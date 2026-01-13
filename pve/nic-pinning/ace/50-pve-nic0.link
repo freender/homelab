@@ -1,0 +1,6 @@
+[Match]
+MACAddress=38:ea:a7:91:cc:60
+Type=ether
+
+[Link]
+Name=nic0

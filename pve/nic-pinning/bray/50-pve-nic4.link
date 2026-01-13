@@ -1,0 +1,6 @@
+[Match]
+MACAddress=0c:91:60:7e:30:6c
+Type=ether
+
+[Link]
+Name=nic4
