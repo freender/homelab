@@ -33,12 +33,12 @@ Master/slave apcupsd setup for Proxmox cluster with coordinated shutdown.
 
 **Single host:**
 ```bash
-./scripts/deploy.sh <hostname>
+./deploy.sh <hostname>
 ```
 
 **All hosts:**
 ```bash
-./scripts/deploy-all.sh
+./deploy.sh all
 ```
 
 ## Testing

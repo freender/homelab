@@ -1,12 +1,12 @@
 #!/bin/bash
 # install.sh - Install apcupsd on target host
-# Usage: ./install.sh [hostname]
+# Usage: ./scripts/install.sh [hostname]
 # If no hostname provided, uses current hostname
 
 set -e
 
 HOST=${1:-$(hostname)}
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 
 # Validate host
 case $HOST in
