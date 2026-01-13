@@ -80,7 +80,7 @@ deploy_to_host() {
 }
 
 echo "==> Deploying Docker Management Scripts"
-echo "    Repository: https://github.com/freender/homelab-vm"
+echo "    Repository: https://github.com/freender/homelab"
 echo "    Hosts: $HOSTS"
 echo ""
 
