@@ -1,0 +1,9 @@
+# Secrets
+**/*.env
+telegram.env
+
+# Local overrides
+*.local
+
+# Git history backups
+.git.backup

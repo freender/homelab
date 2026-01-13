@@ -1,0 +1,51 @@
+Host *
+  StrictHostKeyChecking accept-new
+
+# --- VMs ---
+Host helm
+  HostName helm.freender.internal
+  User freender
+
+Host tower
+  HostName tower.freender.internal
+  User root
+  
+Host work
+  HostName work.freender.internal
+  User freender  
+
+# --- Baremetal ---
+
+Host mbp
+  HostName mbp.freender.internal
+  User freender
+  
+Host pi-kvm
+  HostName pi-kvm.freender.internal
+  User root
+
+Host cottonwood
+  HostName cottonwood.internal
+  User denys
+  
+Host cinci
+  HostName cinci.internal
+  User sysadm
+
+# --- Proxmox nodes ---
+  
+Host ace
+  HostName ace.freender.internal
+  User root
+  
+Host bray
+  HostName bray.freender.internal
+  User root
+  
+Host clovis
+  HostName clovis.freender.internal
+  User root
+
+Host xur
+  HostName xur.freender.internal
+  User root

@@ -1,0 +1,8 @@
+#!/bin/sh
+# bray master notify - alert on all events
+read MESSAGE
+case "${MESSAGE}" in
+  *restored*|*returned*) LEVEL=normal ;;
+  *) LEVEL=alert ;;
+esac
+/etc/apcupsd/telegram/telegram.sh -s "UPS Alert" -d "${MESSAGE}"

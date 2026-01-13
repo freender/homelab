@@ -1,0 +1,88 @@
+# Homelab apcupsd Configuration
+
+Master/slave apcupsd setup for Proxmox cluster with coordinated shutdown.
+
+## Architecture
+
+**bray UPS (APC NS 1500M2):**
+- Powers: ace, bray, clovis (entire cluster)
+- Role: Master with USB connection
+- On battery low: Coordinated cluster shutdown
+
+**xur UPS (APC XS 1000M):**
+- Powers: xur PBS only
+- Role: Independent master with USB connection
+- On battery low: Self-shutdown
+
+## Hosts
+
+| Host   | Role   | Config | Shutdown Behavior |
+|--------|--------|--------|-------------------|
+| bray   | Master | USB    | Triggers cluster-wide host shutdown |
+| ace    | Slave  | Net    | Receives shutdown command from bray |
+| clovis | Slave  | Net    | Receives shutdown command from bray |
+| xur    | Master | USB    | Independent self-shutdown |
+
+## Shutdown Sequence (bray UPS)
+
+1. bray enables HA maintenance on bray/ace/clovis
+2. bray runs shutdown now on ace and clovis
+3. bray runs shutdown now on itself (last)
+
+## Deployment
+
+**Single host:**
+```bash
+./scripts/deploy.sh <hostname>
+```
+
+**All hosts:**
+```bash
+./scripts/deploy-all.sh
+```
+
+## Testing
+
+**Dry-run (no actual shutdown):**
+```bash
+./scripts/test-shutdown.sh
+```
+
+**Verify NIS communication:**
+```bash
+ssh ace "apcaccess status 10.0.40.40:3551 | grep STATUS"
+ssh clovis "apcaccess status 10.0.40.40:3551 | grep STATUS"
+```
+
+**Telegram env file:**
+Create `/etc/apcupsd/telegram/telegram.env` on each host:
+```bash
+TELEGRAM_TOKEN=...
+TELEGRAM_CHATID=...
+```
+
+**Test Telegram:**
+```bash
+ssh ace "/etc/apcupsd/telegram/telegram.sh -s 'Test' -d 'Test message'"
+```
+
+## Quick Reference
+
+```bash
+# UPS status
+ssh bray "apcaccess status"              # Local UPS (bray)
+ssh xur "apcaccess status"               # Local UPS (xur)
+ssh ace "apcaccess status 10.0.40.40:3551"  # Slave view (ace)
+ssh clovis "apcaccess status 10.0.40.40:3551"  # Slave view (clovis)
+
+# Service management
+systemctl status apcupsd
+systemctl restart apcupsd
+
+# Logs
+journalctl -u apcupsd -f
+journalctl -t apcupsd-shutdown
+
+# Event log
+tail -f /var/log/apcupsd.events
+```

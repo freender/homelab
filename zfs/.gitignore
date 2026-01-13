@@ -1,0 +1,9 @@
+# Environment files with secrets
+.env
+
+# Logs
+*.log
+logs/
+
+# Sanoid config directories (generated at runtime)
+cache_*/

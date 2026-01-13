@@ -1,0 +1,80 @@
+#!/bin/bash
+# bray doshutdown - Master cluster controller
+# Stop ALL VMs cluster-wide, wait for them to stop, then poweroff hosts
+
+LOGGER="logger -t apcupsd-shutdown"
+$LOGGER "UPS battery critical - initiating cluster shutdown"
+
+SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5"
+
+# Notify via Telegram
+/etc/apcupsd/telegram/telegram.sh -s "SHUTDOWN" -d "bray UPS critical - initiating cluster shutdown"
+
+# PHASE 1: Shutdown ALL VMs on ALL nodes simultaneously
+$LOGGER "PHASE 1: Initiating graceful shutdown of all VMs cluster-wide"
+
+# Shutdown VMs on ace
+ssh $SSH_OPTS ace "
+  for VMID in \$(qm list 2>/dev/null | awk '\$3==\"running\"{print \$1}'); do
+    logger -t apcupsd-shutdown \"Shutting down VM \$VMID on ace\"
+    qm shutdown \$VMID --timeout 120 &
+  done
+" &
+
+# Shutdown VMs on clovis
+ssh $SSH_OPTS clovis "
+  for VMID in \$(qm list 2>/dev/null | awk '\$3==\"running\"{print \$1}'); do
+    logger -t apcupsd-shutdown \"Shutting down VM \$VMID on clovis\"
+    qm shutdown \$VMID --timeout 120 &
+  done
+" &
+
+# Shutdown VMs on bray
+for VMID in $(qm list 2>/dev/null | awk '$3=="running"{print $1}'); do
+  $LOGGER "Shutting down VM $VMID on bray"
+  qm shutdown $VMID --timeout 120 &
+done
+
+# Give VMs a moment to start shutting down
+sleep 3
+
+# PHASE 2: Wait for ALL VMs to stop on ALL nodes
+$LOGGER "PHASE 2: Waiting for all VMs to stop cluster-wide (max 120 seconds)"
+
+for i in {1..120}; do
+  # Check if any VMs are still running on any node
+  ACE_RUNNING=$(ssh $SSH_OPTS ace "qm list 2>/dev/null | awk '\$3==\"running\"{print \$1}'" 2>/dev/null)
+  CLOVIS_RUNNING=$(ssh $SSH_OPTS clovis "qm list 2>/dev/null | awk '\$3==\"running\"{print \$1}'" 2>/dev/null)
+  BRAY_RUNNING=$(qm list 2>/dev/null | awk '$3=="running"{print $1}')
+  
+  if [ -z "$ACE_RUNNING" ] && [ -z "$CLOVIS_RUNNING" ] && [ -z "$BRAY_RUNNING" ]; then
+    $LOGGER "All VMs stopped on all nodes after $i seconds"
+    break
+  fi
+  
+  sleep 1
+done
+
+# Log if we hit timeout
+if [ ! -z "$ACE_RUNNING" ] || [ ! -z "$CLOVIS_RUNNING" ] || [ ! -z "$BRAY_RUNNING" ]; then
+  $LOGGER "WARNING: Timeout waiting for VMs to stop, forcing host shutdown anyway"
+  [ ! -z "$ACE_RUNNING" ] && $LOGGER "ace still has running VMs: $ACE_RUNNING"
+  [ ! -z "$CLOVIS_RUNNING" ] && $LOGGER "clovis still has running VMs: $CLOVIS_RUNNING"
+  [ ! -z "$BRAY_RUNNING" ] && $LOGGER "bray still has running VMs: $BRAY_RUNNING"
+fi
+
+# PHASE 3: Poweroff all hosts (ace and clovis immediately, bray after 30 seconds)
+$LOGGER "PHASE 3: Powering off hosts: ace/clovis immediate, bray in 30 seconds"
+/etc/apcupsd/telegram/telegram.sh -s "SHUTDOWN" -d "All VMs stopped - powering off cluster (ace/clovis now, bray in 30s)"
+
+# Poweroff ace and clovis immediately with detached commands that survive SSH disconnect
+ssh $SSH_OPTS ace "nohup sh -c 'sleep 2 && logger -t apcupsd-shutdown \"Executing poweroff on ace\" && systemctl poweroff' >/dev/null 2>&1 &"
+ssh $SSH_OPTS clovis "nohup sh -c 'sleep 2 && logger -t apcupsd-shutdown \"Executing poweroff on clovis\" && systemctl poweroff' >/dev/null 2>&1 &"
+
+# Schedule bray poweroff in background (30 seconds delay) so script can exit immediately with code 99
+$LOGGER "Scheduling bray poweroff in 30 seconds"
+nohup sh -c 'sleep 30 && logger -t apcupsd-shutdown "Executing poweroff on bray" && systemctl poweroff' >/dev/null 2>&1 &
+
+# Exit immediately with code 99 to prevent apccontrol from running its default shutdown
+$LOGGER "Exiting doshutdown with code 99 (bray poweroff scheduled in background)"
+exit 99

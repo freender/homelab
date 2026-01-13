@@ -1,0 +1,17 @@
+#!/bin/bash
+# xur doshutdown - Independent PBS master
+# Simple self-shutdown, no cluster dependencies
+
+LOGGER="logger -t apcupsd-shutdown"
+$LOGGER "xur UPS battery critical - shutting down PBS"
+
+# Notify via Telegram
+/etc/apcupsd/telegram/telegram.sh -s "SHUTDOWN" -d "xur UPS critical - shutting down PBS server"
+
+# No VMs on PBS, schedule poweroff in background with 2 second delay
+$LOGGER "Scheduling xur poweroff in 2 seconds"
+nohup sh -c 'sleep 2 && logger -t apcupsd-shutdown "Executing poweroff on xur" && systemctl poweroff' >/dev/null 2>&1 &
+
+# Exit immediately with code 99 to prevent apccontrol from running its default shutdown
+$LOGGER "Exiting doshutdown with code 99 (xur poweroff scheduled in background)"
+exit 99

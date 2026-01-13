@@ -1,0 +1,23 @@
+# Secrets
+**/.env
+**/telegram.env
+**/*.env
+
+# Allow examples
+!**/.env.example
+
+# Local overrides
+*.local
+*.backup
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+.claude/
+
+# Logs
+*.log
