@@ -1,13 +1,13 @@
 #!/bin/bash
 # Deploy NIC pinning configs to PVE nodes
-# Usage: ./deploy.sh [ace|bray|clovis|all]
+# Usage: ./deploy.sh [ace|bray|clovis|xur|all]
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-HOSTS="${@:-ace bray clovis}"
+HOSTS="${@:-ace bray clovis xur}"
 if [[ "$1" == "all" ]]; then
-    HOSTS="ace bray clovis"
+    HOSTS="ace bray clovis xur"
 fi
 
 echo "==> Deploying NIC Pinning"
