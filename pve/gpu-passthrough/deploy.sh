@@ -1,6 +1,6 @@
 #!/bin/bash
 # Deploy GPU passthrough configs to PVE nodes
-# Usage: ./deploy.sh [ace|clovis|all]
+# Run from helm: ./deploy.sh [ace|clovis|all]
 
 set -e
 
