@@ -70,15 +70,15 @@ for host in $HOSTS; do
     scp "$SCRIPT_DIR/$host/blacklist.conf" "$host":/etc/modprobe.d/blacklist.conf
     scp "$SCRIPT_DIR/$host/vfio.conf" "$host":/etc/modprobe.d/vfio.conf
 
-    # Check if VFIO modules already in /etc/modules
-    echo "    Checking /etc/modules for VFIO entries..."
-    if ! ssh "$host" "grep -q '^vfio_pci' /etc/modules"; then
-        echo "    Adding VFIO modules to /etc/modules..."
-        scp "$SCRIPT_DIR/$host/modules" "$host":/tmp/vfio-modules
-        ssh "$host" "cat /tmp/vfio-modules >> /etc/modules && rm /tmp/vfio-modules"
-    else
-        echo "    VFIO modules already present in /etc/modules"
-    fi
+    # Deploy VFIO modules
+    echo "    Deploying VFIO modules (modules-load.d)..."
+    scp "$SCRIPT_DIR/$host/modules" "$host":/tmp/vfio-modules
+    ssh "$host" "install -D -m 0644 /tmp/vfio-modules /etc/modules-load.d/vfio.conf && rm /tmp/vfio-modules"
+
+    # Clean legacy VFIO module entries
+    echo "    Cleaning legacy /etc/modules VFIO entries..."
+    ssh "$host" "if [ -f /etc/modules ]; then grep -v '^vfio' /etc/modules > /tmp/modules.clean && mv /tmp/modules.clean /etc/modules; fi"
+    ssh "$host" "if [ -f /etc/modules-load.d/modules.conf ]; then grep -v '^vfio' /etc/modules-load.d/modules.conf > /tmp/modules.conf.clean && mv /tmp/modules.conf.clean /etc/modules-load.d/modules.conf; fi"
 
     # Update initramfs
     echo "    Updating initramfs..."
