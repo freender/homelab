@@ -11,6 +11,13 @@ Automation and configuration management for Proxmox-based homelab infrastructure
 - Remote: `cottonwood.internal`, `cinci.internal`
 - VIP for Traefik HA
 
+## Deploy All
+
+```bash
+cd ~/homelab
+./deploy-all.sh
+```
+
 ## Modules
 
 ### [apcupsd](apcupsd/)
@@ -21,7 +28,7 @@ UPS monitoring with coordinated cluster shutdown
 **Deploy:**
 ```bash
 cd ~/homelab/apcupsd
-./scripts/deploy.sh <host>
+./deploy.sh all
 ```
 
 ### [telegraf](telegraf/)
