@@ -31,10 +31,39 @@ for host in $HOSTS; do
     ssh "$host" "cp /etc/modprobe.d/blacklist.conf /etc/modprobe.d/blacklist.conf.bak.$(date +%Y%m%d%H%M%S) 2>/dev/null || true"
     ssh "$host" "cp /etc/modprobe.d/vfio.conf /etc/modprobe.d/vfio.conf.bak.$(date +%Y%m%d%H%M%S) 2>/dev/null || true"
 
-    # Update GRUB cmdline
-    echo "    Updating GRUB configuration..."
+    # Update boot cmdline
+    echo "    Updating boot configuration..."
     GRUB_LINE=$(cat "$SCRIPT_DIR/$host/grub")
-    ssh "$host" "sed -i 's|^GRUB_CMDLINE_LINUX_DEFAULT=.*|$GRUB_LINE|' /etc/default/grub"
+    CMDLINE=${GRUB_LINE#GRUB_CMDLINE_LINUX_DEFAULT=\"}
+    CMDLINE=${CMDLINE%\"}
+
+    if ssh "$host" "test -f /etc/kernel/cmdline"; then
+        echo "    Detected systemd-boot (/etc/kernel/cmdline)"
+        CURRENT_CMDLINE=$(ssh "$host" "cat /etc/kernel/cmdline")
+        if [[ "$CURRENT_CMDLINE" != *"root="* ]]; then
+            CURRENT_CMDLINE=$(ssh "$host" "cat /proc/cmdline")
+        fi
+        FILTERED_CMDLINE=""
+        for arg in $CURRENT_CMDLINE; do
+            case "$arg" in
+                BOOT_IMAGE=*|initrd=*|intel_iommu=*|amd_iommu=*|iommu=*|pcie_acs_override=*)
+                    continue
+                    ;;
+                *)
+                    FILTERED_CMDLINE="$FILTERED_CMDLINE $arg"
+                    ;;
+            esac
+        done
+        FILTERED_CMDLINE="${FILTERED_CMDLINE# }"
+        NEW_CMDLINE="$FILTERED_CMDLINE $CMDLINE"
+        NEW_CMDLINE="${NEW_CMDLINE# }"
+        ssh "$host" "printf '%s\\n' \"$NEW_CMDLINE\" > /etc/kernel/cmdline"
+        ssh "$host" "proxmox-boot-tool refresh"
+    else
+        echo "    Detected GRUB (/etc/default/grub)"
+        ssh "$host" "sed -i 's|^GRUB_CMDLINE_LINUX_DEFAULT=.*|$GRUB_LINE|' /etc/default/grub"
+        ssh "$host" "update-grub"
+    fi
 
     # Deploy modprobe configs
     echo "    Deploying modprobe configs..."
@@ -51,9 +80,9 @@ for host in $HOSTS; do
         echo "    VFIO modules already present in /etc/modules"
     fi
 
-    # Update grub and initramfs
-    echo "    Updating GRUB and initramfs..."
-    ssh "$host" "update-grub && update-initramfs -u -k all"
+    # Update initramfs
+    echo "    Updating initramfs..."
+    ssh "$host" "update-initramfs -u -k all"
 
     echo "    ✓ Deployed to $host (reboot required)"
     echo ""
