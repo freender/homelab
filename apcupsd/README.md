@@ -50,8 +50,8 @@ Master/slave apcupsd setup for Proxmox cluster with coordinated shutdown.
 
 **Verify NIS communication:**
 ```bash
-ssh ace "apcaccess status 10.0.40.40:3551 | grep STATUS"
-ssh clovis "apcaccess status 10.0.40.40:3551 | grep STATUS"
+ssh ace "apcaccess status | grep STATUS"
+ssh clovis "apcaccess status | grep STATUS"
 ```
 
 **Telegram env file:**
@@ -72,8 +72,8 @@ ssh ace "/etc/apcupsd/telegram/telegram.sh -s 'Test' -d 'Test message'"
 # UPS status
 ssh bray "apcaccess status"              # Local UPS (bray)
 ssh xur "apcaccess status"               # Local UPS (xur)
-ssh ace "apcaccess status 10.0.40.40:3551"  # Slave view (ace)
-ssh clovis "apcaccess status 10.0.40.40:3551"  # Slave view (clovis)
+ssh ace "apcaccess status"  # Slave view (ace)
+ssh clovis "apcaccess status"  # Slave view (clovis)
 
 # Service management
 systemctl status apcupsd

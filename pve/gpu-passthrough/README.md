@@ -127,13 +127,6 @@ All configurations require:
 - ✅ Enable: **PCIe** (critical for performance)
 - Optional: Set as **Primary GPU**
 
-### ROM Files (NVIDIA)
-
-Some NVIDIA cards require VBIOS ROM file:
-1. Extract ROM with GPU-Z on Windows
-2. Upload to Proxmox: `/usr/share/kvm/<gpu-name>.bin`
-3. Reference in VM config: `romfile=<gpu-name>.bin`
-
 ## Verification
 
 Check IOMMU enabled:
@@ -237,12 +230,3 @@ cd ~/homelab/pve/gpu-passthrough
 ./deploy.sh <host>
 ssh <host> reboot
 ```
-
-**Verification:**
-```bash
-ssh <host> "lspci -nnk | grep -A 3 VGA"
-```
-
-**Related Documentation:**
-- Obsidian: `Main/Homelab/Proxmox/PVE - GPU Passthrough`
-- Obsidian: `Main/Homelab/Proxmox/PVE - GPU Passthrough Recovery - Ace`
