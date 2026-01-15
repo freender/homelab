@@ -21,16 +21,16 @@ This directory contains automated GPU passthrough configuration for Proxmox host
 ## Directory Structure
 
 ```
-gpu-passthrough/
+pve-gpu-passthrough/
 ├── deploy.sh              # Deployment script (run from helm)
 ├── README.md              # This file
 ├── ace/                   # Intel iGPU config for ace
-│   ├── grub               # GRUB cmdline (video=efifb:off)
+│   ├── cmdline            # systemd-boot kernel args
 │   ├── blacklist.conf     # Blacklist i915 driver
 │   ├── vfio.conf          # Bind GPU to vfio-pci (8086:3e92)
 │   └── modules            # VFIO kernel modules
 └── clovis/                # NVIDIA config for clovis
-    ├── grub               # GRUB cmdline (Intel CPU)
+    ├── cmdline            # systemd-boot kernel args
     ├── blacklist.conf     # Blacklist nvidia/nouveau drivers
     ├── vfio.conf          # Bind GPU to vfio-pci (10de:2208,10de:1aef)
     └── modules            # VFIO kernel modules
@@ -40,7 +40,7 @@ gpu-passthrough/
 
 Deploy to specific host:
 ```bash
-cd ~/homelab/pve/gpu-passthrough
+cd ~/homelab/pve-gpu-passthrough
 ./deploy.sh ace      # Deploy to ace
 ./deploy.sh clovis   # Deploy to clovis
 ```
@@ -67,9 +67,9 @@ ssh clovis reboot
 - GPU: Intel UHD Graphics 630 [8086:3e92]
 - IOMMU Group: 0
 
-**GRUB Parameters:**
+**Kernel Parameters (systemd-boot):**
 ```
-intel_iommu=on pcie_acs_override=downstream video=efifb:off
+quiet intel_iommu=on pcie_acs_override=downstream video=efifb:off
 ```
 
 **Notes:**
@@ -94,9 +94,9 @@ pci=noaer pcie_acs_override=downstream,multifunction i915.disable_display=1 vide
 - GPU: NVIDIA RTX 3080 [10de:2208]
 - Audio: NVIDIA Audio [10de:1aef]
 
-**GRUB Parameters:**
+**Kernel Parameters (systemd-boot):**
 ```
-intel_iommu=on iommu=pt pcie_acs_override=downstream
+quiet intel_iommu=on iommu=pt pcie_acs_override=downstream
 ```
 
 **Notes:**
@@ -172,7 +172,7 @@ NVIDIA driver returns Code 43 when KVM detection enabled.
 4. Use recent drivers (older drivers may not support hiding)
 
 ### GPU not working after VM restart (Reset Bug)
-Some GPUs don't properly reset between VM sessions.
+Some GPUs do not properly reset between VM sessions.
 
 **Solutions:**
 1. Use vendor reset kernel patch (if available)
@@ -183,7 +183,7 @@ Some GPUs don't properly reset between VM sessions.
 ### IOMMU groups too large
 Multiple devices in same IOMMU group prevent individual passthrough.
 
-**Solution:** Use ACS override (already in GRUB configs):
+**Solution:** Use ACS override (already in kernel params):
 ```
 pcie_acs_override=downstream
 ```
@@ -201,14 +201,14 @@ If host console appears to hang during boot, this is expected.
 
 | File | Purpose |
 |------|---------|
-| `/etc/default/grub` | Kernel boot parameters |
+| `/etc/kernel/cmdline` | Kernel boot parameters (systemd-boot) |
 | `/etc/modules` | Kernel modules to load at boot |
 | `/etc/modprobe.d/blacklist.conf` | Prevent host drivers from loading |
 | `/etc/modprobe.d/vfio.conf` | Bind specific devices to vfio-pci |
 
 **Apply changes:**
 ```bash
-update-grub
+proxmox-boot-tool refresh
 update-initramfs -u -k all
 reboot
 ```
@@ -226,7 +226,7 @@ lspci -nn | grep -E "VGA|3D|Audio controller.*NVIDIA"
 
 **Deployment:**
 ```bash
-cd ~/homelab/pve/gpu-passthrough
+cd ~/homelab/pve-gpu-passthrough
 ./deploy.sh <host>
 ssh <host> reboot
 ```

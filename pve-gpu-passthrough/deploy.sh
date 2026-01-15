@@ -12,7 +12,7 @@ fi
 
 echo "==> Deploying GPU Passthrough Configs"
 echo "    Hosts: $HOSTS"
-echo "    WARNING: This will modify GRUB, modules, and initramfs"
+echo "    WARNING: This will modify systemd-boot cmdline, modules, and initramfs"
 echo ""
 
 for host in $HOSTS; do
@@ -24,64 +24,50 @@ for host in $HOSTS; do
         continue
     fi
 
+    if [[ ! -f "$SCRIPT_DIR/$host/cmdline" ]]; then
+        echo "    ✗ Error: Missing cmdline config for $host"
+        continue
+    fi
+
     # Backup existing configs
     echo "    Backing up existing configs..."
-    ssh "$host" "cp /etc/default/grub /etc/default/grub.bak.$(date +%Y%m%d%H%M%S) 2>/dev/null || true"
+    ssh "$host" "cp /etc/kernel/cmdline /etc/kernel/cmdline.bak.$(date +%Y%m%d%H%M%S) 2>/dev/null || true"
     ssh "$host" "cp /etc/modules /etc/modules.bak.$(date +%Y%m%d%H%M%S) 2>/dev/null || true"
     ssh "$host" "cp /etc/modprobe.d/blacklist.conf /etc/modprobe.d/blacklist.conf.bak.$(date +%Y%m%d%H%M%S) 2>/dev/null || true"
     ssh "$host" "cp /etc/modprobe.d/vfio.conf /etc/modprobe.d/vfio.conf.bak.$(date +%Y%m%d%H%M%S) 2>/dev/null || true"
 
-    # Update boot cmdline
-    echo "    Updating boot configuration..."
-    GRUB_LINE=$(cat "$SCRIPT_DIR/$host/grub")
-    CMDLINE=${GRUB_LINE#GRUB_CMDLINE_LINUX_DEFAULT=\"}
-    CMDLINE=${CMDLINE%\"}
+    # Update boot cmdline (systemd-boot)
+    echo "    Updating systemd-boot (/etc/kernel/cmdline)"
+    CMDLINE=$(cat "$SCRIPT_DIR/$host/cmdline")
 
-    HAS_SYSTEMD_BOOT=false
-    HAS_GRUB=false
-
-    if ssh "$host" "test -f /etc/kernel/cmdline"; then
-        HAS_SYSTEMD_BOOT=true
-    fi
-
-    if ssh "$host" "test -f /etc/default/grub"; then
-        HAS_GRUB=true
-    fi
-
-    if $HAS_SYSTEMD_BOOT; then
-        echo "    Updating systemd-boot (/etc/kernel/cmdline)"
-        CURRENT_CMDLINE=$(ssh "$host" "cat /etc/kernel/cmdline")
-        if [[ "$CURRENT_CMDLINE" != *"root="* ]]; then
-            CURRENT_CMDLINE=$(ssh "$host" "cat /proc/cmdline")
-        fi
-        FILTERED_CMDLINE=""
-        for arg in $CURRENT_CMDLINE; do
-            case "$arg" in
-                BOOT_IMAGE=*|initrd=*|intel_iommu=*|amd_iommu=*|iommu=*|pcie_acs_override=*)
-                    continue
-                    ;;
-                *)
-                    FILTERED_CMDLINE="$FILTERED_CMDLINE $arg"
-                    ;;
-            esac
-        done
-        FILTERED_CMDLINE="${FILTERED_CMDLINE# }"
-        NEW_CMDLINE="$FILTERED_CMDLINE $CMDLINE"
-        NEW_CMDLINE="${NEW_CMDLINE# }"
-        ssh "$host" "printf '%s\\n' \"$NEW_CMDLINE\" > /etc/kernel/cmdline"
-        ssh "$host" "proxmox-boot-tool refresh"
-    fi
-
-    if $HAS_GRUB; then
-        echo "    Updating GRUB (/etc/default/grub)"
-        ssh "$host" "sed -i 's|^GRUB_CMDLINE_LINUX_DEFAULT=.*|$GRUB_LINE|' /etc/default/grub"
-        ssh "$host" "update-grub"
-    fi
-
-    if ! $HAS_SYSTEMD_BOOT && ! $HAS_GRUB; then
-        echo "    ✗ Error: No boot config found (systemd-boot or GRUB)"
+    if ! ssh "$host" "test -f /etc/kernel/cmdline"; then
+        echo "    ✗ Error: /etc/kernel/cmdline not found (systemd-boot required)"
         continue
     fi
+
+    CURRENT_CMDLINE=$(ssh "$host" "cat /etc/kernel/cmdline")
+    if [[ "$CURRENT_CMDLINE" != *"root="* ]]; then
+        CURRENT_CMDLINE=$(ssh "$host" "cat /proc/cmdline")
+    fi
+
+    FILTERED_CMDLINE=""
+    for arg in $CURRENT_CMDLINE; do
+        case "$arg" in
+            BOOT_IMAGE=*|initrd=*|intel_iommu=*|amd_iommu=*|iommu=*|pcie_acs_override=*|video=*)
+                continue
+                ;;
+            *)
+                FILTERED_CMDLINE="$FILTERED_CMDLINE $arg"
+                ;;
+        esac
+    done
+
+    FILTERED_CMDLINE="${FILTERED_CMDLINE# }"
+    NEW_CMDLINE="$FILTERED_CMDLINE $CMDLINE"
+    NEW_CMDLINE="${NEW_CMDLINE# }"
+
+    ssh "$host" "printf '%s\n' \"$NEW_CMDLINE\" > /etc/kernel/cmdline"
+    ssh "$host" "proxmox-boot-tool refresh"
 
     # Deploy modprobe configs
     echo "    Deploying modprobe configs..."
