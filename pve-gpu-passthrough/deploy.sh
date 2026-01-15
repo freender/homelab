@@ -37,8 +37,19 @@ for host in $HOSTS; do
     CMDLINE=${GRUB_LINE#GRUB_CMDLINE_LINUX_DEFAULT=\"}
     CMDLINE=${CMDLINE%\"}
 
+    HAS_SYSTEMD_BOOT=false
+    HAS_GRUB=false
+
     if ssh "$host" "test -f /etc/kernel/cmdline"; then
-        echo "    Detected systemd-boot (/etc/kernel/cmdline)"
+        HAS_SYSTEMD_BOOT=true
+    fi
+
+    if ssh "$host" "test -f /etc/default/grub"; then
+        HAS_GRUB=true
+    fi
+
+    if $HAS_SYSTEMD_BOOT; then
+        echo "    Updating systemd-boot (/etc/kernel/cmdline)"
         CURRENT_CMDLINE=$(ssh "$host" "cat /etc/kernel/cmdline")
         if [[ "$CURRENT_CMDLINE" != *"root="* ]]; then
             CURRENT_CMDLINE=$(ssh "$host" "cat /proc/cmdline")
@@ -59,10 +70,17 @@ for host in $HOSTS; do
         NEW_CMDLINE="${NEW_CMDLINE# }"
         ssh "$host" "printf '%s\\n' \"$NEW_CMDLINE\" > /etc/kernel/cmdline"
         ssh "$host" "proxmox-boot-tool refresh"
-    else
-        echo "    Detected GRUB (/etc/default/grub)"
+    fi
+
+    if $HAS_GRUB; then
+        echo "    Updating GRUB (/etc/default/grub)"
         ssh "$host" "sed -i 's|^GRUB_CMDLINE_LINUX_DEFAULT=.*|$GRUB_LINE|' /etc/default/grub"
         ssh "$host" "update-grub"
+    fi
+
+    if ! $HAS_SYSTEMD_BOOT && ! $HAS_GRUB; then
+        echo "    ✗ Error: No boot config found (systemd-boot or GRUB)"
+        continue
     fi
 
     # Deploy modprobe configs
