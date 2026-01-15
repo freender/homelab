@@ -13,6 +13,18 @@ fi
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
+# Validate telegram.env exists locally before deployment
+if [[ ! -f "$SCRIPT_DIR/shared/telegram/telegram.env" ]]; then
+    echo "ERROR: telegram.env not found!"
+    echo ""
+    echo "Create it from the example:"
+    echo "  cp $SCRIPT_DIR/shared/telegram/telegram.env.example $SCRIPT_DIR/shared/telegram/telegram.env"
+    echo "  # Edit with your actual TELEGRAM_TOKEN and TELEGRAM_CHATID"
+    echo ""
+    echo "NOTE: telegram.env is gitignored and should never be committed."
+    exit 1
+fi
+
 echo "=== Deploying apcupsd ==="
 echo "Hosts: $HOSTS"
 echo ""
