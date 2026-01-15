@@ -1,6 +1,0 @@
-[Match]
-MACAddress=e0:d5:5e:25:a5:e0
-Type=ether
-
-[Link]
-Name=nic2

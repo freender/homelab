@@ -12,6 +12,8 @@ MODULES=(
     "telegraf"
     "zfs"
     "docker"
+    "pve-interfaces"
+    "pve-gpu-passthrough"
 )
 
 declare -A MODULE_SCRIPTS=(
@@ -20,6 +22,8 @@ declare -A MODULE_SCRIPTS=(
     ["telegraf"]="${SCRIPT_DIR}/telegraf/deploy.sh"
     ["zfs"]="${SCRIPT_DIR}/zfs/deploy.sh"
     ["docker"]="${SCRIPT_DIR}/docker/deploy.sh"
+    ["pve-interfaces"]="${SCRIPT_DIR}/pve-interfaces/deploy.sh"
+    ["pve-gpu-passthrough"]="${SCRIPT_DIR}/pve-gpu-passthrough/deploy.sh"
 )
 
 FAILED_MODULES=()

@@ -77,6 +77,26 @@ cd ~/homelab/ssh
 ./deploy.sh all
 ```
 
+### [pve-interfaces](pve-interfaces/)
+Proxmox network interface configuration
+- Per-node `/etc/network/interfaces` files
+
+**Deploy:**
+```bash
+cd ~/homelab/pve-interfaces
+./deploy.sh all
+```
+
+### [pve-gpu-passthrough](pve-gpu-passthrough/)
+Proxmox GPU passthrough configs
+- Updates boot cmdline, VFIO modules, and modprobe configs
+
+**Deploy:**
+```bash
+cd ~/homelab/pve-gpu-passthrough
+./deploy.sh all
+```
+
 ## Quick Reference
 
 **Clone repo:**
@@ -95,7 +115,7 @@ cd ~/homelab && git pull
 ssh <host> "apcaccess status"
 
 # Metrics query
-curl -s 'http://victoria-metrics.freender.internal:8428/api/v1/query?query=sensors_temp_input' | jq
+curl -s "http://victoria-metrics.freender.internal:8428/api/v1/query?query=sensors_temp_input" | jq
 
 # ZFS snapshots
 ssh <remote-nas> "zfs list -t snapshot"
