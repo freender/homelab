@@ -1,13 +1,23 @@
 #!/bin/bash
 # Deploy docker management scripts
-# Usage: ./deploy.sh [helm|cottonwood|cinci|all]
+# Usage: ./deploy.sh [helm|cottonwood|cinci|tower|all]
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-HOSTS="${@:-helm cottonwood cinci}"
+# Supported hosts for this module
+SUPPORTED_HOSTS=("helm" "tower" "cottonwood" "cinci")
+
+# Skip if host not applicable
+if [[ -n "${1:-}" && "$1" != "all" ]]; then
+    if [[ ! " ${SUPPORTED_HOSTS[*]} " =~ " $1 " ]]; then
+        echo "==> Skipping docker (not applicable to $1)"
+        exit 0
+    fi
+fi
+HOSTS="${@:-helm cottonwood cinci tower}"
 if [[ "$1" == "all" ]]; then
-    HOSTS="helm cottonwood cinci"
+    HOSTS="helm cottonwood cinci tower"
 fi
 
 # Host-specific configuration
@@ -15,10 +25,14 @@ declare -A HOST_USERS=(
     ["helm"]="freender"
     ["cottonwood"]="denys"
     ["cinci"]="sysadm"
+    ["tower"]="root"
 )
 
 # Hosts without ZFS (need backup.sh)
 NO_ZFS_HOSTS=("helm")
+
+# Hosts that don't need cron (User Scripts plugin handles scheduling)
+NO_CRON_HOSTS=("tower")
 
 APPDATA_DEST="/mnt/cache/appdata"
 DOCKER_SCRIPTS_DIR="\$HOME/docker-scripts"
@@ -65,14 +79,18 @@ deploy_to_host() {
         done
     fi
     
-    # Update cron entries
-    echo "    Updating crontab..."
-    if [[ "$host" == "helm" ]]; then
-        # helm: backup.sh cron only (it calls start.sh internally)
-        ssh "$host" "(crontab -l 2>/dev/null | grep -v 'start.sh' | grep -v 'backup.sh' | grep -v '/mnt/ssdpool/backup' | grep -v 'snapshot_ceph' | grep -v 'traefik-acme-sync'; echo \"${CRON_BACKUP_HELM}\") | crontab -"
+    # Update cron entries (skip for hosts using User Scripts plugin)
+    if [[ ! " ${NO_CRON_HOSTS[@]} " =~ " ${host} " ]]; then
+        echo "    Updating crontab..."
+        if [[ "$host" == "helm" ]]; then
+            # helm: backup.sh cron only (it calls start.sh internally)
+            ssh "$host" "(crontab -l 2>/dev/null | grep -v 'start.sh' | grep -v 'backup.sh' | grep -v '/mnt/ssdpool/backup' | grep -v 'snapshot_ceph' | grep -v 'traefik-acme-sync'; echo "${CRON_BACKUP_HELM}") | crontab -"
+        else
+            # NAS hosts: start.sh cron (keep existing update.log location)
+            ssh "$host" "(crontab -l 2>/dev/null | grep -v 'start.sh'; echo "${CRON_START_NAS}") | crontab -"
+        fi
     else
-        # NAS hosts: start.sh cron (keep existing update.log location)
-        ssh "$host" "(crontab -l 2>/dev/null | grep -v 'start.sh'; echo \"${CRON_START_NAS}\") | crontab -"
+        echo "    Skipping cron (User Scripts plugin handles scheduling)"
     fi
     
     echo "    ✓ Deployment complete for $host"

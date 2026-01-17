@@ -4,6 +4,17 @@
 
 set -e
 
+# Supported hosts for this module
+SUPPORTED_HOSTS=("ace" "bray" "clovis" "xur")
+
+# Skip if host not applicable
+if [[ -n "${1:-}" && "$1" != "all" ]]; then
+    if [[ ! " ${SUPPORTED_HOSTS[*]} " =~ " $1 " ]]; then
+        echo "==> Skipping apcupsd (not applicable to $1)"
+        exit 0
+    fi
+fi
+
 DEFAULT_HOSTS="xur ace clovis bray"
 HOSTS="$*"
 
@@ -41,9 +52,7 @@ for HOST in $HOSTS; do
     echo "Running installer on $HOST..."
     ssh "$HOST" "cd /tmp/homelab-apcupsd && chmod +x scripts/install.sh && ./scripts/install.sh $HOST"
 
-    # Cleanup
-    ssh "$HOST" "rm -rf /tmp/homelab-apcupsd"
-
-    echo "=== Deployment to $HOST complete ==="
     echo ""
 done
+
+echo "=== Deployment complete ==="

@@ -4,7 +4,19 @@
 
 set -e
 
+# Supported hosts for this module
+SUPPORTED_HOSTS=("ace" "bray" "clovis")
+
+# Skip if host not applicable
+if [[ -n "${1:-}" && "$1" != "all" ]]; then
+    if [[ ! " ${SUPPORTED_HOSTS[*]} " =~ " $1 " ]]; then
+        echo "==> Skipping pve-interfaces (not applicable to $1)"
+        exit 0
+    fi
+fi
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+HOSTS="${@:-ace bray clovis xur}"
 HOSTS="${@:-ace bray clovis xur}"
 if [[ "$1" == "all" ]]; then
     HOSTS="ace bray clovis xur"

@@ -1,9 +1,13 @@
 #!/bin/bash
-# Deploy all homelab modules
-# Usage: ./deploy-all.sh
+# Deploy homelab modules
+# Usage: ./deploy-all.sh [hostname|all]
+#   ./deploy-all.sh          - Deploy all modules to all hosts
+#   ./deploy-all.sh tower    - Deploy applicable modules to tower only
+#   ./deploy-all.sh helm     - Deploy applicable modules to helm only
 
 set -u
 
+HOST="${1:-all}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 MODULES=(
@@ -17,52 +21,35 @@ MODULES=(
     "pve-gpu-passthrough"
 )
 
-declare -A MODULE_SCRIPTS=(
-    ["ssh"]="${SCRIPT_DIR}/ssh/deploy.sh"
-    ["apcupsd"]="${SCRIPT_DIR}/apcupsd/deploy.sh"
-    ["telegraf"]="${SCRIPT_DIR}/telegraf/deploy.sh"
-    ["zfs"]="${SCRIPT_DIR}/zfs/deploy.sh"
-    ["docker"]="${SCRIPT_DIR}/docker/deploy.sh"
-    ["tower"]="${SCRIPT_DIR}/tower/deploy.sh"
-    ["pve-interfaces"]="${SCRIPT_DIR}/pve-interfaces/deploy.sh"
-    ["pve-gpu-passthrough"]="${SCRIPT_DIR}/pve-gpu-passthrough/deploy.sh"
-)
-
 FAILED_MODULES=()
 
-run_module() {
-    local module="$1"
-    local script="${MODULE_SCRIPTS[$module]}"
-
-    echo "==> Deploying module: ${module}"
-
-    if [[ ! -x "$script" ]]; then
-        echo "    ✗ Missing deploy script: ${script}"
-        FAILED_MODULES+=("
-${module}")
-        echo ""
-        return
-    fi
-
-    if "$script" all; then
-        echo "    ✓ ${module} deployment complete"
-    else
-        echo "    ✗ ${module} deployment failed"
-        FAILED_MODULES+=("
-${module}")
-    fi
-
-    echo ""
-}
-
-echo "==> Deploying all homelab modules"
+echo "==> Deploying homelab to: $HOST"
 echo ""
 
 for module in "${MODULES[@]}"; do
-    run_module "$module"
+    script="${SCRIPT_DIR}/${module}/deploy.sh"
+    
+    if [[ ! -x "$script" ]]; then
+        echo "==> Skipping $module (missing deploy script)"
+        FAILED_MODULES+=("
+$module")
+        continue
+    fi
+    
+    # Run module deploy, capture exit code
+    "$script" "$HOST"
+    exit_code=$?
+    
+    # exit 0 = success or skipped (handled by module)
+    # exit non-zero = failure
+    if [[ $exit_code -ne 0 ]]; then
+        FAILED_MODULES+=("
+$module")
+    fi
 done
 
-echo "==> Deploy all complete!"
+echo ""
+echo "==> Deploy complete!"
 
 if [[ ${#FAILED_MODULES[@]} -gt 0 ]]; then
     echo "Failed modules: ${FAILED_MODULES[*]}"

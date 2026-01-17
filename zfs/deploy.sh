@@ -1,27 +1,52 @@
 #!/bin/bash
 # Deploy ZFS ZED Telegram notifications and ZFS scripts
-# Usage: ./deploy.sh [cottonwood|cinci|all]
+# Usage: ./deploy.sh [cottonwood|cinci|tower|all]
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-HOSTS="${@:-cottonwood cinci}"
+# Supported hosts for this module
+SUPPORTED_HOSTS=("tower" "cottonwood" "cinci")
+
+# Skip if host not applicable
+if [[ -n "${1:-}" && "$1" != "all" ]]; then
+    if [[ ! " ${SUPPORTED_HOSTS[*]} " =~ " $1 " ]]; then
+        echo "==> Skipping zfs (not applicable to $1)"
+        exit 0
+    fi
+fi
+HOSTS="${@:-cottonwood cinci tower}"
 if [[ "$1" == "all" ]]; then
-    HOSTS="cottonwood cinci"
+    HOSTS="cottonwood cinci tower"
 fi
 
-ENV_FILE="${SCRIPT_DIR}/.env"
-if [[ ! -f "$ENV_FILE" ]]; then
-    echo "Missing ${ENV_FILE}. Copy .env.example and fill in credentials."
-    exit 1
-fi
+# Hosts that use ZED Telegram notifications (TrueNAS/Linux only, not Unraid)
+ZED_HOSTS=("cottonwood" "cinci")
 
-# shellcheck source=/dev/null
-source "$ENV_FILE"
+# Tower-specific configuration
+TOWER_DEST="/mnt/cache/appdata/scripts"
+TOWER_SCRIPTS=(
+    "zfs_replication_cache.sh"
+    "zfs_timemachine_cleanup.sh"
+    "rsync_flash.sh"
+    "rsync_pi_kvm_backup.sh"
+)
 
-if [[ -z "${TELEGRAM_TOKEN:-}" ]] || [[ -z "${TELEGRAM_CHAT_ID:-}" ]]; then
-    echo "TELEGRAM_TOKEN or TELEGRAM_CHAT_ID not set in ${ENV_FILE}."
-    exit 1
+# Check for .env file for ZED hosts
+if [[ " ${HOSTS} " =~ (cottonwood|cinci) ]]; then
+    ENV_FILE="${SCRIPT_DIR}/.env"
+    if [[ ! -f "$ENV_FILE" ]]; then
+        echo "Missing ${ENV_FILE}. Copy .env.example and fill in credentials."
+        exit 1
+    fi
+
+    # shellcheck source=/dev/null
+    source "$ENV_FILE"
+
+    if [[ -z "${TELEGRAM_TOKEN:-}" ]] || [[ -z "${TELEGRAM_CHAT_ID:-}" ]]; then
+        echo "TELEGRAM_TOKEN or TELEGRAM_CHAT_ID not set in ${ENV_FILE}."
+        exit 1
+    fi
 fi
 
 ZED_EVENTS=(
@@ -45,14 +70,27 @@ CRON_REPL_LINE='10 0 * * * sudo $HOME/zfs-scripts/zfs_replication_appdata.sh >> 
 
 update_cron() {
     local host="$1"
-    ssh "$host" "(crontab -l 2>/dev/null | grep -v 'zfs_snapshots.sh' | grep -v 'zfs_replication_appdata.sh'; echo \"$CRON_SNAPSHOT_LINE\"; echo \"$CRON_REPL_LINE\") | crontab -"
+    ssh "$host" "(crontab -l 2>/dev/null | grep -v 'zfs_snapshots.sh' | grep -v 'zfs_replication_appdata.sh'; echo \"${CRON_SNAPSHOT_LINE}\"; echo \"${CRON_REPL_LINE}\") | crontab -"
 }
 
-echo "==> Deploying ZFS ZED Telegram Notifications and ZFS Scripts"
-echo "    Hosts: $HOSTS"
-echo ""
+deploy_to_tower() {
+    echo "==> Deploying to tower (Unraid)..."
+    
+    echo "    Copying tower-specific scripts..."
+    for script in "${TOWER_SCRIPTS[@]}"; do
+        scp "${SCRIPT_DIR}/scripts/${script}" "tower:/tmp/${script}"
+        ssh "tower" "sudo mv /tmp/${script} ${TOWER_DEST}/${script} && sudo chmod +x ${TOWER_DEST}/${script}"
+    done
+    
+    echo "    Skipping ZED setup (Unraid has built-in notifications)"
+    echo "    Skipping cron (User Scripts plugin handles scheduling)"
+    echo "    ✓ Deployment complete for tower"
+    echo ""
+}
 
-for host in $HOSTS; do
+deploy_to_nas() {
+    local host="$1"
+    
     echo "==> Deploying to $host..."
 
     echo "    Copying zed-telegram-notify.sh..."
@@ -94,10 +132,26 @@ for host in $HOSTS; do
     echo "    Updating crontab..."
     update_cron "$host"
 
+    echo "    ✓ Deployment complete for $host"
     echo ""
+}
+
+echo "==> Deploying ZFS Scripts"
+echo "    Repository: https://github.com/freender/homelab"
+echo "    Hosts: $HOSTS"
+echo ""
+
+for host in $HOSTS; do
+    if [[ "$host" == "tower" ]]; then
+        deploy_to_tower
+    elif [[ " ${ZED_HOSTS[@]} " =~ " ${host} " ]]; then
+        deploy_to_nas "$host"
+    else
+        echo "==> Skipping zfs (not applicable to $host)"
+    fi
 done
 
 echo "==> Deployment complete!"
 echo ""
-echo "Test ZED with:"
+echo "Test ZED (cottonwood/cinci) with:"
 echo '  ssh <host> "sudo ZEVENT_POOL=cache ZEVENT_SUBCLASS=statechange ZEVENT_VDEV_STATE_STR=DEGRADED /etc/zfs/zed.d/telegram-notify.sh"'

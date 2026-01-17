@@ -7,6 +7,17 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SSH_CONFIG="${SCRIPT_DIR}/ssh_config"
 
+# Supported hosts for this module
+SUPPORTED_HOSTS=("helm" "tower" "mbp" "cottonwood" "cinci" "ace" "bray" "clovis" "xur")
+
+# Skip if host not applicable
+if [[ -n "${1:-}" && "$1" != "all" ]]; then
+    if [[ ! " ${SUPPORTED_HOSTS[*]} " =~ " $1 " ]]; then
+        echo "==> Skipping ssh (not applicable to $1)"
+        exit 0
+    fi
+fi
+
 # Default hosts (all accessible)
 DEFAULT_HOSTS="helm tower mbp cottonwood cinci ace bray clovis xur"
 
