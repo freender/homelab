@@ -3,7 +3,7 @@
 # Enhanced backup script with never-stop container protection
 # Add this script to cron:
 # crontab -e
-# 5 9 * * * /mnt/cache/backup/backup.sh > /mnt/cache/backup/backup.txt 2>&1
+# 5 9 * * * /mnt/cache/appdata/scripts/backup.sh >> /mnt/cache/appdata/scripts/logs/backup.log 2>&1
 # PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin
 
 # Define source and destination directories

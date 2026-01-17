@@ -35,8 +35,8 @@ NO_ZFS_HOSTS=("helm")
 NO_CRON_HOSTS=("tower")
 
 APPDATA_DEST="/mnt/cache/appdata"
-DOCKER_SCRIPTS_DIR="\$HOME/docker-scripts"
-DOCKER_LOGS_DIR="\$HOME/docker-logs"
+APPDATA_SCRIPTS_DIR="${APPDATA_DEST}/scripts"
+APPDATA_LOGS_DIR="${APPDATA_SCRIPTS_DIR}/logs"
 
 APPDATA_SCRIPTS=(
     "start.sh"
@@ -49,7 +49,7 @@ BACKUP_SCRIPTS=(
 
 # Cron entries
 CRON_START_NAS='0 9 * * * cd /mnt/cache/appdata && ./start.sh >> /mnt/cache/appdata/update.log 2>&1'
-CRON_BACKUP_HELM='5 9 * * * $HOME/docker-scripts/backup.sh >> $HOME/docker-logs/backup.log 2>&1'
+CRON_BACKUP_HELM='5 9 * * * /mnt/cache/appdata/scripts/backup.sh >> /mnt/cache/appdata/scripts/logs/backup.log 2>&1'
 
 deploy_to_host() {
     local host="$1"
@@ -66,16 +66,13 @@ deploy_to_host() {
     
     # Deploy backup.sh only to non-ZFS hosts (helm)
     if [[ " ${NO_ZFS_HOSTS[@]} " =~ " ${host} " ]]; then
-        echo "    Creating docker-scripts directory..."
-        ssh "$host" "mkdir -p ${DOCKER_SCRIPTS_DIR}"
-        
-        echo "    Creating docker-logs directory..."
-        ssh "$host" "mkdir -p ${DOCKER_LOGS_DIR}"
+        echo "    Creating appdata scripts directories..."
+        ssh "$host" "mkdir -p ${APPDATA_SCRIPTS_DIR} ${APPDATA_LOGS_DIR}"
         
         echo "    Copying backup.sh..."
         for script in "${BACKUP_SCRIPTS[@]}"; do
             scp "${SCRIPT_DIR}/${script}" "${host}:/tmp/${script}"
-            ssh "$host" "mv /tmp/${script} ${DOCKER_SCRIPTS_DIR}/${script} && chmod +x ${DOCKER_SCRIPTS_DIR}/${script}"
+            ssh "$host" "mv /tmp/${script} ${APPDATA_SCRIPTS_DIR}/${script} && chmod +x ${APPDATA_SCRIPTS_DIR}/${script}"
         done
     fi
     
@@ -87,7 +84,7 @@ deploy_to_host() {
             ssh "$host" "(crontab -l 2>/dev/null | grep -v 'start.sh' | grep -v 'backup.sh' | grep -v '/mnt/ssdpool/backup' | grep -v 'snapshot_ceph' | grep -v 'traefik-acme-sync'; echo "${CRON_BACKUP_HELM}") | crontab -"
         else
             # NAS hosts: start.sh cron (keep existing update.log location)
-            ssh "$host" "(crontab -l 2>/dev/null | grep -v 'start.sh'; echo "${CRON_START_NAS}") | crontab -"
+            ssh "$host" "(crontab -l 2>/dev/null | grep -v 'start.sh'; printf '%s\n' \"${CRON_START_NAS}\") | crontab -"
         fi
     else
         echo "    Skipping cron (User Scripts plugin handles scheduling)"

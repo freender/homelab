@@ -23,7 +23,7 @@ cd ~/homelab/docker
 - `start.sh` - Updates and starts Docker stacks (Traefik first), cleans up unused images
 - `rm.sh` - Stops all Docker stacks with confirmation
 
-**helm only** (`~/docker-scripts/`):
+**helm only** (`/mnt/cache/appdata/scripts/`):
 - `backup.sh` - Backup appdata with smart container orchestration
 
 ### Directory Structure
@@ -34,14 +34,14 @@ All hosts:
     - start.sh, rm.sh     # Docker management scripts
 
 helm:
-  ~/docker-scripts/
+  /mnt/cache/appdata/scripts/
     - backup.sh           # Backup automation
-  ~/docker-logs/
+  /mnt/cache/appdata/scripts/logs/
     - backup.log          # Backup output
 
 NAS hosts (cinci, cottonwood):
-  ~/zfs-scripts/          # From homelab/zfs repo
-  ~/zfs-logs/             # From homelab/zfs repo
+  /mnt/cache/appdata/scripts/       # From homelab/zfs repo
+  /mnt/cache/appdata/scripts/logs/  # From homelab/zfs repo
 
 tower:
   /mnt/cache/appdata/scripts/  # ZFS and filebot scripts (see homelab/zfs and homelab/filebot repos)
@@ -69,7 +69,7 @@ cd /mnt/cache/appdata && ./start.sh
 cd /mnt/cache/appdata && ./rm.sh
 
 # Manual backup (helm only)
-~/docker-scripts/backup.sh
+/mnt/cache/appdata/scripts/backup.sh
 ```
 
 ## Scripts

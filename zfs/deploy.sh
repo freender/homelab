@@ -58,15 +58,15 @@ ZED_EVENTS=(
     "checksum"
 )
 
-ZFS_DEST_DIR="\$HOME/zfs-scripts"
+ZFS_DEST_DIR="/mnt/cache/appdata/scripts"
 ZFS_SCRIPTS=(
     "zfs_snapshots.sh"
     "zfs_replication_appdata.sh"
 )
 
-LOG_DIR="\$HOME/zfs-logs"
-CRON_SNAPSHOT_LINE='00 0 * * * sudo $HOME/zfs-scripts/zfs_snapshots.sh >> $HOME/zfs-logs/zfs_snapshots.log 2>&1'
-CRON_REPL_LINE='10 0 * * * sudo $HOME/zfs-scripts/zfs_replication_appdata.sh >> $HOME/zfs-logs/zfs_replication_appdata.log 2>&1'
+LOG_DIR="/mnt/cache/appdata/scripts/logs"
+CRON_SNAPSHOT_LINE='0 0 * * * sudo /mnt/cache/appdata/scripts/zfs_snapshots.sh >> /mnt/cache/appdata/scripts/logs/zfs_snapshots.log 2>&1'
+CRON_REPL_LINE='10 0 * * * sudo /mnt/cache/appdata/scripts/zfs_replication_appdata.sh >> /mnt/cache/appdata/scripts/logs/zfs_replication_appdata.log 2>&1'
 
 update_cron() {
     local host="$1"
@@ -120,14 +120,13 @@ deploy_to_nas() {
     ssh "$host" "if ! command -v sanoid >/dev/null 2>&1 || ! command -v syncoid >/dev/null 2>&1; then sudo apt-get update -qq; sudo apt-get install -y sanoid; fi"
 
     echo "    Copying ZFS scripts..."
-    ssh "$host" "mkdir -p $ZFS_DEST_DIR"
+    ssh "$host" "mkdir -p $ZFS_DEST_DIR $LOG_DIR"
     for script in "${ZFS_SCRIPTS[@]}"; do
         scp "${SCRIPT_DIR}/scripts/${script}" "${host}:/tmp/${script}"
         ssh "$host" "sudo mv /tmp/${script} $ZFS_DEST_DIR/${script} && sudo chmod +x $ZFS_DEST_DIR/${script}"
     done
 
     echo "    Ensuring log directory: $LOG_DIR"
-    ssh "$host" "mkdir -p $LOG_DIR"
 
     echo "    Updating crontab..."
     update_cron "$host"

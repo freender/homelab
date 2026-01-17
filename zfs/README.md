@@ -4,7 +4,7 @@ ZFS automation for cottonwood, cinci, and tower:
 - ZED Telegram notifications for ZFS errors (cottonwood/cinci)
 - Shared snapshot and appdata replication scripts (cottonwood/cinci)
 - Tower-specific ZFS/backup scripts (tower)
-- Cron jobs logging to \`\$HOME/zfs-logs\` (cottonwood/cinci)
+- Cron jobs logging to `/mnt/cache/appdata/scripts/logs` (cottonwood/cinci)
 
 ## Repo Layout
 \`\`\`
@@ -49,10 +49,10 @@ No setup required - scripts deploy directly.
 
 ### cottonwood/cinci
 - ZED notifier to \`/etc/zfs/zed.d/telegram-notify.sh\`
-- ZFS scripts to \`\$HOME/zfs-scripts\`
+- ZFS scripts to `/mnt/cache/appdata/scripts`
 - Cron entries:
-  - \`00 0 * * * sudo \$HOME/zfs-scripts/zfs_snapshots.sh >> \$HOME/zfs-logs/zfs_snapshots.log 2>&1\`
-  - \`10 0 * * * sudo \$HOME/zfs-scripts/zfs_replication_appdata.sh >> \$HOME/zfs-logs/zfs_replication_appdata.log 2>&1\`
+  - `0 0 * * * sudo /mnt/cache/appdata/scripts/zfs_snapshots.sh >> /mnt/cache/appdata/scripts/logs/zfs_snapshots.log 2>&1`
+  - `10 0 * * * sudo /mnt/cache/appdata/scripts/zfs_replication_appdata.sh >> /mnt/cache/appdata/scripts/logs/zfs_replication_appdata.log 2>&1`
 
 ### tower
 - ZFS/backup scripts to \`/mnt/cache/appdata/scripts/\`
