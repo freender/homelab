@@ -16,7 +16,7 @@ MODULES=(
     "telegraf"
     "zfs"
     "docker"
-    "tower"
+    "filebot"
     "pve-interfaces"
     "pve-gpu-passthrough"
 )

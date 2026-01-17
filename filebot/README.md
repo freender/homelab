@@ -1,4 +1,4 @@
-# homelab/tower
+# homelab/filebot
 
 Tower (Unraid) specific scripts for maintenance and monitoring.
 
@@ -31,7 +31,7 @@ Monitors FileBot download folder for stuck imports.
 Deploy from helm:
 
 \`\`\`bash
-cd ~/homelab/tower
+cd ~/homelab/filebot
 ./deploy.sh
 \`\`\`
 

@@ -1,5 +1,5 @@
 #!/bin/bash
-# Deploy tower-specific scripts
+# Deploy filebot scripts
 # Usage: ./deploy.sh
 
 set -e
@@ -11,7 +11,7 @@ SUPPORTED_HOSTS=("tower")
 # Skip if host not applicable
 if [[ -n "${1:-}" && "$1" != "all" ]]; then
     if [[ ! " ${SUPPORTED_HOSTS[*]} " =~ " $1 " ]]; then
-        echo "==> Skipping tower (not applicable to $1)"
+        echo "==> Skipping filebot (not applicable to $1)"
         exit 0
     fi
 fi
@@ -22,7 +22,7 @@ SCRIPTS=(
     "filebot_monitor.sh"
 )
 
-echo "==> Deploying Tower Scripts"
+echo "==> Deploying Filebot Scripts"
 echo "    Repository: https://github.com/freender/homelab"
 echo "    Destination: ${DEST_DIR}"
 echo ""
