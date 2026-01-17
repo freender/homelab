@@ -12,6 +12,7 @@ MODULES=(
     "telegraf"
     "zfs"
     "docker"
+    "tower"
     "pve-interfaces"
     "pve-gpu-passthrough"
 )
@@ -22,6 +23,7 @@ declare -A MODULE_SCRIPTS=(
     ["telegraf"]="${SCRIPT_DIR}/telegraf/deploy.sh"
     ["zfs"]="${SCRIPT_DIR}/zfs/deploy.sh"
     ["docker"]="${SCRIPT_DIR}/docker/deploy.sh"
+    ["tower"]="${SCRIPT_DIR}/tower/deploy.sh"
     ["pve-interfaces"]="${SCRIPT_DIR}/pve-interfaces/deploy.sh"
     ["pve-gpu-passthrough"]="${SCRIPT_DIR}/pve-gpu-passthrough/deploy.sh"
 )
@@ -36,7 +38,8 @@ run_module() {
 
     if [[ ! -x "$script" ]]; then
         echo "    ✗ Missing deploy script: ${script}"
-        FAILED_MODULES+=("${module}")
+        FAILED_MODULES+=("
+${module}")
         echo ""
         return
     fi
@@ -45,7 +48,8 @@ run_module() {
         echo "    ✓ ${module} deployment complete"
     else
         echo "    ✗ ${module} deployment failed"
-        FAILED_MODULES+=("${module}")
+        FAILED_MODULES+=("
+${module}")
     fi
 
     echo ""
