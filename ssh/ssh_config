@@ -9,15 +9,19 @@ Host helm
 Host tower
   HostName tower.freender.internal
   User root
-  
-Host work
-  HostName work.freender.internal
-  User freender  
+
+Host ascendant
+  HostName ascendant.freender.internal
+  User freender
+
+Host ghost
+  HostName 10.0.10.230
+  User freender
 
 # --- Baremetal ---
 
-Host mbp
-  HostName mbp.freender.internal
+Host hunter
+  HostName hunter.freender.internal
   User freender
   
 Host pi-kvm
