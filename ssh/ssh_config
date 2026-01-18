@@ -20,8 +20,8 @@ Host ghost
 
 # --- Baremetal ---
 
-Host hunter
-  HostName hunter.freender.internal
+Host exo
+  HostName exo.freender.internal
   User freender
   
 Host pi-kvm

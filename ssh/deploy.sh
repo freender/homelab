@@ -8,7 +8,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SSH_CONFIG="${SCRIPT_DIR}/ssh_config"
 
 # Supported hosts for this module
-SUPPORTED_HOSTS=("helm" "tower" "mbp" "cottonwood" "cinci" "ace" "bray" "clovis" "xur")
+SUPPORTED_HOSTS=("helm" "tower" "exo" "cottonwood" "cinci" "ace" "bray" "clovis" "xur")
 
 # Skip if host not applicable
 if [[ -n "${1:-}" && "$1" != "all" ]]; then
@@ -19,7 +19,7 @@ if [[ -n "${1:-}" && "$1" != "all" ]]; then
 fi
 
 # Default hosts (all accessible)
-DEFAULT_HOSTS="helm tower mbp cottonwood cinci ace bray clovis xur"
+DEFAULT_HOSTS="helm tower exo cottonwood cinci ace bray clovis xur"
 
 HOSTS="${@:-$DEFAULT_HOSTS}"
 if [[ "$1" == "all" ]]; then
