@@ -30,7 +30,7 @@ TIMESTAMP=$(date +%Y-%m-%d)
 
 # Detect execution mode
 function detect_mode() {
-    if [[ -f /etc/pve/.version ]]; then
+    if [[ -d /etc/pve ]]; then
         echo "local"
     else
         echo "remote"
