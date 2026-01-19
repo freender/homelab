@@ -5,7 +5,7 @@
 set -e
 
 # Supported hosts for this module
-SUPPORTED_HOSTS=("ace" "clovis")
+SUPPORTED_HOSTS=("ace" "bray" "clovis")
 
 # Skip if host not applicable
 if [[ -n "${1:-}" && "$1" != "all" ]]; then
@@ -16,10 +16,10 @@ if [[ -n "${1:-}" && "$1" != "all" ]]; then
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-HOSTS="${@:-ace clovis}"
-HOSTS="${@:-ace clovis}"
+HOSTS="${@:-ace bray clovis}"
+HOSTS="${@:-ace bray clovis}"
 if [[ "$1" == "all" ]]; then
-    HOSTS="ace clovis"
+    HOSTS="ace bray clovis"
 fi
 
 echo "==> Deploying GPU Passthrough Configs"
