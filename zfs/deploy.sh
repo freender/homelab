@@ -76,10 +76,13 @@ update_cron() {
 deploy_to_tower() {
     echo "==> Deploying to tower (Unraid)..."
     
+    # Set ownership (99:100 for Unraid nobody:users)
+    OWNER="99:100"
+    
     echo "    Copying tower-specific scripts..."
     for script in "${TOWER_SCRIPTS[@]}"; do
         scp "${SCRIPT_DIR}/scripts/${script}" "tower:/tmp/${script}"
-        ssh "tower" "sudo mv /tmp/${script} ${TOWER_DEST}/${script} && sudo chmod +x ${TOWER_DEST}/${script}"
+        ssh "tower" "sudo mv /tmp/${script} ${TOWER_DEST}/${script} && sudo chmod +x ${TOWER_DEST}/${script} && sudo chown $OWNER ${TOWER_DEST}/${script}"
     done
     
     echo "    Skipping ZED setup (Unraid has built-in notifications)"
@@ -121,12 +124,17 @@ deploy_to_nas() {
 
     echo "    Copying ZFS scripts..."
     ssh "$host" "mkdir -p $ZFS_DEST_DIR $LOG_DIR"
+    
+    # Set ownership (1000:1000 for cottonwood/cinci)
+    OWNER="1000:1000"
+    
     for script in "${ZFS_SCRIPTS[@]}"; do
         scp "${SCRIPT_DIR}/scripts/${script}" "${host}:/tmp/${script}"
-        ssh "$host" "sudo mv /tmp/${script} $ZFS_DEST_DIR/${script} && sudo chmod +x $ZFS_DEST_DIR/${script}"
+        ssh "$host" "sudo mv /tmp/${script} $ZFS_DEST_DIR/${script} && sudo chmod +x $ZFS_DEST_DIR/${script} && sudo chown $OWNER $ZFS_DEST_DIR/${script}"
     done
 
-    echo "    Ensuring log directory: $LOG_DIR"
+    echo "    Setting ownership on log directory..."
+    ssh "$host" "sudo chown $OWNER $LOG_DIR"
 
     echo "    Updating crontab..."
     update_cron "$host"
