@@ -262,9 +262,9 @@ function remove_gpu_passthrough_remote() {
     echo ""
     
     if [[ "${DRY_RUN:-false}" == "true" ]]; then
-        ssh "$host" "DRY_RUN=true bash /tmp/pve-gpu-passthrough-remove-temp.sh"
+        ssh "$host" 'export DRY_RUN=true && bash /tmp/pve-gpu-passthrough-remove-temp.sh'
     else
-        ssh "$host" "bash /tmp/pve-gpu-passthrough-remove-temp.sh"
+        ssh "$host" 'bash /tmp/pve-gpu-passthrough-remove-temp.sh'
     fi
     
     # Cleanup
