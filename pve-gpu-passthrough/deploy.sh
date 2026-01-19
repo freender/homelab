@@ -63,13 +63,18 @@ for host in $HOSTS; do
     fi
 
     FILTERED_CMDLINE=""
+    SEEN_ARGS=""
     for arg in $CURRENT_CMDLINE; do
         case "$arg" in
             BOOT_IMAGE=*|initrd=*|intel_iommu=*|amd_iommu=*|iommu=*|pcie_acs_override=*|video=*)
                 continue
                 ;;
             *)
-                FILTERED_CMDLINE="$FILTERED_CMDLINE $arg"
+                # Deduplicate parameters (especially "quiet")
+                if [[ ! " $SEEN_ARGS " =~ " $arg " ]]; then
+                    FILTERED_CMDLINE="$FILTERED_CMDLINE $arg"
+                    SEEN_ARGS="$SEEN_ARGS $arg"
+                fi
                 ;;
         esac
     done
@@ -77,8 +82,19 @@ for host in $HOSTS; do
     FILTERED_CMDLINE="${FILTERED_CMDLINE# }"
     NEW_CMDLINE="$FILTERED_CMDLINE $CMDLINE"
     NEW_CMDLINE="${NEW_CMDLINE# }"
+    
+    # Final deduplication after combining (handles duplicates between old and new)
+    FINAL_CMDLINE=""
+    FINAL_SEEN=""
+    for arg in $NEW_CMDLINE; do
+        if [[ ! " $FINAL_SEEN " =~ " $arg " ]]; then
+            FINAL_CMDLINE="$FINAL_CMDLINE $arg"
+            FINAL_SEEN="$FINAL_SEEN $arg"
+        fi
+    done
+    FINAL_CMDLINE="${FINAL_CMDLINE# }"
 
-    ssh "$host" "printf '%s\n' \"$NEW_CMDLINE\" > /etc/kernel/cmdline"
+    ssh "$host" "printf '%s\n' \"$FINAL_CMDLINE\" > /etc/kernel/cmdline"
     ssh "$host" "proxmox-boot-tool refresh"
 
     # Deploy modprobe configs

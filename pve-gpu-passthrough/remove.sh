@@ -79,6 +79,11 @@ EOF
 function remove_gpu_passthrough_local() {
     local current_host=$(hostname)
     
+    # Check for dry-run flag file (used when called remotely)
+    if [[ -f /tmp/pve-gpu-passthrough-dryrun.flag ]]; then
+        DRY_RUN="true"
+    fi
+    
     # Validate this is a supported host
     if [[ ! " ${SUPPORTED_HOSTS[*]} " =~ " $current_host " ]]; then
         echo "ERROR: Current host '$current_host' is not configured for GPU passthrough"
@@ -261,14 +266,15 @@ function remove_gpu_passthrough_remote() {
     echo "    Executing removal on $host..."
     echo ""
     
+    # Pass DRY_RUN flag via temporary flag file
     if [[ "${DRY_RUN:-false}" == "true" ]]; then
-        ssh "$host" 'export DRY_RUN=true && bash /tmp/pve-gpu-passthrough-remove-temp.sh'
+        ssh "$host" 'echo "true" > /tmp/pve-gpu-passthrough-dryrun.flag && bash /tmp/pve-gpu-passthrough-remove-temp.sh'
     else
-        ssh "$host" 'bash /tmp/pve-gpu-passthrough-remove-temp.sh'
+        ssh "$host" 'rm -f /tmp/pve-gpu-passthrough-dryrun.flag && bash /tmp/pve-gpu-passthrough-remove-temp.sh'
     fi
     
     # Cleanup
-    ssh "$host" "rm -f /tmp/pve-gpu-passthrough-remove-temp.sh"
+    ssh "$host" "rm -f /tmp/pve-gpu-passthrough-remove-temp.sh /tmp/pve-gpu-passthrough-dryrun.flag"
     
     echo ""
     return 0
