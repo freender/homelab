@@ -96,11 +96,18 @@ for host in $HOSTS; do
     ssh "$host" "if [ -f /etc/modules ]; then grep -v '^vfio' /etc/modules > /tmp/modules.clean && mv /tmp/modules.clean /etc/modules; fi"
     ssh "$host" "if [ -f /etc/modules-load.d/modules.conf ]; then grep -v '^vfio' /etc/modules-load.d/modules.conf > /tmp/modules.conf.clean && mv /tmp/modules.conf.clean /etc/modules-load.d/modules.conf; fi"
 
+    # Deploy emergency removal script
+    echo "    Deploying emergency removal script..."
+    scp "$SCRIPT_DIR/remove.sh" "$host:/root/pve-gpu-passthrough-remove.sh"
+    ssh "$host" "chmod 755 /root/pve-gpu-passthrough-remove.sh"
+    ssh "$host" "chown root:root /root/pve-gpu-passthrough-remove.sh"
+
     # Update initramfs
     echo "    Updating initramfs..."
     ssh "$host" "update-initramfs -u -k all"
 
     echo "    ✓ Deployed to $host (reboot required)"
+    echo "    ✓ Emergency removal script: /root/pve-gpu-passthrough-remove.sh"
     echo ""
 done
 

@@ -152,12 +152,68 @@ List IOMMU groups:
 ssh <host> "find /sys/kernel/iommu_groups/ -type l | sort -V"
 ```
 
+## Emergency Recovery
+
+### Restore Console Display (Remove GPU Passthrough)
+
+**Use when:** GPU passthrough prevents console access and you need to restore display output.
+
+**Method 1: Pre-deployed Script (Fastest)**
+
+Script is auto-deployed to `/root/pve-gpu-passthrough-remove.sh` on each host during deployment.
+
+1) Boot into recovery mode:
+   - Hold `Space` at systemd-boot menu
+   - Press `e` on Proxmox entry
+   - Append `systemd.unit=emergency.target` to options line
+   - Press `Ctrl+X` to boot to root shell
+
+2) Execute removal script:
+```bash
+/root/pve-gpu-passthrough-remove.sh
+```
+
+3) Reboot:
+```bash
+reboot
+```
+
+**Method 2: Remote Execution (from helm)**
+
+If SSH access is available:
+```bash
+cd ~/homelab/pve-gpu-passthrough
+./remove.sh ace          # Remove from specific host
+./remove.sh all          # Remove from all hosts
+./remove.sh --dry-run ace  # Preview changes
+
+# Then reboot
+ssh ace reboot
+```
+
+**What it does:**
+- Removes `video=efifb:off` from kernel cmdline
+- Comments out GPU driver blacklists
+- Comments out VFIO device bindings
+- Removes VFIO module config
+- Preserves IOMMU/ACS settings
+- Updates initramfs and bootloader
+
+**After recovery:** GPU will use native driver (i915/nouveau) and display will work.
+
+**Re-enable passthrough:**
+```bash
+cd ~/homelab/pve-gpu-passthrough
+./deploy.sh ace
+ssh ace reboot
+```
+
 ## Troubleshooting
 
 ### No display after reboot
 **Expected behavior** - GPU is bound to vfio-pci and unavailable to host.
 
-**Solution:** Use Proxmox web GUI at `https://<host>:8006`
+**Solution:** Use Proxmox web GUI at `https://<host>:8006` or see Emergency Recovery above.
 
 ### Code 43 error in Windows VM
 NVIDIA driver returns Code 43 when KVM detection enabled.
@@ -195,7 +251,7 @@ If host console appears to hang during boot, this is expected.
 
 **Cause:** GPU passed to VM, no display output available to host.
 
-**Recovery:** See Obsidian guide: `PVE - GPU Passthrough Recovery - Ace`
+**Recovery:** Run `/root/pve-gpu-passthrough-remove.sh` from recovery console (see Emergency Recovery above)
 
 ## File Locations
 
@@ -229,4 +285,13 @@ lspci -nn | grep -E "VGA|3D|Audio controller.*NVIDIA"
 cd ~/homelab/pve-gpu-passthrough
 ./deploy.sh <host>
 ssh <host> reboot
+```
+
+**Emergency Recovery:**
+```bash
+# From recovery console on affected host:
+/root/pve-gpu-passthrough-remove.sh
+
+# From helm (if SSH works):
+./remove.sh <host>
 ```
