@@ -1,1 +1,1 @@
-quiet intel_iommu=on iommu=pt pcie_acs_override=downstream
+quiet intel_iommu=on iommu=pt pcie_acs_override=downstream video=efifb:off
