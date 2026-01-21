@@ -1,54 +1,89 @@
 #!/bin/bash
-# Deploy network interfaces config to PVE nodes
+# Deploy network interfaces config to PVE/PBS nodes
 # Usage: ./deploy.sh [ace|bray|clovis|xur|all]
 
-set -e
-
-# Supported hosts for this module
-SUPPORTED_HOSTS=("ace" "bray" "clovis")
-
-# Skip if host not applicable
-if [[ -n "${1:-}" && "$1" != "all" ]]; then
-    if [[ ! " ${SUPPORTED_HOSTS[*]} " =~ " $1 " ]]; then
-        echo "==> Skipping pve-interfaces (not applicable to $1)"
-        exit 0
-    fi
-fi
+# Source shared library
+source "$(dirname "$0")/../lib/common.sh"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-HOSTS="${@:-ace bray clovis xur}"
-HOSTS="${@:-ace bray clovis xur}"
-if [[ "$1" == "all" ]]; then
-    HOSTS="ace bray clovis xur"
+
+if ! load_hosts_file "$SCRIPT_DIR/hosts.conf"; then
+    exit 1
 fi
 
-echo "==> Deploying Network Interfaces"
-echo "    Hosts: $HOSTS"
+# Get supported hosts from registry (PVE + PBS)
+SUPPORTED_HOSTS=($(get_hosts_by_type pve) $(get_hosts_by_type pbs))
+
+# Filter hosts based on arguments
+if ! HOSTS=$(filter_hosts "${1:-all}" "${SUPPORTED_HOSTS[@]}"); then
+    print_action "Skipping pve-interfaces (not applicable to $1)"
+    exit 0
+fi
+
+print_action "Deploying Network Interfaces"
+print_sub "Hosts: $HOSTS"
 echo ""
 
 for host in $HOSTS; do
-    echo "==> Deploying to $host..."
+    print_action "Deploying to $host..."
 
-    if [[ ! -f "$SCRIPT_DIR/$host/interfaces" ]]; then
-        echo "    ✗ Error: No config found for node: $host"
-        echo "    Available: $(ls -d "$SCRIPT_DIR"/*/ 2>/dev/null | xargs -n1 basename | tr n  )"
+    host_type=$(get_host_type "$host")
+
+    if [[ "$host_type" == "pve" ]]; then
+        template_file="$SCRIPT_DIR/templates/pve-interfaces"
+    else
+        template_file="$SCRIPT_DIR/templates/pbs-interfaces"
+    fi
+
+    if [[ ! -f "$template_file" ]]; then
+        print_warn "No template found for node type: $host_type"
+        print_sub "Expected: $template_file"
         continue
     fi
 
+    mgmt_ip=$(get_host_kv "$host" "net.mgmt_ip")
+    if [[ "$host_type" == "pve" ]]; then
+        storage_ip=$(get_host_kv "$host" "net.storage_ip" || true)
+    else
+        storage_ip=""
+    fi
+    gateway=$(get_host_kv "$host" "net.gateway")
+
+    if [[ -z "$mgmt_ip" || -z "$gateway" ]]; then
+        print_warn "Missing net.mgmt_ip or net.gateway for $host in pve-interfaces/hosts.conf"
+        continue
+    fi
+
+    if [[ "$host_type" == "pve" && -z "$storage_ip" ]]; then
+        print_warn "Missing net.storage_ip for $host in pve-interfaces/hosts.conf"
+        continue
+    fi
+
+    content=$(cat "$template_file")
+    content=${content//\$\{NET_MGMT_IP\}/$mgmt_ip}
+    content=${content//\$\{NET_GATEWAY\}/$gateway}
+    if [[ -n "$storage_ip" ]]; then
+        content=${content//\$\{NET_STORAGE_IP\}/$storage_ip}
+    fi
+
+    rendered_file=$(mktemp)
+    printf '%s\n' "$content" > "$rendered_file"
+
     # Backup existing config
-    echo "    Backing up existing config..."
-    ssh "$host" "cp /etc/network/interfaces /etc/network/interfaces.bak.$(date +%Y%m%d%H%M%S)"
+    print_sub "Backing up existing config..."
+    ssh "$host" "cp /etc/network/interfaces /etc/network/interfaces.bak.\$(date +%Y%m%d%H%M%S)"
 
     # Copy new config
-    echo "    Copying interfaces file..."
-    scp "$SCRIPT_DIR/$host/interfaces" "$host":/tmp/interfaces
-    ssh "$host" "mv /tmp/interfaces /etc/network/interfaces && chmod 644 /etc/network/interfaces"
+    print_sub "Copying interfaces file..."
+    deploy_file "$rendered_file" "$host" "/etc/network/interfaces"
 
-    echo "    ✓ Deployed to $host (reboot or ifreload required)"
+    rm -f "$rendered_file"
+
+    print_ok "Deployed to $host (reboot or ifreload required)"
     echo ""
 done
 
-echo "==> Deployment complete!"
+print_action "Deployment complete!"
 echo ""
 echo "Apply changes:"
 echo "  ssh <node> ifreload -a   # Apply without reboot (may disrupt connections)"

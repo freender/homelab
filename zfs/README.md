@@ -45,6 +45,13 @@ No setup required - scripts deploy directly.
 ./deploy.sh cinci          # Cincinnati only
 \`\`\`
 
+## Host Registry
+
+Hosts are selected by `zfs/hosts.conf` types:
+
+- `truenas` -> TrueNAS ZED notifications
+- `unraid` -> Unraid scripts only
+
 ## What Gets Deployed
 
 ### cottonwood/cinci

@@ -23,6 +23,10 @@ Master/slave apcupsd setup for Proxmox cluster with coordinated shutdown.
 | clovis | Slave  | Net    | Receives shutdown command from bray |
 | xur    | Master | USB    | Independent self-shutdown |
 
+## Host Registry
+
+Per-host settings live in `apcupsd/hosts.conf` using `ups.*` keys.
+
 ## Shutdown Sequence (bray UPS)
 
 1. bray enables HA maintenance on bray/ace/clovis

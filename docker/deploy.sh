@@ -2,38 +2,48 @@
 # Deploy docker management scripts
 # Usage: ./deploy.sh [helm|cottonwood|cinci|tower|all]
 
-set -e
+# Source shared library
+source "$(dirname "$0")/../lib/common.sh"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# Supported hosts for this module
-SUPPORTED_HOSTS=("helm" "tower" "cottonwood" "cinci")
 
-# Skip if host not applicable
-if [[ -n "${1:-}" && "$1" != "all" ]]; then
-    if [[ ! " ${SUPPORTED_HOSTS[*]} " =~ " $1 " ]]; then
-        echo "==> Skipping docker (not applicable to $1)"
-        exit 0
+if ! load_hosts_file "$SCRIPT_DIR/hosts.conf"; then
+    exit 1
+fi
+
+get_docker_hosts() {
+    get_hosts_with_feature docker
+}
+
+load_host_config() {
+    local host="$1"
+    USER=$(get_host_kv "$host" "docker.user")
+
+    if [[ -z "$USER" ]]; then
+        echo "ERROR: docker.user missing for $host in docker/hosts.conf"
+        return 1
     fi
+}
+
+host_needs_backup() {
+    local host="$1"
+    host_has_feature "$host" "docker-backup"
+}
+
+host_skip_cron() {
+    local host="$1"
+    host_has_feature "$host" "docker-no-cron"
+}
+
+SUPPORTED_HOSTS=($(get_docker_hosts))
+
+# Filter hosts based on arguments
+if ! HOSTS=$(filter_hosts "${1:-all}" "${SUPPORTED_HOSTS[@]}"); then
+    print_action "Skipping docker (not applicable to $1)"
+    exit 0
 fi
-HOSTS="${@:-helm cottonwood cinci tower}"
-if [[ "$1" == "all" ]]; then
-    HOSTS="helm cottonwood cinci tower"
-fi
 
-# Host-specific configuration
-declare -A HOST_USERS=(
-    ["helm"]="freender"
-    ["cottonwood"]="denys"
-    ["cinci"]="sysadm"
-    ["tower"]="root"
-)
-
-# Hosts without ZFS (need backup.sh)
-NO_ZFS_HOSTS=("helm")
-
-# Hosts that don't need cron (User Scripts plugin handles scheduling)
-NO_CRON_HOSTS=("tower")
-
+# Configuration
 APPDATA_DEST="/mnt/cache/appdata"
 APPDATA_SCRIPTS_DIR="${APPDATA_DEST}/scripts"
 APPDATA_LOGS_DIR="${APPDATA_SCRIPTS_DIR}/logs"
@@ -53,57 +63,59 @@ CRON_BACKUP_HELM='5 9 * * * /mnt/cache/appdata/scripts/backup.sh >> /mnt/cache/a
 
 deploy_to_host() {
     local host="$1"
-    local user="${HOST_USERS[$host]}"
-    
-    echo "==> Deploying to $host (user: $user)..."
+
+    if ! load_host_config "$host"; then
+        return 1
+    fi
+
+    print_action "Deploying to $host (user: $USER)..."
     
     # Deploy appdata scripts (all hosts)
-    echo "    Copying appdata scripts..."
+    print_sub "Copying appdata scripts..."
     for script in "${APPDATA_SCRIPTS[@]}"; do
-        scp "${SCRIPT_DIR}/${script}" "${host}:/tmp/${script}"
-        ssh "$host" "sudo mv /tmp/${script} ${APPDATA_DEST}/${script} && sudo chown ${user}:${user} ${APPDATA_DEST}/${script} && sudo chmod +x ${APPDATA_DEST}/${script}"
+        scp -q "${SCRIPT_DIR}/${script}" "${host}:/tmp/${script}"
+        ssh "$host" "sudo mv /tmp/${script} ${APPDATA_DEST}/${script} && sudo chown ${USER}:${USER} ${APPDATA_DEST}/${script} && sudo chmod +x ${APPDATA_DEST}/${script}"
     done
     
-    # Deploy backup.sh only to non-ZFS hosts (helm)
-    if [[ " ${NO_ZFS_HOSTS[@]} " =~ " ${host} " ]]; then
-        echo "    Creating appdata scripts directories..."
+    # Deploy backup.sh only to hosts that need it
+    if host_needs_backup "$host"; then
+        print_sub "Creating appdata scripts directories..."
         ssh "$host" "mkdir -p ${APPDATA_SCRIPTS_DIR} ${APPDATA_LOGS_DIR}"
         
-        echo "    Copying backup.sh..."
+        print_sub "Copying backup.sh..."
         for script in "${BACKUP_SCRIPTS[@]}"; do
-            scp "${SCRIPT_DIR}/${script}" "${host}:/tmp/${script}"
+            scp -q "${SCRIPT_DIR}/${script}" "${host}:/tmp/${script}"
             ssh "$host" "mv /tmp/${script} ${APPDATA_SCRIPTS_DIR}/${script} && chmod +x ${APPDATA_SCRIPTS_DIR}/${script}"
         done
     fi
     
     # Update cron entries (skip for hosts using User Scripts plugin)
-    if [[ ! " ${NO_CRON_HOSTS[@]} " =~ " ${host} " ]]; then
-        echo "    Updating crontab..."
-        if [[ "$host" == "helm" ]]; then
-            # helm: backup.sh cron only (it calls start.sh internally)
-            ssh "$host" "(crontab -l 2>/dev/null | grep -v 'start.sh' | grep -v 'backup.sh' | grep -v '/mnt/ssdpool/backup' | grep -v 'snapshot_ceph' | grep -v 'traefik-acme-sync'; echo "${CRON_BACKUP_HELM}") | crontab -"
+    if ! host_skip_cron "$host"; then
+        print_sub "Updating crontab..."
+        if host_needs_backup "$host"; then
+            # Hosts with backup: backup.sh cron only (it calls start.sh internally)
+            ssh "$host" "(crontab -l 2>/dev/null | grep -v 'start.sh' | grep -v 'backup.sh' | grep -v '/mnt/ssdpool/backup' | grep -v 'snapshot_ceph' | grep -v 'traefik-acme-sync'; echo \"${CRON_BACKUP_HELM}\") | crontab -"
         else
-            # NAS hosts: start.sh cron (keep existing update.log location)
+            # NAS hosts: start.sh cron
             ssh "$host" "(crontab -l 2>/dev/null | grep -v 'start.sh'; printf '%s\n' \"${CRON_START_NAS}\") | crontab -"
         fi
     else
-        echo "    Skipping cron (User Scripts plugin handles scheduling)"
+        print_sub "Skipping cron (User Scripts plugin handles scheduling)"
     fi
     
-    echo "    ✓ Deployment complete for $host"
+    print_ok "Deployment complete for $host"
     echo ""
 }
 
-echo "==> Deploying Docker Management Scripts"
-echo "    Repository: https://github.com/freender/homelab"
-echo "    Hosts: $HOSTS"
+print_action "Deploying Docker Management Scripts"
+print_sub "Hosts: $HOSTS"
 echo ""
 
 for host in $HOSTS; do
     deploy_to_host "$host"
 done
 
-echo "==> All deployments complete!"
+print_action "All deployments complete!"
 echo ""
 echo "Manual usage:"
 echo "  cd /mnt/cache/appdata && ./start.sh   # Update and start containers"

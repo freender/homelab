@@ -1,15 +1,27 @@
 # Agent Instructions for Homelab Repository
 
-**Repository:** `git@github.com:freender/homelab.git`  
-**Type:** Shell-based infrastructure automation for Proxmox homelab cluster  
-**Primary Language:** Bash/Shell scripts  
-**Infrastructure:** 3-node Proxmox Ceph cluster (ace, bray, clovis), PBS backup server (xur), VMs, remote NAS
+**Repository:** `git@github.com:freender/homelab.git`
+**Type:** Shell-based infrastructure automation for Proxmox homelab
+**Primary Language:** Bash/Shell
+**Infrastructure:** 3-node Proxmox cluster (ace, bray, clovis), PBS (xur), VMs, remote NAS
 
----
+## Build, Lint, Test
 
-## Commands Reference
+No formal build system, linter, or automated tests.
 
-### Deployment Commands
+**Manual verification (typical):**
+- Service status: `ssh <host> "systemctl status <service>"`
+- Logs: `ssh <host> "journalctl -u <service> -n 50"`
+
+**Single-test example (module-specific):**
+- `apcupsd/scripts/test-shutdown.sh` (run on the UPS host)
+
+**Pragmatic checks when editing a module:**
+1) Deploy only the module to one host.
+2) Validate config file is present and service is active.
+3) Review recent logs for errors.
+
+## Deployment Commands
 
 ```bash
 # Deploy all modules to all hosts
@@ -18,376 +30,120 @@
 # Deploy all modules to a specific host
 ./deploy-all.sh <hostname>
 
-# Deploy single module to all its supported hosts
-cd <module>/ && ./deploy.sh all
+# Deploy a single module to all supported hosts
+cd <module> && ./deploy.sh all
 
-# Deploy single module to specific hosts
-cd <module>/ && ./deploy.sh <host1> <host2>
+# Deploy a single module to specific hosts
+cd <module> && ./deploy.sh <host1> <host2>
 ```
 
-### No Build/Test/Lint Commands
-
-This repository has **no formal build system, test framework, or linters**. Verification is manual:
-
-```bash
-# Verify deployment by checking service status
-ssh <host> "systemctl status <service>"
-
-# Check logs
-ssh <host> "journalctl -u <service> -n 50"
-
-# Manual functional tests exist in some modules
-# Example: apcupsd/scripts/test-shutdown.sh
-```
-
-### Module Structure
+## Module Layout
 
 ```
 homelab/
-├── deploy-all.sh              # Master orchestrator
-├── <module>/
-│   ├── deploy.sh              # Module deployment script
-│   ├── configs/               # Per-host configurations
-│   ├── scripts/               # Installation/utility scripts
-│   └── README.md              # Module documentation
+├── deploy-all.sh
+├── lib/common.sh
+└── <module>/
+    ├── deploy.sh
+    ├── hosts.conf      # Module-specific registry
+    ├── configs/        # Optional
+    ├── scripts/        # Optional
+    └── README.md
 ```
 
-**Modules:** apcupsd, telegraf, zfs, docker, ssh, pve-interfaces, pve-gpu-passthrough, filebot
+## Deployment Pattern (deploy.sh)
 
----
+```bash
+#!/bin/bash
+source "$(dirname "$0")/../lib/common.sh"
+
+SUPPORTED_HOSTS=($(get_hosts_by_type pve))
+if ! HOSTS=$(filter_hosts "${1:-all}" "${SUPPORTED_HOSTS[@]}"); then
+    print_action "Skipping <module> (not applicable to $1)"
+    exit 0
+fi
+```
 
 ## Code Style Guidelines
 
-### Shell Script Standards
-
-**Error Handling:**
+### Imports and Structure
+- Source shared helpers at the top of `deploy.sh` scripts.
 ```bash
 #!/bin/bash
-set -e    # Exit on error (REQUIRED for all scripts)
-set -u    # Exit on undefined variables (OPTIONAL but recommended)
-```
-
-**Script Header:**
-```bash
-#!/bin/bash
-# Brief description of what this script does
-# Usage: ./script.sh [arguments]
-```
-
-**Directory Resolution:**
-```bash
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-# OR for sourced scripts:
+source "$(dirname "$0")/../lib/common.sh"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ```
+- Prefer `lib/common.sh` helpers: `filter_hosts`, `deploy_file`, `deploy_script`, `ensure_remote_dir`.
 
-**Host Filtering Pattern (for deploy.sh):**
-```bash
-# Supported hosts for this module
-SUPPORTED_HOSTS=("ace" "bray" "clovis" "xur")
+### Formatting
+- Use 4-space indentation.
+- Use `[[ ... ]]` for tests, and quote all variables: `"${VAR}"`.
+- Keep SSH commands on single lines unless a heredoc is required.
 
-# Skip if host not applicable
-if [[ -n "${1:-}" && "$1" != "all" ]]; then
-    if [[ ! " ${SUPPORTED_HOSTS[*]} " =~ " $1 " ]]; then
-        echo "==> Skipping <module> (not applicable to $1)"
-        exit 0  # Exit 0 = graceful skip
-    fi
-fi
-```
+### Error Handling
+- `set -e` is required in scripts that execute commands (inherit via `lib/common.sh`).
+- `set -u` is recommended when scripts accept parameters.
+- Validate required files and inputs early and exit with non-zero on failure.
+- Use `|| true` only for intentionally non-fatal commands.
 
 ### Naming Conventions
-
-**Variables:**
-- `UPPERCASE_WITH_UNDERSCORES` for constants and environment variables
-- `lowercase` for local variables in simple scripts
-- Use `${VAR}` bracing for clarity, `"${VAR}"` for safety
-
-**Files:**
-- `lowercase-with-dashes.sh` for scripts
-- `lowercase.conf` for configuration files
-- `README.md` for documentation (capitalized)
-
-**Hosts:**
-- Proxmox nodes: `ace`, `bray`, `clovis`
-- Backup server: `xur`
-- VMs: `helm`, `tower`
-- Remote NAS: `cottonwood`, `cinci`
-
-### Deployment Pattern
-
-**Standard deploy.sh structure:**
-```bash
-#!/bin/bash
-set -e
-
-SUPPORTED_HOSTS=("host1" "host2")
-
-# Host filtering (see above)
-
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-
-# Validate prerequisites (secrets, configs)
-if [[ ! -f "$SCRIPT_DIR/required-file" ]]; then
-    echo "ERROR: required-file not found!"
-    exit 1
-fi
-
-echo "=== Deploying <module> ==="
-
-for HOST in $HOSTS; do
-    echo "=== Deploying to $HOST ==="
-    
-    # Create temp directory on target
-    ssh "$HOST" "rm -rf /tmp/homelab-<module> && mkdir -p /tmp/homelab-<module>"
-    
-    # Copy files
-    scp -r "$SCRIPT_DIR"/* "$HOST:/tmp/homelab-<module>/"
-    
-    # Run installer
-    ssh "$HOST" "cd /tmp/homelab-<module> && chmod +x scripts/install.sh && ./scripts/install.sh"
-    
-    echo ""
-done
-
-echo "=== Deployment complete ==="
-```
-
-### Configuration Management
-
-**Secrets:**
-- Store in `.env` or `telegram.env` files (gitignored)
-- Provide `.env.example` templates
-- Validate existence before deployment
-- **NEVER commit secrets to git**
-
-**Per-host configs:**
-- Organize in `<module>/<hostname>/` subdirectories
-- Use hostname as directory name
-- Example: `pve-interfaces/ace/interfaces`, `apcupsd/configs/ace/apcupsd.conf`
-
-**Heredocs for config files:**
-```bash
-# Use heredocs instead of manual editing
-cat > /path/to/config << 'EOF'
-config content here
-variables not expanded with single quotes
-EOF
-
-# Use unquoted delimiter for variable expansion
-cat > /path/to/config << EOF
-config with ${VARIABLE} expansion
-EOF
-```
-
-### SSH Operations
-
-**Remote commands:**
-```bash
-# Single command
-ssh "$HOST" "command"
-
-# Multiple commands (use shell quoting)
-ssh "$HOST" "cmd1 && cmd2 && cmd3"
-
-# Quiet operation for service checks
-ssh "$HOST" "systemctl is-active --quiet service"
-
-# Handle errors gracefully
-ssh "$HOST" "command || true"
-```
-
-**File transfers:**
-```bash
-# Copy single file
-scp "$LOCAL_FILE" "${HOST}:/remote/path/"
-
-# Copy directory recursively
-scp -r "$LOCAL_DIR" "${HOST}:/remote/path/"
-
-# Set permissions after copy
-ssh "$HOST" "chown root:root /path/file && chmod 644 /path/file"
-```
-
-### Output and Logging
-
-**Consistent output format:**
-```bash
-echo "=== Section Header ==="
-echo "==> Action starting..."
-echo "    Substep details..."
-echo "    ✓ Success indicator"
-echo "    ✗ Warning: Problem description"
-echo ""  # Blank line between sections
-```
-
-**Exit codes:**
-- `exit 0` = success or graceful skip
-- `exit 1` = failure (triggers error in deploy-all.sh)
-- Use `set -e` to auto-exit on command failures
+- Constants and environment variables: `UPPERCASE_WITH_UNDERSCORES`.
+- Local variables: `lowercase` or `lower_snake_case`.
+- Functions: `lower_snake_case`.
+- Scripts: `lowercase-with-dashes.sh`.
 
 ### Types and Validation
+- Bash has no types; use explicit validation.
+- Use `command -v <tool>` checks before installing dependencies.
+- Guard missing config with clear error messages and `exit 1`.
 
-**Bash has no type system.** Use validation instead:
+### Host Filtering and Registry
+- Use module-scoped `hosts.conf` as the source of truth for host types and features.
+- `SUPPORTED_HOSTS` should come from helpers like `get_hosts_by_type`.
+- Use `filter_hosts` and return `exit 0` for non-applicable hosts.
 
-```bash
-# Check file exists
-if [[ ! -f "$FILE" ]]; then
-    echo "ERROR: File not found: $FILE"
-    exit 1
-fi
+### Output and Logging
+- Prefer `print_header`, `print_action`, `print_sub`, `print_ok`, `print_warn` from `lib/common.sh`.
+- Keep output consistent for deploy-all aggregation.
 
-# Check directory exists
-if [[ ! -d "$DIR" ]]; then
-    mkdir -p "$DIR"
-fi
+### SSH and File Transfer
+- Use `ssh "$HOST" "command"` for single commands.
+- Use `deploy_file` / `deploy_script` for consistent permissions and ownership.
+- Stage files under `/tmp/homelab-<module>` when doing multi-file installs.
 
-# Check command exists
-if ! command -v telegraf &> /dev/null; then
-    echo "Installing telegraf..."
-    apt-get install -y telegraf
-fi
-
-# Validate arguments
-if [[ $# -lt 1 ]]; then
-    echo "Usage: $0 <required-arg>"
-    exit 1
-fi
-```
-
-### Python Scripts (Minimal Usage)
-
-**Style (when needed):**
-- Python 3
-- Shebang: `#!/usr/bin/env python3`
-- Used only for complex data processing (e.g., telegraf custom collectors)
-- Keep simple, no external dependencies if possible
-
----
-
-## Documentation Style
-
-**Module README.md structure:**
-```markdown
-# Module Name
-
-Brief description (1-2 sentences)
-
-## Architecture
-
-Hardware/software details
-
-## Installation
-
-**SCOPE:** PER-NODE or CLUSTER-WIDE
-**NODES:** hostname(s)
-**REBUILD:** Required or Skip
-
-1) Numbered steps with commands:
-\`\`\`bash
-command without ssh wrapper
-\`\`\`
-
-2) Continue...
-
-## Quick Reference
-
-**Key:** Value
-**Command:** `example`
-```
-
-**Philosophy:** Command-focused, minimal prose, numbered steps. Commands are copy-paste ready and assume you're ON the target machine (no `ssh host` wrapper in docs unless reaching a different remote).
-
----
-
-## Git Workflow
-
-**Commits:**
-- Conventional style: `add`, `update`, `fix`, `refactor`, `docs`
-- Concise messages focused on "why" not "what"
-- Example: `update: add memory metrics to telegraf configs`
-
-**Branches:**
-- Work directly on `main` for this repository (small team, infrastructure-as-code)
-- No formal branching strategy or CI/CD
-
-**Secrets:**
-- `.gitignore` blocks: `**/.env`, `**/telegram.env`, `**/*.env`
-- Always check before committing: `git status`
-- Provide `.env.example` templates for all secret files
-
----
+### Config Files
+- Use heredocs for configs; do not open interactive editors.
+- Quote heredoc delimiter to avoid variable expansion when needed.
 
 ## Common Tasks
 
-### Adding a New Module
+- Deploy one module for validation: `cd <module> && ./deploy.sh <host>`
+- Debug a deploy script: `bash -x <module>/deploy.sh <host>`
+- Check if a service is active: `ssh <host> "systemctl is-active --quiet <service>"`
+- Tail logs while validating: `ssh <host> "journalctl -u <service> -f"`
 
-1. Create directory: `mkdir <module>`
-2. Create `deploy.sh` with host filtering and standard structure
-3. Create `scripts/install.sh` for on-host installation
-4. Create `README.md` following documentation style
-5. Add module summary to main `README.md`
-6. Test: `./deploy-all.sh <test-host>`
+## Documentation Style (Module README.md)
 
-### Modifying Configuration
+- Command-focused, minimal prose.
+- Numbered steps `1) 2) 3)` with copy-paste-ready commands.
+- Include `SCOPE`, `NODES`, and `REBUILD` metadata under `## Installation`.
+- Use heredocs for config files.
+- Add a `## Quick Reference` section with key commands or values.
 
-1. Update config file in `<module>/configs/<host>/`
-2. Run deployment: `cd <module> && ./deploy.sh <host>`
-3. Verify: `ssh <host> "cat /path/to/deployed/config"`
-4. Check service: `ssh <host> "systemctl status <service>"`
+## Secrets
 
-### Adding Secrets
+- Store secrets in `.env` or `telegram.env` (gitignored).
+- Provide `.env.example` templates for required values.
+- Never commit secrets; validate existence before deployment.
 
-1. Create `.env.example` template with placeholder values
-2. Document in module README under "Installation"
-3. Add to `.gitignore` pattern (already covered by `**/*.env`)
-4. Add validation in `deploy.sh` before deployment
+## Git Workflow
 
-### Debugging Deployment
+- Work directly on `main` unless explicitly branching.
+- Commit prefixes: `add`, `update`, `fix`, `refactor`, `docs`.
+- Commit messages focus on why, not the file list.
 
-```bash
-# Check deploy-all.sh found modules
-./deploy-all.sh 2>&1 | grep "Deploying"
+## Cursor and Copilot Rules
 
-# Run single module with set -x for debugging
-bash -x <module>/deploy.sh <host>
+- No `.cursor/rules/`, `.cursorrules`, or `.github/copilot-instructions.md` files found.
 
-# Check SSH connectivity
-ssh <host> "echo 'Connected to $(hostname)'"
-
-# View service logs
-ssh <host> "journalctl -u <service> -f"
-```
-
----
-
-## Infrastructure Context
-
-**DNS:**
-- Home: `*.freender.internal`
-- Remote: `cottonwood.internal`, `cinci.internal`
-
-**Services:**
-- VictoriaMetrics: `victoria-metrics.freender.internal:8428`
-- Traefik: VIP-based HA
-
-**Hardware:**
-- ace: Intel UHD 630 GPU passthrough
-- bray: Intel Alder Lake-P iGPU passthrough, UPS-connected
-- clovis: NVIDIA RTX 3080 GPU passthrough
-- xur: Proxmox Backup Server, UPS-connected
-
----
-
-## Key Principles
-
-1. **Simplicity over tooling** - Direct bash scripts, no Ansible/Terraform
-2. **Explicit error handling** - Always use `set -e`, validate inputs
-3. **Graceful host filtering** - Modules skip non-applicable hosts with `exit 0`
-4. **SSH-based deployment** - Copy to /tmp, execute, clean up
-5. **Secret safety** - Never commit .env files, always validate before deploy
-6. **Command-focused docs** - Show exact commands, minimal explanation
-7. **Manual verification** - No automated tests, rely on service status checks
-
----
-
-**Last updated:** 2026-01-18
+**Last updated:** 2026-01-20

@@ -1,0 +1,22 @@
+auto lo
+iface lo inet loopback
+
+# Load additional interface configs
+source /etc/network/interfaces.d/*
+
+# Physical interfaces — no IP
+auto nic1
+iface nic1 inet manual
+
+auto nic0
+iface nic0 inet manual
+
+# Bond interface
+auto bond0
+iface bond0 inet static
+	address ${NET_MGMT_IP}
+	gateway ${NET_GATEWAY}
+    bond-slaves nic0 nic1
+    bond-mode active-backup
+    bond-primary nic0
+    bond-miimon 100

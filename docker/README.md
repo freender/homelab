@@ -17,6 +17,10 @@ cd ~/homelab/docker
 ./deploy.sh helm         # helm only
 ```
 
+## Host Registry
+
+Per-host settings live in `docker/hosts.conf` using `docker.*` keys.
+
 ### What Gets Deployed
 
 **All hosts** (`/mnt/cache/appdata/`):

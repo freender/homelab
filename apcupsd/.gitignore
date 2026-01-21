@@ -5,5 +5,8 @@ telegram.env
 # Local overrides
 *.local
 
+# Generated output
+rendered/
+
 # Git history backups
 .git.backup

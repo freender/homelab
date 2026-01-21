@@ -7,27 +7,64 @@ set -e
 
 HOST=${1:-$(hostname)}
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+HOSTS_CONF="$SCRIPT_DIR/hosts.conf"
 
-# Validate host
-case $HOST in
-    bray|xur)
-        TYPE="master"
-        ;;
-    ace|clovis)
-        TYPE="slave"
-        ;;
-    *)
-        echo "Unknown host: $HOST"
-        echo "Valid hosts: ace, bray, clovis, xur"
-        exit 1
-        ;;
-esac
+# Get host role from apcupsd/hosts.conf (data-driven)
+if [[ ! -f "$HOSTS_CONF" ]]; then
+    echo "Error: apcupsd/hosts.conf not found at $HOSTS_CONF"
+    exit 1
+fi
 
-echo "=== Installing apcupsd $TYPE on $HOST ==="
+get_host_value() {
+    local target="$1"
+    local key="$2"
+    local in_host=0
+    local line
 
-# Check if config exists
-if [[ ! -d "$SCRIPT_DIR/configs/$HOST" ]]; then
-    echo "Error: Config directory not found: $SCRIPT_DIR/configs/$HOST"
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        line="${line%$'\r'}"
+        [[ "$line" =~ ^[[:space:]]*# ]] && continue
+        [[ -z "${line//[[:space:]]/}" ]] && continue
+
+        if [[ "$line" =~ ^[A-Za-z0-9._-]+:[[:space:]]*$ ]]; then
+            if [[ "${line%%:*}" == "$target" ]]; then
+                in_host=1
+            else
+                in_host=0
+            fi
+            continue
+        fi
+
+        if [[ $in_host -eq 1 && "$line" =~ ^[[:space:]]+${key}:[[:space:]]*.*$ ]]; then
+            local value="${line#*:}"
+            value="${value%"${value##*[![:space:]]}"}"
+            value="${value#"${value%%[![:space:]]*}"}"
+            if [[ "$value" =~ ^".*"$ ]]; then
+                value="${value:1:${#value}-2}"
+            elif [[ "$value" =~ ^'.*'$ ]]; then
+                value="${value:1:${#value}-2}"
+            fi
+            echo "$value"
+            return 0
+        fi
+    done < "$HOSTS_CONF"
+
+    return 1
+}
+
+ROLE=$(get_host_value "$HOST" "ups.role")
+if [[ -z "$ROLE" ]]; then
+    echo "Error: ups.role missing for $HOST in apcupsd/hosts.conf"
+    exit 1
+fi
+
+echo "=== Installing apcupsd $ROLE on $HOST ==="
+
+RENDERED_DIR="$SCRIPT_DIR/$HOST"
+
+# Check if rendered configs exist
+if [[ ! -d "$RENDERED_DIR" ]]; then
+    echo "Error: Rendered config directory not found: $RENDERED_DIR"
     exit 1
 fi
 
@@ -47,14 +84,10 @@ fi
 
 # Copy configs
 echo "Copying configuration files..."
-cp "$SCRIPT_DIR/configs/$HOST/apcupsd.conf" /etc/apcupsd/
-cp "$SCRIPT_DIR/configs/$HOST/doshutdown" /etc/apcupsd/
-# Use host-specific notify if available, fallback to shared
-if [[ -f "$SCRIPT_DIR/configs/$HOST/apcupsd.notify" ]]; then
-  cp "$SCRIPT_DIR/configs/$HOST/apcupsd.notify" /etc/apcupsd/
-else
-  cp "$SCRIPT_DIR/shared/apcupsd.notify" /etc/apcupsd/
-fi
+cp "$RENDERED_DIR/apcupsd.conf" /etc/apcupsd/
+cp "$RENDERED_DIR/doshutdown" /etc/apcupsd/
+# Use shared notify
+cp "$SCRIPT_DIR/shared/apcupsd.notify" /etc/apcupsd/
 
 # Setup telegram
 mkdir -p /etc/apcupsd/telegram

@@ -2,75 +2,68 @@
 # Deploy SSH config to homelab infrastructure
 # Usage: ./deploy.sh [host1 host2 ...] or ./deploy.sh all
 
-set -e
+# Source shared library
+source "$(dirname "$0")/../lib/common.sh"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SSH_CONFIG="${SCRIPT_DIR}/ssh_config"
+CONFIGS_DIR="${SCRIPT_DIR}/configs"
+COMMON_CONFIG="${CONFIGS_DIR}/common.conf"
 
-# Supported hosts for this module
-SUPPORTED_HOSTS=("helm" "tower" "exo" "cottonwood" "cinci" "ace" "bray" "clovis" "xur")
-
-# Skip if host not applicable
-if [[ -n "${1:-}" && "$1" != "all" ]]; then
-    if [[ ! " ${SUPPORTED_HOSTS[*]} " =~ " $1 " ]]; then
-        echo "==> Skipping ssh (not applicable to $1)"
-        exit 0
-    fi
+if ! load_hosts_file "$SCRIPT_DIR/hosts.conf"; then
+    exit 1
 fi
 
-# Default hosts (all accessible)
-DEFAULT_HOSTS="helm tower exo cottonwood cinci ace bray clovis xur"
+# Get all hosts from registry
+SUPPORTED_HOSTS=($(get_all_hosts))
 
-HOSTS="${@:-$DEFAULT_HOSTS}"
-if [[ "$1" == "all" ]]; then
-    HOSTS="$DEFAULT_HOSTS"
+# Filter hosts based on arguments
+if ! HOSTS=$(filter_hosts "${1:-all}" "${SUPPORTED_HOSTS[@]}"); then
+    print_action "Skipping ssh (not applicable to $1)"
+    exit 0
 fi
 
-if [[ ! -f "$SSH_CONFIG" ]]; then
-    echo "Error: ssh_config not found at $SSH_CONFIG"
+if [[ ! -f "$COMMON_CONFIG" ]]; then
+    echo "Error: common.conf not found at $COMMON_CONFIG"
     exit 1
 fi
 
 deploy_to_host() {
     local host="$1"
-    echo "==> Deploying to $host..."
+    print_action "Deploying to $host..."
     
     # Ensure .ssh directory exists
     if ! ssh "$host" "mkdir -p ~/.ssh && chmod 700 ~/.ssh" 2>/dev/null; then
-        echo "    ✗ Failed to create .ssh directory on $host"
+        print_warn "Failed to create .ssh directory on $host"
         return 1
     fi
     
-    # Copy base config
-    echo "    Deploying base config..."
-    scp -q "$SSH_CONFIG" "${host}:/tmp/ssh_config"
-    ssh "$host" "mv /tmp/ssh_config ~/.ssh/config && chmod 600 ~/.ssh/config"
+    # Start with common config
+    print_sub "Deploying base config..."
+    scp -q "$COMMON_CONFIG" "${host}:/tmp/ssh_config"
     
-    # Special case: tower - append Unraid backup entry
-    if [[ "$host" == "tower" ]]; then
-        echo "    Appending Unraid backup config..."
-        ssh "$host" "cat >> ~/.ssh/config << 'TOWER_EOF'
-Host backup.unraid.net
-IdentityFile ~/.ssh/unraidbackup_id_ed25519
-IdentitiesOnly yes
-TOWER_EOF
-"
+    # Append host-specific config if exists
+    if [[ -f "$CONFIGS_DIR/$host/append.conf" ]]; then
+        print_sub "Appending $host-specific config..."
+        cat "$CONFIGS_DIR/$host/append.conf" | ssh "$host" "cat >> /tmp/ssh_config"
     fi
+    
+    # Move to final location
+    ssh "$host" "mv /tmp/ssh_config ~/.ssh/config && chmod 600 ~/.ssh/config"
     
     # Verify deployment
     if ssh "$host" "test -f ~/.ssh/config && test -r ~/.ssh/config" 2>/dev/null; then
-        echo "    ✓ Deployment successful"
+        print_ok "Deployment successful"
     else
-        echo "    ✗ Deployment verification failed"
+        print_warn "Deployment verification failed"
         return 1
     fi
     
     echo ""
 }
 
-echo "==> Deploying SSH Config"
-echo "    Source: $SSH_CONFIG"
-echo "    Hosts: $HOSTS"
+print_action "Deploying SSH Config"
+print_sub "Source: $COMMON_CONFIG"
+print_sub "Hosts: $HOSTS"
 echo ""
 
 FAILED_HOSTS=()
@@ -81,7 +74,7 @@ for host in $HOSTS; do
     fi
 done
 
-echo "==> Deployment complete!"
+print_action "Deployment complete!"
 
 if [[ ${#FAILED_HOSTS[@]} -gt 0 ]]; then
     echo ""

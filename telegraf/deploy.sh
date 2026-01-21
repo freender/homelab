@@ -2,160 +2,113 @@
 # Deploy Telegraf Monitoring to Cluster
 # Usage: ./deploy.sh [host1 host2 ...] or ./deploy.sh all
 
-set -e
-
-# Supported hosts for this module
-SUPPORTED_HOSTS=(ace bray clovis xur)
-
-# Skip if host not applicable
-if [[ -n "${1:-}" && "$1" != "all" ]]; then
-    if [[ ! " ${SUPPORTED_HOSTS[*]} " =~ " $1 " ]]; then
-        echo "==> Skipping telegraf (not applicable to $1)"
-        exit 0
-    fi
-fi
-
-HOSTS="${@:-ace bray clovis xur}"
-HOSTS="${@:-ace bray clovis xur}"
-if [[ "$1" == "all" ]]; then
-    HOSTS="ace bray clovis xur"
-fi
+# Source shared library
+source "$(dirname "$0")/../lib/common.sh"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-MAIN_CONFIG="${SCRIPT_DIR}/telegraf.conf"
-SENSORS_CONFIG="${SCRIPT_DIR}/sensors.conf"
-SMARTCTL_CONFIG="${SCRIPT_DIR}/smartctl.conf"
-DISKIO_CONFIG="${SCRIPT_DIR}/diskio.conf"
-NET_CONFIG="${SCRIPT_DIR}/net.conf"
-MEM_CONFIG="${SCRIPT_DIR}/mem.conf"
-BRAY_SMARTCTL_CONFIG="${SCRIPT_DIR}/smartctl-bray.conf"
-BRAY_SMARTCTL_SCRIPT="${SCRIPT_DIR}/smartctl-bray-boot.py"
-BRAY_SMARTCTL_INPUT_CONFIG="${SCRIPT_DIR}/smartctl-bray-smartctl.conf"
-APCUPSD_CONFIG="${SCRIPT_DIR}/apcupsd.conf"
+CONFIGS_DIR="${SCRIPT_DIR}/configs"
+COMMON_DIR="${CONFIGS_DIR}/common"
 
-if [[ ! -f "$MAIN_CONFIG" ]]; then
-    echo "Error: telegraf.conf not found at $MAIN_CONFIG"
+if ! load_hosts_file "$SCRIPT_DIR/hosts.conf"; then
     exit 1
 fi
 
-echo "==> Deploying Telegraf Monitoring"
-echo "    Hosts: $HOSTS"
-echo "    Collection Interval: 10s (sensors), 10s (smartctl), 10s (diskio)"
+# Get supported hosts from registry (PVE + PBS)
+SUPPORTED_HOSTS=($(get_hosts_by_type pve) $(get_hosts_by_type pbs))
+
+# Filter hosts based on arguments
+if ! HOSTS=$(filter_hosts "${1:-all}" "${SUPPORTED_HOSTS[@]}"); then
+    print_action "Skipping telegraf (not applicable to $1)"
+    exit 0
+fi
+
+# Validate common configs exist
+if [[ ! -f "$COMMON_DIR/telegraf.conf" ]]; then
+    echo "Error: telegraf.conf not found at $COMMON_DIR/telegraf.conf"
+    exit 1
+fi
+
+print_action "Deploying Telegraf Monitoring"
+print_sub "Hosts: $HOSTS"
 echo ""
 
 for host in $HOSTS; do
-    echo "==> Deploying to $host..."
+    print_action "Deploying to $host..."
 
-    # Ensure InfluxData repository is configured and key is current
+    # Ensure InfluxData repository is configured
     if ! ssh "$host" "test -f /etc/apt/sources.list.d/influxdata.list"; then
-        echo "    Adding InfluxData repository..."
+        print_sub "Adding InfluxData repository..."
         ssh "$host" "mkdir -p /etc/apt/keyrings"
         ssh "$host" "curl -fsSL https://repos.influxdata.com/influxdata-archive.key | gpg --dearmor --yes --batch -o /etc/apt/keyrings/influxdata-archive.gpg"
         ssh "$host" "echo 'deb [signed-by=/etc/apt/keyrings/influxdata-archive.gpg] https://repos.influxdata.com/debian stable main' | tee /etc/apt/sources.list.d/influxdata.list"
     else
-        echo "    InfluxData repository already configured"
+        print_sub "InfluxData repository already configured"
     fi
 
-    echo "    Refreshing InfluxData repository key..."
+    # Refresh repository key
+    print_sub "Refreshing InfluxData repository key..."
     ssh "$host" "mkdir -p /etc/apt/keyrings"
     ssh "$host" "curl -fsSL https://repos.influxdata.com/influxdata-archive.key | gpg --dearmor --yes --batch -o /etc/apt/keyrings/influxdata-archive.gpg"
-    echo "    Testing apt update after key refresh..."
     ssh "$host" "apt-get update -qq"
 
     # Install required packages
-    echo "    Installing packages (telegraf, lm-sensors, smartmontools)..."
-    ssh "$host" "apt-get update -qq && apt-get install -y telegraf lm-sensors smartmontools"
+    print_sub "Installing packages (telegraf, lm-sensors, smartmontools)..."
+    ssh "$host" "apt-get install -y -qq telegraf lm-sensors smartmontools"
 
-    # Ensure lm-sensors is configured
-    echo "    Configuring lm-sensors..."
+    # Configure lm-sensors
+    print_sub "Configuring lm-sensors..."
     ssh "$host" "sensors-detect --auto >/dev/null 2>&1 || true"
 
-    # Deploy main configuration
-    echo "    Deploying telegraf.conf..."
-    scp "$MAIN_CONFIG" "${host}:/etc/telegraf/telegraf.conf"
-    ssh "$host" "chown root:root /etc/telegraf/telegraf.conf && chmod 644 /etc/telegraf/telegraf.conf"
-
-    # Ensure telegraf.d directory exists
+    # Ensure directories exist
     ssh "$host" "mkdir -p /etc/telegraf/telegraf.d"
 
-    # Deploy sensors configuration
-    echo "    Deploying sensors.conf..."
-    scp "$SENSORS_CONFIG" "${host}:/etc/telegraf/telegraf.d/sensors.conf"
-    ssh "$host" "chown root:root /etc/telegraf/telegraf.d/sensors.conf && chmod 644 /etc/telegraf/telegraf.d/sensors.conf"
+    # Deploy main telegraf.conf
+    print_sub "Deploying telegraf.conf..."
+    deploy_file "$COMMON_DIR/telegraf.conf" "$host" "/etc/telegraf/telegraf.conf"
 
-    # Deploy smartctl configuration (inputs.smartctl)
-    if [[ "$host" == "bray" && -f "$BRAY_SMARTCTL_INPUT_CONFIG" ]]; then
-        echo "    Deploying bray smartctl.conf override..."
-        scp "$BRAY_SMARTCTL_INPUT_CONFIG" "${host}:/etc/telegraf/telegraf.d/smartctl.conf"
-        ssh "$host" "chown root:root /etc/telegraf/telegraf.d/smartctl.conf && chmod 644 /etc/telegraf/telegraf.d/smartctl.conf"
-    elif [[ -f "$SMARTCTL_CONFIG" ]]; then
-        echo "    Deploying smartctl.conf..."
-        scp "$SMARTCTL_CONFIG" "${host}:/etc/telegraf/telegraf.d/smartctl.conf"
-        ssh "$host" "chown root:root /etc/telegraf/telegraf.d/smartctl.conf && chmod 644 /etc/telegraf/telegraf.d/smartctl.conf"
-    fi
+    # Deploy common configs to telegraf.d/
+    print_sub "Deploying common configs..."
+    for conf in sensors.conf smartctl.conf diskio.conf net.conf mem.conf; do
+        if [[ -f "$COMMON_DIR/$conf" ]]; then
+            deploy_file "$COMMON_DIR/$conf" "$host" "/etc/telegraf/telegraf.d/$conf"
+        fi
+    done
 
     # Deploy sudoers rule for smartctl
-    if [[ -f "${SCRIPT_DIR}/telegraf-smartctl-sudoers" ]]; then
-        echo "    Deploying sudoers rule for smartctl..."
-        scp "${SCRIPT_DIR}/telegraf-smartctl-sudoers" "${host}:/etc/sudoers.d/telegraf-smartctl"
-        ssh "$host" "chown root:root /etc/sudoers.d/telegraf-smartctl && chmod 440 /etc/sudoers.d/telegraf-smartctl"
+    if [[ -f "$COMMON_DIR/telegraf-smartctl-sudoers" ]]; then
+        print_sub "Deploying sudoers rule..."
+        deploy_file "$COMMON_DIR/telegraf-smartctl-sudoers" "$host" "/etc/sudoers.d/telegraf-smartctl" "440"
     fi
 
-    # Deploy bray boot smartctl exec config
-    if [[ "$host" == "bray" && -f "$BRAY_SMARTCTL_CONFIG" && -f "$BRAY_SMARTCTL_SCRIPT" ]]; then
-        echo "    Deploying bray boot smartctl exec config..."
-        scp "$BRAY_SMARTCTL_CONFIG" "${host}:/etc/telegraf/telegraf.d/smartctl-bray.conf"
-        ssh "$host" "chown root:root /etc/telegraf/telegraf.d/smartctl-bray.conf && chmod 644 /etc/telegraf/telegraf.d/smartctl-bray.conf"
+    # Deploy host-specific configs (overrides common)
+    if [[ -d "$CONFIGS_DIR/$host" ]]; then
+        print_sub "Deploying $host-specific configs..."
+        for conf in "$CONFIGS_DIR/$host"/*.conf; do
+            [[ -f "$conf" ]] || continue
+            deploy_file "$conf" "$host" "/etc/telegraf/telegraf.d/$(basename "$conf")"
+        done
+    fi
 
-        echo "    Deploying bray boot smartctl exec script..."
+    # Deploy bray-specific boot script
+    if [[ "$host" == "bray" && -f "$SCRIPT_DIR/scripts/smartctl-bray-boot.py" ]]; then
+        print_sub "Deploying bray boot smartctl script..."
         ssh "$host" "mkdir -p /usr/local/bin"
-        scp "$BRAY_SMARTCTL_SCRIPT" "${host}:/usr/local/bin/telegraf-smartctl-bray-boot"
-        ssh "$host" "chown root:root /usr/local/bin/telegraf-smartctl-bray-boot && chmod 755 /usr/local/bin/telegraf-smartctl-bray-boot"
-    fi
-
-    # Deploy diskio configuration
-    if [[ -f "$DISKIO_CONFIG" ]]; then
-        echo "    Deploying diskio.conf..."
-        scp "$DISKIO_CONFIG" "${host}:/etc/telegraf/telegraf.d/diskio.conf"
-        ssh "$host" "chown root:root /etc/telegraf/telegraf.d/diskio.conf && chmod 644 /etc/telegraf/telegraf.d/diskio.conf"
-    fi
-
-    # Deploy net configuration
-    if [[ -f "$NET_CONFIG" ]]; then
-        echo "    Deploying net.conf..."
-        scp "$NET_CONFIG" "${host}:/etc/telegraf/telegraf.d/net.conf"
-        ssh "$host" "chown root:root /etc/telegraf/telegraf.d/net.conf && chmod 644 /etc/telegraf/telegraf.d/net.conf"
-    fi
-
-    # Deploy mem configuration
-    if [[ -f "$MEM_CONFIG" ]]; then
-        echo "    Deploying mem.conf..."
-        scp "$MEM_CONFIG" "${host}:/etc/telegraf/telegraf.d/mem.conf"
-        ssh "$host" "chown root:root /etc/telegraf/telegraf.d/mem.conf && chmod 644 /etc/telegraf/telegraf.d/mem.conf"
-    fi
-
-
-    # Deploy apcupsd configuration (only to hosts with UPS)
-    if [[ "$host" == "bray" || "$host" == "xur" ]] && [[ -f "$APCUPSD_CONFIG" ]]; then
-        echo "    Deploying apcupsd.conf..."
-        scp "$APCUPSD_CONFIG" "${host}:/etc/telegraf/telegraf.d/apcupsd.conf"
-        ssh "$host" "chown root:root /etc/telegraf/telegraf.d/apcupsd.conf && chmod 644 /etc/telegraf/telegraf.d/apcupsd.conf"
+        deploy_script "$SCRIPT_DIR/scripts/smartctl-bray-boot.py" "$host" "/usr/local/bin/telegraf-smartctl-bray-boot"
     fi
 
     # Enable and restart telegraf
-    echo "    Enabling and restarting telegraf service..."
+    print_sub "Enabling and restarting telegraf service..."
     ssh "$host" "systemctl enable telegraf && systemctl restart telegraf"
 
     # Check status
-    echo "    Checking service status..."
     if ssh "$host" "systemctl is-active --quiet telegraf"; then
-        echo "    ✓ Telegraf running on $host"
+        print_ok "Telegraf running on $host"
     else
-        echo "    ✗ Warning: Telegraf not running on $host"
+        print_warn "Telegraf not running on $host"
         ssh "$host" "systemctl status telegraf --no-pager -l" || true
     fi
 
     echo ""
 done
 
-echo "==> Deployment complete!"
+print_action "Deployment complete!"

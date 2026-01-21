@@ -24,17 +24,19 @@ This directory contains automated GPU passthrough configuration for Proxmox host
 pve-gpu-passthrough/
 ├── deploy.sh              # Deployment script (run from helm)
 ├── README.md              # This file
-├── ace/                   # Intel iGPU config for ace
-│   ├── cmdline            # systemd-boot kernel args
-│   ├── blacklist.conf     # Blacklist i915 driver
-│   ├── vfio.conf          # Bind GPU to vfio-pci (8086:3e92)
-│   └── modules            # VFIO kernel modules
-└── clovis/                # NVIDIA config for clovis
-    ├── cmdline            # systemd-boot kernel args
-    ├── blacklist.conf     # Blacklist nvidia/nouveau drivers
-    ├── vfio.conf          # Bind GPU to vfio-pci (10de:2208,10de:1aef)
-    └── modules            # VFIO kernel modules
+├── profiles/              # Shared profile templates
+│   ├── intel/
+│   │   ├── cmdline
+│   │   ├── blacklist.conf
+│   │   └── vfio.conf.tpl
+│   └── nvidia/
+│       ├── cmdline
+│       ├── blacklist.conf
+│       └── vfio.conf.tpl
+└── modules                # VFIO kernel modules
 ```
+
+Host registry data lives in `pve-gpu-passthrough/hosts.conf` using `gpu.*` keys.
 
 ## Usage
 
