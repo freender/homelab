@@ -91,17 +91,17 @@ cp "$SCRIPT_DIR/shared/apcupsd.notify" /etc/apcupsd/
 
 # Setup telegram
 mkdir -p /etc/apcupsd/telegram
-cp "$SCRIPT_DIR/shared/telegram/telegram.sh" /etc/apcupsd/telegram/
+cp "$SCRIPT_DIR/telegram/telegram.sh" /etc/apcupsd/telegram/
 
 # Copy telegram.env from temp directory
 ENV_FILE="/etc/apcupsd/telegram/telegram.env"
-if [[ -f "$SCRIPT_DIR/shared/telegram/telegram.env" ]]; then
-    cp "$SCRIPT_DIR/shared/telegram/telegram.env" "$ENV_FILE"
+if [[ -f "$SCRIPT_DIR/telegram/telegram.env" ]]; then
+    cp "$SCRIPT_DIR/telegram/telegram.env" "$ENV_FILE"
     chmod 600 "$ENV_FILE"
     chown root:root "$ENV_FILE"
     echo "Telegram credentials installed."
 else
-    echo "ERROR: Missing $SCRIPT_DIR/shared/telegram/telegram.env"
+    echo "ERROR: Missing $SCRIPT_DIR/telegram/telegram.env"
     echo "This should have been copied during deployment."
     exit 1
 fi

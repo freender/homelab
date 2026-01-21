@@ -1,13 +1,12 @@
 #!/bin/bash
-# shared/telegram/telegram.sh - Universal Telegram notification script
-# Used by: apcupsd, zfs/zed
+# apcupsd/telegram/telegram.sh - Telegram notification script
+# Used by: apcupsd
 #
 # Usage: telegram.sh -s "Subject" -d "Message body"
 #
 # Env file locations (checked in order):
 #   /etc/homelab/telegram.env     (preferred - shared location)
 #   /etc/apcupsd/telegram/telegram.env
-#   /etc/zfs/zed.d/.env
 
 set -euo pipefail
 
@@ -15,7 +14,6 @@ set -euo pipefail
 ENV_LOCATIONS=(
     "/etc/homelab/telegram.env"
     "/etc/apcupsd/telegram/telegram.env"
-    "/etc/zfs/zed.d/.env"
 )
 
 for ENV_FILE in "${ENV_LOCATIONS[@]}"; do

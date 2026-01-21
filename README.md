@@ -8,7 +8,7 @@ Automation and configuration management for Proxmox-based homelab infrastructure
 
 **Network:**
 - Home: `*.freender.internal`
-- Remote: `cottonwood.internal`, `cinci.internal`
+- Remote (TrueNAS): `cottonwood.internal`, `cinci.internal`
 - VIP for Traefik HA
 
 ## Deploy All
@@ -28,29 +28,6 @@ UPS monitoring with coordinated cluster shutdown
 **Deploy:**
 ```bash
 cd ~/homelab/apcupsd
-./deploy.sh all
-```
-
-### [telegraf](telegraf/)
-Metrics collection (CPU, disk, network, sensors, smartctl)
-- Sends to VictoriaMetrics
-- Deploys to Proxmox hosts
-
-**Deploy:**
-```bash
-cd ~/homelab/telegraf
-./deploy.sh all
-```
-
-### [zfs](zfs/)
-ZFS automation for remote NAS
-- ZED Telegram notifications
-- Automated snapshots (7 daily, 4 weekly, 3 monthly)
-- Appdata replication
-
-**Deploy:**
-```bash
-cd ~/homelab/zfs
 ./deploy.sh all
 ```
 
@@ -117,9 +94,16 @@ ssh <host> "apcaccess status"
 # Metrics query
 curl -s "http://victoria-metrics.freender.internal:8428/api/v1/query?query=sensors_temp_input" | jq
 
-# ZFS snapshots
-ssh <remote-nas> "zfs list -t snapshot"
-
 # Docker containers
 ssh <vm> "cd /mnt/cache/appdata && ./start.sh"
+```
+### [telegraf](telegraf/)
+Metrics collection (CPU, disk, network, sensors, smartctl)
+- Sends to VictoriaMetrics
+- Deploys to ace, bray, clovis, xur
+
+**Deploy:**
+```bash
+cd ~/homelab/telegraf
+./deploy.sh all
 ```

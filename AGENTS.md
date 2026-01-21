@@ -9,12 +9,14 @@
 
 No formal build system, linter, or automated tests.
 
+**Single-test / narrow validation:**
+- `apcupsd/scripts/test-shutdown.sh` (run on the UPS host)
+- Module deploy dry-run by targeting a single host: `cd <module> && ./deploy.sh <host>`
+
 **Manual verification (typical):**
 - Service status: `ssh <host> "systemctl status <service>"`
+- Service active check: `ssh <host> "systemctl is-active --quiet <service>"`
 - Logs: `ssh <host> "journalctl -u <service> -n 50"`
-
-**Single-test example (module-specific):**
-- `apcupsd/scripts/test-shutdown.sh` (run on the UPS host)
 
 **Pragmatic checks when editing a module:**
 1) Deploy only the module to one host.
@@ -37,7 +39,7 @@ cd <module> && ./deploy.sh all
 cd <module> && ./deploy.sh <host1> <host2>
 ```
 
-## Module Layout
+## Repository Layout
 
 ```
 homelab/
@@ -51,7 +53,7 @@ homelab/
     └── README.md
 ```
 
-## Deployment Pattern (deploy.sh)
+## Script Structure (deploy.sh)
 
 ```bash
 #!/bin/bash
@@ -68,23 +70,14 @@ fi
 
 ### Imports and Structure
 - Source shared helpers at the top of `deploy.sh` scripts.
-```bash
-#!/bin/bash
-source "$(dirname "$0")/../lib/common.sh"
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-```
+- Cache script paths with `SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"` when needed.
 - Prefer `lib/common.sh` helpers: `filter_hosts`, `deploy_file`, `deploy_script`, `ensure_remote_dir`.
 
 ### Formatting
 - Use 4-space indentation.
 - Use `[[ ... ]]` for tests, and quote all variables: `"${VAR}"`.
 - Keep SSH commands on single lines unless a heredoc is required.
-
-### Error Handling
-- `set -e` is required in scripts that execute commands (inherit via `lib/common.sh`).
-- `set -u` is recommended when scripts accept parameters.
-- Validate required files and inputs early and exit with non-zero on failure.
-- Use `|| true` only for intentionally non-fatal commands.
+- Prefer `$(...)` over backticks.
 
 ### Naming Conventions
 - Constants and environment variables: `UPPERCASE_WITH_UNDERSCORES`.
@@ -96,6 +89,14 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 - Bash has no types; use explicit validation.
 - Use `command -v <tool>` checks before installing dependencies.
 - Guard missing config with clear error messages and `exit 1`.
+- Validate required files before running `deploy_file` or `deploy_script`.
+
+### Error Handling
+- `set -e` is required in scripts that execute commands (inherit via `lib/common.sh`).
+- `set -u` is recommended when scripts accept parameters.
+- Validate required inputs early and exit with non-zero on failure.
+- Use `|| true` only for intentionally non-fatal commands.
+- Wrap risky remote actions with explicit checks and clear failure output.
 
 ### Host Filtering and Registry
 - Use module-scoped `hosts.conf` as the source of truth for host types and features.
@@ -105,6 +106,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ### Output and Logging
 - Prefer `print_header`, `print_action`, `print_sub`, `print_ok`, `print_warn` from `lib/common.sh`.
 - Keep output consistent for deploy-all aggregation.
+- Log changes with explicit explains (what, where, why) before running remote commands.
 
 ### SSH and File Transfer
 - Use `ssh "$HOST" "command"` for single commands.
@@ -114,6 +116,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ### Config Files
 - Use heredocs for configs; do not open interactive editors.
 - Quote heredoc delimiter to avoid variable expansion when needed.
+- Keep config templates in `configs/` when reused across hosts.
 
 ## Common Tasks
 
@@ -146,4 +149,4 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 - No `.cursor/rules/`, `.cursorrules`, or `.github/copilot-instructions.md` files found.
 
-**Last updated:** 2026-01-20
+**Last updated:** 2026-01-21

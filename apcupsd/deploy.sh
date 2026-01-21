@@ -60,12 +60,12 @@ if ! HOSTS=$(filter_hosts "${1:-all}" "${SUPPORTED_HOSTS[@]}"); then
 fi
 
 # Validate shared telegram.env exists
-TELEGRAM_ENV="${SCRIPT_DIR}/../shared/telegram/telegram.env"
+TELEGRAM_ENV="${SCRIPT_DIR}/telegram/telegram.env"
 if [[ ! -f "$TELEGRAM_ENV" ]]; then
     echo "ERROR: telegram.env not found!"
     echo ""
     echo "Create it from the example:"
-    echo "  cp shared/telegram/telegram.env.example shared/telegram/telegram.env"
+    echo "  cp apcupsd/telegram/telegram.env.example apcupsd/telegram/telegram.env"
     echo "  # Edit with your actual TELEGRAM_TOKEN and TELEGRAM_CHATID"
     exit 1
 fi
@@ -162,8 +162,8 @@ for HOST in $HOSTS; do
     scp -rq "$RENDERED_DIR/$HOST" "$SCRIPT_DIR/scripts" "$SCRIPT_DIR/shared" "$SCRIPT_DIR/hosts.conf" "$HOST:/tmp/homelab-apcupsd/"
 
     # Copy shared telegram files (from homelab root shared/)
-    ssh "$HOST" "mkdir -p /tmp/homelab-apcupsd/shared/telegram"
-    scp -rq "$SCRIPT_DIR/../shared/telegram/"* "$HOST:/tmp/homelab-apcupsd/shared/telegram/"
+    ssh "$HOST" "mkdir -p /tmp/homelab-apcupsd/telegram"
+    scp -rq "$SCRIPT_DIR/telegram/"* "$HOST:/tmp/homelab-apcupsd/telegram/"
 
     # Run installer on target
     print_sub "Running installer on $HOST..."

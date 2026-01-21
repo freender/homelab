@@ -12,8 +12,6 @@ Deploy scripts from helm to hosts:
 cd ~/homelab/docker
 ./deploy.sh all          # Deploy to all hosts
 ./deploy.sh tower        # Tower (Unraid) only
-./deploy.sh cinci        # Cincinnati only
-./deploy.sh cottonwood   # Cottonwood only
 ./deploy.sh helm         # helm only
 ```
 
@@ -43,12 +41,8 @@ helm:
   /mnt/cache/appdata/scripts/logs/
     - backup.log          # Backup output
 
-NAS hosts (cinci, cottonwood):
-  /mnt/cache/appdata/scripts/       # From homelab/zfs repo
-  /mnt/cache/appdata/scripts/logs/  # From homelab/zfs repo
-
 tower:
-  /mnt/cache/appdata/scripts/  # ZFS and filebot scripts (see homelab/zfs and homelab/filebot repos)
+  /mnt/cache/appdata/scripts/  # Managed by User Scripts plugin
 ```
 
 ### Cron Schedules
@@ -56,12 +50,8 @@ tower:
 **helm:**
 - 9:05 AM daily: Backup appdata (also updates containers via start.sh)
 
-**cinci, cottonwood:**
-- 9:00 AM daily: Update containers (start.sh)
-- Backups handled by ZFS snapshots (see homelab/zfs repo)
-
 **tower:**
-- Scheduling handled by User Scripts plugin (see homelab/filebot repo)
+- Scheduling handled by User Scripts plugin
 
 ### Manual Usage
 

@@ -1,6 +1,6 @@
 #!/bin/bash
 # Deploy docker management scripts
-# Usage: ./deploy.sh [helm|cottonwood|cinci|tower|all]
+# Usage: ./deploy.sh [helm|tower|all]
 
 # Source shared library
 source "$(dirname "$0")/../lib/common.sh"
