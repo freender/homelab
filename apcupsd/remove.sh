@@ -6,17 +6,15 @@ source "$(dirname "$0")/../lib/common.sh"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-if ! load_hosts_file "$SCRIPT_DIR/hosts.conf"; then
-    exit 1
-fi
+HOSTS_FILE="$SCRIPT_DIR/hosts.conf"
 
 get_apcupsd_hosts() {
     local hosts=()
     local -A seen=()
     local list=(
-        $(get_hosts_with_feature ups-master)
-        $(get_hosts_with_feature ups-slave)
-        $(get_hosts_with_feature ups-standalone)
+        $(hosts list --feature ups-master)
+        $(hosts list --feature ups-slave)
+        $(hosts list --feature ups-standalone)
     )
 
     for host in "${list[@]}"; do

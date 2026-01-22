@@ -2,188 +2,145 @@
 # lib/common.sh - Shared deployment functions
 # Source this from module deploy.sh scripts:
 #   source "$(dirname "$0")/../lib/common.sh"
+#
+# Dependencies: yq (auto-installed if missing)
 
 set -e
 
 # Resolve HOMELAB_ROOT (parent of lib/)
 HOMELAB_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-# Hosts registry (loaded per-module)
-declare -gA HOST_TYPES=()
-declare -gA HOST_FEATURES=()
-declare -gA HOST_KV=()
-declare -ga HOST_ORDER=()
-HOSTS_LOADED=0
-
-load_hosts_file() {
-    local file="$1"
-    local current_host=""
-    local in_features=0
-
-    if [[ ! -f "$file" ]]; then
-        echo "Error: hosts file not found: $file" >&2
-        return 1
-    fi
-
-    HOST_TYPES=()
-    HOST_FEATURES=()
-    HOST_KV=()
-    HOST_ORDER=()
-    HOSTS_LOADED=1
-
-    while IFS= read -r line || [[ -n "$line" ]]; do
-        line="${line%$'\r'}"
-        [[ "$line" =~ ^[[:space:]]*# ]] && continue
-        [[ -z "${line//[[:space:]]/}" ]] && continue
-
-        if [[ "$line" =~ ^[A-Za-z0-9._-]+:[[:space:]]*$ ]]; then
-            current_host="${line%%:*}"
-            HOST_ORDER+=("$current_host")
-            HOST_TYPES["$current_host"]=""
-            HOST_FEATURES["$current_host"]=""
-            in_features=0
-            continue
-        fi
-
-        if [[ -z "$current_host" ]]; then
-            continue
-        fi
-
-        if [[ "$line" =~ ^[[:space:]]+features:[[:space:]]*$ ]]; then
-            in_features=1
-            continue
-        fi
-
-        if [[ "$line" =~ ^[[:space:]]+-[[:space:]]+(.+)$ && $in_features -eq 1 ]]; then
-            local feature="${BASH_REMATCH[1]}"
-            feature="${feature%%[[:space:]]#*}"
-            feature="${feature%"${feature##*[![:space:]]}"}"
-            feature="${feature#"${feature%%[![:space:]]*}"}"
-            if [[ -n "$feature" ]]; then
-                HOST_FEATURES["$current_host"]+=" $feature"
-                HOST_FEATURES["$current_host"]="${HOST_FEATURES["$current_host"]# }"
-            fi
-            continue
-        fi
-
-        if [[ "$line" =~ ^[[:space:]]+[^:]+:[[:space:]]*.*$ ]]; then
-            in_features=0
-            local key="${line%%:*}"
-            local value="${line#*:}"
-            key="${key%"${key##*[![:space:]]}"}"
-            key="${key#"${key%%[![:space:]]*}"}"
-            value="${value%"${value##*[![:space:]]}"}"
-            value="${value#"${value%%[![:space:]]*}"}"
-            if [[ "$value" =~ ^".*"$ ]]; then
-                value="${value:1:${#value}-2}"
-            elif [[ "$value" =~ ^'.*'$ ]]; then
-                value="${value:1:${#value}-2}"
-            fi
-
-            if [[ "$key" == "type" ]]; then
-                HOST_TYPES["$current_host"]="$value"
-            else
-                HOST_KV["$current_host|$key"]="$value"
-            fi
-        fi
-    done < "$file"
-}
-
-require_hosts_loaded() {
-    if [[ ${HOSTS_LOADED:-0} -ne 1 ]]; then
-        echo "Error: hosts file not loaded. Call load_hosts_file first." >&2
-        return 1
-    fi
-}
-
 # -----------------------------------------------------------------------------
-# Host Registry Functions
+# yq Installation
 # -----------------------------------------------------------------------------
 
-# Get all hosts of a specific type (pve, pbs, vm, truenas, unraid)
-# Usage: get_hosts_by_type pve
-get_hosts_by_type() {
-    local type="$1"
-    require_hosts_loaded || return 1
-    local hosts=()
-    local host
+YQ_VERSION="v4.44.1"
 
-    for host in "${HOST_ORDER[@]}"; do
-        if [[ "${HOST_TYPES[$host]}" == "$type" ]]; then
-            hosts+=("$host")
-        fi
-    done
-
-    printf '%s ' "${hosts[@]}"
-}
-
-# Get all hosts with a specific feature
-# Usage: get_hosts_with_feature gpu
-get_hosts_with_feature() {
-    local feature="$1"
-    require_hosts_loaded || return 1
-    local hosts=()
-    local host
-
-    for host in "${HOST_ORDER[@]}"; do
-        if [[ " ${HOST_FEATURES[$host]} " == *" $feature "* ]]; then
-            hosts+=("$host")
-        fi
-    done
-
-    printf '%s ' "${hosts[@]}"
-}
-
-# Check if host has a feature
-# Usage: if host_has_feature bray ups-master; then ...
-host_has_feature() {
-    local host="$1" feature="$2"
-    require_hosts_loaded || return 1
-    [[ " ${HOST_FEATURES[$host]} " == *" $feature "* ]]
-}
-
-# Get host type
-# Usage: get_host_type bray  # returns "pve"
-get_host_type() {
-    local host="$1"
-    require_hosts_loaded || return 1
-    echo "${HOST_TYPES[$host]}"
-}
-
-# Get all defined hosts
-# Usage: get_all_hosts
-get_all_hosts() {
-    require_hosts_loaded || return 1
-    printf '%s ' "${HOST_ORDER[@]}"
-}
-
-# Get host key/value from module hosts.conf
-# Usage: get_host_kv ace ups.role
-get_host_kv() {
-    local host="$1" key="$2"
-    require_hosts_loaded || return 1
-    local value
-
-    value="${HOST_KV[$host|$key]}"
-    if [[ -z "$value" ]]; then
-        return 1
-    fi
-
-    echo "$value"
-}
-
-# Get host key/value with default
-# Usage: get_host_kv_default ace net.mgmt_ip 0.0.0.0
-get_host_kv_default() {
-    local host="$1" key="$2" default="$3"
-    local value
-
-    value=$(get_host_kv "$host" "$key" || true)
-    if [[ -n "$value" ]]; then
-        echo "$value"
+ensure_yq() {
+    command -v yq &>/dev/null && return 0
+    
+    local yq_bin="${HOMELAB_ROOT}/.bin/yq"
+    local arch
+    arch=$(uname -m)
+    case "$arch" in
+        x86_64)  arch="amd64" ;;
+        aarch64|arm64) arch="arm64" ;;
+        *)       echo "Error: Unsupported architecture: $arch" >&2; return 1 ;;
+    esac
+    
+    local url="https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_${arch}"
+    
+    echo "==> Installing yq ${YQ_VERSION}..." >&2
+    mkdir -p "$(dirname "$yq_bin")"
+    
+    if command -v curl &>/dev/null; then
+        curl -fsSL "$url" -o "$yq_bin" || { echo "Error: Failed to download yq" >&2; return 1; }
+    elif command -v wget &>/dev/null; then
+        wget -q "$url" -O "$yq_bin" || { echo "Error: Failed to download yq" >&2; return 1; }
     else
-        echo "$default"
+        echo "Error: curl or wget required to install yq" >&2
+        return 1
     fi
+    
+    chmod +x "$yq_bin"
+    export PATH="${HOMELAB_ROOT}/.bin:$PATH"
+    echo "==> yq installed to $yq_bin" >&2
+}
+
+# Auto-install yq on source
+ensure_yq || exit 1
+
+# -----------------------------------------------------------------------------
+# Host Registry
+# -----------------------------------------------------------------------------
+
+# Global hosts file path
+HOSTS_FILE=""
+
+# Unified hosts command
+# Usage:
+#   hosts list                      # all hosts
+#   hosts list --type pve           # hosts by type
+#   hosts list --feature telegraf   # hosts by feature
+#   hosts get <host> <key> [default] # get host property
+#   hosts has <host> <feature>      # check if host has feature (boolean)
+hosts() {
+    local cmd="$1"
+    shift
+    
+    case "$cmd" in
+        list)
+            [[ -z "$HOSTS_FILE" ]] && { echo "Error: HOSTS_FILE not set" >&2; return 1; }
+            [[ ! -f "$HOSTS_FILE" ]] && { echo "Error: hosts file not found: $HOSTS_FILE" >&2; return 1; }
+            
+            local type="" feature=""
+            while [[ $# -gt 0 ]]; do
+                case "$1" in
+                    --type)
+                        type="$2"
+                        shift 2
+                        ;;
+                    --feature)
+                        feature="$2"
+                        shift 2
+                        ;;
+                    *)
+                        echo "Error: Unknown option: $1" >&2
+                        return 1
+                        ;;
+                esac
+            done
+            
+            if [[ -n "$type" ]]; then
+                yq e "to_entries | .[] | select(.value.type == \"$type\") | .key" "$HOSTS_FILE" | tr '\n' ' '
+            elif [[ -n "$feature" ]]; then
+                yq e "to_entries | .[] | select(.value.features // [] | contains([\"$feature\"])) | .key" "$HOSTS_FILE" | tr '\n' ' '
+            else
+                yq e 'keys | .[]' "$HOSTS_FILE" | tr '\n' ' '
+            fi
+            ;;
+            
+        get)
+            [[ -z "$HOSTS_FILE" ]] && { echo "Error: HOSTS_FILE not set" >&2; return 1; }
+            [[ ! -f "$HOSTS_FILE" ]] && { echo "Error: hosts file not found: $HOSTS_FILE" >&2; return 1; }
+            
+            local host="$1"
+            local key="$2"
+            local default="${3:-}"
+            
+            [[ -z "$host" ]] && { echo "Error: host required" >&2; return 1; }
+            [[ -z "$key" ]] && { echo "Error: key required" >&2; return 1; }
+            
+            local value
+            value=$(yq e ".\"$host\".\"$key\" // \"\"" "$HOSTS_FILE")
+            
+            if [[ -n "$value" && "$value" != "null" ]]; then
+                echo "$value"
+            elif [[ -n "$default" ]]; then
+                echo "$default"
+            else
+                return 1
+            fi
+            ;;
+            
+        has)
+            [[ -z "$HOSTS_FILE" ]] && { echo "Error: HOSTS_FILE not set" >&2; return 1; }
+            [[ ! -f "$HOSTS_FILE" ]] && { echo "Error: hosts file not found: $HOSTS_FILE" >&2; return 1; }
+            
+            local host="$1"
+            local feature="$2"
+            
+            [[ -z "$host" ]] && { echo "Error: host required" >&2; return 1; }
+            [[ -z "$feature" ]] && { echo "Error: feature required" >&2; return 1; }
+            
+            yq e ".\"$host\".features // [] | contains([\"$feature\"])" "$HOSTS_FILE" | grep -q "true"
+            ;;
+            
+        *)
+            echo "Usage: hosts {list|get|has} ..." >&2
+            return 1
+            ;;
+    esac
 }
 
 # -----------------------------------------------------------------------------
@@ -258,59 +215,94 @@ ensure_remote_dir() {
 }
 
 # -----------------------------------------------------------------------------
-# Config Helpers
-# -----------------------------------------------------------------------------
-
-# Load KEY=VALUE config file into shell variables
-# Usage: load_kv_file /path/to/config
-load_kv_file() {
-    local file="$1"
-
-    if [[ ! -f "$file" ]]; then
-        echo "Error: config file not found: $file" >&2
-        return 1
-    fi
-
-    while IFS='=' read -r key value; do
-        [[ -z "${key//[[:space:]]/}" ]] && continue
-        [[ "$key" == \#* ]] && continue
-
-        key="${key#"${key%%[![:space:]]*}"}"
-        key="${key%"${key##*[![:space:]]}"}"
-        value="${value#"${value%%[![:space:]]*}"}"
-        value="${value%"${value##*[![:space:]]}"}"
-
-        if [[ -n "$key" ]]; then
-            printf -v "$key" '%s' "$value"
-        fi
-    done < "$file"
-}
-
-# -----------------------------------------------------------------------------
 # Output Helpers
 # -----------------------------------------------------------------------------
 
-# Print section header
-print_header() {
-    echo "=== $* ==="
+print_header() { echo "=== $* ==="; }
+print_action() { echo "==> $*"; }
+print_sub()    { echo "    $*"; }
+print_ok()     { echo "    ✓ $*"; }
+print_warn()   { echo "    ✗ Warning: $*"; }
+
+# -----------------------------------------------------------------------------
+# Deployment Framework
+# -----------------------------------------------------------------------------
+
+# Global state
+DEPLOY_MODULE=""
+declare -ga DEPLOY_FAILED_HOSTS=()
+
+# Initialize deployment
+# Usage: deploy_init "Module Name"
+deploy_init() {
+    DEPLOY_MODULE="$1"
+    DEPLOY_FAILED_HOSTS=()
 }
 
-# Print action
-print_action() {
-    echo "==> $*"
+# Run deployment across hosts
+# Usage: deploy_run <deploy_function> <hosts...>
+# The deploy function receives host as $1, should return 0 on success
+deploy_run() {
+    local deploy_fn="$1"
+    shift
+    local hosts_list="$*"
+    
+    print_action "Deploying $DEPLOY_MODULE"
+    print_sub "Hosts: $hosts_list"
+    echo ""
+    
+    for host in $hosts_list; do
+        print_action "Deploying to $host..."
+        
+        if "$deploy_fn" "$host"; then
+            print_ok "Deployed to $host"
+        else
+            print_warn "Failed to deploy to $host"
+            DEPLOY_FAILED_HOSTS+=("$host")
+        fi
+        echo ""
+    done
 }
 
-# Print sub-action
-print_sub() {
-    echo "    $*"
+# Finish deployment and report results
+# Usage: deploy_finish
+# Returns: 0 if all succeeded, 1 if any failed
+deploy_finish() {
+    print_action "Deployment complete!"
+    
+    if [[ ${#DEPLOY_FAILED_HOSTS[@]} -gt 0 ]]; then
+        echo ""
+        print_warn "Failed hosts: ${DEPLOY_FAILED_HOSTS[*]}"
+        return 1
+    fi
+    return 0
 }
 
-# Print success
-print_ok() {
-    echo "    ✓ $*"
+# -----------------------------------------------------------------------------
+# Service Helpers
+# -----------------------------------------------------------------------------
+
+# Enable and start a systemd service
+# Usage: enable_service host service
+enable_service() {
+    local host="$1"
+    local service="$2"
+    ssh "$host" "systemctl enable --now $service"
 }
 
-# Print warning
-print_warn() {
-    echo "    ✗ Warning: $*"
+# Verify a systemd service is running
+# Usage: verify_service host service
+# Returns: 0 if active, 1 if not
+verify_service() {
+    local host="$1"
+    local service="$2"
+    
+    if ssh "$host" "systemctl is-active --quiet $service" 2>/dev/null; then
+        print_ok "$service running"
+        return 0
+    else
+        print_warn "$service not running"
+        ssh "$host" "systemctl status $service --no-pager -l" 2>/dev/null || true
+        return 1
+    fi
 }

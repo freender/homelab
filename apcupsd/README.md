@@ -45,6 +45,35 @@ Per-host settings live in `apcupsd/hosts.conf` using `ups.*` keys.
 ./deploy.sh all
 ```
 
+## Removal
+
+**Single host:**
+```bash
+./remove.sh <hostname>
+```
+
+**All hosts:**
+```bash
+./remove.sh all
+```
+
+**Purge package:**
+```bash
+./remove.sh --purge all
+```
+
+**Skip confirmation:**
+```bash
+./remove.sh --yes all
+```
+
+**What it does:**
+- Stops and disables the apcupsd service
+- Backs up `/etc/apcupsd/` to `/etc/apcupsd.bak.TIMESTAMP`
+- Removes config files and telegram integration
+- Resets `/etc/default/apcupsd` (ISCONFIGURED=no)
+- Optionally purges the apcupsd package with `--purge`
+
 ## Testing
 
 **Dry-run (no actual shutdown):**

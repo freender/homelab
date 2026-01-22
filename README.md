@@ -31,6 +31,12 @@ cd ~/homelab/apcupsd
 ./deploy.sh all
 ```
 
+**Remove:**
+```bash
+cd ~/homelab/apcupsd
+./remove.sh all
+```
+
 ### [docker](docker/)
 Docker management scripts
 - `start.sh`: Update and start all containers (Traefik first)
@@ -74,6 +80,12 @@ cd ~/homelab/pve-gpu-passthrough
 ./deploy.sh all
 ```
 
+**Remove:**
+```bash
+cd ~/homelab/pve-gpu-passthrough
+./remove.sh all
+```
+
 ## Quick Reference
 
 **Clone repo:**
@@ -106,4 +118,10 @@ Metrics collection (CPU, disk, network, sensors, smartctl)
 ```bash
 cd ~/homelab/telegraf
 ./deploy.sh all
+```
+
+**Remove:**
+```bash
+cd ~/homelab/telegraf
+./remove.sh all
 ```

@@ -6,13 +6,7 @@ source "$(dirname "$0")/../lib/common.sh"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-if ! load_hosts_file "$SCRIPT_DIR/hosts.conf"; then
-    exit 1
-fi
-
-get_telegraf_hosts() {
-    get_hosts_with_feature telegraf
-}
+HOSTS_FILE="$SCRIPT_DIR/hosts.conf"
 
 PURGE=false
 REMOVE_REPO=false
@@ -49,7 +43,7 @@ EOF
     esac
 done
 
-SUPPORTED_HOSTS=($(get_telegraf_hosts))
+SUPPORTED_HOSTS=($(hosts list --feature telegraf))
 
 if ! HOSTS=$(filter_hosts "${1:-all}" "${SUPPORTED_HOSTS[@]}"); then
     print_action "Skipping telegraf removal (not applicable to $1)"

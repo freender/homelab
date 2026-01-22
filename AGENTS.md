@@ -1,161 +1,193 @@
 # Agent Instructions for Homelab Repository
 
-**Repository:** `git@github.com:freender/homelab.git`
-**Type:** Shell-based infrastructure automation for Proxmox homelab
-**Primary Language:** Bash/Shell
-**Infrastructure:** 3-node Proxmox cluster (ace, bray, clovis), PBS (xur), VMs, remote NAS
+**Repository:** `git@github.com:freender/homelab.git`  
+**Type:** Shell-based infrastructure automation for Proxmox homelab  
+**Language:** Bash/Shell  
+**Hosts:** Proxmox cluster (ace, bray, clovis), PBS (xur), VMs
 
 ## Build, Lint, Test
 
-No formal build system, linter, or automated tests.
+No formal build system or automated tests. Validation is manual.
 
-**Single-test / narrow validation:**
-- `apcupsd/scripts/test-shutdown.sh` (run on the UPS host)
-- Module deploy by targeting a single host: `cd <module> && ./deploy.sh <host>`
+```bash
+cd <module> && ./deploy.sh <host>       # Single module validation (preferred)
+bash -x <module>/deploy.sh <host>       # Debug a deploy script
+apcupsd/scripts/test-shutdown.sh        # Test script (UPS-specific)
+```
 
-**Manual verification (typical):**
-- Service status: `ssh <host> "systemctl status <service>"`
-- Service active check: `ssh <host> "systemctl is-active --quiet <service>"`
-- Logs: `ssh <host> "journalctl -u <service> -n 50"`
-
-**Pragmatic checks when editing a module:**
-1) Deploy only the module to one host.
-2) Validate config file is present and service is active.
-3) Review recent logs for errors.
+**Post-deploy verification:**
+```bash
+ssh <host> "systemctl is-active --quiet <service>"  # Check running
+ssh <host> "systemctl status <service>"              # Full status
+ssh <host> "journalctl -u <service> -n 50"           # Recent logs
+```
 
 ## Deployment Commands
 
 ```bash
-# Deploy all modules to all hosts
-./deploy-all.sh
-
-# Deploy all modules to a specific host
-./deploy-all.sh <hostname>
-
-# Deploy a single module to all supported hosts
-cd <module> && ./deploy.sh all
-
-# Deploy a single module to specific hosts
-cd <module> && ./deploy.sh <host1> <host2>
-
-# Remove a single module from all supported hosts
-cd <module> && ./remove.sh all
-
-# Remove a single module from specific hosts
-cd <module> && ./remove.sh <host1> <host2>
+./deploy-all.sh                         # All modules, all hosts
+./deploy-all.sh <hostname>              # All modules, single host
+cd <module> && ./deploy.sh all          # Single module, all hosts
+cd <module> && ./deploy.sh <host>       # Single module, single host
+cd <module> && ./remove.sh <host>       # Remove module from host
+cd <module> && ./remove.sh --yes all    # Remove without confirmation
 ```
 
 ## Repository Layout
 
 ```
 homelab/
-├── deploy-all.sh
-├── lib/common.sh
+├── deploy-all.sh           # Orchestrates all modules
+├── lib/common.sh           # Shared functions (MUST source)
 └── <module>/
-    ├── deploy.sh
-    ├── hosts.conf      # Module-specific registry
-    ├── configs/        # Optional
-    ├── scripts/        # Optional
-    └── README.md
+    ├── deploy.sh           # Required entry point
+    ├── remove.sh           # Optional removal script
+    ├── hosts.conf          # Module host registry (YAML-like)
+    ├── configs/            # Config templates
+    └── scripts/            # Helper scripts
 ```
 
-## Script Structure (deploy.sh)
+## deploy.sh Template
 
 ```bash
 #!/bin/bash
 source "$(dirname "$0")/../lib/common.sh"
 
-SUPPORTED_HOSTS=($(get_hosts_by_type pve))
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+HOSTS_FILE="$SCRIPT_DIR/hosts.conf"
+
+# --- Host Selection ---
+SUPPORTED_HOSTS=($(hosts list --type pve))
 if ! HOSTS=$(filter_hosts "${1:-all}" "${SUPPORTED_HOSTS[@]}"); then
     print_action "Skipping <module> (not applicable to $1)"
     exit 0
 fi
+
+# --- Validation ---
+validate() {
+    [[ ! -f "$SCRIPT_DIR/config.conf" ]] && { echo "Error: config.conf missing"; return 1; }
+}
+validate || exit 1
+
+# --- Per-Host Deployment ---
+deploy() {
+    local host="$1"
+    
+    # deployment logic here
+    print_sub "Deploying config..."
+    deploy_file "$SCRIPT_DIR/config.conf" "$host" "/etc/app/config.conf"
+    
+    enable_service "$host" "app"
+    verify_service "$host" "app"  # optional
+}
+
+# --- Main ---
+deploy_init "<Module Name>"
+deploy_run deploy $HOSTS
+deploy_finish
 ```
 
-## Code Style Guidelines
+## remove.sh Pattern
 
-### Imports and Structure
-- Source shared helpers at the top of `deploy.sh` scripts.
-- Cache script paths with `SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"` when needed.
-- Prefer `lib/common.sh` helpers: `filter_hosts`, `deploy_file`, `deploy_script`, `ensure_remote_dir`.
-- `remove.sh` scripts are SSH-only, use `filter_hosts`, and include a confirmation prompt (`--yes` to skip).
+- Source common.sh, parse `--yes`/`-y` flag to skip confirmation
+- Filter hosts with `filter_hosts`, use `SUPPORTED_HOSTS` array
+- Track failures in `FAILED_HOSTS=()`, exit 1 if any failures
+- Always backup before removing: `cp -r /etc/foo /etc/foo.bak.$(date +%Y%m%d%H%M%S)`
+
+## lib/common.sh Functions
+
+**hosts command** (unified host query interface):
+- `hosts list` - all hosts
+- `hosts list --type pve` - filter by type (pve, pbs, vm)
+- `hosts list --feature telegraf` - filter by feature
+- `hosts get <host> <key> [default]` - get property value
+- `hosts has <host> <feature>` - check if host has feature (boolean)
+
+**Deployment framework**:
+- `deploy_init "Module Name"` - Initialize deployment (sets module name, clears failed hosts)
+- `deploy_run <function> $HOSTS` - Run deployment function for each host with automatic failure tracking
+- `deploy_finish` - Print summary, exit with appropriate code
+
+**Other functions**:
+- `filter_hosts ARG HOSTS...` - Filter CLI arg against supported hosts
+- `deploy_file SRC HOST DEST [MODE] [OWNER]` - SCP + chmod/chown
+- `deploy_script SRC HOST DEST` - Deploy executable (mode 755)
+- `ensure_remote_dir HOST DIR [MODE]` - mkdir -p on remote
+- `enable_service HOST SERVICE` - systemctl enable --now
+- `verify_service HOST SERVICE` - Check service status, show logs if failed
+- `print_header`, `print_action`, `print_sub`, `print_ok`, `print_warn` - Output helpers
+
+## hosts.conf Format
+
+```yaml
+ace:
+  type: pve
+  features:
+    - telegraf
+    - gpu
+
+bray:
+  type: pve
+  ups.role: master
+  features:
+    - telegraf
+    - ups-master
+```
+
+Access with: `hosts get ace ups.role`, `hosts has bray ups-master`
+
+## Code Style
 
 ### Formatting
-- Use 4-space indentation.
-- Use `[[ ... ]]` for tests, and quote all variables: `"${VAR}"`.
-- Keep SSH commands on single lines unless a heredoc is required.
-- Prefer `$(...)` over backticks.
+- 4-space indentation
+- `[[ ... ]]` for conditionals (not `[ ]`)
+- Quote all variables: `"${VAR}"`, `"$host"`
+- `$(...)` over backticks
+- Single-line SSH when possible
 
-### Naming Conventions
-- Constants and environment variables: `UPPERCASE_WITH_UNDERSCORES`.
-- Local variables: `lowercase` or `lower_snake_case`.
-- Functions: `lower_snake_case`.
-- Scripts: `lowercase-with-dashes.sh`.
-
-### Types and Validation
-- Bash has no types; use explicit validation.
-- Use `command -v <tool>` checks before installing dependencies.
-- Guard missing config with clear error messages and `exit 1`.
-- Validate required files before running `deploy_file` or `deploy_script`.
+### Naming
+- Constants: `UPPERCASE_WITH_UNDERSCORES`
+- Variables: `lowercase` or `snake_case`
+- Functions: `snake_case`
+- Scripts: `lowercase-with-dashes.sh`
 
 ### Error Handling
-- `set -e` is required in scripts that execute commands (inherit via `lib/common.sh`).
-- `set -u` is recommended when scripts accept parameters.
-- Validate required inputs early and exit with non-zero on failure.
-- Use `|| true` only for intentionally non-fatal commands.
-- Wrap risky remote actions with explicit checks and clear failure output.
-- Removal scripts should continue on per-host errors and summarize failed hosts at the end.
+- `set -e` inherited from common.sh (required)
+- `set -u` in scripts accepting parameters
+- Validate inputs early, exit 1 on failure
+- `|| true` only for intentionally non-fatal commands
+- Removal scripts: continue on errors, summarize failures at end
 
-### Host Filtering and Registry
-- Use module-scoped `hosts.conf` as the source of truth for host types and features.
-- `SUPPORTED_HOSTS` should come from helpers like `get_hosts_by_type`.
-- Use `filter_hosts` and return `exit 0` for non-applicable hosts.
+### SSH Commands
+```bash
+ssh "$host" "systemctl restart nginx"                       # Single command
+ssh "$host" "apt-get update && apt-get install -y nginx"    # Chained commands
 
-### Output and Logging
-- Prefer `print_header`, `print_action`, `print_sub`, `print_ok`, `print_warn` from `lib/common.sh`.
-- Keep output consistent for deploy-all aggregation.
-- Log changes with explicit explains (what, where, why) before running remote commands.
-
-### SSH and File Transfer
-- Use `ssh "$HOST" "command"` for single commands.
-- Use `deploy_file` / `deploy_script` for consistent permissions and ownership.
-- Stage files under `/tmp/homelab-<module>` when doing multi-file installs.
+ssh "$host" bash <<'EOF'    # Heredoc for complex operations
+systemctl stop service
+rm -rf /tmp/cache
+systemctl start service
+EOF
+```
 
 ### Config Files
-- Use heredocs for configs; do not open interactive editors.
-- Quote heredoc delimiter to avoid variable expansion when needed.
-- Keep config templates in `configs/` when reused across hosts.
-
-## Common Tasks
-
-- Deploy one module for validation: `cd <module> && ./deploy.sh <host>`
-- Remove one module for validation: `cd <module> && ./remove.sh <host>`
-- Debug a deploy script: `bash -x <module>/deploy.sh <host>`
-- Check if a service is active: `ssh <host> "systemctl is-active --quiet <service>"`
-- Tail logs while validating: `ssh <host> "journalctl -u <service> -f"`
-
-## Documentation Style (Module README.md)
-
-- Command-focused, minimal prose.
-- Numbered steps `1) 2) 3)` with copy-paste-ready commands.
-- Include `SCOPE`, `NODES`, and `REBUILD` metadata under `## Installation`.
-- Use heredocs for config files.
-- Add a `## Quick Reference` section with key commands or values.
+- Heredocs for configs (no interactive editors)
+- Quote delimiter to prevent expansion: `<<'EOF'`
+- Templates in `configs/` directory
 
 ## Secrets
 
-- Store secrets in `.env` or `telegram.env` (gitignored).
-- Provide `.env.example` templates for required values.
-- Never commit secrets; validate existence before deployment.
+- Store in `.env` or `telegram.env` (gitignored)
+- Provide `.env.example` templates
+- Never commit secrets
+- Validate: `[[ ! -f "$SCRIPT_DIR/.env" ]] && echo "Error: Missing .env" && exit 1`
 
 ## Git Workflow
 
-- Work directly on `main` unless explicitly branching.
-- Commit prefixes: `add`, `update`, `fix`, `refactor`, `docs`.
-- Commit messages focus on why, not the file list.
+- Work on `main` branch
+- Commit prefixes: `add`, `update`, `fix`, `refactor`, `docs`
+- Focus on why, not what
 
-## Cursor and Copilot Rules
+## Cursor/Copilot Rules
 
-- No `.cursor/rules/`, `.cursorrules`, or `.github/copilot-instructions.md` files found.
-
-**Last updated:** 2026-01-21
+No `.cursor/rules/`, `.cursorrules`, or `.github/copilot-instructions.md` found.

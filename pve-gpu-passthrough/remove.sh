@@ -28,10 +28,7 @@ if [[ -f "$COMMON_LIB" ]]; then
     source "$COMMON_LIB"
 
     if [[ -f "$HOSTS_CONF" ]]; then
-        if ! load_hosts_file "$HOSTS_CONF"; then
-            echo "ERROR: Failed to load hosts registry"
-            exit 1
-        fi
+        HOSTS_FILE="$HOSTS_CONF"
     else
         echo "ERROR: hosts.conf not found at $HOSTS_CONF"
         exit 1
@@ -367,7 +364,7 @@ else
         HOSTS=("$@")
     else
         if [[ "$1" == "all" ]]; then
-            HOSTS=($(get_hosts_by_type pve))
+            HOSTS=($(hosts list --type pve))
             if [[ ${#HOSTS[@]} -eq 0 ]]; then
                 echo "ERROR: No Proxmox hosts found in registry"
                 exit 1

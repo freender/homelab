@@ -64,6 +64,40 @@ Test configuration:
 ssh bray "telegraf --test --config /etc/telegraf/telegraf.conf"
 ```
 
+## Removal
+
+Remove from specific hosts:
+```bash
+./remove.sh ace bray
+```
+
+Remove from all hosts:
+```bash
+./remove.sh all
+```
+
+Also remove telegraf package:
+```bash
+./remove.sh --purge all
+```
+
+Also remove InfluxData apt repository:
+```bash
+./remove.sh --remove-repo all
+```
+
+Skip confirmation prompt:
+```bash
+./remove.sh --yes all
+```
+
+**What it does:**
+- Stops and disables the telegraf service
+- Backs up `/etc/telegraf/` to `/etc/telegraf.bak.TIMESTAMP`
+- Removes config files and sudoers rule
+- Optionally removes the InfluxData repository with `--remove-repo`
+- Optionally purges the telegraf package with `--purge`
+
 ## Roles
 
 - `telegraf`: Generic hardware metrics

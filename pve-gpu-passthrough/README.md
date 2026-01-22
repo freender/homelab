@@ -187,11 +187,13 @@ If SSH access is available:
 cd ~/homelab/pve-gpu-passthrough
 ./remove.sh ace          # Remove from specific host
 ./remove.sh all          # Remove from all hosts
-./remove.sh --dry-run ace  # Preview changes
+./remove.sh --yes ace     # Skip confirmation
 
 # Then reboot
 ssh ace reboot
 ```
+
+**Note:** The script discovers and validates Proxmox hosts from `hosts.conf` (type: pve).
 
 **What it does:**
 - Removes `video=efifb:off` from kernel cmdline
