@@ -18,19 +18,37 @@
 
 set -e
 
-# Supported hosts for GPU passthrough removal
-SUPPORTED_HOSTS=("ace" "bray" "clovis")
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+COMMON_LIB="$SCRIPT_DIR/../lib/common.sh"
+HOSTS_CONF="$SCRIPT_DIR/hosts.conf"
 
-# Default: all hosts if "all" specified
-DEFAULT_HOSTS="ace bray clovis"
+REMOTE_MODE=false
+if [[ -f "$COMMON_LIB" ]]; then
+    REMOTE_MODE=true
+    source "$COMMON_LIB"
+
+    if [[ -f "$HOSTS_CONF" ]]; then
+        if ! load_hosts_file "$HOSTS_CONF"; then
+            echo "ERROR: Failed to load hosts registry"
+            exit 1
+        fi
+    else
+        echo "ERROR: hosts.conf not found at $HOSTS_CONF"
+        exit 1
+    fi
+fi
 
 # Script metadata
 VERSION="1.0.0"
 TIMESTAMP=$(date +%Y-%m-%d)
 
 # Detect execution mode
+function is_proxmox_host() {
+    [[ -d /etc/pve ]]
+}
+
 function detect_mode() {
-    if [[ -d /etc/pve ]]; then
+    if is_proxmox_host; then
         echo "local"
     else
         echo "remote"
@@ -61,7 +79,7 @@ Usage (Local on Proxmox host):
   /root/pve-gpu-passthrough-remove.sh
   ~/pve-gpu-passthrough-remove.sh
 
-Supported hosts: ace, bray, clovis
+Supported hosts: Any Proxmox VE node in the homelab registry (type: pve)
 
 What it does:
   - Removes video=efifb:off from kernel cmdline (restores framebuffer)
@@ -84,16 +102,16 @@ function remove_gpu_passthrough_local() {
         DRY_RUN="true"
     fi
     
-    # Validate this is a supported host
-    if [[ ! " ${SUPPORTED_HOSTS[*]} " =~ " $current_host " ]]; then
-        echo "ERROR: Current host '$current_host' is not configured for GPU passthrough"
-        echo "Supported hosts: ${SUPPORTED_HOSTS[*]}"
+    # Validate this is a Proxmox host
+    if ! is_proxmox_host; then
+        echo "ERROR: This script must run on a Proxmox VE host"
+        echo "       Missing /etc/pve directory"
         exit 1
     fi
     
     echo "=== Removing GPU Passthrough Configuration ==="
     echo "    Host: $current_host"
-    echo "    Mode: Local execution"
+    echo "    Mode: Local execution (standalone)"
     echo "    Date: $TIMESTAMP"
     echo ""
     
@@ -340,26 +358,44 @@ else
     fi
     
     # Parse hosts
-    HOSTS=""
-    if [[ "$1" == "all" ]]; then
-        HOSTS="$DEFAULT_HOSTS"
-    else
-        HOSTS="$*"
-    fi
-    
-    # Validate each host
-    for host in $HOSTS; do
-        if [[ ! " ${SUPPORTED_HOSTS[*]} " =~ " $host " ]]; then
-            echo "ERROR: Unsupported host: $host"
-            echo "Supported hosts: ${SUPPORTED_HOSTS[*]}"
+    if [[ "$REMOTE_MODE" == "false" ]]; then
+        if [[ "$1" == "all" ]]; then
+            echo "ERROR: 'all' not supported in standalone mode"
+            echo "       Run from homelab repo or specify explicit hostname"
             exit 1
         fi
-    done
+        HOSTS=("$@")
+    else
+        if [[ "$1" == "all" ]]; then
+            HOSTS=($(get_hosts_by_type pve))
+            if [[ ${#HOSTS[@]} -eq 0 ]]; then
+                echo "ERROR: No Proxmox hosts found in registry"
+                exit 1
+            fi
+        else
+            HOSTS=("$@")
+        fi
+
+        # Validate each host is type pve
+        for host in "${HOSTS[@]}"; do
+            host_type=$(get_host_type "$host" 2>/dev/null || echo "")
+            if [[ "$host_type" != "pve" ]]; then
+                echo "ERROR: Host '$host' is not a Proxmox node (type=${host_type:-unknown})"
+                echo "       Only Proxmox VE hosts are supported"
+                exit 1
+            fi
+        done
+    fi
     
     # Show plan and confirm (unless --yes or --dry-run)
     if [[ "$SKIP_CONFIRM" == "false" && "$DRY_RUN" == "false" ]]; then
         echo "=== GPU Passthrough Removal Plan ==="
-        echo "    Hosts: $HOSTS"
+        if [[ "$REMOTE_MODE" == "true" ]]; then
+            echo "    Hosts: ${HOSTS[*]}"
+            echo "    (All hosts validated as type=pve)"
+        else
+            echo "    Hosts: ${HOSTS[*]} (not validated - standalone mode)"
+        fi
         echo ""
         echo "    Changes per host:"
         echo "    - Remove video=efifb:off from kernel cmdline"
@@ -381,7 +417,7 @@ else
     
     # Execute removal on each host
     FAILED_HOSTS=()
-    for host in $HOSTS; do
+    for host in "${HOSTS[@]}"; do
         if ! remove_gpu_passthrough_remote "$host"; then
             FAILED_HOSTS+=("$host")
         fi
@@ -398,7 +434,7 @@ else
     
     # Show reboot instructions
     SUCCESS_HOSTS=()
-    for host in $HOSTS; do
+    for host in "${HOSTS[@]}"; do
         if [[ ! " ${FAILED_HOSTS[*]} " =~ " $host " ]]; then
             SUCCESS_HOSTS+=("$host")
         fi

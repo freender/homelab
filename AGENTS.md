@@ -11,7 +11,7 @@ No formal build system, linter, or automated tests.
 
 **Single-test / narrow validation:**
 - `apcupsd/scripts/test-shutdown.sh` (run on the UPS host)
-- Module deploy dry-run by targeting a single host: `cd <module> && ./deploy.sh <host>`
+- Module deploy by targeting a single host: `cd <module> && ./deploy.sh <host>`
 
 **Manual verification (typical):**
 - Service status: `ssh <host> "systemctl status <service>"`
@@ -37,6 +37,12 @@ cd <module> && ./deploy.sh all
 
 # Deploy a single module to specific hosts
 cd <module> && ./deploy.sh <host1> <host2>
+
+# Remove a single module from all supported hosts
+cd <module> && ./remove.sh all
+
+# Remove a single module from specific hosts
+cd <module> && ./remove.sh <host1> <host2>
 ```
 
 ## Repository Layout
@@ -72,6 +78,7 @@ fi
 - Source shared helpers at the top of `deploy.sh` scripts.
 - Cache script paths with `SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"` when needed.
 - Prefer `lib/common.sh` helpers: `filter_hosts`, `deploy_file`, `deploy_script`, `ensure_remote_dir`.
+- `remove.sh` scripts are SSH-only, use `filter_hosts`, and include a confirmation prompt (`--yes` to skip).
 
 ### Formatting
 - Use 4-space indentation.
@@ -97,6 +104,7 @@ fi
 - Validate required inputs early and exit with non-zero on failure.
 - Use `|| true` only for intentionally non-fatal commands.
 - Wrap risky remote actions with explicit checks and clear failure output.
+- Removal scripts should continue on per-host errors and summarize failed hosts at the end.
 
 ### Host Filtering and Registry
 - Use module-scoped `hosts.conf` as the source of truth for host types and features.
@@ -121,6 +129,7 @@ fi
 ## Common Tasks
 
 - Deploy one module for validation: `cd <module> && ./deploy.sh <host>`
+- Remove one module for validation: `cd <module> && ./remove.sh <host>`
 - Debug a deploy script: `bash -x <module>/deploy.sh <host>`
 - Check if a service is active: `ssh <host> "systemctl is-active --quiet <service>"`
 - Tail logs while validating: `ssh <host> "journalctl -u <service> -f"`
