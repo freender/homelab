@@ -6,7 +6,7 @@ telegram.env
 *.local
 
 # Generated output
-rendered/
+build/
 
 # Git history backups
 .git.backup

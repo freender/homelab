@@ -6,9 +6,10 @@ source "$(dirname "$0")/../lib/common.sh"
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 HOSTS_FILE="$SCRIPT_DIR/hosts.conf"
-PROFILES_DIR="$SCRIPT_DIR/profiles"
-RENDERED_DIR="$SCRIPT_DIR/rendered"
-TELEGRAM_ENV="${SCRIPT_DIR}/telegram/telegram.env"
+TEMPLATES_DIR="$SCRIPT_DIR/templates"
+CONFIGS_DIR="$SCRIPT_DIR/configs"
+BUILD_ROOT="$SCRIPT_DIR/build"
+TELEGRAM_ENV="$CONFIGS_DIR/telegram/telegram.env"
 
 # --- Host Selection ---
 get_apcupsd_hosts() {
@@ -36,7 +37,7 @@ fi
 # --- Validation ---
 [[ ! -f "$TELEGRAM_ENV" ]] && {
     echo "ERROR: telegram.env not found!"
-    echo "  cp apcupsd/telegram/telegram.env.example apcupsd/telegram/telegram.env"
+    echo "  cp apcupsd/configs/telegram/telegram.env.example apcupsd/configs/telegram/telegram.env"
     exit 1
 }
 
@@ -55,36 +56,41 @@ render_template() {
 
 render_configs() {
     local host="$1" role="$2" upsname="$3" device="$4" nisip="$5" slave_hosts="$6"
-    local host_dir="$RENDERED_DIR/$host"
+    local host_dir="$BUILD_ROOT/$host"
     mkdir -p "$host_dir"
-    
+
     local conf_template shutdown_template
     case "$role" in
         master)
-            conf_template="$PROFILES_DIR/master.conf.tpl"
-            shutdown_template="$PROFILES_DIR/doshutdown-master.tpl"
+            conf_template="$TEMPLATES_DIR/master.conf.tpl"
+            shutdown_template="$TEMPLATES_DIR/doshutdown-master.tpl"
             ;;
         slave)
-            conf_template="$PROFILES_DIR/slave.conf.tpl"
-            shutdown_template="$PROFILES_DIR/doshutdown-slave.tpl"
+            conf_template="$TEMPLATES_DIR/slave.conf.tpl"
+            shutdown_template="$TEMPLATES_DIR/doshutdown-slave.tpl"
             ;;
         master-standalone)
-            conf_template="$PROFILES_DIR/master.conf.tpl"
-            shutdown_template="$PROFILES_DIR/doshutdown-master-standalone.tpl"
+            conf_template="$TEMPLATES_DIR/master.conf.tpl"
+            shutdown_template="$TEMPLATES_DIR/doshutdown-master-standalone.tpl"
             ;;
         *)
             echo "ERROR: Unknown role '$role'"
             return 1
             ;;
     esac
-    
+
     for tpl in "$conf_template" "$shutdown_template"; do
         [[ ! -f "$tpl" ]] && { echo "ERROR: Missing template $tpl"; return 1; }
     done
-    
+
     render_template "$conf_template" "$host_dir/apcupsd.conf" "$host" "$upsname" "$device" "$nisip" "$slave_hosts"
     render_template "$shutdown_template" "$host_dir/doshutdown" "$host" "$upsname" "$device" "$nisip" "$slave_hosts"
     chmod +x "$host_dir/doshutdown"
+
+    cat > "$host_dir/env" <<EOF
+ROLE="$role"
+HOST="$host"
+EOF
 }
 
 # --- Per-Host Deployment ---
@@ -93,22 +99,21 @@ SLAVE_HOSTS=$(hosts list --feature ups-slave)
 deploy() {
     local host="$1"
     local role upsname device nisip
-    
+
     role=$(hosts get "$host" "ups.role") || { print_warn "ups.role missing"; return 1; }
     upsname=$(hosts get "$host" "ups.name") || { print_warn "ups.name missing"; return 1; }
     device=$(hosts get "$host" "ups.device" "")
     nisip=$(hosts get "$host" "ups.nisip") || { print_warn "ups.nisip missing"; return 1; }
-    
+
     render_configs "$host" "$role" "$upsname" "$device" "$nisip" "$SLAVE_HOSTS" || return 1
-    
-    print_sub "Copying files..."
-    ssh "$host" "rm -rf /tmp/homelab-apcupsd && mkdir -p /tmp/homelab-apcupsd"
-    scp -rq "$RENDERED_DIR/$host" "$SCRIPT_DIR/scripts" "$SCRIPT_DIR/shared" "$SCRIPT_DIR/hosts.conf" "$host:/tmp/homelab-apcupsd/"
-    ssh "$host" "mkdir -p /tmp/homelab-apcupsd/telegram"
-    scp -rq "$SCRIPT_DIR/telegram/"* "$host:/tmp/homelab-apcupsd/telegram/"
-    
+
+    print_sub "Staging bundle..."
+    ssh "$host" "rm -rf /tmp/homelab-apcupsd && mkdir -p /tmp/homelab-apcupsd/build"
+    scp -rq "$BUILD_ROOT/$host" "$host:/tmp/homelab-apcupsd/build/"
+    scp -rq "$SCRIPT_DIR/scripts" "$CONFIGS_DIR" "$host:/tmp/homelab-apcupsd/"
+
     print_sub "Running installer..."
-    ssh "$host" "cd /tmp/homelab-apcupsd && chmod +x scripts/install.sh && ./scripts/install.sh $host"
+    ssh "$host" "cd /tmp/homelab-apcupsd && chmod +x scripts/install.sh && sudo ./scripts/install.sh $host"
 }
 
 # --- Main ---

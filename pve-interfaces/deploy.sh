@@ -6,6 +6,7 @@ source "$(dirname "$0")/../lib/common.sh"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HOSTS_FILE="$SCRIPT_DIR/hosts.conf"
+BUILD_ROOT="$SCRIPT_DIR/build"
 
 # --- Host Selection ---
 SUPPORTED_HOSTS=($(hosts list --type pve) $(hosts list --type pbs))
@@ -18,44 +19,43 @@ fi
 deploy() {
     local host="$1"
     local host_type template_file mgmt_ip storage_ip gateway
-    
+    local build_dir="$BUILD_ROOT/$host"
+
     host_type=$(hosts get "$host" "type")
-    
+
     if [[ "$host_type" == "pve" ]]; then
         template_file="$SCRIPT_DIR/templates/pve-interfaces"
     else
         template_file="$SCRIPT_DIR/templates/pbs-interfaces"
     fi
-    
+
     [[ ! -f "$template_file" ]] && { print_warn "No template for type: $host_type"; return 1; }
-    
+
     mgmt_ip=$(hosts get "$host" "net.mgmt_ip") || { print_warn "net.mgmt_ip missing"; return 1; }
     gateway=$(hosts get "$host" "net.gateway") || { print_warn "net.gateway missing"; return 1; }
-    
+
     if [[ "$host_type" == "pve" ]]; then
         storage_ip=$(hosts get "$host" "net.storage_ip" "") || true
         [[ -z "$storage_ip" ]] && { print_warn "net.storage_ip missing"; return 1; }
     fi
-    
-    # Render template
+
+    rm -rf "$build_dir"
+    mkdir -p "$build_dir"
+
     local content
     content=$(cat "$template_file")
     content=${content//\$\{NET_MGMT_IP\}/$mgmt_ip}
     content=${content//\$\{NET_GATEWAY\}/$gateway}
     [[ -n "$storage_ip" ]] && content=${content//\$\{NET_STORAGE_IP\}/$storage_ip}
-    
-    local rendered_file
-    rendered_file=$(mktemp)
-    printf '%s\n' "$content" > "$rendered_file"
-    
-    print_sub "Backing up existing config..."
-    ssh "$host" "cp /etc/network/interfaces /etc/network/interfaces.bak.\$(date +%Y%m%d%H%M%S)"
-    
-    print_sub "Deploying interfaces file..."
-    deploy_file "$rendered_file" "$host" "/etc/network/interfaces"
-    rm -f "$rendered_file"
-    
-    print_sub "Reboot or ifreload required"
+    printf '%s\n' "$content" > "$build_dir/interfaces"
+
+    print_sub "Staging bundle..."
+    ssh "$host" "rm -rf /tmp/homelab-pve-interfaces && mkdir -p /tmp/homelab-pve-interfaces/build"
+    scp -rq "$build_dir" "$host:/tmp/homelab-pve-interfaces/build/"
+    scp -rq "$SCRIPT_DIR/scripts" "$host:/tmp/homelab-pve-interfaces/"
+
+    print_sub "Running installer..."
+    ssh "$host" "cd /tmp/homelab-pve-interfaces && chmod +x scripts/install.sh && sudo ./scripts/install.sh $host"
 }
 
 # --- Main ---

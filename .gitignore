@@ -24,3 +24,6 @@ Thumbs.db
 
 # Downloaded binaries
 .bin/
+
+# Build artifacts
+**/build/

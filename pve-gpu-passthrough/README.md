@@ -24,7 +24,7 @@ This directory contains automated GPU passthrough configuration for Proxmox host
 pve-gpu-passthrough/
 ├── deploy.sh              # Deployment script (run from helm)
 ├── README.md              # This file
-├── profiles/              # Shared profile templates
+├── templates/             # Shared profile templates
 │   ├── intel/
 │   │   ├── cmdline
 │   │   ├── blacklist.conf
@@ -33,7 +33,7 @@ pve-gpu-passthrough/
 │       ├── cmdline
 │       ├── blacklist.conf
 │       └── vfio.conf.tpl
-└── modules                # VFIO kernel modules
+└── configs/               # Static config inputs (modules)
 ```
 
 Host registry data lives in `pve-gpu-passthrough/hosts.conf` using `gpu.*` keys.

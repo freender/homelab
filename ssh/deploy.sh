@@ -6,8 +6,9 @@ source "$(dirname "$0")/../lib/common.sh"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HOSTS_FILE="$SCRIPT_DIR/hosts.conf"
-CONFIGS_DIR="${SCRIPT_DIR}/configs"
-COMMON_CONFIG="${CONFIGS_DIR}/common.conf"
+CONFIGS_DIR="$SCRIPT_DIR/configs"
+COMMON_CONFIG="$CONFIGS_DIR/common.conf"
+BUILD_ROOT="$SCRIPT_DIR/build"
 
 # --- Host Selection ---
 SUPPORTED_HOSTS=($(hosts list))
@@ -22,26 +23,23 @@ fi
 # --- Per-Host Deployment ---
 deploy() {
     local host="$1"
-    
-    # Ensure .ssh directory exists
-    if ! ssh "$host" "mkdir -p ~/.ssh && chmod 700 ~/.ssh" 2>/dev/null; then
-        print_warn "Failed to create .ssh directory"
-        return 1
-    fi
-    
-    print_sub "Deploying base config..."
-    scp -q "$COMMON_CONFIG" "${host}:/tmp/ssh_config"
-    
-    # Append host-specific config if exists
+    local build_dir="$BUILD_ROOT/$host"
+
+    rm -rf "$build_dir"
+    mkdir -p "$build_dir"
+
+    cp "$COMMON_CONFIG" "$build_dir/config"
     if [[ -f "$CONFIGS_DIR/$host/append.conf" ]]; then
-        print_sub "Appending $host-specific config..."
-        cat "$CONFIGS_DIR/$host/append.conf" | ssh "$host" "cat >> /tmp/ssh_config"
+        cat "$CONFIGS_DIR/$host/append.conf" >> "$build_dir/config"
     fi
-    
-    ssh "$host" "mv /tmp/ssh_config ~/.ssh/config && chmod 600 ~/.ssh/config"
-    
-    # Verify
-    ssh "$host" "test -f ~/.ssh/config && test -r ~/.ssh/config" 2>/dev/null
+
+    print_sub "Staging bundle..."
+    ssh "$host" "rm -rf /tmp/homelab-ssh && mkdir -p /tmp/homelab-ssh/build"
+    scp -rq "$build_dir" "$host:/tmp/homelab-ssh/build/"
+    scp -rq "$SCRIPT_DIR/scripts" "$host:/tmp/homelab-ssh/"
+
+    print_sub "Running installer..."
+    ssh "$host" "cd /tmp/homelab-ssh && chmod +x scripts/install.sh && ./scripts/install.sh $host"
 }
 
 # --- Main ---

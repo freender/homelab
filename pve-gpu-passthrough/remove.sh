@@ -375,7 +375,7 @@ else
 
         # Validate each host is type pve
         for host in "${HOSTS[@]}"; do
-            host_type=$(get_host_type "$host" 2>/dev/null || echo "")
+            host_type=$(hosts get "$host" "type" 2>/dev/null || echo "")
             if [[ "$host_type" != "pve" ]]; then
                 echo "ERROR: Host '$host' is not a Proxmox node (type=${host_type:-unknown})"
                 echo "       Only Proxmox VE hosts are supported"

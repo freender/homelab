@@ -43,8 +43,10 @@ homelab/
     ├── deploy.sh           # Required entry point
     ├── remove.sh           # Optional removal script
     ├── hosts.conf          # Module host registry (YAML-like)
-    ├── configs/            # Config templates
-    └── scripts/            # Helper scripts
+    ├── templates/          # Templated inputs (.tpl)
+    ├── configs/            # Static configs and shared files
+    ├── scripts/            # Install/remove helpers
+    └── build/              # Generated artifacts (gitignored)
 ```
 
 ## deploy.sh Template
@@ -72,13 +74,18 @@ validate || exit 1
 # --- Per-Host Deployment ---
 deploy() {
     local host="$1"
-    
-    # deployment logic here
-    print_sub "Deploying config..."
-    deploy_file "$SCRIPT_DIR/config.conf" "$host" "/etc/app/config.conf"
-    
-    enable_service "$host" "app"
-    verify_service "$host" "app"  # optional
+    local build_dir="$SCRIPT_DIR/build/$host"
+
+    rm -rf "$build_dir"
+    mkdir -p "$build_dir"
+    cp "$SCRIPT_DIR/config.conf" "$build_dir/config.conf"
+
+    print_sub "Staging bundle..."
+    ssh "$host" "rm -rf /tmp/homelab-<module> && mkdir -p /tmp/homelab-<module>"
+    scp -rq "$build_dir" "$SCRIPT_DIR/scripts" "$host:/tmp/homelab-<module>/"
+
+    print_sub "Running installer..."
+    ssh "$host" "cd /tmp/homelab-<module> && chmod +x scripts/install.sh && sudo ./scripts/install.sh $host"
 }
 
 # --- Main ---

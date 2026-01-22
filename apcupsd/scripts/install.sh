@@ -1,75 +1,45 @@
 #!/bin/bash
 # install.sh - Install apcupsd on target host
 # Usage: ./scripts/install.sh [hostname]
-# If no hostname provided, uses current hostname
 
 set -e
 
 HOST=${1:-$(hostname)}
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-HOSTS_CONF="$SCRIPT_DIR/hosts.conf"
+BUILD_DIR="$SCRIPT_DIR/build/$HOST"
+CONFIGS_DIR="$SCRIPT_DIR/configs"
+ENV_FILE="$BUILD_DIR/env"
 
-# Get host role from apcupsd/hosts.conf (data-driven)
-if [[ ! -f "$HOSTS_CONF" ]]; then
-    echo "Error: apcupsd/hosts.conf not found at $HOSTS_CONF"
-    exit 1
-fi
-
-get_host_value() {
-    local target="$1"
-    local key="$2"
-    local in_host=0
-    local line
-
-    while IFS= read -r line || [[ -n "$line" ]]; do
-        line="${line%$'\r'}"
-        [[ "$line" =~ ^[[:space:]]*# ]] && continue
-        [[ -z "${line//[[:space:]]/}" ]] && continue
-
-        if [[ "$line" =~ ^[A-Za-z0-9._-]+:[[:space:]]*$ ]]; then
-            if [[ "${line%%:*}" == "$target" ]]; then
-                in_host=1
-            else
-                in_host=0
-            fi
-            continue
-        fi
-
-        if [[ $in_host -eq 1 && "$line" =~ ^[[:space:]]+${key}:[[:space:]]*.*$ ]]; then
-            local value="${line#*:}"
-            value="${value%"${value##*[![:space:]]}"}"
-            value="${value#"${value%%[![:space:]]*}"}"
-            if [[ "$value" =~ ^".*"$ ]]; then
-                value="${value:1:${#value}-2}"
-            elif [[ "$value" =~ ^'.*'$ ]]; then
-                value="${value:1:${#value}-2}"
-            fi
-            echo "$value"
-            return 0
-        fi
-    done < "$HOSTS_CONF"
-
-    return 1
-}
-
-ROLE=$(get_host_value "$HOST" "ups.role")
-if [[ -z "$ROLE" ]]; then
-    echo "Error: ups.role missing for $HOST in apcupsd/hosts.conf"
-    exit 1
+ROLE="unknown"
+if [[ -f "$ENV_FILE" ]]; then
+    # shellcheck source=/dev/null
+    source "$ENV_FILE"
 fi
 
 echo "=== Installing apcupsd $ROLE on $HOST ==="
 
-RENDERED_DIR="$SCRIPT_DIR/$HOST"
+if [[ ! -d "$BUILD_DIR" ]]; then
+    echo "Error: Rendered config directory not found: $BUILD_DIR"
+    exit 1
+fi
 
-# Check if rendered configs exist
-if [[ ! -d "$RENDERED_DIR" ]]; then
-    echo "Error: Rendered config directory not found: $RENDERED_DIR"
+if [[ ! -f "$CONFIGS_DIR/shared/apcupsd.notify" ]]; then
+    echo "Error: Missing $CONFIGS_DIR/shared/apcupsd.notify"
+    exit 1
+fi
+
+if [[ ! -f "$CONFIGS_DIR/telegram/telegram.sh" ]]; then
+    echo "Error: Missing $CONFIGS_DIR/telegram/telegram.sh"
+    exit 1
+fi
+
+if [[ ! -f "$CONFIGS_DIR/telegram/telegram.env" ]]; then
+    echo "Error: Missing $CONFIGS_DIR/telegram/telegram.env"
     exit 1
 fi
 
 # Install package if needed
-if ! which apcupsd >/dev/null 2>&1; then
+if ! command -v apcupsd >/dev/null 2>&1; then
     echo "Installing apcupsd package..."
     apt update && apt install -y apcupsd
 fi
@@ -84,27 +54,19 @@ fi
 
 # Copy configs
 echo "Copying configuration files..."
-cp "$RENDERED_DIR/apcupsd.conf" /etc/apcupsd/
-cp "$RENDERED_DIR/doshutdown" /etc/apcupsd/
-# Use shared notify
-cp "$SCRIPT_DIR/shared/apcupsd.notify" /etc/apcupsd/
+cp "$BUILD_DIR/apcupsd.conf" /etc/apcupsd/
+cp "$BUILD_DIR/doshutdown" /etc/apcupsd/
+cp "$CONFIGS_DIR/shared/apcupsd.notify" /etc/apcupsd/
 
 # Setup telegram
 mkdir -p /etc/apcupsd/telegram
-cp "$SCRIPT_DIR/telegram/telegram.sh" /etc/apcupsd/telegram/
+cp "$CONFIGS_DIR/telegram/telegram.sh" /etc/apcupsd/telegram/
 
-# Copy telegram.env from temp directory
-ENV_FILE="/etc/apcupsd/telegram/telegram.env"
-if [[ -f "$SCRIPT_DIR/telegram/telegram.env" ]]; then
-    cp "$SCRIPT_DIR/telegram/telegram.env" "$ENV_FILE"
-    chmod 600 "$ENV_FILE"
-    chown root:root "$ENV_FILE"
-    echo "Telegram credentials installed."
-else
-    echo "ERROR: Missing $SCRIPT_DIR/telegram/telegram.env"
-    echo "This should have been copied during deployment."
-    exit 1
-fi
+ENV_FILE_DEST="/etc/apcupsd/telegram/telegram.env"
+cp "$CONFIGS_DIR/telegram/telegram.env" "$ENV_FILE_DEST"
+chmod 600 "$ENV_FILE_DEST"
+chown root:root "$ENV_FILE_DEST"
+echo "Telegram credentials installed."
 
 # Set permissions
 chmod +x /etc/apcupsd/doshutdown
@@ -123,7 +85,7 @@ systemctl enable apcupsd
 systemctl start apcupsd
 
 echo ""
-echo "=== apcupsd $TYPE installed on $HOST ==="
+echo "=== apcupsd $ROLE installed on $HOST ==="
 echo ""
 apcaccess status 2>/dev/null | grep -E "STATUS|MODEL|TIMELEFT|BCHARGE" || echo "Waiting for UPS connection..."
 echo ""
