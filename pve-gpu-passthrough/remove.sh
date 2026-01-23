@@ -12,7 +12,6 @@
 source "$(dirname "$0")/../lib/common.sh"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-HOSTS_FILE="$SCRIPT_DIR/hosts.conf"
 
 parse_common_flags "$@"
 set -- "${PARSED_ARGS[@]}"

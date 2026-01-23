@@ -5,7 +5,6 @@
 source "$(dirname "$0")/../lib/common.sh"
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-HOSTS_FILE="$SCRIPT_DIR/hosts.conf"
 TEMPLATES_DIR="$SCRIPT_DIR/templates"
 CONFIGS_DIR="$SCRIPT_DIR/configs"
 BUILD_ROOT="$SCRIPT_DIR/build"

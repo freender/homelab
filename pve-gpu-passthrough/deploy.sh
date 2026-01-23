@@ -5,7 +5,6 @@
 source "$(dirname "$0")/../lib/common.sh"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-HOSTS_FILE="$SCRIPT_DIR/hosts.conf"
 TEMPLATES_DIR="$SCRIPT_DIR/templates"
 MODULES_FILE="$SCRIPT_DIR/configs/modules"
 BUILD_ROOT="$SCRIPT_DIR/build"

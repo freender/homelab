@@ -5,7 +5,6 @@
 source "$(dirname "$0")/../lib/common.sh"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-HOSTS_FILE="$SCRIPT_DIR/hosts.conf"
 CONFIGS_DIR="$SCRIPT_DIR/configs"
 COMMON_DIR="$CONFIGS_DIR/common"
 APC_CONFIG="$CONFIGS_DIR/roles/apc/apcupsd.conf"

@@ -56,8 +56,17 @@ ensure_yq || exit 1
 # Host Registry
 # -----------------------------------------------------------------------------
 
-# Global hosts file path
+# Global hosts file path (optional override by modules)
 HOSTS_FILE=""
+
+resolve_hosts_file() {
+    if [[ -n "$HOSTS_FILE" ]]; then
+        echo "$HOSTS_FILE"
+        return 0
+    fi
+
+    echo "$HOMELAB_ROOT/hosts.conf"
+}
 
 # Unified hosts command
 # Usage:
@@ -70,10 +79,12 @@ hosts() {
     local cmd="$1"
     shift
     
+    local hosts_file
+    hosts_file=$(resolve_hosts_file)
+
     case "$cmd" in
         list)
-            [[ -z "$HOSTS_FILE" ]] && { echo "Error: HOSTS_FILE not set" >&2; return 1; }
-            [[ ! -f "$HOSTS_FILE" ]] && { echo "Error: hosts file not found: $HOSTS_FILE" >&2; return 1; }
+            [[ ! -f "$hosts_file" ]] && { echo "Error: hosts file not found: $hosts_file" >&2; return 1; }
             
             local type="" feature=""
             while [[ $# -gt 0 ]]; do
@@ -94,17 +105,16 @@ hosts() {
             done
             
             if [[ -n "$type" ]]; then
-                yq e "to_entries | .[] | select(.value.type == \"$type\") | .key" "$HOSTS_FILE" | tr '\n' ' '
+                yq e "to_entries | .[] | select(.value.type == \"$type\") | .key" "$hosts_file" | tr '\n' ' '
             elif [[ -n "$feature" ]]; then
-                yq e "to_entries | .[] | select(.value.features // [] | contains([\"$feature\"])) | .key" "$HOSTS_FILE" | tr '\n' ' '
+                yq e "to_entries | .[] | select(.value.features // [] | contains([\"$feature\"])) | .key" "$hosts_file" | tr '\n' ' '
             else
-                yq e 'keys | .[]' "$HOSTS_FILE" | tr '\n' ' '
+                yq e 'keys | .[]' "$hosts_file" | tr '\n' ' '
             fi
             ;;
             
         get)
-            [[ -z "$HOSTS_FILE" ]] && { echo "Error: HOSTS_FILE not set" >&2; return 1; }
-            [[ ! -f "$HOSTS_FILE" ]] && { echo "Error: hosts file not found: $HOSTS_FILE" >&2; return 1; }
+            [[ ! -f "$hosts_file" ]] && { echo "Error: hosts file not found: $hosts_file" >&2; return 1; }
             
             local host="$1"
             local key="$2"
@@ -114,7 +124,7 @@ hosts() {
             [[ -z "$key" ]] && { echo "Error: key required" >&2; return 1; }
             
             local value
-            value=$(yq e ".\"$host\".\"$key\" // \"\"" "$HOSTS_FILE")
+            value=$(yq e ".\"$host\".\"$key\" // \"\"" "$hosts_file")
             
             if [[ -n "$value" && "$value" != "null" ]]; then
                 echo "$value"
@@ -126,8 +136,7 @@ hosts() {
             ;;
             
         has)
-            [[ -z "$HOSTS_FILE" ]] && { echo "Error: HOSTS_FILE not set" >&2; return 1; }
-            [[ ! -f "$HOSTS_FILE" ]] && { echo "Error: hosts file not found: $HOSTS_FILE" >&2; return 1; }
+            [[ ! -f "$hosts_file" ]] && { echo "Error: hosts file not found: $hosts_file" >&2; return 1; }
             
             local host="$1"
             local feature="$2"
@@ -135,7 +144,7 @@ hosts() {
             [[ -z "$host" ]] && { echo "Error: host required" >&2; return 1; }
             [[ -z "$feature" ]] && { echo "Error: feature required" >&2; return 1; }
             
-            yq e ".\"$host\".features // [] | contains([\"$feature\"])" "$HOSTS_FILE" | grep -q "true"
+            yq e ".\"$host\".features // [] | contains([\"$feature\"])" "$hosts_file" | grep -q "true"
             ;;
             
         *)

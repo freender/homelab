@@ -1,0 +1,57 @@
+name: Validate
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  shellcheck:
+    name: ShellCheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run ShellCheck
+        uses: ludeeus/action-shellcheck@master
+        with:
+          scandir: "."
+          severity: warning
+          ignore_paths: ".bin"
+
+  yaml-lint:
+    name: YAML Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Lint hosts.conf
+        uses: ibiqlik/action-yamllint@v3
+        with:
+          file_or_dir: "hosts.conf"
+          config_data: |
+            extends: relaxed
+            rules:
+              line-length: disable
+              truthy: disable
+
+  dry-run:
+    name: Dry Run Modules
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install yq
+        run: |
+          mkdir -p .bin
+          wget -qO .bin/yq https://github.com/mikefarah/yq/releases/download/v4.44.1/yq_linux_amd64
+          chmod +x .bin/yq
+      - name: Dry-run all deploy scripts
+        run: |
+          export PATH="$PWD/.bin:$PATH"
+          failed=0
+          for module in */deploy.sh; do
+            echo "=== Testing $(dirname "$module") ==="
+            if ! ./$module --dry-run all 2>&1 | head -20; then
+              failed=1
+            fi
+          done
+          exit $failed
