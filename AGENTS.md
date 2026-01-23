@@ -29,6 +29,7 @@ ssh <host> "journalctl -u <service> -n 50"           # Recent logs
 ./deploy-all.sh <hostname>              # All modules, single host
 cd <module> && ./deploy.sh all          # Single module, all hosts
 cd <module> && ./deploy.sh <host>       # Single module, single host
+cd <module> && ./deploy.sh --dry-run <host>  # Preview without deploying
 cd <module> && ./remove.sh <host>       # Remove module from host
 cd <module> && ./remove.sh --yes all    # Remove without confirmation
 ```
@@ -57,8 +58,12 @@ source "$(dirname "$0")/../lib/common.sh"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HOSTS_FILE="$SCRIPT_DIR/hosts.conf"
+BUILD_ROOT="$SCRIPT_DIR/build"
 
 # --- Host Selection ---
+ARGS=$(parse_common_flags "$@")
+set -- $ARGS
+
 SUPPORTED_HOSTS=($(hosts list --type pve))
 if ! HOSTS=$(filter_hosts "${1:-all}" "${SUPPORTED_HOSTS[@]}"); then
     print_action "Skipping <module> (not applicable to $1)"
@@ -74,15 +79,27 @@ validate || exit 1
 # --- Per-Host Deployment ---
 deploy() {
     local host="$1"
-    local build_dir="$SCRIPT_DIR/build/$host"
+    local build_dir="$BUILD_ROOT/$host"
 
-    rm -rf "$build_dir"
-    mkdir -p "$build_dir"
+    prepare_build_dir "$build_dir"
     cp "$SCRIPT_DIR/config.conf" "$build_dir/config.conf"
 
+    # If using templates:
+    # render_template "$SCRIPT_DIR/templates/config.tpl" "$build_dir/config" VAR1="value1" VAR2="value2"
+
+    show_build_diff "$build_dir"
+
+    if [[ "$DRY_RUN" == true ]]; then
+        print_sub "[DRY-RUN] Would deploy to $host:/tmp/homelab-<module>/"
+        print_sub "Build files:"
+        find "$build_dir" -type f | sed "s|$build_dir/|    |"
+        return 0
+    fi
+
     print_sub "Staging bundle..."
-    ssh "$host" "rm -rf /tmp/homelab-<module> && mkdir -p /tmp/homelab-<module>"
-    scp -rq "$build_dir" "$SCRIPT_DIR/scripts" "$host:/tmp/homelab-<module>/"
+    ssh "$host" "rm -rf /tmp/homelab-<module> && mkdir -p /tmp/homelab-<module>/build"
+    scp -rq "$build_dir" "$host:/tmp/homelab-<module>/build/"
+    scp -rq "$SCRIPT_DIR/scripts" "$host:/tmp/homelab-<module>/"
 
     print_sub "Running installer..."
     ssh "$host" "cd /tmp/homelab-<module> && chmod +x scripts/install.sh && sudo ./scripts/install.sh $host"
@@ -114,6 +131,14 @@ deploy_finish
 - `deploy_init "Module Name"` - Initialize deployment (sets module name, clears failed hosts)
 - `deploy_run <function> $HOSTS` - Run deployment function for each host with automatic failure tracking
 - `deploy_finish` - Print summary, exit with appropriate code
+- `parse_common_flags "$@"` - Parse --dry-run/-n flag, returns non-flag args
+
+**Template rendering**:
+- `render_template TEMPLATE OUTPUT VAR1=val1 VAR2=val2 ...` - Render template with variable substitution, auto-validates no unreplaced placeholders
+
+**Build directory helpers**:
+- `prepare_build_dir DIR` - Clean and create build dir, preserve previous as DIR.prev for diffing
+- `show_build_diff DIR` - Show diff between current and previous build
 
 **Other functions**:
 - `filter_hosts ARG HOSTS...` - Filter CLI arg against supported hosts
@@ -123,6 +148,9 @@ deploy_finish
 - `enable_service HOST SERVICE` - systemctl enable --now
 - `verify_service HOST SERVICE` - Check service status, show logs if failed
 - `print_header`, `print_action`, `print_sub`, `print_ok`, `print_warn` - Output helpers
+
+**Global flags**:
+- `$DRY_RUN` - Boolean, set by parse_common_flags when --dry-run/-n is passed
 
 ## hosts.conf Format
 

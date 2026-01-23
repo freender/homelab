@@ -9,6 +9,9 @@ HOSTS_FILE="$SCRIPT_DIR/hosts.conf"
 BUILD_ROOT="$SCRIPT_DIR/build"
 
 # --- Host Selection ---
+ARGS=$(parse_common_flags "$@")
+set -- $ARGS
+
 SUPPORTED_HOSTS=($(hosts list --feature docker))
 if ! HOSTS=$(filter_hosts "${1:-all}" "${SUPPORTED_HOSTS[@]}"); then
     print_action "Skipping docker (not applicable to $1)"
@@ -27,14 +30,22 @@ deploy() {
     hosts has "$host" "docker-backup" && backup_enabled=true
     hosts has "$host" "docker-no-cron" && no_cron=true
 
-    rm -rf "$build_dir"
-    mkdir -p "$build_dir"
+    prepare_build_dir "$build_dir"
 
     cat > "$build_dir/env" <<EOF
 DOCKER_USER="$user"
 DOCKER_BACKUP="$backup_enabled"
 DOCKER_NO_CRON="$no_cron"
 EOF
+
+    show_build_diff "$build_dir"
+
+    if [[ "$DRY_RUN" == true ]]; then
+        print_sub "[DRY-RUN] Would deploy to $host:/tmp/homelab-docker/"
+        print_sub "Build files:"
+        find "$build_dir" -type f | sed "s|$build_dir/|    |"
+        return 0
+    fi
 
     print_sub "Staging bundle..."
     ssh "$host" "rm -rf /tmp/homelab-docker && mkdir -p /tmp/homelab-docker/build"

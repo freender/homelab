@@ -11,6 +11,9 @@ MODULES_FILE="$SCRIPT_DIR/configs/modules"
 BUILD_ROOT="$SCRIPT_DIR/build"
 
 # --- Host Selection ---
+ARGS=$(parse_common_flags "$@")
+set -- $ARGS
+
 SUPPORTED_HOSTS=($(hosts list --feature gpu))
 if ! HOSTS=$(filter_hosts "${1:-all}" "${SUPPORTED_HOSTS[@]}"); then
     print_action "Skipping pve-gpu-passthrough (not applicable to $1)"
@@ -40,16 +43,22 @@ deploy() {
         return 1
     fi
 
-    rm -rf "$build_dir"
-    mkdir -p "$build_dir"
+    prepare_build_dir "$build_dir"
 
     cp "$blacklist_conf" "$build_dir/blacklist.conf"
     cp "$cmdline_conf" "$build_dir/cmdline"
     cp "$MODULES_FILE" "$build_dir/modules"
 
-    local vfio_content
-    vfio_content=$(cat "$vfio_template")
-    printf '%s\n' "${vfio_content//\$\{PCI_IDS\}/$pci_ids}" > "$build_dir/vfio.conf"
+    render_template "$vfio_template" "$build_dir/vfio.conf" PCI_IDS="$pci_ids"
+
+    show_build_diff "$build_dir"
+
+    if [[ "$DRY_RUN" == true ]]; then
+        print_sub "[DRY-RUN] Would deploy to $host:/tmp/homelab-pve-gpu-passthrough/"
+        print_sub "Build files:"
+        find "$build_dir" -type f | sed "s|$build_dir/|    |"
+        return 0
+    fi
 
     print_sub "Staging bundle..."
     ssh "$host" "rm -rf /tmp/homelab-pve-gpu-passthrough && mkdir -p /tmp/homelab-pve-gpu-passthrough/build"

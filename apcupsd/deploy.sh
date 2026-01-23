@@ -28,6 +28,10 @@ get_apcupsd_hosts() {
     printf '%s\n' "${hosts[@]}"
 }
 
+# Parse flags
+ARGS=$(parse_common_flags "$@")
+set -- $ARGS
+
 SUPPORTED_HOSTS=($(get_apcupsd_hosts))
 if ! HOSTS=$(filter_hosts "${1:-all}" "${SUPPORTED_HOSTS[@]}"); then
     print_action "Skipping apcupsd (not applicable to $1)"
@@ -41,23 +45,10 @@ fi
     exit 1
 }
 
-# --- Template Rendering ---
-render_template() {
-    local template="$1" output="$2" host="$3" upsname="$4" device="$5" nisip="$6" slave_hosts="$7"
-    local content
-    content=$(cat "$template")
-    content=${content//\$\{HOST\}/$host}
-    content=${content//\$\{UPSNAME\}/$upsname}
-    content=${content//\$\{DEVICE\}/$device}
-    content=${content//\$\{NISIP\}/$nisip}
-    content=${content//\$\{SLAVE_HOSTS\}/$slave_hosts}
-    printf '%s\n' "$content" > "$output"
-}
-
+# --- Config Rendering ---
 render_configs() {
     local host="$1" role="$2" upsname="$3" device="$4" nisip="$5" slave_hosts="$6"
     local host_dir="$BUILD_ROOT/$host"
-    mkdir -p "$host_dir"
 
     local conf_template shutdown_template
     case "$role" in
@@ -83,14 +74,22 @@ render_configs() {
         [[ ! -f "$tpl" ]] && { echo "ERROR: Missing template $tpl"; return 1; }
     done
 
-    render_template "$conf_template" "$host_dir/apcupsd.conf" "$host" "$upsname" "$device" "$nisip" "$slave_hosts"
-    render_template "$shutdown_template" "$host_dir/doshutdown" "$host" "$upsname" "$device" "$nisip" "$slave_hosts"
+    prepare_build_dir "$host_dir"
+
+    render_template "$conf_template" "$host_dir/apcupsd.conf" \
+        HOST="$host" UPSNAME="$upsname" DEVICE="$device" NISIP="$nisip" SLAVE_HOSTS="$slave_hosts"
+    
+    render_template "$shutdown_template" "$host_dir/doshutdown" \
+        HOST="$host" UPSNAME="$upsname" DEVICE="$device" NISIP="$nisip" SLAVE_HOSTS="$slave_hosts"
+    
     chmod +x "$host_dir/doshutdown"
 
     cat > "$host_dir/env" <<EOF
 ROLE="$role"
 HOST="$host"
 EOF
+
+    show_build_diff "$host_dir"
 }
 
 # --- Per-Host Deployment ---
@@ -106,6 +105,13 @@ deploy() {
     nisip=$(hosts get "$host" "ups.nisip") || { print_warn "ups.nisip missing"; return 1; }
 
     render_configs "$host" "$role" "$upsname" "$device" "$nisip" "$SLAVE_HOSTS" || return 1
+
+    if [[ "$DRY_RUN" == true ]]; then
+        print_sub "[DRY-RUN] Would deploy to $host:/tmp/homelab-apcupsd/"
+        print_sub "Build files:"
+        find "$BUILD_ROOT/$host" -type f | sed "s|$BUILD_ROOT/$host/|    |"
+        return 0
+    fi
 
     print_sub "Staging bundle..."
     ssh "$host" "rm -rf /tmp/homelab-apcupsd && mkdir -p /tmp/homelab-apcupsd/build"

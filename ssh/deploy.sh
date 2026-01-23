@@ -11,6 +11,9 @@ COMMON_CONFIG="$CONFIGS_DIR/common.conf"
 BUILD_ROOT="$SCRIPT_DIR/build"
 
 # --- Host Selection ---
+ARGS=$(parse_common_flags "$@")
+set -- $ARGS
+
 SUPPORTED_HOSTS=($(hosts list))
 if ! HOSTS=$(filter_hosts "${1:-all}" "${SUPPORTED_HOSTS[@]}"); then
     print_action "Skipping ssh (not applicable to $1)"
@@ -25,12 +28,20 @@ deploy() {
     local host="$1"
     local build_dir="$BUILD_ROOT/$host"
 
-    rm -rf "$build_dir"
-    mkdir -p "$build_dir"
+    prepare_build_dir "$build_dir"
 
     cp "$COMMON_CONFIG" "$build_dir/config"
     if [[ -f "$CONFIGS_DIR/$host/append.conf" ]]; then
         cat "$CONFIGS_DIR/$host/append.conf" >> "$build_dir/config"
+    fi
+
+    show_build_diff "$build_dir"
+
+    if [[ "$DRY_RUN" == true ]]; then
+        print_sub "[DRY-RUN] Would deploy to $host:/tmp/homelab-ssh/"
+        print_sub "Build files:"
+        find "$build_dir" -type f | sed "s|$build_dir/|    |"
+        return 0
     fi
 
     print_sub "Staging bundle..."

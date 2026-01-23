@@ -178,8 +178,103 @@ filter_hosts() {
 }
 
 # -----------------------------------------------------------------------------
+# Template Rendering
+# -----------------------------------------------------------------------------
+
+# Render template with variable substitution
+# Usage: render_template TEMPLATE OUTPUT VAR1=val1 VAR2=val2 ...
+# Replaces ${VAR1}, ${VAR2}, etc. in template with provided values
+# Validates that all placeholders are replaced (fails if unreplaced vars found)
+render_template() {
+    local template="$1" output="$2"
+    shift 2
+    
+    [[ ! -f "$template" ]] && { echo "Error: Template not found: $template" >&2; return 1; }
+    
+    local content
+    content=$(cat "$template")
+    
+    # Process each VAR=value argument
+    for arg in "$@"; do
+        local var="${arg%%=*}"
+        local val="${arg#*=}"
+        content="${content//\$\{$var\}/$val}"
+    done
+    
+    printf '%s\n' "$content" > "$output"
+    
+    # Validate: check for unreplaced placeholders
+    local unreplaced
+    unreplaced=$(grep -oE '\$\{[A-Z_]+\}' "$output" 2>/dev/null || true)
+    if [[ -n "$unreplaced" ]]; then
+        print_warn "Unreplaced placeholders in $(basename "$output"):"
+        echo "$unreplaced" | sort -u | sed 's/^/    /' >&2
+        return 1
+    fi
+}
+
+# -----------------------------------------------------------------------------
 # Deployment Helper Functions
 # -----------------------------------------------------------------------------
+
+# Global flags
+DRY_RUN=false
+
+# Parse common deployment flags
+# Usage: ARGS=$(parse_common_flags "$@")
+# Returns: Non-flag arguments (e.g. hostname)
+parse_common_flags() {
+    local args=()
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --dry-run|-n)
+                DRY_RUN=true
+                shift
+                ;;
+            *)
+                args+=("$1")
+                shift
+                ;;
+        esac
+    done
+    echo "${args[@]}"
+}
+
+# Prepare build directory with diff support
+# Usage: prepare_build_dir BUILD_DIR
+# Moves existing build to .prev for diffing
+prepare_build_dir() {
+    local build_dir="$1"
+    
+    # Preserve previous build for diffing
+    if [[ -d "$build_dir" ]]; then
+        rm -rf "${build_dir}.prev"
+        mv "$build_dir" "${build_dir}.prev"
+    fi
+    mkdir -p "$build_dir"
+}
+
+# Show diff between current and previous build
+# Usage: show_build_diff BUILD_DIR
+show_build_diff() {
+    local build_dir="$1"
+    local prev_dir="${build_dir}.prev"
+    
+    if [[ ! -d "$prev_dir" ]]; then
+        print_sub "No previous build to compare"
+        return 0
+    fi
+    
+    local diff_output
+    diff_output=$(diff -rq "$prev_dir" "$build_dir" 2>/dev/null || true)
+    
+    if [[ -z "$diff_output" ]]; then
+        print_sub "No changes from previous build"
+    else
+        print_sub "Changes from previous build:"
+        diff -ru "$prev_dir" "$build_dir" 2>/dev/null | head -100 || true
+    fi
+}
 
 # Deploy a file via scp with ownership and permissions
 # Usage: deploy_file local_file host remote_path [mode] [owner]

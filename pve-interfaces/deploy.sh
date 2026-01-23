@@ -9,6 +9,9 @@ HOSTS_FILE="$SCRIPT_DIR/hosts.conf"
 BUILD_ROOT="$SCRIPT_DIR/build"
 
 # --- Host Selection ---
+ARGS=$(parse_common_flags "$@")
+set -- $ARGS
+
 SUPPORTED_HOSTS=($(hosts list --type pve) $(hosts list --type pbs))
 if ! HOSTS=$(filter_hosts "${1:-all}" "${SUPPORTED_HOSTS[@]}"); then
     print_action "Skipping pve-interfaces (not applicable to $1)"
@@ -39,15 +42,24 @@ deploy() {
         [[ -z "$storage_ip" ]] && { print_warn "net.storage_ip missing"; return 1; }
     fi
 
-    rm -rf "$build_dir"
-    mkdir -p "$build_dir"
+    prepare_build_dir "$build_dir"
 
-    local content
-    content=$(cat "$template_file")
-    content=${content//\$\{NET_MGMT_IP\}/$mgmt_ip}
-    content=${content//\$\{NET_GATEWAY\}/$gateway}
-    [[ -n "$storage_ip" ]] && content=${content//\$\{NET_STORAGE_IP\}/$storage_ip}
-    printf '%s\n' "$content" > "$build_dir/interfaces"
+    if [[ "$host_type" == "pve" ]]; then
+        render_template "$template_file" "$build_dir/interfaces" \
+            NET_MGMT_IP="$mgmt_ip" NET_GATEWAY="$gateway" NET_STORAGE_IP="$storage_ip"
+    else
+        render_template "$template_file" "$build_dir/interfaces" \
+            NET_MGMT_IP="$mgmt_ip" NET_GATEWAY="$gateway"
+    fi
+
+    show_build_diff "$build_dir"
+
+    if [[ "$DRY_RUN" == true ]]; then
+        print_sub "[DRY-RUN] Would deploy to $host:/tmp/homelab-pve-interfaces/"
+        print_sub "Build files:"
+        find "$build_dir" -type f | sed "s|$build_dir/|    |"
+        return 0
+    fi
 
     print_sub "Staging bundle..."
     ssh "$host" "rm -rf /tmp/homelab-pve-interfaces && mkdir -p /tmp/homelab-pve-interfaces/build"
