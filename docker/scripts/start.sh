@@ -99,8 +99,8 @@ echo ""
 [ "$found" -eq 0 ] && [ ${#ORDERED_STACKS[@]} -eq 0 ] && echo "No subdirectories found under $ROOT"
 
 echo ""
-echo ">>> Pruning unused Docker images"
-docker system prune -f || {
+echo ">>> Pruning unused Docker images and volumes"
+docker system prune -f --volumes || {
   code=$?
   echo "!! docker system prune failed (exit $code)"
 }
