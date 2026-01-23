@@ -61,8 +61,8 @@ HOSTS_FILE="$SCRIPT_DIR/hosts.conf"
 BUILD_ROOT="$SCRIPT_DIR/build"
 
 # --- Host Selection ---
-ARGS=$(parse_common_flags "$@")
-set -- $ARGS
+parse_common_flags "$@"
+set -- "${PARSED_ARGS[@]}"
 
 SUPPORTED_HOSTS=($(hosts list --type pve))
 if ! HOSTS=$(filter_hosts "${1:-all}" "${SUPPORTED_HOSTS[@]}"); then
@@ -131,7 +131,7 @@ deploy_finish
 - `deploy_init "Module Name"` - Initialize deployment (sets module name, clears failed hosts)
 - `deploy_run <function> $HOSTS` - Run deployment function for each host with automatic failure tracking
 - `deploy_finish` - Print summary, exit with appropriate code
-- `parse_common_flags "$@"` - Parse --dry-run/-n flag, returns non-flag args
+- `parse_common_flags "$@"` - Parse --dry-run/-n flag, sets PARSED_ARGS array
 
 **Template rendering**:
 - `render_template TEMPLATE OUTPUT VAR1=val1 VAR2=val2 ...` - Render template with variable substitution, auto-validates no unreplaced placeholders

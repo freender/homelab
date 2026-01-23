@@ -29,8 +29,8 @@ get_apcupsd_hosts() {
 }
 
 # Parse flags
-ARGS=$(parse_common_flags "$@")
-set -- $ARGS
+parse_common_flags "$@"
+set -- "${PARSED_ARGS[@]}"
 
 SUPPORTED_HOSTS=($(get_apcupsd_hosts))
 if ! HOSTS=$(filter_hosts "${1:-all}" "${SUPPORTED_HOSTS[@]}"); then

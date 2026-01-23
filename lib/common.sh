@@ -218,13 +218,14 @@ render_template() {
 # -----------------------------------------------------------------------------
 
 # Global flags
-DRY_RUN=false
+DRY_RUN=${DRY_RUN:-false}
 
 # Parse common deployment flags
-# Usage: ARGS=$(parse_common_flags "$@")
-# Returns: Non-flag arguments (e.g. hostname)
+# Usage: parse_common_flags "$@"
+# Sets DRY_RUN global and modifies positional parameters
+# Call with: parse_common_flags "$@"; set -- "${PARSED_ARGS[@]}"
 parse_common_flags() {
-    local args=()
+    PARSED_ARGS=()
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --dry-run|-n)
@@ -232,12 +233,11 @@ parse_common_flags() {
                 shift
                 ;;
             *)
-                args+=("$1")
+                PARSED_ARGS+=("$1")
                 shift
                 ;;
         esac
     done
-    echo "${args[@]}"
 }
 
 # Prepare build directory with diff support

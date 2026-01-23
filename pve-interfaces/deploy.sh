@@ -9,8 +9,8 @@ HOSTS_FILE="$SCRIPT_DIR/hosts.conf"
 BUILD_ROOT="$SCRIPT_DIR/build"
 
 # --- Host Selection ---
-ARGS=$(parse_common_flags "$@")
-set -- $ARGS
+parse_common_flags "$@"
+set -- "${PARSED_ARGS[@]}"
 
 SUPPORTED_HOSTS=($(hosts list --type pve) $(hosts list --type pbs))
 if ! HOSTS=$(filter_hosts "${1:-all}" "${SUPPORTED_HOSTS[@]}"); then
