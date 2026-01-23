@@ -7,6 +7,8 @@
 
 set -e
 
+source "$(dirname "${BASH_SOURCE[0]}")/utils.sh"
+
 # Resolve HOMELAB_ROOT (parent of lib/)
 HOMELAB_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
@@ -220,20 +222,6 @@ render_template() {
 # Global flags
 DRY_RUN=${DRY_RUN:-false}
 
-# Backup a file or directory (silent)
-# Usage: backup_config /etc/foo/bar.conf
-# Creates: /etc/foo/bar.conf.bak.YYYYMMDDHHmmss
-backup_config() {
-    local path="$1"
-    [[ -e "$path" ]] || return 0
-
-    local backup="${path}.bak.$(date +%Y%m%d%H%M%S)"
-    if [[ -d "$path" ]]; then
-        cp -r "$path" "$backup"
-    else
-        cp "$path" "$backup"
-    fi
-}
 
 # Parse common deployment flags
 # Usage: parse_common_flags "$@"
@@ -325,16 +313,6 @@ ensure_remote_dir() {
 }
 
 # -----------------------------------------------------------------------------
-# Output Helpers
-# -----------------------------------------------------------------------------
-
-print_header() { echo "=== $* ==="; }
-print_action() { echo "==> $*"; }
-print_sub()    { echo "    $*"; }
-print_ok()     { echo "    ✓ $*"; }
-print_warn()   { echo "    ✗ Warning: $*"; }
-
-# -----------------------------------------------------------------------------
 # Deployment Framework
 # -----------------------------------------------------------------------------
 
@@ -393,17 +371,17 @@ deploy_finish() {
 # -----------------------------------------------------------------------------
 
 # Enable and start a systemd service
-# Usage: enable_service host service
-enable_service() {
+# Usage: enable_remote_service host service
+enable_remote_service() {
     local host="$1"
     local service="$2"
     ssh "$host" "systemctl enable --now $service"
 }
 
 # Verify a systemd service is running
-# Usage: verify_service host service
+# Usage: verify_remote_service host service
 # Returns: 0 if active, 1 if not
-verify_service() {
+verify_remote_service() {
     local host="$1"
     local service="$2"
     

@@ -114,9 +114,10 @@ deploy() {
     fi
 
     print_sub "Staging bundle..."
-    ssh "$host" "rm -rf /tmp/homelab-apcupsd && mkdir -p /tmp/homelab-apcupsd/build"
+    ssh "$host" "rm -rf /tmp/homelab-apcupsd && mkdir -p /tmp/homelab-apcupsd/build /tmp/homelab-apcupsd/lib"
     scp -rq "$BUILD_ROOT/$host" "$host:/tmp/homelab-apcupsd/build/"
     scp -rq "$SCRIPT_DIR/scripts" "$CONFIGS_DIR" "$host:/tmp/homelab-apcupsd/"
+    scp -q "$HOMELAB_ROOT/lib/print.sh" "$HOMELAB_ROOT/lib/utils.sh" "$host:/tmp/homelab-apcupsd/lib/"
 
     print_sub "Running installer..."
     ssh "$host" "cd /tmp/homelab-apcupsd && chmod +x scripts/install.sh && sudo ./scripts/install.sh $host"

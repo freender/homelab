@@ -61,9 +61,10 @@ deploy() {
     fi
 
     print_sub "Staging bundle..."
-    ssh "$host" "rm -rf /tmp/homelab-pve-gpu-passthrough && mkdir -p /tmp/homelab-pve-gpu-passthrough/build"
+    ssh "$host" "rm -rf /tmp/homelab-pve-gpu-passthrough && mkdir -p /tmp/homelab-pve-gpu-passthrough/build /tmp/homelab-pve-gpu-passthrough/lib"
     scp -rq "$build_dir" "$host:/tmp/homelab-pve-gpu-passthrough/build/"
     scp -rq "$SCRIPT_DIR/scripts" "$SCRIPT_DIR/remove.sh" "$host:/tmp/homelab-pve-gpu-passthrough/"
+    scp -q "$HOMELAB_ROOT/lib/print.sh" "$HOMELAB_ROOT/lib/utils.sh" "$host:/tmp/homelab-pve-gpu-passthrough/lib/"
 
     print_sub "Running installer..."
     ssh "$host" "cd /tmp/homelab-pve-gpu-passthrough && chmod +x scripts/install.sh && sudo ./scripts/install.sh $host"

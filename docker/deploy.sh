@@ -52,9 +52,10 @@ EOF
     fi
 
     print_sub "Staging bundle..."
-    ssh "$host" "rm -rf /tmp/homelab-docker && mkdir -p /tmp/homelab-docker/build"
+    ssh "$host" "rm -rf /tmp/homelab-docker && mkdir -p /tmp/homelab-docker/build /tmp/homelab-docker/lib"
     scp -rq "$build_dir" "$host:/tmp/homelab-docker/build/"
     scp -rq "$SCRIPT_DIR/scripts" "$host:/tmp/homelab-docker/"
+    scp -q "$HOMELAB_ROOT/lib/print.sh" "$HOMELAB_ROOT/lib/utils.sh" "$host:/tmp/homelab-docker/lib/"
 
     print_sub "Running installer..."
     ssh "$host" "cd /tmp/homelab-docker && chmod +x scripts/install.sh && sudo ./scripts/install.sh $host"

@@ -74,6 +74,14 @@ if [[ "$SKIP_CONFIRM" == "false" ]]; then
     echo ""
 fi
 
+for HOST in $HOSTS; do
+    if ! ssh "$HOST" "rm -rf /tmp/homelab-telegraf-remove && mkdir -p /tmp/homelab-telegraf-remove/lib"; then
+        print_warn "Failed to stage utils on $HOST"
+    else
+        scp -q "$HOMELAB_ROOT/lib/print.sh" "$HOMELAB_ROOT/lib/utils.sh" "$HOST:/tmp/homelab-telegraf-remove/lib/" || true
+    fi
+done
+
 print_header "Removing telegraf"
 echo "Hosts: $HOSTS"
 echo ""
@@ -101,7 +109,11 @@ for HOST in $HOSTS; do
     fi
 
     print_sub "Backing up configs..."
-    if ! ssh "$HOST" "backup_config(){ [ -e \"\$1\" ] || return 0; cp -r \"\$1\" \"\$1.bak.\$(date +%Y%m%d%H%M%S)\"; }; backup_config /etc/telegraf"; then
+    if ! ssh "$HOST" bash <<'EOF'
+source /tmp/homelab-telegraf-remove/lib/utils.sh
+backup_config /etc/telegraf
+EOF
+    then
         host_failed=true
     fi
 
@@ -135,6 +147,8 @@ for HOST in $HOSTS; do
             host_failed=true
         fi
     fi
+
+    ssh "$HOST" "rm -rf /tmp/homelab-telegraf-remove" >/dev/null 2>&1 || true
 
     if [[ "$host_failed" == "true" ]]; then
         print_warn "Removal completed with errors on $HOST"

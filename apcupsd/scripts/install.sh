@@ -10,11 +10,16 @@ BUILD_DIR="$SCRIPT_DIR/build/$HOST"
 CONFIGS_DIR="$SCRIPT_DIR/configs"
 ENV_FILE="$BUILD_DIR/env"
 
-backup_config() {
-    local path="$1"
-    [[ -e "$path" ]] || return 0
-    cp -r "$path" "${path}.bak.$(date +%Y%m%d%H%M%S)"
-}
+if [[ -f "$SCRIPT_DIR/lib/utils.sh" ]]; then
+    source "$SCRIPT_DIR/lib/utils.sh"
+else
+    backup_config() {
+        local path="$1"
+        [[ -e "$path" ]] || return 0
+        cp -r "$path" "${path}.bak.$(date +%Y%m%d%H%M%S)"
+    }
+    print_sub() { echo "    $*"; }
+fi
 
 ROLE="unknown"
 if [[ -f "$ENV_FILE" ]]; then

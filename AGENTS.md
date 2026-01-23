@@ -97,9 +97,10 @@ deploy() {
     fi
 
     print_sub "Staging bundle..."
-    ssh "$host" "rm -rf /tmp/homelab-<module> && mkdir -p /tmp/homelab-<module>/build"
+    ssh "$host" "rm -rf /tmp/homelab-<module> && mkdir -p /tmp/homelab-<module>/build /tmp/homelab-<module>/lib"
     scp -rq "$build_dir" "$host:/tmp/homelab-<module>/build/"
     scp -rq "$SCRIPT_DIR/scripts" "$host:/tmp/homelab-<module>/"
+    scp -q "$HOMELAB_ROOT/lib/print.sh" "$HOMELAB_ROOT/lib/utils.sh" "$host:/tmp/homelab-<module>/lib/"
 
     print_sub "Running installer..."
     ssh "$host" "cd /tmp/homelab-<module> && chmod +x scripts/install.sh && sudo ./scripts/install.sh $host"
@@ -119,6 +120,23 @@ deploy_finish
 - Always backup before removing: `cp -r /etc/foo /etc/foo.bak.$(date +%Y%m%d%H%M%S)`
 
 ## lib/common.sh Functions
+
+## lib/ Structure
+
+```
+lib/
+├── print.sh      # Output helpers (zero dependencies)
+├── utils.sh      # Remote-safe utilities (sources print.sh)
+└── common.sh     # Full orchestration framework (sources utils.sh)
+```
+
+**print.sh**
+- `print_header`, `print_action`, `print_sub`, `print_ok`, `print_warn`
+
+**utils.sh** (safe for remote hosts)
+- `backup_config PATH` - Backup file/dir to PATH.bak.YYYYMMDDHHmmss
+- `enable_service SERVICE` - systemctl enable --now (local)
+- `verify_service SERVICE` - Check service status (local)
 
 **hosts command** (unified host query interface):
 - `hosts list` - all hosts
@@ -148,8 +166,8 @@ deploy_finish
 - `deploy_file SRC HOST DEST [MODE] [OWNER]` - SCP + chmod/chown
 - `deploy_script SRC HOST DEST` - Deploy executable (mode 755)
 - `ensure_remote_dir HOST DIR [MODE]` - mkdir -p on remote
-- `enable_service HOST SERVICE` - systemctl enable --now
-- `verify_service HOST SERVICE` - Check service status, show logs if failed
+- `enable_remote_service HOST SERVICE` - systemctl enable --now
+- `verify_remote_service HOST SERVICE` - Check service status, show logs if failed
 - `print_header`, `print_action`, `print_sub`, `print_ok`, `print_warn` - Output helpers
 
 **Global flags**:

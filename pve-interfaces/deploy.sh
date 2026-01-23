@@ -62,9 +62,10 @@ deploy() {
     fi
 
     print_sub "Staging bundle..."
-    ssh "$host" "rm -rf /tmp/homelab-pve-interfaces && mkdir -p /tmp/homelab-pve-interfaces/build"
+    ssh "$host" "rm -rf /tmp/homelab-pve-interfaces && mkdir -p /tmp/homelab-pve-interfaces/build /tmp/homelab-pve-interfaces/lib"
     scp -rq "$build_dir" "$host:/tmp/homelab-pve-interfaces/build/"
     scp -rq "$SCRIPT_DIR/scripts" "$host:/tmp/homelab-pve-interfaces/"
+    scp -q "$HOMELAB_ROOT/lib/print.sh" "$HOMELAB_ROOT/lib/utils.sh" "$host:/tmp/homelab-pve-interfaces/lib/"
 
     print_sub "Running installer..."
     ssh "$host" "cd /tmp/homelab-pve-interfaces && chmod +x scripts/install.sh && sudo ./scripts/install.sh $host"

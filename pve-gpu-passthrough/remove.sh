@@ -79,8 +79,9 @@ remove_gpu_passthrough() {
     fi
 
     print_sub "Staging removal script..."
-    ssh "$host" "rm -rf /tmp/homelab-pve-gpu-passthrough && mkdir -p /tmp/homelab-pve-gpu-passthrough"
+    ssh "$host" "rm -rf /tmp/homelab-pve-gpu-passthrough && mkdir -p /tmp/homelab-pve-gpu-passthrough/lib"
     scp -q "$SCRIPT_DIR/scripts/remove-local.sh" "$host:/tmp/homelab-pve-gpu-passthrough/"
+    scp -q "$HOMELAB_ROOT/lib/print.sh" "$HOMELAB_ROOT/lib/utils.sh" "$host:/tmp/homelab-pve-gpu-passthrough/lib/"
 
     print_sub "Running removal..."
     ssh "$host" "chmod +x /tmp/homelab-pve-gpu-passthrough/remove-local.sh && sudo /tmp/homelab-pve-gpu-passthrough/remove-local.sh $dry_run_flag"

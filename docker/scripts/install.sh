@@ -8,6 +8,17 @@ HOST=${1:-$(hostname)}
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD_DIR="$SCRIPT_DIR/build/$HOST"
 
+if [[ -f "$SCRIPT_DIR/lib/utils.sh" ]]; then
+    source "$SCRIPT_DIR/lib/utils.sh"
+else
+    backup_config() {
+        local path="$1"
+        [[ -e "$path" ]] || return 0
+        cp -r "$path" "${path}.bak.$(date +%Y%m%d%H%M%S)"
+    }
+    print_sub() { echo "    $*"; }
+fi
+
 if [[ ! -f "$BUILD_DIR/env" ]]; then
     echo "Error: Missing env file at $BUILD_DIR/env"
     exit 1
@@ -47,6 +58,7 @@ if [[ "$DOCKER_BACKUP" == "true" ]]; then
 fi
 
 if [[ "$DOCKER_NO_CRON" != "true" ]]; then
+    crontab -l > "/tmp/crontab.bak.$(date +%Y%m%d%H%M%S)" 2>/dev/null || true
     if [[ "$DOCKER_BACKUP" == "true" ]]; then
         (crontab -l 2>/dev/null | grep -v 'start.sh' | grep -v 'backup.sh' | grep -v '/mnt/ssdpool/backup' | grep -v 'snapshot_ceph' | grep -v 'traefik-acme-sync'; echo "$CRON_BACKUP_HELM") | crontab -
     else

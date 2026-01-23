@@ -76,9 +76,10 @@ deploy() {
     fi
 
     print_sub "Staging bundle..."
-    ssh "$host" "rm -rf /tmp/homelab-telegraf && mkdir -p /tmp/homelab-telegraf/build"
+    ssh "$host" "rm -rf /tmp/homelab-telegraf && mkdir -p /tmp/homelab-telegraf/build /tmp/homelab-telegraf/lib"
     scp -rq "$build_dir" "$host:/tmp/homelab-telegraf/build/"
     scp -rq "$SCRIPT_DIR/scripts" "$host:/tmp/homelab-telegraf/"
+    scp -q "$HOMELAB_ROOT/lib/print.sh" "$HOMELAB_ROOT/lib/utils.sh" "$host:/tmp/homelab-telegraf/lib/"
 
     print_sub "Running installer..."
     ssh "$host" "cd /tmp/homelab-telegraf && chmod +x scripts/install.sh && sudo ./scripts/install.sh $host"

@@ -14,6 +14,18 @@ VERSION="2.0.0"
 TIMESTAMP=$(date +%Y%m%d%H%M%S)
 DRY_RUN=false
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ -f "$SCRIPT_DIR/lib/utils.sh" ]]; then
+    source "$SCRIPT_DIR/lib/utils.sh"
+else
+    backup_config() {
+        local path="$1"
+        [[ -e "$path" ]] || return 0
+        cp -r "$path" "${path}.bak.$(date +%Y%m%d%H%M%S)"
+    }
+    print_sub() { echo "    $*"; }
+fi
+
 show_help() {
     cat << 'EOF'
 Usage: remove-local.sh [--dry-run]
@@ -52,8 +64,6 @@ if [[ ! -d /etc/pve ]]; then
     echo "       Missing /etc/pve directory"
     exit 1
 fi
-
-print_sub() { echo "    $*"; }
 
 echo "=== Removing GPU Passthrough Configuration ==="
 echo "    Host: $(hostname)"
@@ -108,7 +118,8 @@ if [[ -f /etc/modprobe.d/blacklist.conf ]]; then
 
     if [[ "$BLACKLIST_CHANGED" == "true" ]]; then
         if [[ "$DRY_RUN" == "false" ]]; then
-            sed -i.bak."$TIMESTAMP" \
+            backup_config /etc/modprobe.d/blacklist.conf
+            sed -i \
                 -e "s/^blacklist i915$/# blacklist i915  # Removed by remove-local.sh on $TIMESTAMP/" \
                 -e "s/^blacklist nvidia\*$/# blacklist nvidia*  # Removed by remove-local.sh on $TIMESTAMP/" \
                 -e "s/^blacklist nvidia$/# blacklist nvidia  # Removed by remove-local.sh on $TIMESTAMP/" \
@@ -133,7 +144,8 @@ if [[ -f /etc/modprobe.d/vfio.conf ]]; then
         echo "    Found: $VFIO_LINE"
 
         if [[ "$DRY_RUN" == "false" ]]; then
-            sed -i.bak."$TIMESTAMP" \
+            backup_config /etc/modprobe.d/vfio.conf
+            sed -i \
                 "s/^options vfio-pci/# options vfio-pci/; s/$/ # Removed by remove-local.sh on $TIMESTAMP/" \
                 /etc/modprobe.d/vfio.conf
             echo "    Commented out VFIO device binding"

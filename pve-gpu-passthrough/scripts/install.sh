@@ -8,11 +8,16 @@ HOST=${1:-$(hostname)}
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD_DIR="$SCRIPT_DIR/build/$HOST"
 
-backup_config() {
-    local path="$1"
-    [[ -e "$path" ]] || return 0
-    cp -r "$path" "${path}.bak.$(date +%Y%m%d%H%M%S)" 2>/dev/null || true
-}
+if [[ -f "$SCRIPT_DIR/lib/utils.sh" ]]; then
+    source "$SCRIPT_DIR/lib/utils.sh"
+else
+    backup_config() {
+        local path="$1"
+        [[ -e "$path" ]] || return 0
+        cp -r "$path" "${path}.bak.$(date +%Y%m%d%H%M%S)" 2>/dev/null || true
+    }
+    print_sub() { echo "    $*"; }
+fi
 
 if [[ ! -f "$BUILD_DIR/blacklist.conf" || ! -f "$BUILD_DIR/cmdline" || ! -f "$BUILD_DIR/vfio.conf" || ! -f "$BUILD_DIR/modules" ]]; then
     echo "Error: Missing build artifacts in $BUILD_DIR"
@@ -23,8 +28,6 @@ if [[ ! -f /etc/kernel/cmdline ]]; then
     echo "Error: /etc/kernel/cmdline not found (systemd-boot required)"
     exit 1
 fi
-
-print_sub() { echo "    $*"; }
 
 print_sub "Backing up configs..."
 backup_config /etc/kernel/cmdline
