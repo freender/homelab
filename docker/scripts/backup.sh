@@ -26,7 +26,7 @@ NEVER_STOP_CONTAINERS=(
 echo "===== Starting Docker Backup: $(date) ====="
 
 # Create new backup directory
-cd "$SRC"
+cd "$SRC" || exit 1
 mkdir -p "$DEST"
 
 # Log never-stop containers status
@@ -47,9 +47,17 @@ ALL_CONTAINERS=$(docker ps -q)
 CONTAINERS_TO_STOP=""
 for container_id in $ALL_CONTAINERS; do
   container_name=$(docker inspect --format='{{.Name}}' $container_id | sed 's/^\///')
-  
+
   # Check if container is in never-stop list
-  if [[ ! " ${NEVER_STOP_CONTAINERS[@]} " =~ " ${container_name} " ]]; then
+  never_stop=false
+  for protected in "${NEVER_STOP_CONTAINERS[@]}"; do
+    if [[ "$protected" == "$container_name" ]]; then
+      never_stop=true
+      break
+    fi
+  done
+
+  if [[ "$never_stop" == "false" ]]; then
     CONTAINERS_TO_STOP="$CONTAINERS_TO_STOP $container_id"
   fi
 done

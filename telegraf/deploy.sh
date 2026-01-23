@@ -14,7 +14,7 @@ BUILD_ROOT="$SCRIPT_DIR/build"
 parse_common_flags "$@"
 set -- "${PARSED_ARGS[@]}"
 
-SUPPORTED_HOSTS=($(hosts list --feature telegraf))
+read -r -a SUPPORTED_HOSTS <<< "$(hosts list --feature telegraf)"
 if ! HOSTS=$(filter_hosts "${1:-all}" "${SUPPORTED_HOSTS[@]}"); then
     print_action "Skipping telegraf (not applicable to $1)"
     exit 0

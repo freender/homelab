@@ -11,7 +11,10 @@ BUILD_ROOT="$SCRIPT_DIR/build"
 parse_common_flags "$@"
 set -- "${PARSED_ARGS[@]}"
 
-SUPPORTED_HOSTS=($(hosts list --type pve) $(hosts list --type pbs))
+SUPPORTED_HOSTS=()
+read -r -a pve_hosts <<< "$(hosts list --type pve)"
+read -r -a pbs_hosts <<< "$(hosts list --type pbs)"
+SUPPORTED_HOSTS=("${pve_hosts[@]}" "${pbs_hosts[@]}")
 if ! HOSTS=$(filter_hosts "${1:-all}" "${SUPPORTED_HOSTS[@]}"); then
     print_action "Skipping pve-interfaces (not applicable to $1)"
     exit 0

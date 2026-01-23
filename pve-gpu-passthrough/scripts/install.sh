@@ -38,25 +38,49 @@ cmdline=$(cat "$BUILD_DIR/cmdline")
 current_cmdline=$(cat /etc/kernel/cmdline)
 [[ "$current_cmdline" != *"root="* ]] && current_cmdline=$(cat /proc/cmdline)
 
-filtered=""
-seen=""
+filtered_args=()
+seen_args=()
 for arg in $current_cmdline; do
     case "$arg" in
         BOOT_IMAGE=*|initrd=*|intel_iommu=*|amd_iommu=*|iommu=*|pcie_acs_override=*|video=*)
             continue ;;
         *)
-            [[ ! " $seen " =~ " $arg " ]] && { filtered="$filtered $arg"; seen="$seen $arg"; }
+            already_seen=false
+            for seen_arg in "${seen_args[@]}"; do
+                if [[ "$seen_arg" == "$arg" ]]; then
+                    already_seen=true
+                    break
+                fi
+            done
+
+            if [[ "$already_seen" == "false" ]]; then
+                filtered_args+=("$arg")
+                seen_args+=("$arg")
+            fi
             ;;
     esac
 done
 
-new_cmdline="${filtered# } $cmdline"
-final=""
-final_seen=""
-for arg in $new_cmdline; do
-    [[ ! " $final_seen " =~ " $arg " ]] && { final="$final $arg"; final_seen="$final_seen $arg"; }
+cmdline_args=()
+read -r -a cmdline_args <<< "$cmdline"
+new_cmdline=("${filtered_args[@]}" "${cmdline_args[@]}")
+final_args=()
+final_seen=()
+for arg in "${new_cmdline[@]}"; do
+    already_seen=false
+    for seen_arg in "${final_seen[@]}"; do
+        if [[ "$seen_arg" == "$arg" ]]; then
+            already_seen=true
+            break
+        fi
+    done
+
+    if [[ "$already_seen" == "false" ]]; then
+        final_args+=("$arg")
+        final_seen+=("$arg")
+    fi
 done
-final="${final# }"
+final="${final_args[*]}"
 
 printf '%s\n' "$final" > /etc/kernel/cmdline
 proxmox-boot-tool refresh

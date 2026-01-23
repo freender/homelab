@@ -42,7 +42,7 @@ EOF
     esac
 done
 
-SUPPORTED_HOSTS=($(hosts list --feature gpu))
+read -r -a SUPPORTED_HOSTS <<< "$(hosts list --feature gpu)"
 if ! HOSTS=$(filter_hosts "${1:-}" "${SUPPORTED_HOSTS[@]}"); then
     echo "ERROR: No hostname specified or host not supported"
     echo "Supported hosts: ${SUPPORTED_HOSTS[*]}"

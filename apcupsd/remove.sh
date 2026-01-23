@@ -4,16 +4,18 @@
 
 source "$(dirname "$0")/../lib/common.sh"
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-
 get_apcupsd_hosts() {
     local hosts=()
     local -A seen=()
-    local list=(
-        $(hosts list --feature ups-master)
-        $(hosts list --feature ups-slave)
-        $(hosts list --feature ups-standalone)
-    )
+    local list=()
+    local role_hosts=()
+
+    read -r -a role_hosts <<< "$(hosts list --feature ups-master)"
+    list+=("${role_hosts[@]}")
+    read -r -a role_hosts <<< "$(hosts list --feature ups-slave)"
+    list+=("${role_hosts[@]}")
+    read -r -a role_hosts <<< "$(hosts list --feature ups-standalone)"
+    list+=("${role_hosts[@]}")
 
     for host in "${list[@]}"; do
         if [[ -n "$host" && -z "${seen[$host]:-}" ]]; then
@@ -54,7 +56,7 @@ EOF
     esac
 done
 
-SUPPORTED_HOSTS=($(get_apcupsd_hosts))
+read -r -a SUPPORTED_HOSTS <<< "$(get_apcupsd_hosts)"
 
 if ! HOSTS=$(filter_hosts "${1:-all}" "${SUPPORTED_HOSTS[@]}"); then
     print_action "Skipping apcupsd removal (not applicable to $1)"

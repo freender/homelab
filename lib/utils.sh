@@ -21,7 +21,8 @@ backup_config() {
     local path="$1"
     [[ -e "$path" ]] || return 0
 
-    local backup="${path}.bak.$(date +%Y%m%d%H%M%S)"
+    local backup
+    backup="${path}.bak.$(date +%Y%m%d%H%M%S)"
     if [[ -d "$path" ]]; then
         cp -r "$path" "$backup"
     else

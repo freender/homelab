@@ -4,8 +4,6 @@
 
 source "$(dirname "$0")/../lib/common.sh"
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-
 PURGE=false
 REMOVE_REPO=false
 SKIP_CONFIRM=false
@@ -41,7 +39,7 @@ EOF
     esac
 done
 
-SUPPORTED_HOSTS=($(hosts list --feature telegraf))
+read -r -a SUPPORTED_HOSTS <<< "$(hosts list --feature telegraf)"
 
 if ! HOSTS=$(filter_hosts "${1:-all}" "${SUPPORTED_HOSTS[@]}"); then
     print_action "Skipping telegraf removal (not applicable to $1)"

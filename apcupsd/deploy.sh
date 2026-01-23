@@ -13,13 +13,25 @@ TELEGRAM_ENV="$CONFIGS_DIR/telegram/telegram.env"
 # --- Host Selection ---
 get_apcupsd_hosts() {
     local hosts=() seen=()
-    local list=(
-        $(hosts list --feature ups-master)
-        $(hosts list --feature ups-slave)
-        $(hosts list --feature ups-standalone)
-    )
+    local list=()
+    local role_hosts=()
+
+    read -r -a role_hosts <<< "$(hosts list --feature ups-master)"
+    list+=("${role_hosts[@]}")
+    read -r -a role_hosts <<< "$(hosts list --feature ups-slave)"
+    list+=("${role_hosts[@]}")
+    read -r -a role_hosts <<< "$(hosts list --feature ups-standalone)"
+    list+=("${role_hosts[@]}")
     for host in "${list[@]}"; do
-        if [[ -n "$host" && ! " ${seen[*]} " =~ " $host " ]]; then
+        local already_seen=false
+        for seen_host in "${seen[@]}"; do
+            if [[ "$seen_host" == "$host" ]]; then
+                already_seen=true
+                break
+            fi
+        done
+
+        if [[ -n "$host" && "$already_seen" == "false" ]]; then
             hosts+=("$host")
             seen+=("$host")
         fi
@@ -31,7 +43,7 @@ get_apcupsd_hosts() {
 parse_common_flags "$@"
 set -- "${PARSED_ARGS[@]}"
 
-SUPPORTED_HOSTS=($(get_apcupsd_hosts))
+read -r -a SUPPORTED_HOSTS <<< "$(get_apcupsd_hosts)"
 if ! HOSTS=$(filter_hosts "${1:-all}" "${SUPPORTED_HOSTS[@]}"); then
     print_action "Skipping apcupsd (not applicable to $1)"
     exit 0
