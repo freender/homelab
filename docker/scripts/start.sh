@@ -97,4 +97,11 @@ done
 echo ""
 [ "$skipped" -gt 0 ] && echo "Skipped $skipped director(ies)"
 [ "$found" -eq 0 ] && [ ${#ORDERED_STACKS[@]} -eq 0 ] && echo "No subdirectories found under $ROOT"
+
+echo ""
+echo ">>> Pruning unused Docker images"
+docker system prune -f || {
+  code=$?
+  echo "!! docker system prune failed (exit $code)"
+}
 echo "=== Done ==="
