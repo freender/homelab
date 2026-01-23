@@ -10,6 +10,12 @@ BUILD_DIR="$SCRIPT_DIR/build/$HOST"
 CONFIGS_DIR="$SCRIPT_DIR/configs"
 ENV_FILE="$BUILD_DIR/env"
 
+backup_config() {
+    local path="$1"
+    [[ -e "$path" ]] || return 0
+    cp -r "$path" "${path}.bak.$(date +%Y%m%d%H%M%S)"
+}
+
 ROLE="unknown"
 if [[ -f "$ENV_FILE" ]]; then
     # shellcheck source=/dev/null
@@ -48,9 +54,7 @@ fi
 systemctl stop apcupsd 2>/dev/null || true
 
 # Backup existing config
-if [[ -f /etc/apcupsd/apcupsd.conf ]]; then
-    cp /etc/apcupsd/apcupsd.conf /etc/apcupsd/apcupsd.conf.bak.$(date +%Y%m%d%H%M%S)
-fi
+backup_config /etc/apcupsd/apcupsd.conf
 
 # Copy configs
 echo "Copying configuration files..."

@@ -220,6 +220,21 @@ render_template() {
 # Global flags
 DRY_RUN=${DRY_RUN:-false}
 
+# Backup a file or directory (silent)
+# Usage: backup_config /etc/foo/bar.conf
+# Creates: /etc/foo/bar.conf.bak.YYYYMMDDHHmmss
+backup_config() {
+    local path="$1"
+    [[ -e "$path" ]] || return 0
+
+    local backup="${path}.bak.$(date +%Y%m%d%H%M%S)"
+    if [[ -d "$path" ]]; then
+        cp -r "$path" "$backup"
+    else
+        cp "$path" "$backup"
+    fi
+}
+
 # Parse common deployment flags
 # Usage: parse_common_flags "$@"
 # Sets DRY_RUN global and modifies positional parameters

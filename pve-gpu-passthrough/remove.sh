@@ -37,7 +37,7 @@ fi
 
 # Script metadata
 VERSION="1.0.0"
-TIMESTAMP=$(date +%Y-%m-%d)
+TIMESTAMP=$(date +%Y%m%d%H%M%S)
 
 # Detect execution mode
 function is_proxmox_host() {

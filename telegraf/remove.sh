@@ -101,7 +101,7 @@ for HOST in $HOSTS; do
     fi
 
     print_sub "Backing up configs..."
-    if ! ssh "$HOST" "if [ -d /etc/telegraf ]; then cp -r /etc/telegraf /etc/telegraf.bak.\$(date +%Y%m%d%H%M%S); fi"; then
+    if ! ssh "$HOST" "backup_config(){ [ -e \"\$1\" ] || return 0; cp -r \"\$1\" \"\$1.bak.\$(date +%Y%m%d%H%M%S)\"; }; backup_config /etc/telegraf"; then
         host_failed=true
     fi
 

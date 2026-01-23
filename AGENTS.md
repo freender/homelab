@@ -140,6 +140,9 @@ deploy_finish
 - `prepare_build_dir DIR` - Clean and create build dir, preserve previous as DIR.prev for diffing
 - `show_build_diff DIR` - Show diff between current and previous build
 
+**Backup helpers**:
+- `backup_config PATH` - Backup file/dir to PATH.bak.YYYYMMDDHHmmss (silent)
+
 **Other functions**:
 - `filter_hosts ARG HOSTS...` - Filter CLI arg against supported hosts
 - `deploy_file SRC HOST DEST [MODE] [OWNER]` - SCP + chmod/chown
