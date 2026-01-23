@@ -28,17 +28,21 @@ if [[ -z "$DOCKER_USER" ]]; then
     exit 1
 fi
 
+DOCKER_OWNER="${DOCKER_OWNER:-$DOCKER_USER}"
+DOCKER_GROUP="${DOCKER_GROUP:-$DOCKER_OWNER}"
+
 mkdir -p "$APPDATA_DEST"
 
 for script in start.sh rm.sh; do
     cp "$SCRIPT_DIR/scripts/$script" "${APPDATA_DEST}/${script}"
-    chown "${DOCKER_USER}:${DOCKER_USER}" "${APPDATA_DEST}/${script}"
+    chown "${DOCKER_OWNER}:${DOCKER_GROUP}" "${APPDATA_DEST}/${script}"
     chmod +x "${APPDATA_DEST}/${script}"
 done
 
 if [[ "$DOCKER_BACKUP" == "true" ]]; then
     mkdir -p "$APPDATA_SCRIPTS_DIR" "$APPDATA_LOGS_DIR"
     cp "$SCRIPT_DIR/scripts/backup.sh" "$APPDATA_SCRIPTS_DIR/backup.sh"
+    chown "${DOCKER_OWNER}:${DOCKER_GROUP}" "$APPDATA_SCRIPTS_DIR/backup.sh"
     chmod +x "$APPDATA_SCRIPTS_DIR/backup.sh"
 fi
 

@@ -213,6 +213,10 @@ EOF
 - Quote delimiter to prevent expansion: `<<'EOF'`
 - Templates in `configs/` directory
 
+### Docker Ownership Overrides
+- Optional per-host overrides: `docker.owner`, `docker.group`
+- Defaults to `docker.user` if not set
+
 ## Secrets
 
 - Store in `.env` or `telegram.env` (gitignored)
