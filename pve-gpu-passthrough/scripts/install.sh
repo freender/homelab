@@ -71,8 +71,8 @@ if [[ -f /etc/modules ]]; then
 fi
 
 print_sub "Deploying emergency removal script..."
-if [[ -f "$SCRIPT_DIR/remove.sh" ]]; then
-    cp "$SCRIPT_DIR/remove.sh" /root/pve-gpu-passthrough-remove.sh
+if [[ -f "$SCRIPT_DIR/scripts/remove-local.sh" ]]; then
+    cp "$SCRIPT_DIR/scripts/remove-local.sh" /root/pve-gpu-passthrough-remove.sh
     chmod +x /root/pve-gpu-passthrough-remove.sh
 fi
 
