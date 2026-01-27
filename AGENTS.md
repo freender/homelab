@@ -55,16 +55,11 @@ print.sh
 - `print_header`, `print_action`, `print_sub`, `print_ok`, `print_warn`
 utils.sh (safe for remote hosts)
 - `backup_config PATH` - Backup file/dir to PATH.bak.YYYYMMDDHHmmss
-- `enable_service SERVICE` - systemctl enable --now (local)
-- `verify_service SERVICE` - Check service status (local)
 common.sh (helm/orchestration)
 - `hosts list|get|has` (requires yq)
 - `filter_hosts`, `parse_common_flags`, `render_template`
 - `prepare_build_dir`, `show_build_diff`
-- `deploy_file`, `deploy_script`, `ensure_remote_dir`
 - `deploy_init`, `deploy_run`, `deploy_finish`
-- `enable_remote_service HOST SERVICE`
-- `verify_remote_service HOST SERVICE`
 
 ## Key Patterns
 deploy.sh
@@ -83,9 +78,8 @@ remove.sh
 ```yaml
 ace:
   type: pve
-  features:
-    - telegraf
-    - pve-gpu-passthrough
+  telegraf:
+  pve-gpu-passthrough:
 ```
 Access with: `hosts get ace apcupsd.role`, `hosts has bray apcupsd`
 

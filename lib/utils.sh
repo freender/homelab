@@ -29,26 +29,3 @@ backup_config() {
         cp "$path" "$backup"
     fi
 }
-
-# Enable and start a systemd service
-# Usage: enable_service service
-enable_service() {
-    local service="$1"
-    systemctl enable --now "$service"
-}
-
-# Verify a systemd service is running
-# Usage: verify_service service
-# Returns: 0 if active, 1 if not
-verify_service() {
-    local service="$1"
-
-    if systemctl is-active --quiet "$service" 2>/dev/null; then
-        print_ok "$service running"
-        return 0
-    else
-        print_warn "$service not running"
-        systemctl status "$service" --no-pager -l 2>/dev/null || true
-        return 1
-    fi
-}
