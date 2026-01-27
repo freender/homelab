@@ -33,12 +33,12 @@ deploy() {
 
     [[ ! -f "$template_file" ]] && { print_warn "No template for type: $host_type"; return 1; }
 
-    mgmt_ip=$(hosts get "$host" "net.mgmt_ip") || { print_warn "net.mgmt_ip missing"; return 1; }
-    gateway=$(hosts get "$host" "net.gateway") || { print_warn "net.gateway missing"; return 1; }
+    mgmt_ip=$(hosts get "$host" "pve-interfaces.mgmt_ip") || { print_warn "pve-interfaces.mgmt_ip missing"; return 1; }
+    gateway=$(hosts get "$host" "pve-interfaces.gateway") || { print_warn "pve-interfaces.gateway missing"; return 1; }
 
     if [[ "$host_type" == "pve" ]]; then
-        storage_ip=$(hosts get "$host" "net.storage_ip" "") || true
-        [[ -z "$storage_ip" ]] && { print_warn "net.storage_ip missing"; return 1; }
+        storage_ip=$(hosts get "$host" "pve-interfaces.storage_ip" "") || true
+        [[ -z "$storage_ip" ]] && { print_warn "pve-interfaces.storage_ip missing"; return 1; }
     fi
 
     prepare_build_dir "$build_dir"
