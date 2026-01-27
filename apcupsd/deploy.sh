@@ -12,7 +12,7 @@ TELEGRAM_ENV="$CONFIGS_DIR/telegram/telegram.env"
 
 # --- Host Selection ---
 get_apcupsd_hosts() {
-    hosts list --feature ups
+    hosts list --feature apcupsd
 }
 
 # Parse flags
@@ -24,6 +24,7 @@ if ! HOSTS=$(filter_hosts "${1:-all}" "${SUPPORTED_HOSTS[@]}"); then
     print_action "Skipping apcupsd (not applicable to $1)"
     exit 0
 fi
+
 
 # --- Validation ---
 [[ ! -f "$TELEGRAM_ENV" ]] && {
@@ -82,8 +83,8 @@ EOF
 # --- Per-Host Deployment ---
 get_slave_hosts() {
     local slaves=""
-    for h in $(hosts list --feature ups); do
-        if [[ "$(hosts get "$h" "ups.role")" == "slave" ]]; then
+    for h in $(hosts list --feature apcupsd); do
+        if [[ "$(hosts get "$h" "apcupsd.role")" == "slave" ]]; then
             slaves="$slaves $h"
         fi
     done
@@ -95,10 +96,10 @@ deploy() {
     local host="$1"
     local role upsname device nisip
 
-    role=$(hosts get "$host" "ups.role") || { print_warn "ups.role missing"; return 1; }
-    upsname=$(hosts get "$host" "ups.name") || { print_warn "ups.name missing"; return 1; }
-    device=$(hosts get "$host" "ups.device" "")
-    nisip=$(hosts get "$host" "ups.nisip") || { print_warn "ups.nisip missing"; return 1; }
+    role=$(hosts get "$host" "apcupsd.role") || { print_warn "apcupsd.role missing"; return 1; }
+    upsname=$(hosts get "$host" "apcupsd.name") || { print_warn "apcupsd.name missing"; return 1; }
+    device=$(hosts get "$host" "apcupsd.device" "")
+    nisip=$(hosts get "$host" "apcupsd.nisip") || { print_warn "apcupsd.nisip missing"; return 1; }
 
     render_configs "$host" "$role" "$upsname" "$device" "$nisip" "$SLAVE_HOSTS" || return 1
 

@@ -120,10 +120,9 @@ if [[ -f /etc/modprobe.d/blacklist.conf ]]; then
         if [[ "$DRY_RUN" == "false" ]]; then
             backup_config /etc/modprobe.d/blacklist.conf
             sed -i \
-                -e "s/^blacklist i915$/# blacklist i915  # Removed by remove-local.sh on $TIMESTAMP/" \
-                -e "s/^blacklist nvidia\*$/# blacklist nvidia*  # Removed by remove-local.sh on $TIMESTAMP/" \
-                -e "s/^blacklist nvidia$/# blacklist nvidia  # Removed by remove-local.sh on $TIMESTAMP/" \
-                -e "s/^blacklist nouveau$/# blacklist nouveau  # Removed by remove-local.sh on $TIMESTAMP/" \
+                -e "s/^blacklist i915.*/# &  # Removed by remove-local.sh on $TIMESTAMP/" \
+                -e "s/^blacklist nvidia.*/# &  # Removed by remove-local.sh on $TIMESTAMP/" \
+                -e "s/^blacklist nouveau.*/# &  # Removed by remove-local.sh on $TIMESTAMP/" \
                 /etc/modprobe.d/blacklist.conf
             echo "    Commented out GPU driver blacklists"
         else

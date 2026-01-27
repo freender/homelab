@@ -30,8 +30,9 @@ validate() {
 
     for host in $HOSTS; do
         local ups_role
-        ups_role=$(hosts get "$host" "ups.role" "none")
+        ups_role=$(hosts get "$host" "apcupsd.role" "none")
         if [[ "$ups_role" == "master" || "$ups_role" == "master-standalone" ]]; then
+
             if [[ ! -f "$APC_CONFIG" ]]; then
                 echo "Error: APC config not found for master node $host: $APC_CONFIG"
                 return 1
@@ -55,7 +56,7 @@ deploy() {
         cp "$COMMON_DIR/$conf" "$build_dir/telegraf.d/$conf"
     done
 
-    ups_role=$(hosts get "$host" "ups.role" "none")
+    ups_role=$(hosts get "$host" "apcupsd.role" "none")
     if [[ "$ups_role" == "master" || "$ups_role" == "master-standalone" ]]; then
         cp "$APC_CONFIG" "$build_dir/telegraf.d/apcupsd.conf"
     fi

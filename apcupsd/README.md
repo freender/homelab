@@ -25,7 +25,7 @@ Master/slave apcupsd setup for Proxmox cluster with coordinated shutdown.
 
 ## Host Registry
 
-Per-host settings live in `apcupsd/hosts.conf` using `ups.*` keys.
+Per-host settings live in `hosts.conf` using `apcupsd.*` keys.
 
 ## Shutdown Sequence (bray UPS)
 

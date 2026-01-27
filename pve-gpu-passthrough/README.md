@@ -36,7 +36,7 @@ pve-gpu-passthrough/
 └── configs/               # Static config inputs (modules)
 ```
 
-Host registry data lives in `pve-gpu-passthrough/hosts.conf` using `gpu.*` keys.
+Host registry data lives in `hosts.conf` using `pve-gpu-passthrough.*` keys.
 
 ## Usage
 

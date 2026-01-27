@@ -85,9 +85,9 @@ ace:
   type: pve
   features:
     - telegraf
-    - gpu
+    - pve-gpu-passthrough
 ```
-Access with: `hosts get ace ups.role`, `hosts has bray ups-master`
+Access with: `hosts get ace apcupsd.role`, `hosts has bray apcupsd`
 
 ## Code Style
 Formatting

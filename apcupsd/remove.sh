@@ -5,26 +5,7 @@
 source "$(dirname "$0")/../lib/common.sh"
 
 get_apcupsd_hosts() {
-    local hosts=()
-    local -A seen=()
-    local list=()
-    local role_hosts=()
-
-    read -r -a role_hosts <<< "$(hosts list --feature ups-master)"
-    list+=("${role_hosts[@]}")
-    read -r -a role_hosts <<< "$(hosts list --feature ups-slave)"
-    list+=("${role_hosts[@]}")
-    read -r -a role_hosts <<< "$(hosts list --feature ups-standalone)"
-    list+=("${role_hosts[@]}")
-
-    for host in "${list[@]}"; do
-        if [[ -n "$host" && -z "${seen[$host]:-}" ]]; then
-            hosts+=("$host")
-            seen[$host]=1
-        fi
-    done
-
-    printf '%s\n' "${hosts[@]}"
+    hosts list --feature apcupsd
 }
 
 PURGE=false

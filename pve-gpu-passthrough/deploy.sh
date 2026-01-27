@@ -13,7 +13,7 @@ BUILD_ROOT="$SCRIPT_DIR/build"
 parse_common_flags "$@"
 set -- "${PARSED_ARGS[@]}"
 
-read -r -a SUPPORTED_HOSTS <<< "$(hosts list --feature gpu)"
+read -r -a SUPPORTED_HOSTS <<< "$(hosts list --feature pve-gpu-passthrough)"
 if ! HOSTS=$(filter_hosts "${1:-all}" "${SUPPORTED_HOSTS[@]}"); then
     print_action "Skipping pve-gpu-passthrough (not applicable to $1)"
     exit 0
@@ -28,8 +28,8 @@ deploy() {
     local profile pci_ids
     local build_dir="$BUILD_ROOT/$host"
 
-    profile=$(hosts get "$host" "gpu.profile") || { print_warn "gpu.profile missing"; return 1; }
-    pci_ids=$(hosts get "$host" "gpu.pci_ids") || { print_warn "gpu.pci_ids missing"; return 1; }
+    profile=$(hosts get "$host" "pve-gpu-passthrough.profile") || { print_warn "pve-gpu-passthrough.profile missing"; return 1; }
+    pci_ids=$(hosts get "$host" "pve-gpu-passthrough.pci_ids") || { print_warn "pve-gpu-passthrough.pci_ids missing"; return 1; }
 
     [[ ! -d "$TEMPLATES_DIR/$profile" ]] && { print_warn "Unknown profile: $profile"; return 1; }
 
