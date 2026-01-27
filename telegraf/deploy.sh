@@ -29,7 +29,8 @@ validate() {
     done
 
     for host in $HOSTS; do
-        local ups_role=$(hosts get "$host" "ups.role" "none")
+        local ups_role
+        ups_role=$(hosts get "$host" "ups.role" "none")
         if [[ "$ups_role" == "master" || "$ups_role" == "master-standalone" ]]; then
             if [[ ! -f "$APC_CONFIG" ]]; then
                 echo "Error: APC config not found for master node $host: $APC_CONFIG"
