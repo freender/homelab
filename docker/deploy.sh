@@ -26,8 +26,7 @@ deploy() {
     user=$(hosts get "$host" "docker.user") || { print_warn "docker.user missing"; return 1; }
     owner=$(hosts get "$host" "docker.owner" "$user")
     group=$(hosts get "$host" "docker.group" "$owner")
-    backup_enabled=false
-    hosts has "$host" "docker-backup" && backup_enabled=true
+    backup_enabled=$(hosts get "$host" "docker.backup" "false")
 
     prepare_build_dir "$build_dir"
 

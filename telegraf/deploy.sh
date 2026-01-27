@@ -29,9 +29,12 @@ validate() {
     done
 
     for host in $HOSTS; do
-        if hosts has "$host" "telegraf-apc" && [[ ! -f "$APC_CONFIG" ]]; then
-            echo "Error: APC config not found: $APC_CONFIG"
-            return 1
+        local ups_role=$(hosts get "$host" "ups.role" "none")
+        if [[ "$ups_role" == "master" || "$ups_role" == "master-standalone" ]]; then
+            if [[ ! -f "$APC_CONFIG" ]]; then
+                echo "Error: APC config not found for master node $host: $APC_CONFIG"
+                return 1
+            fi
         fi
     done
 }
@@ -41,6 +44,7 @@ validate || exit 1
 deploy() {
     local host="$1"
     local build_dir="$BUILD_ROOT/$host"
+    local ups_role
 
     prepare_build_dir "$build_dir"
     mkdir -p "$build_dir/telegraf.d"
@@ -50,7 +54,8 @@ deploy() {
         cp "$COMMON_DIR/$conf" "$build_dir/telegraf.d/$conf"
     done
 
-    if hosts has "$host" "telegraf-apc"; then
+    ups_role=$(hosts get "$host" "ups.role" "none")
+    if [[ "$ups_role" == "master" || "$ups_role" == "master-standalone" ]]; then
         cp "$APC_CONFIG" "$build_dir/telegraf.d/apcupsd.conf"
     fi
 
