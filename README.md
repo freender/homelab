@@ -8,7 +8,7 @@ Automation and configuration management for Proxmox-based homelab infrastructure
 
 **Network:**
 - Home: `*.freender.internal`
-- Remote (TrueNAS): `cottonwood.internal`, `cinci.internal`
+- Remote (Ubuntu): `cottonwood.internal`, `cinci.internal`
 - VIP for Traefik HA
 
 ## Deploy All

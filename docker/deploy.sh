@@ -21,15 +21,13 @@ fi
 deploy() {
     local host="$1"
     local build_dir="$BUILD_ROOT/$host"
-    local user owner group backup_enabled no_cron
+    local user owner group backup_enabled
 
     user=$(hosts get "$host" "docker.user") || { print_warn "docker.user missing"; return 1; }
     owner=$(hosts get "$host" "docker.owner" "$user")
     group=$(hosts get "$host" "docker.group" "$owner")
     backup_enabled=false
-    no_cron=false
     hosts has "$host" "docker-backup" && backup_enabled=true
-    hosts has "$host" "docker-no-cron" && no_cron=true
 
     prepare_build_dir "$build_dir"
 
@@ -38,7 +36,6 @@ DOCKER_USER="$user"
 DOCKER_OWNER="$owner"
 DOCKER_GROUP="$group"
 DOCKER_BACKUP="$backup_enabled"
-DOCKER_NO_CRON="$no_cron"
 EOF
 
     show_build_diff "$build_dir"

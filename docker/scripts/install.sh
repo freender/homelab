@@ -31,9 +31,6 @@ APPDATA_DEST="/mnt/cache/appdata"
 APPDATA_SCRIPTS_DIR="${APPDATA_DEST}/scripts"
 APPDATA_LOGS_DIR="${APPDATA_SCRIPTS_DIR}/logs"
 
-CRON_START_NAS='0 9 * * * cd /mnt/cache/appdata && ./start.sh >> /mnt/cache/appdata/update.log 2>&1'
-CRON_BACKUP_HELM='5 9 * * * /mnt/cache/appdata/scripts/backup.sh >> /mnt/cache/appdata/scripts/logs/backup.log 2>&1'
-
 if [[ -z "$DOCKER_USER" ]]; then
     echo "Error: DOCKER_USER missing"
     exit 1
@@ -55,13 +52,4 @@ if [[ "$DOCKER_BACKUP" == "true" ]]; then
     cp "$SCRIPT_DIR/scripts/backup.sh" "$APPDATA_SCRIPTS_DIR/backup.sh"
     chown "${DOCKER_OWNER}:${DOCKER_GROUP}" "$APPDATA_SCRIPTS_DIR/backup.sh"
     chmod +x "$APPDATA_SCRIPTS_DIR/backup.sh"
-fi
-
-if [[ "$DOCKER_NO_CRON" != "true" ]]; then
-    crontab -l > "/tmp/crontab.bak.$(date +%Y%m%d%H%M%S)" 2>/dev/null || true
-    if [[ "$DOCKER_BACKUP" == "true" ]]; then
-        (crontab -l 2>/dev/null | grep -v 'start.sh' | grep -v 'backup.sh' | grep -v '/mnt/ssdpool/backup' | grep -v 'snapshot_ceph' | grep -v 'traefik-acme-sync'; echo "$CRON_BACKUP_HELM") | crontab -
-    else
-        (crontab -l 2>/dev/null | grep -v 'start.sh'; printf '%s\n' "$CRON_START_NAS") | crontab -
-    fi
 fi
