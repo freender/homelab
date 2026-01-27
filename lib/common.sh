@@ -56,22 +56,9 @@ ensure_yq || exit 1
 # Host Registry
 # -----------------------------------------------------------------------------
 
-# Global hosts file path (optional override by modules)
-HOSTS_FILE=""
-
-resolve_hosts_file() {
-    if [[ -n "$HOSTS_FILE" ]]; then
-        echo "$HOSTS_FILE"
-        return 0
-    fi
-
-    echo "$HOMELAB_ROOT/hosts.conf"
-}
-
 # Unified hosts command
 # Usage:
 #   hosts list                      # all hosts
-#   hosts list --type pve           # hosts by type
 #   hosts list --feature telegraf   # hosts by feature
 #   hosts get <host> <key> [default] # get host property
 #   hosts has <host> <feature>      # check if host has feature (boolean)
@@ -79,20 +66,15 @@ hosts() {
     local cmd="$1"
     shift
     
-    local hosts_file
-    hosts_file=$(resolve_hosts_file)
+    local hosts_file="$HOMELAB_ROOT/hosts.conf"
 
     case "$cmd" in
         list)
             [[ ! -f "$hosts_file" ]] && { echo "Error: hosts file not found: $hosts_file" >&2; return 1; }
             
-            local type="" feature=""
+            local feature=""
             while [[ $# -gt 0 ]]; do
                 case "$1" in
-                    --type)
-                        type="$2"
-                        shift 2
-                        ;;
                     --feature)
                         feature="$2"
                         shift 2
@@ -104,14 +86,13 @@ hosts() {
                 esac
             done
             
-            if [[ -n "$type" ]]; then
-                yq e "to_entries | .[] | select(.value.type == \"$type\") | .key" "$hosts_file" | tr '\n' ' '
-            elif [[ -n "$feature" ]]; then
+            if [[ -n "$feature" ]]; then
                 yq e "to_entries | .[] | select(.value | has(\"$feature\")) | .key" "$hosts_file" | tr '\n' ' '
             else
                 yq e 'keys | .[]' "$hosts_file" | tr '\n' ' '
             fi
             ;;
+
             
         get)
             [[ ! -f "$hosts_file" ]] && { echo "Error: hosts file not found: $hosts_file" >&2; return 1; }
@@ -288,39 +269,6 @@ show_build_diff() {
     fi
 }
 
-# Deploy a file via scp with ownership and permissions
-# Usage: deploy_file local_file host remote_path [mode] [owner]
-deploy_file() {
-    local src="$1"
-    local host="$2"
-    local dest="$3"
-    local mode="${4:-644}"
-    local owner="${5:-root:root}"
-    
-    scp -q "$src" "${host}:/tmp/homelab-deploy-tmp"
-    ssh "$host" "mv /tmp/homelab-deploy-tmp '$dest' && chown $owner '$dest' && chmod $mode '$dest'"
-}
-
-# Deploy a file and make it executable
-# Usage: deploy_script local_file host remote_path
-deploy_script() {
-    local src="$1"
-    local host="$2"
-    local dest="$3"
-    
-    deploy_file "$src" "$host" "$dest" "755" "root:root"
-}
-
-# Ensure remote directory exists
-# Usage: ensure_remote_dir host /path/to/dir [mode]
-ensure_remote_dir() {
-    local host="$1"
-    local dir="$2"
-    local mode="${3:-755}"
-    
-    ssh "$host" "mkdir -p '$dir' && chmod $mode '$dir'"
-}
-
 # -----------------------------------------------------------------------------
 # Deployment Framework
 # -----------------------------------------------------------------------------
@@ -373,33 +321,4 @@ deploy_finish() {
         return 1
     fi
     return 0
-}
-
-# -----------------------------------------------------------------------------
-# Service Helpers
-# -----------------------------------------------------------------------------
-
-# Enable and start a systemd service
-# Usage: enable_remote_service host service
-enable_remote_service() {
-    local host="$1"
-    local service="$2"
-    ssh "$host" "systemctl enable --now $service"
-}
-
-# Verify a systemd service is running
-# Usage: verify_remote_service host service
-# Returns: 0 if active, 1 if not
-verify_remote_service() {
-    local host="$1"
-    local service="$2"
-    
-    if ssh "$host" "systemctl is-active --quiet $service" 2>/dev/null; then
-        print_ok "$service running"
-        return 0
-    else
-        print_warn "$service not running"
-        ssh "$host" "systemctl status $service --no-pager -l" 2>/dev/null || true
-        return 1
-    fi
 }
