@@ -61,9 +61,7 @@ deploy() {
         cp "$APC_CONFIG" "$build_dir/telegraf.d/apcupsd.conf"
     fi
 
-    if hosts has "$host" "zfs"; then
-        cp "$CONFIGS_DIR/roles/zfs/zfs.conf" "$build_dir/telegraf.d/zfs.conf"
-    fi
+    cp "$CONFIGS_DIR/roles/zfs/zfs.conf" "$build_dir/telegraf.d/zfs.conf"
 
     if [[ -f "$COMMON_DIR/telegraf-smartctl-sudoers" ]]; then
         cp "$COMMON_DIR/telegraf-smartctl-sudoers" "$build_dir/telegraf-smartctl-sudoers"
