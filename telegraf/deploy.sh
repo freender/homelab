@@ -22,7 +22,7 @@ fi
 
 # --- Validation ---
 validate() {
-    local required=(telegraf.conf sensors.conf smartctl.conf diskio.conf net.conf mem.conf)
+    local required=(telegraf.conf sensors.conf smartctl.conf diskio.conf disk.conf net.conf mem.conf)
     [[ ! -d "$COMMON_DIR" ]] && { echo "Error: $COMMON_DIR not found"; return 1; }
     for conf in "${required[@]}"; do
         [[ ! -f "$COMMON_DIR/$conf" ]] && { echo "Error: Missing $COMMON_DIR/$conf"; return 1; }
@@ -52,13 +52,17 @@ deploy() {
     mkdir -p "$build_dir/telegraf.d"
 
     cp "$COMMON_DIR/telegraf.conf" "$build_dir/telegraf.conf"
-    for conf in sensors.conf smartctl.conf diskio.conf net.conf mem.conf; do
+    for conf in sensors.conf smartctl.conf diskio.conf disk.conf net.conf mem.conf; do
         cp "$COMMON_DIR/$conf" "$build_dir/telegraf.d/$conf"
     done
 
     ups_role=$(hosts get "$host" "apcupsd.role" "none")
     if [[ "$ups_role" == "master" || "$ups_role" == "master-standalone" ]]; then
         cp "$APC_CONFIG" "$build_dir/telegraf.d/apcupsd.conf"
+    fi
+
+    if hosts has "$host" "zfs"; then
+        cp "$CONFIGS_DIR/roles/zfs/zfs.conf" "$build_dir/telegraf.d/zfs.conf"
     fi
 
     if [[ -f "$COMMON_DIR/telegraf-smartctl-sudoers" ]]; then
