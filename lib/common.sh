@@ -87,7 +87,7 @@ hosts() {
             done
             
             if [[ -n "$feature" ]]; then
-                yq e "to_entries | .[] | select(.value | has(\"$feature\")) | .key" "$hosts_file" | tr '\n' ' '
+                yq e "to_entries | .[] | select(.value | has(\"$feature\") or (.value.features // {} | has(\"$feature\"))) | .key" "$hosts_file" | tr '\n' ' '
             else
                 yq e 'keys | .[]' "$hosts_file" | tr '\n' ' '
             fi
@@ -105,7 +105,8 @@ hosts() {
             [[ -z "$key" ]] && { echo "Error: key required" >&2; return 1; }
             
             local value
-            value=$(yq e ".\"$host\".${key} // \"\"" "$hosts_file")
+            # Try top-level first, then nested features
+            value=$(yq e ".\"$host\".${key} // .\"$host\".features.${key} // \"\"" "$hosts_file")
             
             if [[ -n "$value" && "$value" != "null" ]]; then
                 echo "$value"
@@ -125,7 +126,7 @@ hosts() {
             [[ -z "$host" ]] && { echo "Error: host required" >&2; return 1; }
             [[ -z "$feature" ]] && { echo "Error: feature required" >&2; return 1; }
             
-            yq e ".\"$host\" | has(\"$feature\")" "$hosts_file" | grep -q "true"
+            yq e ".\"$host\" | (has(\"$feature\") or (.features // {} | has(\"$feature\")))" "$hosts_file" | grep -q "true"
             ;;
             
         *)
