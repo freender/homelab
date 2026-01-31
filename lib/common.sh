@@ -19,10 +19,21 @@ HOMELAB_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 YQ_VERSION="v4.44.1"
 
 ensure_yq() {
-    command -v yq &>/dev/null && return 0
+    # Check if yq is in PATH and functional
+    if command -v yq &>/dev/null && yq --version &>/dev/null; then
+        return 0
+    fi
     
     local yq_bin="${HOMELAB_ROOT}/.bin/yq"
-    local arch
+    local os arch
+    
+    os=$(uname -s | tr '[:upper:]' '[:lower:]')
+    case "$os" in
+        linux)  os="linux" ;;
+        darwin) os="darwin" ;;
+        *)      echo "Error: Unsupported OS: $os" >&2; return 1 ;;
+    esac
+
     arch=$(uname -m)
     case "$arch" in
         x86_64)  arch="amd64" ;;
@@ -30,9 +41,9 @@ ensure_yq() {
         *)       echo "Error: Unsupported architecture: $arch" >&2; return 1 ;;
     esac
     
-    local url="https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_${arch}"
+    local url="https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_${os}_${arch}"
     
-    echo "==> Installing yq ${YQ_VERSION}..." >&2
+    echo "==> Installing yq ${YQ_VERSION} for ${os}/${arch}..." >&2
     mkdir -p "$(dirname "$yq_bin")"
     
     if command -v curl &>/dev/null; then
