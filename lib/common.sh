@@ -282,12 +282,61 @@ show_build_diff() {
 }
 
 # -----------------------------------------------------------------------------
+# Remote Config Diff
+# -----------------------------------------------------------------------------
+
+# Diff local file against remote server config
+# Usage: diff_remote_config <host> <local_file> <remote_path>
+# Returns: 0=identical, 1=different, 2=remote doesn't exist
+diff_remote_config() {
+    local host="$1"
+    local local_file="$2"
+    local remote_path="$3"
+    
+    local remote_content
+    if ! remote_content=$(ssh "$host" "cat '$remote_path' 2>/dev/null"); then
+        print_sub "[NEW] $remote_path"
+        return 2
+    fi
+    
+    if diff -q <(echo "$remote_content") "$local_file" > /dev/null 2>&1; then
+        print_sub "[=] $remote_path (no changes)"
+        return 0
+    else
+        print_sub "[~] $remote_path:"
+        diff --color=always -u -L "$host:$remote_path" -L "local:$remote_path" \
+            <(echo "$remote_content") "$local_file" | head -200 || true
+        return 1
+    fi
+}
+
+# Diff entire build directory against remote paths
+# Usage: diff_remote_build <host> <build_dir> <remote_base_path>
+# Note: Uses word splitting on find output; build paths must not contain spaces
+diff_remote_build() {
+    local host="$1"
+    local build_dir="$2"
+    local remote_base="$3"
+    
+    print_sub "Comparing with $host:$remote_base..."
+    
+    local files rel_path remote_path
+    files=$(find "$build_dir" -type f)
+    # shellcheck disable=SC2086 # intentional word splitting, paths are controlled
+    for local_file in $files; do
+        rel_path="${local_file#$build_dir/}"
+        remote_path="$remote_base/$rel_path"
+        diff_remote_config "$host" "$local_file" "$remote_path" || true
+    done
+}
+
+# -----------------------------------------------------------------------------
 # Deployment Framework
 # -----------------------------------------------------------------------------
 
 # Global state
 DEPLOY_MODULE=""
-declare -ga DEPLOY_FAILED_HOSTS=()
+DEPLOY_FAILED_HOSTS=()
 
 # Initialize deployment
 # Usage: deploy_init "Module Name"

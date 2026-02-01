@@ -50,7 +50,11 @@ deploy() {
 
     render_template "$vfio_template" "$build_dir/vfio.conf" PCI_IDS="$pci_ids"
 
-    show_build_diff "$build_dir"
+    print_sub "Comparing with remote configs..."
+    diff_remote_config "$host" "$build_dir/blacklist.conf" "/etc/modprobe.d/blacklist.conf" || true
+    diff_remote_config "$host" "$build_dir/vfio.conf" "/etc/modprobe.d/vfio.conf" || true
+    diff_remote_config "$host" "$build_dir/modules" "/etc/modules-load.d/vfio.conf" || true
+    diff_remote_config "$host" "$build_dir/cmdline" "/etc/kernel/cmdline" || true
 
     if [[ "$DRY_RUN" == true ]]; then
         print_sub "[DRY-RUN] Would deploy to $host:/tmp/homelab-pve-gpu-passthrough/"

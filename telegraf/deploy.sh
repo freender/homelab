@@ -74,7 +74,7 @@ deploy() {
         done
     fi
 
-    show_build_diff "$build_dir"
+    diff_remote_build "$host" "$build_dir" "/etc/telegraf"
 
     if [[ "$DRY_RUN" == true ]]; then
         print_sub "[DRY-RUN] Would deploy to $host:/tmp/homelab-telegraf/"

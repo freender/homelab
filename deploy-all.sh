@@ -7,7 +7,24 @@
 
 set -u
 
-HOST="${1:-all}"
+# Parse flags
+DRY_RUN=false
+ARGS=()
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --dry-run|-n)
+            DRY_RUN=true
+            export DRY_RUN
+            shift
+            ;;
+        *)
+            ARGS+=("$1")
+            shift
+            ;;
+    esac
+done
+
+HOST="${ARGS[0]:-all}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 MODULES=()
@@ -39,7 +56,11 @@ $module")
     fi
     
     # Run module deploy, capture exit code
-    "$script" "$HOST"
+    if [[ "$DRY_RUN" == "true" ]]; then
+        "$script" --dry-run "$HOST"
+    else
+        "$script" "$HOST"
+    fi
     exit_code=$?
     
     # exit 0 = success or skipped (handled by module)

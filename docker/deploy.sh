@@ -37,7 +37,12 @@ DOCKER_GROUP="$group"
 DOCKER_BACKUP="$backup_enabled"
 EOF
 
-    show_build_diff "$build_dir"
+    print_sub "Comparing with remote scripts..."
+    diff_remote_config "$host" "$SCRIPT_DIR/scripts/start.sh" "/mnt/cache/appdata/start.sh" || true
+    diff_remote_config "$host" "$SCRIPT_DIR/scripts/rm.sh" "/mnt/cache/appdata/rm.sh" || true
+    if [[ "$backup_enabled" == "true" ]]; then
+        diff_remote_config "$host" "$SCRIPT_DIR/scripts/backup.sh" "/mnt/cache/appdata/scripts/backup.sh" || true
+    fi
 
     if [[ "$DRY_RUN" == true ]]; then
         print_sub "[DRY-RUN] Would deploy to $host:/tmp/homelab-docker/"

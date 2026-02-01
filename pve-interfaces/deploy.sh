@@ -51,7 +51,8 @@ deploy() {
             NET_MGMT_IP="$mgmt_ip" NET_GATEWAY="$gateway"
     fi
 
-    show_build_diff "$build_dir"
+    print_sub "Comparing with remote config..."
+    diff_remote_config "$host" "$build_dir/interfaces" "/etc/network/interfaces" || true
 
     if [[ "$DRY_RUN" == true ]]; then
         print_sub "[DRY-RUN] Would deploy to $host:/tmp/homelab-pve-interfaces/"

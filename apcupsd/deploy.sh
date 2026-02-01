@@ -76,8 +76,6 @@ render_configs() {
 ROLE="$role"
 HOST="$host"
 EOF
-
-    show_build_diff "$host_dir"
 }
 
 # --- Per-Host Deployment ---
@@ -102,6 +100,12 @@ deploy() {
     nisip=$(hosts get "$host" "apcupsd.nisip") || { print_warn "apcupsd.nisip missing"; return 1; }
 
     render_configs "$host" "$role" "$upsname" "$device" "$nisip" "$SLAVE_HOSTS" || return 1
+
+    print_sub "Comparing with remote configs..."
+    diff_remote_config "$host" "$BUILD_ROOT/$host/apcupsd.conf" "/etc/apcupsd/apcupsd.conf" || true
+    diff_remote_config "$host" "$BUILD_ROOT/$host/doshutdown" "/etc/apcupsd/doshutdown" || true
+    diff_remote_config "$host" "$CONFIGS_DIR/shared/apcupsd.notify" "/etc/apcupsd/apcupsd.notify" || true
+    diff_remote_config "$host" "$CONFIGS_DIR/telegram/telegram.sh" "/etc/apcupsd/telegram/telegram.sh" || true
 
     if [[ "$DRY_RUN" == true ]]; then
         print_sub "[DRY-RUN] Would deploy to $host:/tmp/homelab-apcupsd/"

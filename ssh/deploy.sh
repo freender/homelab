@@ -34,7 +34,8 @@ deploy() {
         cat "$CONFIGS_DIR/$host/append.conf" >> "$build_dir/config"
     fi
 
-    show_build_diff "$build_dir"
+    print_sub "Comparing with remote config..."
+    diff_remote_config "$host" "$build_dir/config" "\$HOME/.ssh/config" || true
 
     if [[ "$DRY_RUN" == true ]]; then
         print_sub "[DRY-RUN] Would deploy to $host:/tmp/homelab-ssh/"
