@@ -10,11 +10,12 @@ ROOT="$(cd "$(dirname "$0")" && pwd)"
 
 # Define startup order (stacks that need to run first)
 # Add directory names here in the order they should start
-ORDERED_STACKS=(
-  "traefik2"
-  # Add more stacks here if they have dependencies
-  # Example: "redis" "database" etc.
-)
+ORDERED_STACKS=()
+if [ -d "$ROOT/traefik" ]; then
+    ORDERED_STACKS+=("traefik")
+elif [ -d "$ROOT/traefik2" ]; then
+    ORDERED_STACKS+=("traefik2")
+fi
 
 # Directories to ignore (no compose.yml or should be skipped)
 IGNORE_DIRS=(

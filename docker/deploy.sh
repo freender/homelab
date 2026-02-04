@@ -58,7 +58,7 @@ EOF
     scp -q "$HOMELAB_ROOT/lib/print.sh" "$HOMELAB_ROOT/lib/utils.sh" "$host:/tmp/homelab-docker/lib/"
 
     print_sub "Running installer..."
-    ssh "$host" "cd /tmp/homelab-docker && chmod +x scripts/install.sh && sudo ./scripts/install.sh $host"
+    ssh "$host" "cd /tmp/homelab-docker && chmod +x scripts/install.sh && sudo bash ./scripts/install.sh $host"
 }
 
 # --- Main ---

@@ -18,7 +18,7 @@ $LOGGER "PHASE 1: Initiating graceful shutdown of all VMs cluster-wide"
 for NODE in "${SLAVE_HOSTS[@]}"; do
   ssh $SSH_OPTS "$NODE" "
     for VMID in \$(qm list 2>/dev/null | awk '\$3==\"running\"{print \$1}'); do
-      logger -t apcupsd-shutdown \"Shutting down VM \$VMID on ${NODE}\"
+      logger -t apcupsd-shutdown \"Shutting down VM \$VMID on $NODE\"
       qm shutdown \$VMID --timeout 120 &
     done
   " &
