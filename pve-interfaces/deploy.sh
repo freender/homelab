@@ -1,5 +1,5 @@
 #!/bin/bash
-# Deploy network interfaces config to PVE/PBS nodes
+# Deploy network interfaces config to PVE nodes
 # Usage: ./deploy.sh [host|all]
 
 source "$(dirname "$0")/../lib/common.sh"
@@ -25,31 +25,24 @@ deploy() {
 
     host_type=$(hosts get "$host" "type")
 
-    if [[ "$host_type" == "pve" ]]; then
-        template_file="$SCRIPT_DIR/templates/pve-interfaces"
-    else
-        template_file="$SCRIPT_DIR/templates/pbs-interfaces"
+    if [[ "$host_type" != "pve" ]]; then
+        print_warn "Skipping $host: pve-interfaces only supports type: pve"
+        return 0
     fi
 
-    [[ ! -f "$template_file" ]] && { print_warn "No template for type: $host_type"; return 1; }
+    template_file="$SCRIPT_DIR/templates/pve-interfaces"
+    [[ ! -f "$template_file" ]] && { print_warn "Template not found: $template_file"; return 1; }
 
     mgmt_ip=$(hosts get "$host" "pve-interfaces.mgmt_ip") || { print_warn "pve-interfaces.mgmt_ip missing"; return 1; }
     gateway=$(hosts get "$host" "pve-interfaces.gateway") || { print_warn "pve-interfaces.gateway missing"; return 1; }
 
-    if [[ "$host_type" == "pve" ]]; then
-        storage_ip=$(hosts get "$host" "pve-interfaces.storage_ip" "") || true
-        [[ -z "$storage_ip" ]] && { print_warn "pve-interfaces.storage_ip missing"; return 1; }
-    fi
+    storage_ip=$(hosts get "$host" "pve-interfaces.storage_ip" "") || true
+    [[ -z "$storage_ip" ]] && { print_warn "pve-interfaces.storage_ip missing"; return 1; }
 
     prepare_build_dir "$build_dir"
 
-    if [[ "$host_type" == "pve" ]]; then
-        render_template "$template_file" "$build_dir/interfaces" \
-            NET_MGMT_IP="$mgmt_ip" NET_GATEWAY="$gateway" NET_STORAGE_IP="$storage_ip"
-    else
-        render_template "$template_file" "$build_dir/interfaces" \
-            NET_MGMT_IP="$mgmt_ip" NET_GATEWAY="$gateway"
-    fi
+    render_template "$template_file" "$build_dir/interfaces" \
+        NET_MGMT_IP="$mgmt_ip" NET_GATEWAY="$gateway" NET_STORAGE_IP="$storage_ip"
 
     print_sub "Comparing with remote config..."
     diff_remote_config "$host" "$build_dir/interfaces" "/etc/network/interfaces" || true
