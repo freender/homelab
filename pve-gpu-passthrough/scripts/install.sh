@@ -34,55 +34,8 @@ backup_config /etc/kernel/cmdline
 backup_config /etc/modules
 
 print_sub "Updating systemd-boot cmdline..."
-cmdline=$(cat "$BUILD_DIR/cmdline")
-current_cmdline=$(cat /etc/kernel/cmdline)
-[[ "$current_cmdline" != *"root="* ]] && current_cmdline=$(cat /proc/cmdline)
-
-filtered_args=()
-seen_args=()
-for arg in $current_cmdline; do
-    case "$arg" in
-        BOOT_IMAGE=*|initrd=*|intel_iommu=*|amd_iommu=*|iommu=*|pcie_acs_override=*|video=*)
-            continue ;;
-        *)
-            already_seen=false
-            for seen_arg in "${seen_args[@]}"; do
-                if [[ "$seen_arg" == "$arg" ]]; then
-                    already_seen=true
-                    break
-                fi
-            done
-
-            if [[ "$already_seen" == "false" ]]; then
-                filtered_args+=("$arg")
-                seen_args+=("$arg")
-            fi
-            ;;
-    esac
-done
-
-cmdline_args=()
-read -r -a cmdline_args <<< "$cmdline"
-new_cmdline=("${filtered_args[@]}" "${cmdline_args[@]}")
-final_args=()
-final_seen=()
-for arg in "${new_cmdline[@]}"; do
-    already_seen=false
-    for seen_arg in "${final_seen[@]}"; do
-        if [[ "$seen_arg" == "$arg" ]]; then
-            already_seen=true
-            break
-        fi
-    done
-
-    if [[ "$already_seen" == "false" ]]; then
-        final_args+=("$arg")
-        final_seen+=("$arg")
-    fi
-done
-final="${final_args[*]}"
-
-printf '%s\n' "$final" > /etc/kernel/cmdline
+cmdline=$(head -n 1 "$BUILD_DIR/cmdline")
+printf '%s\n' "$cmdline" > /etc/kernel/cmdline
 proxmox-boot-tool refresh
 
 print_sub "Deploying modprobe configs..."

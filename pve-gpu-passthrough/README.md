@@ -4,9 +4,7 @@ GPU passthrough configuration for Proxmox VE (Intel iGPU and NVIDIA).
 
 ## Overview
 
-This directory contains automated GPU passthrough configuration for Proxmox hosts:
-- **ace:** Intel Coffee Lake iGPU (UHD Graphics 630)
-- **clovis:** NVIDIA GPU (RTX 3080)
+This directory contains automated GPU passthrough configuration for Proxmox hosts.
 
 ## Prerequisites
 
@@ -24,19 +22,13 @@ This directory contains automated GPU passthrough configuration for Proxmox host
 pve-gpu-passthrough/
 ├── deploy.sh              # Deployment script (run from helm)
 ├── README.md              # This file
-├── templates/             # Shared profile templates
-│   ├── intel/
-│   │   ├── cmdline
-│   │   ├── blacklist.conf
-│   │   └── vfio.conf.tpl
-│   └── nvidia/
-│       ├── cmdline
-│       ├── blacklist.conf
-│       └── vfio.conf.tpl
-└── configs/               # Static config inputs (modules)
+└── configs/               # Static config inputs (cmdline/blacklist/vfio/modules)
 ```
 
 Host registry data lives in `hosts.conf` using `pve-gpu-passthrough.*` keys.
+
+This module no longer uses per-host GPU profiles. All Proxmox nodes get the same
+kernel cmdline, blacklist, and VFIO options; only `pci_ids` varies per host.
 
 ## Usage
 
@@ -62,17 +54,15 @@ ssh clovis reboot
 
 ## Host Configurations
 
-### ace (Intel Coffee Lake iGPU)
+### Kernel Parameters (systemd-boot)
 
 **Hardware:**
 - CPU: Intel i7-8700K (Coffee Lake, 8th gen)
 - GPU: Intel UHD Graphics 630 [8086:3e92]
 - IOMMU Group: 0
 
-**Kernel Parameters (systemd-boot):**
-```
-quiet intel_iommu=on pcie_acs_override=downstream video=efifb:off
-```
+Kernel parameters are managed as a full `/etc/kernel/cmdline` line in:
+`pve-gpu-passthrough/configs/cmdline`
 
 **Notes:**
 - `video=efifb:off` disables EFI framebuffer (prevents host from using GPU)
@@ -89,21 +79,11 @@ quiet intel_iommu=on pcie_acs_override=downstream video=efifb:off
 pci=noaer pcie_acs_override=downstream,multifunction i915.disable_display=1 video=efifb:off initrd=/bzroot
 ```
 
-### clovis (NVIDIA GPU)
+### Notes
 
-**Hardware:**
-- CPU: Intel (VT-d enabled)
-- GPU: NVIDIA RTX 3080 [10de:2208]
-- Audio: NVIDIA Audio [10de:1aef]
-
-**Kernel Parameters (systemd-boot):**
-```
-quiet intel_iommu=on iommu=pt pcie_acs_override=downstream
-```
-
-**Notes:**
+- `video=efifb:off` disables EFI framebuffer (prevents host from using GPU)
+- `pcie_acs_override=downstream` may be required for NVMe passthrough
 - `iommu=pt` enables passthrough mode (better performance)
-- Both GPU and audio controller must be passed together
 
 **VM Configuration:**
 - Machine: q35 (recommended for NVIDIA)

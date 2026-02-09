@@ -5,8 +5,10 @@
 source "$(dirname "$0")/../lib/common.sh"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-TEMPLATES_DIR="$SCRIPT_DIR/templates"
 MODULES_FILE="$SCRIPT_DIR/configs/modules"
+BLACKLIST_FILE="$SCRIPT_DIR/configs/blacklist.conf"
+CMDLINE_FILE="$SCRIPT_DIR/configs/cmdline"
+VFIO_TEMPLATE="$SCRIPT_DIR/configs/vfio.conf.tpl"
 BUILD_ROOT="$SCRIPT_DIR/build"
 
 # --- Host Selection ---
@@ -21,34 +23,30 @@ fi
 
 # --- Validation ---
 [[ ! -f "$MODULES_FILE" ]] && { echo "Error: modules file not found"; exit 1; }
+[[ ! -f "$BLACKLIST_FILE" ]] && { echo "Error: blacklist file not found"; exit 1; }
+[[ ! -f "$CMDLINE_FILE" ]] && { echo "Error: cmdline file not found"; exit 1; }
+[[ ! -f "$VFIO_TEMPLATE" ]] && { echo "Error: vfio template not found"; exit 1; }
 
 # --- Per-Host Deployment ---
 deploy() {
     local host="$1"
-    local profile pci_ids
+    local pci_ids
     local build_dir="$BUILD_ROOT/$host"
 
-    profile=$(hosts get "$host" "pve-gpu-passthrough.profile") || { print_warn "pve-gpu-passthrough.profile missing"; return 1; }
     pci_ids=$(hosts get "$host" "pve-gpu-passthrough.pci_ids") || { print_warn "pve-gpu-passthrough.pci_ids missing"; return 1; }
 
-    [[ ! -d "$TEMPLATES_DIR/$profile" ]] && { print_warn "Unknown profile: $profile"; return 1; }
-
-    local blacklist_conf="$TEMPLATES_DIR/$profile/blacklist.conf"
-    local cmdline_conf="$TEMPLATES_DIR/$profile/cmdline"
-    local vfio_template="$TEMPLATES_DIR/$profile/vfio.conf.tpl"
-
-    if [[ ! -f "$blacklist_conf" || ! -f "$cmdline_conf" || ! -f "$vfio_template" ]]; then
-        print_warn "Missing profile config for $profile"
+    if [[ ! -f "$BLACKLIST_FILE" || ! -f "$CMDLINE_FILE" || ! -f "$VFIO_TEMPLATE" ]]; then
+        print_warn "Missing static config inputs in $SCRIPT_DIR/configs"
         return 1
     fi
 
     prepare_build_dir "$build_dir"
 
-    cp "$blacklist_conf" "$build_dir/blacklist.conf"
-    cp "$cmdline_conf" "$build_dir/cmdline"
+    cp "$BLACKLIST_FILE" "$build_dir/blacklist.conf"
+    cp "$CMDLINE_FILE" "$build_dir/cmdline"
     cp "$MODULES_FILE" "$build_dir/modules"
 
-    render_template "$vfio_template" "$build_dir/vfio.conf" PCI_IDS="$pci_ids"
+    render_template "$VFIO_TEMPLATE" "$build_dir/vfio.conf" PCI_IDS="$pci_ids"
 
     print_sub "Comparing with remote configs..."
     diff_remote_config "$host" "$build_dir/blacklist.conf" "/etc/modprobe.d/blacklist.conf" || true
