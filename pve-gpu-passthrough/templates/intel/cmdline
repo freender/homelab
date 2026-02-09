@@ -1,1 +1,0 @@
-intel_iommu=on pcie_acs_override=downstream video=efifb:off
