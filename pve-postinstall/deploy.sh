@@ -55,11 +55,13 @@ fi
 deploy() {
     local host="$1"
     local host_type
+    local timezone
     local config_dir
     local -a files
     local build_dir="$BUILD_ROOT/$host"
 
     host_type=$(hosts get "$host" "type") || { print_warn "type missing for $host"; return 1; }
+    timezone=$(hosts get "$host" "pve-postinstall.timezone" "UTC")
     case "$host_type" in
         pve)
             config_dir="$PVE_CONFIG_DIR"
@@ -111,7 +113,7 @@ deploy() {
     scp -q "$HOMELAB_ROOT/lib/print.sh" "$HOMELAB_ROOT/lib/utils.sh" "$host:/tmp/homelab-pve-postinstall/lib/"
 
     print_sub "Running installer..."
-    ssh "$host" "cd /tmp/homelab-pve-postinstall && chmod +x scripts/install.sh && sudo ./scripts/install.sh $host $host_type"
+    ssh "$host" "cd /tmp/homelab-pve-postinstall && chmod +x scripts/install.sh && sudo ./scripts/install.sh $host $host_type '$timezone'"
 }
 
 deploy_init "PVE/PBS Post-Install Configs"

@@ -1,11 +1,12 @@
 #!/bin/bash
 # install.sh - Install PVE/PBS post-install configs
-# Usage: ./scripts/install.sh [hostname] [pve|pbs]
+# Usage: ./scripts/install.sh [hostname] [pve|pbs] [timezone]
 
 set -e
 
 HOST=${1:-$(hostname)}
 HOST_TYPE=${2:-}
+TIMEZONE=${3:-UTC}
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD_DIR="$SCRIPT_DIR/build/$HOST"
 BACKUP_DIR="/var/backups/homelab/pve-postinstall"
@@ -102,6 +103,13 @@ fi
 print_sub "Backing up repo configs..."
 backup_sources_list_dir
 backup_no_nag_script
+
+print_sub "Setting timezone to $TIMEZONE..."
+if command -v timedatectl >/dev/null 2>&1; then
+    timedatectl set-timezone "$TIMEZONE" || print_warn "failed to set timezone to $TIMEZONE"
+else
+    print_warn "timedatectl not found; timezone not changed"
+fi
 
 case "$HOST_TYPE" in
     pve)
