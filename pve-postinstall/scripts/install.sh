@@ -8,6 +8,7 @@ HOST=${1:-$(hostname)}
 HOST_TYPE=${2:-}
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD_DIR="$SCRIPT_DIR/build/$HOST"
+BACKUP_DIR="/var/backups/homelab/pve-postinstall"
 
 if [[ -f "$SCRIPT_DIR/lib/utils.sh" ]]; then
     source "$SCRIPT_DIR/lib/utils.sh"
@@ -66,6 +67,26 @@ install_file() {
     esac
 }
 
+backup_no_nag_script() {
+    local src="/etc/apt/apt.conf.d/no-nag-script"
+    local ts
+    ts="$(date +%Y%m%d%H%M%S)"
+
+    [[ -f "$src" ]] || return 0
+
+    mkdir -p "$BACKUP_DIR"
+    cp "$src" "$BACKUP_DIR/no-nag-script.$ts"
+}
+
+cleanup_legacy_no_nag_backups() {
+    local legacy
+
+    for legacy in /etc/apt/apt.conf.d/no-nag-script.bak.*; do
+        [[ -e "$legacy" ]] || continue
+        rm -f "$legacy"
+    done
+}
+
 if [[ -z "$HOST_TYPE" ]]; then
     echo "Error: host type not provided and could not be detected"
     exit 1
@@ -78,7 +99,8 @@ fi
 
 print_sub "Backing up repo configs..."
 backup_config /etc/apt/sources.list.d
-backup_config /etc/apt/apt.conf.d/no-nag-script
+backup_no_nag_script
+cleanup_legacy_no_nag_backups
 
 case "$HOST_TYPE" in
     pve)
