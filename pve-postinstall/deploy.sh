@@ -9,6 +9,40 @@ BUILD_ROOT="$SCRIPT_DIR/build"
 PVE_CONFIG_DIR="$SCRIPT_DIR/configs/pve"
 PBS_CONFIG_DIR="$SCRIPT_DIR/configs/pbs"
 
+PVE_FILES=(
+    proxmox.sources
+    pve-enterprise.sources
+    ceph.sources
+    pve-test.sources
+    no-nag-script
+    pve-remove-nag.sh
+)
+
+PBS_FILES=(
+    proxmox.sources
+    pbs-enterprise.sources
+    no-nag-script
+    pbs-remove-nag.sh
+)
+
+remote_path_for_file() {
+    local file="$1"
+    case "$file" in
+        proxmox.sources|pve-enterprise.sources|ceph.sources|pve-test.sources|pbs-enterprise.sources)
+            echo "/etc/apt/sources.list.d/$file"
+            ;;
+        no-nag-script)
+            echo "/etc/apt/apt.conf.d/no-nag-script"
+            ;;
+        pve-remove-nag.sh|pbs-remove-nag.sh)
+            echo "/usr/local/bin/$file"
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
 parse_common_flags "$@"
 set -- "${PARSED_ARGS[@]}"
 
@@ -22,15 +56,18 @@ deploy() {
     local host="$1"
     local host_type
     local config_dir
+    local -a files
     local build_dir="$BUILD_ROOT/$host"
 
     host_type=$(hosts get "$host" "type") || { print_warn "type missing for $host"; return 1; }
     case "$host_type" in
         pve)
             config_dir="$PVE_CONFIG_DIR"
+            files=("${PVE_FILES[@]}")
             ;;
         pbs)
             config_dir="$PBS_CONFIG_DIR"
+            files=("${PBS_FILES[@]}")
             ;;
         *)
             print_warn "Unsupported host type for $host: $host_type"
@@ -45,21 +82,20 @@ deploy() {
 
     prepare_build_dir "$build_dir"
 
-    cp "$config_dir"/* "$build_dir/"
+    for file in "${files[@]}"; do
+        if [[ ! -f "$config_dir/$file" ]]; then
+            print_warn "Missing config file: $config_dir/$file"
+            return 1
+        fi
+        cp "$config_dir/$file" "$build_dir/$file"
+    done
 
     print_sub "Comparing with remote configs..."
-    if [[ "$host_type" == "pve" ]]; then
-        diff_remote_config "$host" "$build_dir/proxmox.sources" "/etc/apt/sources.list.d/proxmox.sources" || true
-        diff_remote_config "$host" "$build_dir/pve-enterprise.sources" "/etc/apt/sources.list.d/pve-enterprise.sources" || true
-        diff_remote_config "$host" "$build_dir/ceph.sources" "/etc/apt/sources.list.d/ceph.sources" || true
-        diff_remote_config "$host" "$build_dir/pve-test.sources" "/etc/apt/sources.list.d/pve-test.sources" || true
-        diff_remote_config "$host" "$build_dir/no-nag-script" "/etc/apt/apt.conf.d/no-nag-script" || true
-        diff_remote_config "$host" "$build_dir/pve-remove-nag.sh" "/usr/local/bin/pve-remove-nag.sh" || true
-    else
-        diff_remote_config "$host" "$build_dir/proxmox.sources" "/etc/apt/sources.list.d/proxmox.sources" || true
-        diff_remote_config "$host" "$build_dir/pbs-enterprise.sources" "/etc/apt/sources.list.d/pbs-enterprise.sources" || true
-        diff_remote_config "$host" "$build_dir/no-nag-script" "/etc/apt/apt.conf.d/no-nag-script" || true
-    fi
+    for file in "${files[@]}"; do
+        local remote_path
+        remote_path=$(remote_path_for_file "$file") || { print_warn "No remote path mapping for $file"; return 1; }
+        diff_remote_config "$host" "$build_dir/$file" "$remote_path" || true
+    done
 
     if [[ "$DRY_RUN" == true ]]; then
         print_sub "[DRY-RUN] Would deploy to $host:/tmp/homelab-pve-postinstall/"

@@ -29,6 +29,43 @@ if [[ -z "$HOST_TYPE" ]]; then
     fi
 fi
 
+required_files_for_type() {
+    local host_type="$1"
+    case "$host_type" in
+        pve)
+            printf '%s\n' proxmox.sources pve-enterprise.sources ceph.sources pve-test.sources no-nag-script pve-remove-nag.sh
+            ;;
+        pbs)
+            printf '%s\n' proxmox.sources pbs-enterprise.sources no-nag-script pbs-remove-nag.sh
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+install_file() {
+    local file="$1"
+    case "$file" in
+        proxmox.sources|pve-enterprise.sources|ceph.sources|pve-test.sources|pbs-enterprise.sources)
+            cp "$BUILD_DIR/$file" "/etc/apt/sources.list.d/$file"
+            ;;
+        no-nag-script)
+            cp "$BUILD_DIR/$file" "/etc/apt/apt.conf.d/no-nag-script"
+            chmod 644 /etc/apt/apt.conf.d/no-nag-script
+            ;;
+        pve-remove-nag.sh|pbs-remove-nag.sh)
+            mkdir -p /usr/local/bin
+            cp "$BUILD_DIR/$file" "/usr/local/bin/$file"
+            chmod 755 "/usr/local/bin/$file"
+            ;;
+        *)
+            print_warn "Unsupported file mapping: $file"
+            return 1
+            ;;
+    esac
+}
+
 if [[ -z "$HOST_TYPE" ]]; then
     echo "Error: host type not provided and could not be detected"
     exit 1
@@ -45,41 +82,38 @@ backup_config /etc/apt/apt.conf.d/no-nag-script
 
 case "$HOST_TYPE" in
     pve)
-        for file in proxmox.sources pve-enterprise.sources ceph.sources pve-test.sources no-nag-script pve-remove-nag.sh; do
+        while IFS= read -r file; do
             if [[ ! -f "$BUILD_DIR/$file" ]]; then
                 echo "Error: Missing $file in $BUILD_DIR"
                 exit 1
             fi
-        done
+        done < <(required_files_for_type "$HOST_TYPE")
 
         print_sub "Deploying PVE repo sources..."
-        cp "$BUILD_DIR/proxmox.sources" /etc/apt/sources.list.d/proxmox.sources
-        cp "$BUILD_DIR/pve-enterprise.sources" /etc/apt/sources.list.d/pve-enterprise.sources
-        cp "$BUILD_DIR/ceph.sources" /etc/apt/sources.list.d/ceph.sources
-        cp "$BUILD_DIR/pve-test.sources" /etc/apt/sources.list.d/pve-test.sources
+        for file in proxmox.sources pve-enterprise.sources ceph.sources pve-test.sources; do
+            install_file "$file" || exit 1
+        done
 
         print_sub "Deploying nag removal..."
-        mkdir -p /usr/local/bin
-        cp "$BUILD_DIR/pve-remove-nag.sh" /usr/local/bin/pve-remove-nag.sh
-        chmod 755 /usr/local/bin/pve-remove-nag.sh
-        cp "$BUILD_DIR/no-nag-script" /etc/apt/apt.conf.d/no-nag-script
-        chmod 644 /etc/apt/apt.conf.d/no-nag-script
+        install_file pve-remove-nag.sh || exit 1
+        install_file no-nag-script || exit 1
         ;;
     pbs)
-        for file in proxmox.sources pbs-enterprise.sources no-nag-script; do
+        while IFS= read -r file; do
             if [[ ! -f "$BUILD_DIR/$file" ]]; then
                 echo "Error: Missing $file in $BUILD_DIR"
                 exit 1
             fi
-        done
+        done < <(required_files_for_type "$HOST_TYPE")
 
         print_sub "Deploying PBS repo sources..."
-        cp "$BUILD_DIR/proxmox.sources" /etc/apt/sources.list.d/proxmox.sources
-        cp "$BUILD_DIR/pbs-enterprise.sources" /etc/apt/sources.list.d/pbs-enterprise.sources
+        for file in proxmox.sources pbs-enterprise.sources; do
+            install_file "$file" || exit 1
+        done
 
         print_sub "Deploying nag removal..."
-        cp "$BUILD_DIR/no-nag-script" /etc/apt/apt.conf.d/no-nag-script
-        chmod 644 /etc/apt/apt.conf.d/no-nag-script
+        install_file pbs-remove-nag.sh || exit 1
+        install_file no-nag-script || exit 1
         ;;
     *)
         print_warn "Unsupported host type: $HOST_TYPE"

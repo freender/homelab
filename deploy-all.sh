@@ -35,6 +35,41 @@ while IFS= read -r -d '' module_dir; do
     fi
 done < <(find "$SCRIPT_DIR" -mindepth 1 -maxdepth 1 -type d -print0 | sort -z)
 
+PREFERRED_ORDER=(
+    pve-postinstall
+    apcupsd
+    telegraf
+    pve-interfaces
+    pve-gpu-passthrough
+    ssh
+    docker
+)
+
+ORDERED_MODULES=()
+for preferred in "${PREFERRED_ORDER[@]}"; do
+    for module in "${MODULES[@]}"; do
+        if [[ "$module" == "$preferred" ]]; then
+            ORDERED_MODULES+=("$module")
+            break
+        fi
+    done
+done
+
+for module in "${MODULES[@]}"; do
+    found=false
+    for ordered in "${ORDERED_MODULES[@]}"; do
+        if [[ "$module" == "$ordered" ]]; then
+            found=true
+            break
+        fi
+    done
+    if [[ "$found" == false ]]; then
+        ORDERED_MODULES+=("$module")
+    fi
+done
+
+MODULES=("${ORDERED_MODULES[@]}")
+
 if [[ ${#MODULES[@]} -eq 0 ]]; then
     echo "No deployable modules found in ${SCRIPT_DIR}"
     exit 1
@@ -50,8 +85,7 @@ for module in "${MODULES[@]}"; do
     
     if [[ ! -x "$script" ]]; then
         echo "==> Skipping $module (missing deploy script)"
-        FAILED_MODULES+=("
-$module")
+        FAILED_MODULES+=("$module")
         continue
     fi
     
@@ -66,8 +100,7 @@ $module")
     # exit 0 = success or skipped (handled by module)
     # exit non-zero = failure
     if [[ $exit_code -ne 0 ]]; then
-        FAILED_MODULES+=("
-$module")
+        FAILED_MODULES+=("$module")
     fi
 done
 
