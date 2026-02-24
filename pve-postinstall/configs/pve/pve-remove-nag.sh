@@ -19,7 +19,6 @@ if [ -f "$MOBILE_TPL" ] && ! grep -q "$MARKER" "$MOBILE_TPL"; then
       "      const text = (dialog.textContent || '').toLowerCase();" \
       "      if (text.includes('subscription')) {" \
       "        dialog.remove();" \
-      "        console.log('Removed subscription dialog');" \
       "      }" \
       "    });" \
       "" \
@@ -30,7 +29,6 @@ if [ -f "$MOBILE_TPL" ] && ! grep -q "$MARKER" "$MOBILE_TPL"; then
       "      const hasButton = card.querySelector('button');" \
       "      if (!hasButton && text.includes('subscription')) {" \
       "        card.remove();" \
-      "        console.log('Removed subscription card');" \
       "      }" \
       "    });" \
       "  }" \

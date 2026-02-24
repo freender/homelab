@@ -78,13 +78,15 @@ backup_no_nag_script() {
     cp "$src" "$BACKUP_DIR/no-nag-script.$ts"
 }
 
-cleanup_legacy_no_nag_backups() {
-    local legacy
+backup_sources_list_dir() {
+    local src="/etc/apt/sources.list.d"
+    local ts
+    ts="$(date +%Y%m%d%H%M%S)"
 
-    for legacy in /etc/apt/apt.conf.d/no-nag-script.bak.*; do
-        [[ -e "$legacy" ]] || continue
-        rm -f "$legacy"
-    done
+    [[ -d "$src" ]] || return 0
+
+    mkdir -p "$BACKUP_DIR"
+    cp -r "$src" "$BACKUP_DIR/sources.list.d.$ts"
 }
 
 if [[ -z "$HOST_TYPE" ]]; then
@@ -98,9 +100,8 @@ if [[ ! -d "$BUILD_DIR" ]]; then
 fi
 
 print_sub "Backing up repo configs..."
-backup_config /etc/apt/sources.list.d
+backup_sources_list_dir
 backup_no_nag_script
-cleanup_legacy_no_nag_backups
 
 case "$HOST_TYPE" in
     pve)
