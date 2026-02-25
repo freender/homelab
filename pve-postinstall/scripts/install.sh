@@ -35,7 +35,7 @@ required_files_for_type() {
     local host_type="$1"
     case "$host_type" in
         pve)
-            printf '%s\n' proxmox.sources ceph.sources pve-test.sources no-nag-script pve-remove-nag.sh pve-ceph-reconcile.sh
+            printf '%s\n' proxmox.sources ceph.sources pve-test.sources no-nag-script pve-remove-nag.sh
             ;;
         pbs)
             printf '%s\n' proxmox.sources no-nag-script pbs-remove-nag.sh
@@ -60,11 +60,6 @@ install_file() {
             mkdir -p /usr/local/bin
             cp "$BUILD_DIR/$file" "/usr/local/bin/$file"
             chmod 755 "/usr/local/bin/$file"
-            ;;
-        pve-ceph-reconcile.sh)
-            mkdir -p /usr/local/sbin
-            cp "$BUILD_DIR/$file" "/usr/local/sbin/$file"
-            chmod 755 "/usr/local/sbin/$file"
             ;;
         *)
             print_warn "Unsupported file mapping: $file"
@@ -165,13 +160,11 @@ case "$HOST_TYPE" in
         install_file pve-remove-nag.sh || exit 1
         install_file no-nag-script || exit 1
 
-        print_sub "Deploying Ceph daemon reconciliation automation..."
-        install_file pve-ceph-reconcile.sh || exit 1
-
-        print_sub "Ceph reconciliation available at /usr/local/sbin/pve-ceph-reconcile.sh"
+        print_sub "Cleaning legacy Ceph reconciliation binary..."
+        rm -f /usr/local/sbin/pve-ceph-reconcile.sh
 
         print_sub "Running Ceph daemon reconciliation..."
-        /usr/local/sbin/pve-ceph-reconcile.sh || print_warn "ceph daemon reconciliation skipped"
+        bash "$SCRIPT_DIR/scripts/pve-ceph-reconcile.sh" || print_warn "ceph daemon reconciliation skipped"
 
         print_sub "Reconciling local ZFS storage..."
         ensure_local_zfs_storage

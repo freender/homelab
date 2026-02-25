@@ -8,6 +8,12 @@ log() {
     echo "[pve-ceph-reconcile] $*"
 }
 
+osd_ids_from_systemd() {
+    systemctl list-units 'ceph-osd@*.service' --no-pager --no-legend 2>/dev/null \
+        | awk -F'[@.]' '/ceph-osd@[0-9]+\.service/ {print $2}' \
+        | sort -u
+}
+
 if ! command -v ceph >/dev/null 2>&1 || ! command -v pveceph >/dev/null 2>&1 || ! command -v ceph-volume >/dev/null 2>&1; then
     log "ceph CLI tools are missing, skipping"
     exit 0
@@ -41,27 +47,31 @@ if ! systemctl is-active --quiet "ceph-mds@${NODE}.service"; then
     pveceph mds create --name "$NODE" || log "metadata server creation failed or already exists"
 fi
 
-log "activating local OSDs"
-ceph-volume lvm activate --all || log "ceph-volume activation failed"
+mapfile -t OLD_OSD_IDS < <(osd_ids_from_systemd)
 
-mapfile -t OSD_IDS < <(
-    systemctl list-units 'ceph-osd@*.service' --no-pager --no-legend 2>/dev/null \
-        | awk -F'[@.]' '/ceph-osd@[0-9]+\.service/ {print $2}' \
-        | sort -u
-)
+ceph-volume lvm activate --all >/dev/null 2>&1 || log "ceph-volume activation failed"
 
-if [[ ${#OSD_IDS[@]} -eq 0 ]]; then
-    log "no local OSD services found after activation"
+mapfile -t NEW_OSD_IDS < <(osd_ids_from_systemd)
+
+declare -A old_osd_lookup=()
+for osd_id in "${OLD_OSD_IDS[@]}"; do
+    old_osd_lookup["$osd_id"]=1
+done
+
+NEW_IMPORT_IDS=()
+for osd_id in "${NEW_OSD_IDS[@]}"; do
+    if [[ -z "${old_osd_lookup[$osd_id]+x}" ]]; then
+        NEW_IMPORT_IDS+=("$osd_id")
+    fi
+done
+
+if [[ ${#NEW_IMPORT_IDS[@]} -eq 0 ]]; then
+    log "OSD diff: no new OSDs"
 else
-    log "marking local OSDs in: ${OSD_IDS[*]}"
-    for osd_id in "${OSD_IDS[@]}"; do
+    log "OSD diff: +${NEW_IMPORT_IDS[*]}"
+    for osd_id in "${NEW_IMPORT_IDS[@]}"; do
         ceph osd in "osd.${osd_id}" || log "failed to mark osd.${osd_id} in"
     done
 fi
 
-if ceph osd dump 2>/dev/null | grep -qE '^flags .*noout'; then
-    log "noout is set; unsetting noout"
-    ceph osd unset noout || log "failed to unset noout"
-else
-    log "noout is not set"
-fi
+ceph osd unset noout >/dev/null 2>&1 || true

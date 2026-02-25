@@ -15,7 +15,6 @@ PVE_FILES=(
     pve-test.sources
     no-nag-script
     pve-remove-nag.sh
-    pve-ceph-reconcile.sh
 )
 
 PBS_FILES=(
@@ -35,9 +34,6 @@ remote_path_for_file() {
             ;;
         pve-remove-nag.sh|pbs-remove-nag.sh)
             echo "/usr/local/bin/$file"
-            ;;
-        pve-ceph-reconcile.sh)
-            echo "/usr/local/sbin/$file"
             ;;
         *)
             return 1
