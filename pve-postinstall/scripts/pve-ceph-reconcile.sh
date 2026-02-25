@@ -3,6 +3,7 @@
 set -euo pipefail
 
 NODE="$(hostname -s)"
+CEPH_CONF_FILE="/etc/pve/ceph.conf"
 
 log() {
     echo "[pve-ceph-reconcile] $*"
@@ -14,23 +15,29 @@ osd_ids_from_systemd() {
         | sort -u
 }
 
-if ! command -v ceph >/dev/null 2>&1 || ! command -v pveceph >/dev/null 2>&1 || ! command -v ceph-volume >/dev/null 2>&1; then
-    log "ceph CLI tools are missing, skipping"
+if ! command -v pveceph >/dev/null 2>&1; then
+    log "pveceph command is missing, skipping"
     exit 0
 fi
 
-log "installing Ceph packages (no-subscription repo)"
-pveceph install --repository no-subscription --version squid || log "pveceph install failed"
+if ! command -v ceph >/dev/null 2>&1 || ! command -v ceph-volume >/dev/null 2>&1; then
+    log "ceph CLI tools missing; installing Ceph packages"
+fi
 
-if [[ ! -f /etc/pve/ceph.conf ]]; then
+log "installing Ceph packages (no-subscription repo)"
+printf 'y\n' | DEBIAN_FRONTEND=noninteractive pveceph install --repository no-subscription --version squid || log "pveceph install failed"
+
+if ! command -v ceph >/dev/null 2>&1 || ! command -v ceph-volume >/dev/null 2>&1; then
+    log "ceph CLI tools still missing after install, skipping"
+    exit 0
+fi
+
+if [[ ! -f "$CEPH_CONF_FILE" ]]; then
     log "ceph config not present yet (join cluster first), skipping"
     exit 0
 fi
 
-if ! timeout 10 ceph -s >/dev/null 2>&1; then
-    log "cannot reach ceph cluster right now, skipping"
-    exit 0
-fi
+export CEPH_CONF="$CEPH_CONF_FILE"
 
 if ! systemctl is-active --quiet "ceph-mon@${NODE}.service"; then
     log "creating monitor ${NODE}"
