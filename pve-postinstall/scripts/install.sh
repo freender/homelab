@@ -160,9 +160,6 @@ case "$HOST_TYPE" in
         install_file pve-remove-nag.sh || exit 1
         install_file no-nag-script || exit 1
 
-        print_sub "Cleaning legacy Ceph reconciliation binary..."
-        rm -f /usr/local/sbin/pve-ceph-reconcile.sh
-
         print_sub "Running Ceph daemon reconciliation..."
         bash "$SCRIPT_DIR/scripts/pve-ceph-reconcile.sh" || print_warn "ceph daemon reconciliation skipped"
 
