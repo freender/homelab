@@ -95,6 +95,31 @@ backup_sources_list_dir() {
     cp -r "$src" "$BACKUP_DIR/sources.list.d.$ts"
 }
 
+ensure_local_zfs_storage() {
+    if ! command -v pvesm >/dev/null 2>&1; then
+        print_warn "pvesm not found; skipping zfs storage reconciliation"
+        return 0
+    fi
+
+    if ! command -v zpool >/dev/null 2>&1; then
+        print_warn "zpool not found; skipping zfs storage reconciliation"
+        return 0
+    fi
+
+    if ! zpool list rpool >/dev/null 2>&1; then
+        print_warn "rpool not found; skipping vm-disks-zfs reconciliation"
+        return 0
+    fi
+
+    if pvesm status --storage vm-disks-zfs >/dev/null 2>&1; then
+        print_sub "vm-disks-zfs storage already configured"
+        return 0
+    fi
+
+    print_sub "Creating vm-disks-zfs storage on rpool..."
+    pvesm add zfspool vm-disks-zfs --pool rpool --content images,rootdir --sparse 0 || print_warn "failed to create vm-disks-zfs storage"
+}
+
 if [[ -z "$HOST_TYPE" ]]; then
     echo "Error: host type not provided and could not be detected"
     exit 1
@@ -108,6 +133,12 @@ fi
 print_sub "Backing up repo configs..."
 backup_sources_list_dir
 backup_no_nag_script
+
+print_sub "Removing enterprise repository definitions..."
+rm -f /etc/apt/sources.list.d/pve-enterprise.sources
+rm -f /etc/apt/sources.list.d/pbs-enterprise.sources
+rm -f /etc/apt/sources.list.d/ceph.list
+rm -f /etc/apt/sources.list.d/ceph-enterprise.list
 
 print_sub "Setting timezone to $TIMEZONE..."
 if command -v timedatectl >/dev/null 2>&1; then
@@ -141,6 +172,9 @@ case "$HOST_TYPE" in
 
         print_sub "Running Ceph daemon reconciliation..."
         /usr/local/sbin/pve-ceph-reconcile.sh || print_warn "ceph daemon reconciliation skipped"
+
+        print_sub "Reconciling local ZFS storage..."
+        ensure_local_zfs_storage
 
         ;;
     pbs)
