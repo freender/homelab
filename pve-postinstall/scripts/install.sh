@@ -128,6 +128,14 @@ case "$HOST_TYPE" in
         print_sub "Deploying nag removal..."
         install_file pve-remove-nag.sh || exit 1
         install_file no-nag-script || exit 1
+
+        print_sub "Installing Ceph packages..."
+        if command -v pveceph >/dev/null 2>&1; then
+            pveceph install || print_warn "pveceph install failed"
+        else
+            print_warn "pveceph not found; skipping Ceph package install"
+        fi
+
         ;;
     pbs)
         while IFS= read -r file; do
@@ -151,6 +159,13 @@ case "$HOST_TYPE" in
         exit 1
         ;;
 esac
+
+print_sub "Disabling postfix service..."
+if systemctl list-unit-files postfix.service >/dev/null 2>&1; then
+    systemctl disable --now postfix || print_warn "failed to disable postfix"
+else
+    print_sub "postfix service not present; skipping"
+fi
 
 print_sub "Refreshing proxmox widget toolkit..."
 apt --reinstall install proxmox-widget-toolkit &>/dev/null || print_warn "Widget toolkit reinstall failed"
