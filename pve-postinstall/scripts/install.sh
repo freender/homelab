@@ -142,6 +142,13 @@ else
     print_warn "timedatectl not found; timezone not changed"
 fi
 
+if [[ -e "/usr/share/zoneinfo/$TIMEZONE" ]]; then
+    ln -snf "/usr/share/zoneinfo/$TIMEZONE" /etc/localtime || print_warn "failed to update /etc/localtime"
+    printf '%s\n' "$TIMEZONE" > /etc/timezone || print_warn "failed to write /etc/timezone"
+else
+    print_warn "timezone data not found for $TIMEZONE"
+fi
+
 case "$HOST_TYPE" in
     pve)
         while IFS= read -r file; do
