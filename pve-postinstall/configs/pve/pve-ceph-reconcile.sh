@@ -41,43 +41,27 @@ if ! systemctl is-active --quiet "ceph-mds@${NODE}.service"; then
     pveceph mds create --name "$NODE" || log "metadata server creation failed or already exists"
 fi
 
+log "activating local OSDs"
+ceph-volume lvm activate --all || log "ceph-volume activation failed"
+
 mapfile -t OSD_IDS < <(
-    ceph-volume lvm list --format json 2>/dev/null | python3 -c '
-import json
-import sys
-
-try:
-    raw = json.load(sys.stdin)
-except Exception:
-    raise SystemExit(0)
-
-ids = set()
-
-if isinstance(raw, dict):
-    for key, value in raw.items():
-        if str(key).isdigit():
-            ids.add(str(key))
-        if isinstance(value, list):
-            for item in value:
-                if isinstance(item, dict):
-                    osd_id = item.get("osd id") or item.get("osd_id")
-                    if osd_id is not None and str(osd_id).isdigit():
-                        ids.add(str(osd_id))
-
-for osd_id in sorted(ids, key=int):
-    print(osd_id)
-'
+    systemctl list-units 'ceph-osd@*.service' --no-pager --no-legend 2>/dev/null \
+        | awk -F'[@.]' '/ceph-osd@[0-9]+\.service/ {print $2}' \
+        | sort -u
 )
 
 if [[ ${#OSD_IDS[@]} -eq 0 ]]; then
-    log "no local ceph-volume OSDs found, skipping OSD activation"
-    exit 0
+    log "no local OSD services found after activation"
+else
+    log "marking local OSDs in: ${OSD_IDS[*]}"
+    for osd_id in "${OSD_IDS[@]}"; do
+        ceph osd in "osd.${osd_id}" || log "failed to mark osd.${osd_id} in"
+    done
 fi
 
-log "activating local OSDs: ${OSD_IDS[*]}"
-ceph-volume lvm activate --all || log "ceph-volume activation failed"
-
-for osd_id in "${OSD_IDS[@]}"; do
-    log "marking osd.${osd_id} in"
-    ceph osd in "osd.${osd_id}" || log "failed to mark osd.${osd_id} in"
-done
+if ceph osd dump 2>/dev/null | grep -qE '^flags .*noout'; then
+    log "noout is set; unsetting noout"
+    ceph osd unset noout || log "failed to unset noout"
+else
+    log "noout is not set"
+fi
