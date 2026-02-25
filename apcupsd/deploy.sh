@@ -121,7 +121,7 @@ deploy() {
     scp -q "$HOMELAB_ROOT/lib/print.sh" "$HOMELAB_ROOT/lib/utils.sh" "$host:/tmp/homelab-apcupsd/lib/"
 
     print_sub "Running installer..."
-    ssh "$host" "cd /tmp/homelab-apcupsd && chmod +x scripts/install.sh && sudo ./scripts/install.sh $host"
+    ssh "$host" "cd /tmp/homelab-apcupsd && chmod +x scripts/install.sh && if [ \"\$(id -u)\" -eq 0 ]; then ./scripts/install.sh '$host'; elif command -v sudo >/dev/null 2>&1; then sudo ./scripts/install.sh '$host'; else echo 'Error: current user is not root and sudo is not installed' >&2; exit 1; fi"
 }
 
 # --- Main ---
