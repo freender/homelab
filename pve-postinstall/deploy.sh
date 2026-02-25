@@ -11,7 +11,6 @@ PBS_CONFIG_DIR="$SCRIPT_DIR/configs/pbs"
 
 PVE_FILES=(
     proxmox.sources
-    pve-enterprise.sources
     ceph.sources
     pve-test.sources
     no-nag-script
@@ -21,7 +20,6 @@ PVE_FILES=(
 
 PBS_FILES=(
     proxmox.sources
-    pbs-enterprise.sources
     no-nag-script
     pbs-remove-nag.sh
 )
@@ -29,7 +27,7 @@ PBS_FILES=(
 remote_path_for_file() {
     local file="$1"
     case "$file" in
-        proxmox.sources|pve-enterprise.sources|ceph.sources|pve-test.sources|pbs-enterprise.sources)
+        proxmox.sources|ceph.sources|pve-test.sources)
             echo "/etc/apt/sources.list.d/$file"
             ;;
         no-nag-script)

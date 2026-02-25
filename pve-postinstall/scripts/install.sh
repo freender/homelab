@@ -35,10 +35,10 @@ required_files_for_type() {
     local host_type="$1"
     case "$host_type" in
         pve)
-            printf '%s\n' proxmox.sources pve-enterprise.sources ceph.sources pve-test.sources no-nag-script pve-remove-nag.sh pve-ceph-reconcile.sh
+            printf '%s\n' proxmox.sources ceph.sources pve-test.sources no-nag-script pve-remove-nag.sh pve-ceph-reconcile.sh
             ;;
         pbs)
-            printf '%s\n' proxmox.sources pbs-enterprise.sources no-nag-script pbs-remove-nag.sh
+            printf '%s\n' proxmox.sources no-nag-script pbs-remove-nag.sh
             ;;
         *)
             return 1
@@ -49,7 +49,7 @@ required_files_for_type() {
 install_file() {
     local file="$1"
     case "$file" in
-        proxmox.sources|pve-enterprise.sources|ceph.sources|pve-test.sources|pbs-enterprise.sources)
+        proxmox.sources|ceph.sources|pve-test.sources)
             cp "$BUILD_DIR/$file" "/etc/apt/sources.list.d/$file"
             ;;
         no-nag-script)
@@ -126,7 +126,7 @@ case "$HOST_TYPE" in
         done < <(required_files_for_type "$HOST_TYPE")
 
         print_sub "Deploying PVE repo sources..."
-        for file in proxmox.sources pve-enterprise.sources ceph.sources pve-test.sources; do
+        for file in proxmox.sources ceph.sources pve-test.sources; do
             install_file "$file" || exit 1
         done
 
@@ -139,6 +139,9 @@ case "$HOST_TYPE" in
 
         print_sub "Ceph reconciliation available at /usr/local/sbin/pve-ceph-reconcile.sh"
 
+        print_sub "Running Ceph daemon reconciliation..."
+        /usr/local/sbin/pve-ceph-reconcile.sh || print_warn "ceph daemon reconciliation skipped"
+
         ;;
     pbs)
         while IFS= read -r file; do
@@ -149,9 +152,7 @@ case "$HOST_TYPE" in
         done < <(required_files_for_type "$HOST_TYPE")
 
         print_sub "Deploying PBS repo sources..."
-        for file in proxmox.sources pbs-enterprise.sources; do
-            install_file "$file" || exit 1
-        done
+        install_file proxmox.sources || exit 1
 
         print_sub "Deploying nag removal..."
         install_file pbs-remove-nag.sh || exit 1
