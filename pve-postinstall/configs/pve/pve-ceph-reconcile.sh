@@ -13,8 +13,8 @@ if ! command -v ceph >/dev/null 2>&1 || ! command -v pveceph >/dev/null 2>&1; th
     exit 0
 fi
 
-log "installing Ceph packages"
-pveceph install || log "pveceph install failed"
+log "installing Ceph packages (no-subscription repo)"
+pveceph install --repository no-subscription --version squid || log "pveceph install failed"
 
 if [[ ! -f /etc/pve/ceph.conf ]]; then
     log "ceph config not present yet (join cluster first), skipping"
