@@ -111,7 +111,7 @@ deploy() {
     scp -q "$HOMELAB_ROOT/lib/print.sh" "$HOMELAB_ROOT/lib/utils.sh" "$host:/tmp/homelab-pve-postinstall/lib/"
 
     print_sub "Running installer..."
-    ssh "$host" "cd /tmp/homelab-pve-postinstall && chmod +x scripts/install.sh && if [ \"\$(id -u)\" -eq 0 ]; then ./scripts/install.sh '$host' '$host_type' '$timezone'; elif command -v sudo >/dev/null 2>&1; then sudo ./scripts/install.sh '$host' '$host_type' '$timezone'; else echo 'Error: current user is not root and sudo is not installed' >&2; exit 1; fi"
+    ssh "$host" "cd /tmp/homelab-pve-postinstall && chmod +x scripts/install.sh && if [ \"\$(id -u)\" -ne 0 ]; then echo 'Error: PVE/PBS deploy requires root SSH user' >&2; exit 1; fi && ./scripts/install.sh '$host' '$host_type' '$timezone'"
 }
 
 deploy_init "PVE/PBS Post-Install Configs"

@@ -83,7 +83,7 @@ remove_gpu_passthrough() {
     scp -q "$HOMELAB_ROOT/lib/print.sh" "$HOMELAB_ROOT/lib/utils.sh" "$host:/tmp/homelab-pve-gpu-passthrough/lib/"
 
     print_sub "Running removal..."
-    ssh "$host" "chmod +x /tmp/homelab-pve-gpu-passthrough/remove-local.sh && if [ \"\$(id -u)\" -eq 0 ]; then /tmp/homelab-pve-gpu-passthrough/remove-local.sh $dry_run_flag; elif command -v sudo >/dev/null 2>&1; then sudo /tmp/homelab-pve-gpu-passthrough/remove-local.sh $dry_run_flag; else echo 'Error: current user is not root and sudo is not installed' >&2; exit 1; fi"
+    ssh "$host" "chmod +x /tmp/homelab-pve-gpu-passthrough/remove-local.sh && if [ \"\$(id -u)\" -ne 0 ]; then echo 'Error: PVE/PBS deploy requires root SSH user' >&2; exit 1; fi && /tmp/homelab-pve-gpu-passthrough/remove-local.sh $dry_run_flag"
 
     ssh "$host" "rm -rf /tmp/homelab-pve-gpu-passthrough"
 }
