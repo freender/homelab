@@ -15,6 +15,24 @@ osd_ids_from_systemd() {
         | sort -u
 }
 
+ensure_ceph_cli_bootstrap() {
+    local public_network=""
+
+    if [[ ! -f "$CEPH_CONF_FILE" ]]; then
+        log "ceph config not present yet (join cluster first), skipping"
+        return 0
+    fi
+
+    public_network="$(awk -F'=' '/^[[:space:]]*public_network[[:space:]]*=/ {gsub(/[[:space:]]/, "", $2); print $2; exit}' "$CEPH_CONF_FILE")"
+    if [[ -z "$public_network" ]]; then
+        log "public_network missing in $CEPH_CONF_FILE; cannot run pveceph init"
+        return 0
+    fi
+
+    log "running pveceph init to refresh ceph CLI bootstrap"
+    pveceph init --network "$public_network" || log "pveceph init failed"
+}
+
 if ! command -v pveceph >/dev/null 2>&1; then
     log "pveceph command is missing, skipping"
     exit 0
@@ -32,8 +50,9 @@ if ! command -v ceph >/dev/null 2>&1 || ! command -v ceph-volume >/dev/null 2>&1
     exit 0
 fi
 
+ensure_ceph_cli_bootstrap
+
 if [[ ! -f "$CEPH_CONF_FILE" ]]; then
-    log "ceph config not present yet (join cluster first), skipping"
     exit 0
 fi
 
