@@ -102,17 +102,17 @@ ensure_local_zfs_storage() {
     fi
 
     if ! zpool list rpool >/dev/null 2>&1; then
-        print_warn "rpool not found; skipping vm-disks-zfs reconciliation"
+        print_warn "rpool not found; skipping local-zfs reconciliation"
         return 0
     fi
 
-    if pvesm status --storage vm-disks-zfs >/dev/null 2>&1; then
-        print_sub "vm-disks-zfs storage already configured"
+    if pvesm status --storage local-zfs >/dev/null 2>&1; then
+        print_sub "local-zfs storage already configured"
         return 0
     fi
 
-    print_sub "Creating vm-disks-zfs storage on rpool..."
-    pvesm add zfspool vm-disks-zfs --pool rpool --content images,rootdir --sparse 0 || print_warn "failed to create vm-disks-zfs storage"
+    print_sub "Creating local-zfs storage on rpool..."
+    pvesm add zfspool local-zfs --pool rpool --content images,rootdir --sparse 0 || print_warn "failed to create local-zfs storage"
 }
 
 if [[ -z "$HOST_TYPE" ]]; then
