@@ -125,3 +125,15 @@ cd ~/homelab/telegraf
 cd ~/homelab/telegraf
 ./remove.sh all
 ```
+
+### [pbs-config-sync](pbs-config-sync/)
+Xur PBS config backup sync to tower via rsync
+- Syncs `/etc/proxmox-backup`, `/var/lib/proxmox-backup`, `/root/.ssh`, and host network/apt config
+- Deploys `backup-config.service` + `backup-config.timer` (daily)
+- Sends Telegram notification on failure via systemd `OnFailure=`
+
+**Deploy:**
+```bash
+cd ~/homelab/pbs-config-sync
+./deploy.sh xur
+```
