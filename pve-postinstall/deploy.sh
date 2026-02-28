@@ -54,6 +54,7 @@ deploy() {
     local host="$1"
     local host_type
     local timezone
+    local ceph_enabled="false"
     local config_dir
     local -a files
     local build_dir="$BUILD_ROOT/$host"
@@ -64,6 +65,9 @@ deploy() {
         pve)
             config_dir="$PVE_CONFIG_DIR"
             files=("${PVE_FILES[@]}")
+            if hosts has "$host" "ceph"; then
+                ceph_enabled="true"
+            fi
             ;;
         pbs)
             config_dir="$PBS_CONFIG_DIR"
@@ -111,7 +115,7 @@ deploy() {
     scp -q "$HOMELAB_ROOT/lib/print.sh" "$HOMELAB_ROOT/lib/utils.sh" "$host:/tmp/homelab-pve-postinstall/lib/"
 
     print_sub "Running installer..."
-    ssh "$host" "cd /tmp/homelab-pve-postinstall && chmod +x scripts/install.sh && if [ \"\$(id -u)\" -ne 0 ]; then echo 'Error: PVE/PBS deploy requires root SSH user' >&2; exit 1; fi && ./scripts/install.sh '$host' '$host_type' '$timezone'"
+    ssh "$host" "cd /tmp/homelab-pve-postinstall && chmod +x scripts/install.sh && if [ \"\$(id -u)\" -ne 0 ]; then echo 'Error: PVE/PBS deploy requires root SSH user' >&2; exit 1; fi && ./scripts/install.sh '$host' '$host_type' '$timezone' '$ceph_enabled'"
 }
 
 deploy_init "PVE/PBS Post-Install Configs"

@@ -1,12 +1,13 @@
 #!/bin/bash
 # install.sh - Install PVE/PBS post-install configs
-# Usage: ./scripts/install.sh [hostname] [pve|pbs] [timezone]
+# Usage: ./scripts/install.sh [hostname] [pve|pbs] [timezone] [ceph_enabled]
 
 set -e
 
 HOST=${1:-$(hostname)}
 HOST_TYPE=${2:-}
 TIMEZONE=${3:-UTC}
+CEPH_ENABLED=${4:-false}
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD_DIR="$SCRIPT_DIR/build/$HOST"
 BACKUP_DIR="/var/backups/homelab/pve-postinstall"
@@ -167,8 +168,12 @@ case "$HOST_TYPE" in
         install_file pve-remove-nag.sh || exit 1
         install_file no-nag-script || exit 1
 
-        print_sub "Running Ceph daemon reconciliation..."
-        bash "$SCRIPT_DIR/scripts/pve-ceph-reconcile.sh" || print_warn "ceph daemon reconciliation skipped"
+        if [[ "$CEPH_ENABLED" == "true" ]]; then
+            print_sub "Running Ceph daemon reconciliation..."
+            bash "$SCRIPT_DIR/scripts/pve-ceph-reconcile.sh" || print_warn "ceph daemon reconciliation skipped"
+        else
+            print_sub "Ceph feature disabled for host; skipping Ceph reconciliation"
+        fi
 
         print_sub "Reconciling local ZFS storage..."
         ensure_local_zfs_storage
