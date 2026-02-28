@@ -1,0 +1,6 @@
+# Secrets
+telegram.env
+configs/telegram.env
+
+# Generated output
+build/

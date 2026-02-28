@@ -86,6 +86,18 @@ cd ~/homelab/pve-gpu-passthrough
 ./remove.sh all
 ```
 
+### [pve-notifications](pve-notifications/)
+Proxmox notification targets and matchers
+- Deploys `/etc/pve/notifications.cfg` and `/etc/pve/priv/notifications.cfg`
+- Uses Telegram credentials from `pve-notifications/configs/telegram.env` (not tracked)
+
+**Deploy:**
+```bash
+cd ~/homelab/pve-notifications
+cp configs/telegram.env.example configs/telegram.env
+./deploy.sh all
+```
+
 ## Quick Reference
 
 **Clone repo:**
