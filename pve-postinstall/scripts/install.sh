@@ -1,6 +1,6 @@
 #!/bin/bash
-# install.sh - Install PVE/PBS post-install configs
-# Usage: ./scripts/install.sh [hostname] [pve|pbs] [timezone] [ceph_enabled]
+# install.sh - Install PVE post-install configs
+# Usage: ./scripts/install.sh [hostname] [pve] [timezone] [ceph_enabled]
 
 set -e
 
@@ -27,8 +27,6 @@ fi
 if [[ -z "$HOST_TYPE" ]]; then
     if command -v pveversion >/dev/null 2>&1; then
         HOST_TYPE="pve"
-    elif command -v proxmox-backup-manager >/dev/null 2>&1; then
-        HOST_TYPE="pbs"
     fi
 fi
 
@@ -37,9 +35,6 @@ required_files_for_type() {
     case "$host_type" in
         pve)
             printf '%s\n' proxmox.sources ceph.sources pve-test.sources no-nag-script pve-remove-nag.sh
-            ;;
-        pbs)
-            printf '%s\n' proxmox.sources no-nag-script pbs-remove-nag.sh
             ;;
         *)
             return 1
@@ -57,7 +52,7 @@ install_file() {
             cp "$BUILD_DIR/$file" "/etc/apt/apt.conf.d/no-nag-script"
             chmod 644 /etc/apt/apt.conf.d/no-nag-script
             ;;
-        pve-remove-nag.sh|pbs-remove-nag.sh)
+        pve-remove-nag.sh)
             mkdir -p /usr/local/bin
             cp "$BUILD_DIR/$file" "/usr/local/bin/$file"
             chmod 755 "/usr/local/bin/$file"
@@ -132,7 +127,6 @@ backup_no_nag_script
 
 print_sub "Removing enterprise repository definitions..."
 rm -f /etc/apt/sources.list.d/pve-enterprise.sources
-rm -f /etc/apt/sources.list.d/pbs-enterprise.sources
 rm -f /etc/apt/sources.list.d/ceph.list
 rm -f /etc/apt/sources.list.d/ceph-enterprise.list
 
@@ -178,21 +172,6 @@ case "$HOST_TYPE" in
         print_sub "Reconciling local ZFS storage..."
         ensure_local_zfs_storage
 
-        ;;
-    pbs)
-        while IFS= read -r file; do
-            if [[ ! -f "$BUILD_DIR/$file" ]]; then
-                echo "Error: Missing $file in $BUILD_DIR"
-                exit 1
-            fi
-        done < <(required_files_for_type "$HOST_TYPE")
-
-        print_sub "Deploying PBS repo sources..."
-        install_file proxmox.sources || exit 1
-
-        print_sub "Deploying nag removal..."
-        install_file pbs-remove-nag.sh || exit 1
-        install_file no-nag-script || exit 1
         ;;
     *)
         print_warn "Unsupported host type: $HOST_TYPE"

@@ -6,7 +6,7 @@ Minimal Telegraf configuration for collecting hardware metrics from selected hos
 - ace (Proxmox)
 - bray (Proxmox)
 - clovis (Proxmox)
-- xur (PBS)
+- osiris (Proxmox)
 
 ## What It Collects
 - CPU package temperature (coretemp)

@@ -37,7 +37,6 @@ done < <(find "$SCRIPT_DIR" -mindepth 1 -maxdepth 1 -type d -print0 | sort -z)
 
 PREFERRED_ORDER=(
     pve-postinstall
-    pbs-config-sync
     apcupsd
     telegraf
     pve-interfaces

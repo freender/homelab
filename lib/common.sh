@@ -153,7 +153,7 @@ hosts() {
 
 # Filter hosts based on command line argument and supported list
 # Usage: 
-#   SUPPORTED_HOSTS=(ace bray clovis xur)
+#   SUPPORTED_HOSTS=(ace bray clovis osiris)
 #   if ! HOSTS=$(filter_hosts "$1" "${SUPPORTED_HOSTS[@]}"); then
 #       echo "==> Skipping module (not applicable to $1)"
 #       exit 0

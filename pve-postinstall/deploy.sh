@@ -1,5 +1,5 @@
 #!/bin/bash
-# Deploy PVE/PBS post-install configs
+# Deploy PVE post-install configs
 # Usage: ./deploy.sh [host|all]
 
 source "$(dirname "$0")/../lib/common.sh"
@@ -7,7 +7,6 @@ source "$(dirname "$0")/../lib/common.sh"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BUILD_ROOT="$SCRIPT_DIR/build"
 PVE_CONFIG_DIR="$SCRIPT_DIR/configs/pve"
-PBS_CONFIG_DIR="$SCRIPT_DIR/configs/pbs"
 
 PVE_FILES=(
     proxmox.sources
@@ -15,12 +14,6 @@ PVE_FILES=(
     pve-test.sources
     no-nag-script
     pve-remove-nag.sh
-)
-
-PBS_FILES=(
-    proxmox.sources
-    no-nag-script
-    pbs-remove-nag.sh
 )
 
 remote_path_for_file() {
@@ -32,7 +25,7 @@ remote_path_for_file() {
         no-nag-script)
             echo "/etc/apt/apt.conf.d/no-nag-script"
             ;;
-        pve-remove-nag.sh|pbs-remove-nag.sh)
+        pve-remove-nag.sh)
             echo "/usr/local/bin/$file"
             ;;
         *)
@@ -68,10 +61,6 @@ deploy() {
             if hosts has "$host" "ceph"; then
                 ceph_enabled="true"
             fi
-            ;;
-        pbs)
-            config_dir="$PBS_CONFIG_DIR"
-            files=("${PBS_FILES[@]}")
             ;;
         *)
             print_warn "Unsupported host type for $host: $host_type"
@@ -115,9 +104,9 @@ deploy() {
     scp -q "$HOMELAB_ROOT/lib/print.sh" "$HOMELAB_ROOT/lib/utils.sh" "$host:/tmp/homelab-pve-postinstall/lib/"
 
     print_sub "Running installer..."
-    ssh "$host" "cd /tmp/homelab-pve-postinstall && chmod +x scripts/install.sh && if [ \"\$(id -u)\" -ne 0 ]; then echo 'Error: PVE/PBS deploy requires root SSH user' >&2; exit 1; fi && ./scripts/install.sh '$host' '$host_type' '$timezone' '$ceph_enabled'"
+    ssh "$host" "cd /tmp/homelab-pve-postinstall && chmod +x scripts/install.sh && if [ \"\$(id -u)\" -ne 0 ]; then echo 'Error: PVE deploy requires root SSH user' >&2; exit 1; fi && ./scripts/install.sh '$host' '$host_type' '$timezone' '$ceph_enabled'"
 }
 
-deploy_init "PVE/PBS Post-Install Configs"
+deploy_init "PVE Post-Install Configs"
 deploy_run deploy $HOSTS
 deploy_finish

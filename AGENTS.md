@@ -5,7 +5,7 @@ This repository contains shell-based infrastructure automation for a Proxmox hom
 It uses modular Bash scripts to deploy configurations to hosts defined in `hosts.conf`.
 **Primary Language:** Bash (Shell)
 **Config Format:** YAML (`hosts.conf`)
-**Hosts:** Proxmox cluster (ace, bray, clovis), PBS (xur), and VMs.
+**Hosts:** Proxmox nodes (ace, bray, clovis, osiris) and VMs.
 
 ---
 
