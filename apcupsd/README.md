@@ -9,8 +9,8 @@ Master/slave apcupsd setup for Proxmox cluster with coordinated shutdown.
 - Role: Master with USB connection
 - On battery low: Coordinated cluster shutdown
 
-**xur UPS (APC XS 1000M):**
-- Powers: xur PBS only
+**osiris UPS (APC XS 1000M):**
+- Powers: osiris PVE host only
 - Role: Independent master with USB connection
 - On battery low: Self-shutdown
 
@@ -21,7 +21,7 @@ Master/slave apcupsd setup for Proxmox cluster with coordinated shutdown.
 | bray   | Master | USB    | Triggers cluster-wide host shutdown |
 | ace    | Slave  | Net    | Receives shutdown command from bray |
 | clovis | Slave  | Net    | Receives shutdown command from bray |
-| xur    | Master | USB    | Independent self-shutdown |
+| osiris | Master | USB    | Independent self-shutdown |
 
 ## Host Registry
 
@@ -104,7 +104,7 @@ ssh ace "/etc/apcupsd/telegram/telegram.sh -s 'Test' -d 'Test message'"
 ```bash
 # UPS status
 ssh bray "apcaccess status"              # Local UPS (bray)
-ssh xur "apcaccess status"               # Local UPS (xur)
+ssh osiris "apcaccess status"            # Local UPS (osiris)
 ssh ace "apcaccess status"  # Slave view (ace)
 ssh clovis "apcaccess status"  # Slave view (clovis)
 
