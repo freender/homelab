@@ -78,6 +78,8 @@ deploy() {
         } >> "$plan_file"
     done
 
+    show_build_diff "$build_dir"
+
     if [[ "$DRY_RUN" == true ]]; then
         print_sub "[DRY-RUN] Would deploy to $host:/tmp/homelab-pve-storage/"
         print_sub "Configured storages:"

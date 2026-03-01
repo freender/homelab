@@ -22,6 +22,7 @@ else
     }
     print_sub() { echo "    $*"; }
     print_warn() { echo "    ✗ Warning: $*"; }
+    print_error() { echo "    ✗ Error: $*" >&2; }
 fi
 
 if [[ -z "$HOST_TYPE" ]]; then
@@ -112,12 +113,12 @@ ensure_local_zfs_storage() {
 }
 
 if [[ -z "$HOST_TYPE" ]]; then
-    echo "Error: host type not provided and could not be detected"
+    print_error "host type not provided and could not be detected"
     exit 1
 fi
 
 if [[ ! -d "$BUILD_DIR" ]]; then
-    echo "Error: Missing build directory $BUILD_DIR"
+    print_error "Missing build directory $BUILD_DIR"
     exit 1
 fi
 
@@ -148,7 +149,7 @@ case "$HOST_TYPE" in
     pve)
         while IFS= read -r file; do
             if [[ ! -f "$BUILD_DIR/$file" ]]; then
-                echo "Error: Missing $file in $BUILD_DIR"
+                print_error "Missing $file in $BUILD_DIR"
                 exit 1
             fi
         done < <(required_files_for_type "$HOST_TYPE")
@@ -188,7 +189,3 @@ fi
 
 print_sub "Refreshing proxmox widget toolkit..."
 apt --reinstall install proxmox-widget-toolkit &>/dev/null || print_warn "Widget toolkit reinstall failed"
-
-print_sub "Updating system packages..."
-apt update &>/dev/null || print_warn "apt update failed"
-apt -y dist-upgrade &>/dev/null || print_warn "apt dist-upgrade failed"

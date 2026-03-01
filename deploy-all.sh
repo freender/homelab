@@ -38,6 +38,7 @@ done < <(find "$SCRIPT_DIR" -mindepth 1 -maxdepth 1 -type d -print0 | sort -z)
 PREFERRED_ORDER=(
     pve-postinstall
     pve-storage
+    pve-backup
     pve-notifications
     apcupsd
     telegraf
@@ -45,6 +46,7 @@ PREFERRED_ORDER=(
     pve-gpu-passthrough
     ssh
     docker
+    apt-upgrade
 )
 
 ORDERED_MODULES=()

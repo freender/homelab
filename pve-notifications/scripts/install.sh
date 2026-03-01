@@ -17,15 +17,16 @@ else
         cp -r "$path" "${path}.bak.$(date +%Y%m%d%H%M%S)"
     }
     print_sub() { echo "    $*"; }
+    print_error() { echo "    ✗ Error: $*" >&2; }
 fi
 
 if [[ ! -f "$BUILD_DIR/notifications.cfg" ]]; then
-    echo "Error: Missing notifications.cfg at $BUILD_DIR/notifications.cfg"
+    print_error "Missing notifications.cfg at $BUILD_DIR/notifications.cfg"
     exit 1
 fi
 
 if [[ ! -f "$BUILD_DIR/priv-notifications.cfg" ]]; then
-    echo "Error: Missing priv-notifications.cfg at $BUILD_DIR/priv-notifications.cfg"
+    print_error "Missing priv-notifications.cfg at $BUILD_DIR/priv-notifications.cfg"
     exit 1
 fi
 

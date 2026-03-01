@@ -7,3 +7,4 @@ print_action() { echo "==> $*"; }
 print_sub()    { echo "    $*"; }
 print_ok()     { echo "    ✓ $*"; }
 print_warn()   { echo "    ✗ Warning: $*"; }
+print_error()  { echo "    ✗ Error: $*" >&2; }

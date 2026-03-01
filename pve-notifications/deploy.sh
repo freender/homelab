@@ -24,9 +24,9 @@ if [[ ! -f "$ENV_FILE" && -f "$FALLBACK_ENV_FILE" ]]; then
 fi
 
 if [[ ! -f "$ENV_FILE" ]]; then
-    echo "ERROR: telegram env file not found!"
-    echo "  cp pve-notifications/configs/telegram.env.example pve-notifications/configs/telegram.env"
-    echo "  or provide apcupsd/configs/telegram/telegram.env"
+    print_error "telegram env file not found"
+    print_sub "cp pve-notifications/configs/telegram.env.example pve-notifications/configs/telegram.env"
+    print_sub "or provide apcupsd/configs/telegram/telegram.env"
     exit 1
 fi
 
@@ -34,7 +34,7 @@ fi
 source "$ENV_FILE"
 
 if [[ -z "${TELEGRAM_TOKEN:-}" || -z "${TELEGRAM_CHATID:-}" ]]; then
-    echo "ERROR: TELEGRAM_TOKEN and TELEGRAM_CHATID must be set in $ENV_FILE"
+    print_error "TELEGRAM_TOKEN and TELEGRAM_CHATID must be set in $ENV_FILE"
     exit 1
 fi
 
