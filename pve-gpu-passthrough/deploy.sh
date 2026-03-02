@@ -22,10 +22,10 @@ if ! HOSTS=$(filter_hosts "${1:-all}" "${SUPPORTED_HOSTS[@]}"); then
 fi
 
 # --- Validation ---
-[[ ! -f "$MODULES_FILE" ]] && { echo "Error: modules file not found"; exit 1; }
-[[ ! -f "$BLACKLIST_FILE" ]] && { echo "Error: blacklist file not found"; exit 1; }
-[[ ! -f "$CMDLINE_FILE" ]] && { echo "Error: cmdline file not found"; exit 1; }
-[[ ! -f "$VFIO_TEMPLATE" ]] && { echo "Error: vfio template not found"; exit 1; }
+[[ ! -f "$MODULES_FILE" ]] && { print_warn "modules file not found: $MODULES_FILE"; exit 1; }
+[[ ! -f "$BLACKLIST_FILE" ]] && { print_warn "blacklist file not found: $BLACKLIST_FILE"; exit 1; }
+[[ ! -f "$CMDLINE_FILE" ]] && { print_warn "cmdline file not found: $CMDLINE_FILE"; exit 1; }
+[[ ! -f "$VFIO_TEMPLATE" ]] && { print_warn "vfio template not found: $VFIO_TEMPLATE"; exit 1; }
 
 # --- Per-Host Deployment ---
 deploy() {
@@ -34,11 +34,6 @@ deploy() {
     local build_dir="$BUILD_ROOT/$host"
 
     pci_ids=$(hosts get "$host" "pve-gpu-passthrough.pci_ids") || { print_warn "pve-gpu-passthrough.pci_ids missing"; return 1; }
-
-    if [[ ! -f "$BLACKLIST_FILE" || ! -f "$CMDLINE_FILE" || ! -f "$VFIO_TEMPLATE" ]]; then
-        print_warn "Missing static config inputs in $SCRIPT_DIR/configs"
-        return 1
-    fi
 
     prepare_build_dir "$build_dir"
 

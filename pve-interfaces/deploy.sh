@@ -36,8 +36,7 @@ deploy() {
     mgmt_ip=$(hosts get "$host" "pve-interfaces.mgmt_ip") || { print_warn "pve-interfaces.mgmt_ip missing"; return 1; }
     gateway=$(hosts get "$host" "pve-interfaces.gateway") || { print_warn "pve-interfaces.gateway missing"; return 1; }
 
-    storage_ip=$(hosts get "$host" "pve-interfaces.storage_ip" "") || true
-    [[ -z "$storage_ip" ]] && { print_warn "pve-interfaces.storage_ip missing"; return 1; }
+    storage_ip=$(hosts get "$host" "pve-interfaces.storage_ip") || { print_warn "pve-interfaces.storage_ip missing"; return 1; }
 
     prepare_build_dir "$build_dir"
 
