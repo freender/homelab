@@ -45,24 +45,72 @@ required_files_for_type() {
 
 install_file() {
     local file="$1"
+    local source_file="$BUILD_DIR/$file"
+    local destination_file
+
     case "$file" in
         proxmox.sources|ceph.sources|pve-test.sources)
-            cp "$BUILD_DIR/$file" "/etc/apt/sources.list.d/$file"
+            destination_file="/etc/apt/sources.list.d/$file"
             ;;
         no-nag-script)
-            cp "$BUILD_DIR/$file" "/etc/apt/apt.conf.d/no-nag-script"
-            chmod 644 /etc/apt/apt.conf.d/no-nag-script
+            destination_file="/etc/apt/apt.conf.d/no-nag-script"
             ;;
         pve-remove-nag.sh)
-            mkdir -p /usr/local/bin
-            cp "$BUILD_DIR/$file" "/usr/local/bin/$file"
-            chmod 755 "/usr/local/bin/$file"
+            destination_file="/usr/local/bin/$file"
             ;;
         *)
             print_warn "Unsupported file mapping: $file"
             return 1
             ;;
     esac
+
+    if ! file_needs_update "$source_file" "$destination_file"; then
+        local rc=$?
+        if [[ $rc -eq 1 ]]; then
+            print_sub "$destination_file unchanged; skipping update"
+            case "$file" in
+                no-nag-script)
+                    chmod 644 "$destination_file"
+                    ;;
+                pve-remove-nag.sh)
+                    chmod 755 "$destination_file"
+                    ;;
+            esac
+            return 0
+        fi
+        return "$rc"
+    fi
+
+    case "$file" in
+        pve-remove-nag.sh)
+            mkdir -p /usr/local/bin
+            ;;
+    esac
+
+    cp "$source_file" "$destination_file"
+    case "$file" in
+        no-nag-script)
+            chmod 644 "$destination_file"
+            ;;
+        pve-remove-nag.sh)
+            chmod 755 "$destination_file"
+            ;;
+    esac
+    print_sub "Updated $destination_file"
+}
+
+repo_files_need_backup() {
+    local file
+    for file in proxmox.sources ceph.sources pve-test.sources; do
+        if file_needs_update "$BUILD_DIR/$file" "/etc/apt/sources.list.d/$file"; then
+            return 0
+        fi
+        local rc=$?
+        if [[ $rc -ne 1 ]]; then
+            return "$rc"
+        fi
+    done
+    return 1
 }
 
 backup_no_nag_script() {
@@ -161,9 +209,19 @@ if [[ ! -d "$BUILD_DIR" ]]; then
     exit 1
 fi
 
-print_sub "Backing up repo configs..."
-backup_sources_list_dir
-backup_no_nag_script
+print_sub "Checking if repo configs need backup..."
+if repo_files_need_backup; then
+    print_sub "Backing up /etc/apt/sources.list.d..."
+    backup_sources_list_dir
+fi
+
+if file_needs_update "$BUILD_DIR/no-nag-script" "/etc/apt/apt.conf.d/no-nag-script"; then
+    print_sub "Backing up no-nag-script..."
+    backup_no_nag_script
+else
+    rc=$?
+    [[ $rc -eq 1 ]] || exit "$rc"
+fi
 
 print_sub "Removing enterprise repository definitions..."
 rm -f /etc/apt/sources.list.d/pve-enterprise.sources

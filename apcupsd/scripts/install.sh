@@ -9,6 +9,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD_DIR="$SCRIPT_DIR/build/$HOST"
 CONFIGS_DIR="$SCRIPT_DIR/configs"
 ENV_FILE="$BUILD_DIR/env"
+FORCE_UPDATE=${FORCE_UPDATE:-false}
 
 if [[ -f "$SCRIPT_DIR/lib/utils.sh" ]]; then
     source "$SCRIPT_DIR/lib/utils.sh"
@@ -19,6 +20,42 @@ else
         cp -r "$path" "${path}.bak.$(date +%Y%m%d%H%M%S)"
     }
     print_sub() { echo "    $*"; }
+    file_needs_update() {
+        local src="$1"
+        local dst="$2"
+        [[ -f "$src" ]] || return 2
+        [[ ! -f "$dst" ]] && return 0
+        [[ "$FORCE_UPDATE" == "true" ]] && return 0
+        cmp -s "$src" "$dst" && return 1
+        return 0
+    }
+    copy_if_changed() {
+        local src="$1"
+        local dst="$2"
+        local label="${3:-$dst}"
+        if file_needs_update "$src" "$dst"; then
+            cp "$src" "$dst"
+            print_sub "Updated $label"
+            return 0
+        fi
+        local rc=$?
+        [[ $rc -eq 1 ]] && { print_sub "$label unchanged; skipping update"; return 1; }
+        return "$rc"
+    }
+    backup_and_copy_if_changed() {
+        local src="$1"
+        local dst="$2"
+        local label="${3:-$dst}"
+        if file_needs_update "$src" "$dst"; then
+            backup_config "$dst"
+            cp "$src" "$dst"
+            print_sub "Updated $label"
+            return 0
+        fi
+        local rc=$?
+        [[ $rc -eq 1 ]] && { print_sub "$label unchanged; skipping update"; return 1; }
+        return "$rc"
+    }
 fi
 
 ROLE="unknown"
@@ -55,24 +92,46 @@ if ! command -v apcupsd >/dev/null 2>&1; then
     apt update && apt install -y apcupsd
 fi
 
-# Stop service if running
-systemctl stop apcupsd 2>/dev/null || true
+apcupsd_changed=false
 
-# Backup existing config
-backup_config /etc/apcupsd/apcupsd.conf
-
-# Copy configs
 echo "Copying configuration files..."
-cp "$BUILD_DIR/apcupsd.conf" /etc/apcupsd/
-cp "$BUILD_DIR/doshutdown" /etc/apcupsd/
-cp "$CONFIGS_DIR/shared/apcupsd.notify" /etc/apcupsd/
+if backup_and_copy_if_changed "$BUILD_DIR/apcupsd.conf" /etc/apcupsd/apcupsd.conf "apcupsd.conf"; then
+    apcupsd_changed=true
+else
+    rc=$?
+    [[ $rc -eq 1 ]] || exit "$rc"
+fi
+
+if copy_if_changed "$BUILD_DIR/doshutdown" /etc/apcupsd/doshutdown "doshutdown"; then
+    apcupsd_changed=true
+else
+    rc=$?
+    [[ $rc -eq 1 ]] || exit "$rc"
+fi
+
+if copy_if_changed "$CONFIGS_DIR/shared/apcupsd.notify" /etc/apcupsd/apcupsd.notify "apcupsd.notify"; then
+    apcupsd_changed=true
+else
+    rc=$?
+    [[ $rc -eq 1 ]] || exit "$rc"
+fi
 
 # Setup telegram
 mkdir -p /etc/apcupsd/telegram
-cp "$CONFIGS_DIR/telegram/telegram.sh" /etc/apcupsd/telegram/
+if copy_if_changed "$CONFIGS_DIR/telegram/telegram.sh" /etc/apcupsd/telegram/telegram.sh "telegram.sh"; then
+    apcupsd_changed=true
+else
+    rc=$?
+    [[ $rc -eq 1 ]] || exit "$rc"
+fi
 
 ENV_FILE_DEST="/etc/apcupsd/telegram/telegram.env"
-cp "$CONFIGS_DIR/telegram/telegram.env" "$ENV_FILE_DEST"
+if copy_if_changed "$CONFIGS_DIR/telegram/telegram.env" "$ENV_FILE_DEST" "telegram.env"; then
+    apcupsd_changed=true
+else
+    rc=$?
+    [[ $rc -eq 1 ]] || exit "$rc"
+fi
 chmod 600 "$ENV_FILE_DEST"
 chown root:root "$ENV_FILE_DEST"
 echo "Telegram credentials installed."
@@ -91,7 +150,12 @@ fi
 
 # Enable and start service
 systemctl enable apcupsd
-systemctl start apcupsd
+if [[ "$apcupsd_changed" == "true" ]]; then
+    systemctl stop apcupsd 2>/dev/null || true
+    systemctl start apcupsd
+else
+    echo "No apcupsd content changes detected; restart skipped"
+fi
 
 echo ""
 echo "=== apcupsd $ROLE installed on $HOST ==="

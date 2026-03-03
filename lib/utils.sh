@@ -15,6 +15,8 @@ else
     print_error()  { echo "    ✗ Error: $*" >&2; }
 fi
 
+FORCE_UPDATE=${FORCE_UPDATE:-false}
+
 # Backup a file or directory
 # Usage: backup_config /etc/foo/bar.conf
 # Creates: /etc/foo/bar.conf.bak.YYYYMMDDHHmmss
@@ -29,4 +31,113 @@ backup_config() {
     else
         cp "$path" "$backup"
     fi
+}
+
+# Return success when destination file is missing or content differs
+# Usage: if file_needs_update /tmp/new.conf /etc/app.conf; then ...; fi
+file_needs_update() {
+    local src="$1"
+    local dst="$2"
+
+    if [[ ! -f "$src" ]]; then
+        print_error "source file not found: $src"
+        return 2
+    fi
+
+    if [[ ! -f "$dst" ]]; then
+        return 0
+    fi
+
+    if [[ "$FORCE_UPDATE" == "true" ]]; then
+        return 0
+    fi
+
+    if cmp -s "$src" "$dst"; then
+        return 1
+    fi
+
+    return 0
+}
+
+# Copy file only when destination differs or is missing
+# Returns: 0 when changed, 1 when unchanged, 2 on error
+# Usage: copy_if_changed source destination [label]
+copy_if_changed() {
+    local src="$1"
+    local dst="$2"
+    local label="${3:-$dst}"
+
+    if file_needs_update "$src" "$dst"; then
+        cp "$src" "$dst"
+        print_sub "Updated $label"
+        return 0
+    fi
+
+    local rc=$?
+    if [[ $rc -eq 1 ]]; then
+        print_sub "$label unchanged; skipping update"
+        return 1
+    fi
+
+    return "$rc"
+}
+
+# Backup destination and copy file only when destination differs or is missing
+# Returns: 0 when changed, 1 when unchanged, 2 on error
+# Usage: backup_and_copy_if_changed source destination [label]
+backup_and_copy_if_changed() {
+    local src="$1"
+    local dst="$2"
+    local label="${3:-$dst}"
+
+    if file_needs_update "$src" "$dst"; then
+        backup_config "$dst"
+        cp "$src" "$dst"
+        print_sub "Updated $label"
+        return 0
+    fi
+
+    local rc=$?
+    if [[ $rc -eq 1 ]]; then
+        print_sub "$label unchanged; skipping update"
+        return 1
+    fi
+
+    return "$rc"
+}
+
+# Sync files from source directory into destination directory when changed
+# Returns: 0 if any file changed, 1 if no files changed, 2 on error
+# Usage: sync_dir_if_changed /tmp/src.d /etc/app.d [label]
+sync_dir_if_changed() {
+    local src_dir="$1"
+    local dst_dir="$2"
+    local label="${3:-$dst_dir}"
+    local changed=1
+    local file
+
+    if [[ ! -d "$src_dir" ]]; then
+        print_error "source directory not found: $src_dir"
+        return 2
+    fi
+
+    mkdir -p "$dst_dir"
+
+    shopt -s nullglob
+    for file in "$src_dir"/*; do
+        local target_file
+        target_file="$dst_dir/$(basename "$file")"
+        if copy_if_changed "$file" "$target_file" "$label/$(basename "$file")"; then
+            changed=0
+        else
+            local rc=$?
+            if [[ $rc -ne 1 ]]; then
+                shopt -u nullglob
+                return "$rc"
+            fi
+        fi
+    done
+    shopt -u nullglob
+
+    return "$changed"
 }

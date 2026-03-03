@@ -1,20 +1,27 @@
 #!/bin/bash
 # Deploy homelab modules
-# Usage: ./deploy-all.sh [hostname|all]
-#   ./deploy-all.sh          - Deploy all modules to all hosts
-#   ./deploy-all.sh tower    - Deploy applicable modules to tower only
-#   ./deploy-all.sh helm     - Deploy applicable modules to helm only
+# Usage: ./deploy-all.sh [--dry-run] [--force] [hostname|all]
+#   ./deploy-all.sh                 - Deploy all modules to all hosts
+#   ./deploy-all.sh tower           - Deploy applicable modules to tower only
+#   ./deploy-all.sh --dry-run all   - Preview deployments
+#   ./deploy-all.sh --force all     - Force installers to rewrite managed files
 
 set -u
 
 # Parse flags
 DRY_RUN=false
+FORCE_UPDATE=false
 ARGS=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --dry-run|-n)
             DRY_RUN=true
             export DRY_RUN
+            shift
+            ;;
+        --force|--force-update)
+            FORCE_UPDATE=true
+            export FORCE_UPDATE
             shift
             ;;
         *)
@@ -90,8 +97,12 @@ for module in "${MODULES[@]}"; do
     fi
     
     # Run module deploy, capture exit code
-    if [[ "$DRY_RUN" == "true" ]]; then
+    if [[ "$DRY_RUN" == "true" && "$FORCE_UPDATE" == "true" ]]; then
+        "$script" --dry-run --force "$HOST"
+    elif [[ "$DRY_RUN" == "true" ]]; then
         "$script" --dry-run "$HOST"
+    elif [[ "$FORCE_UPDATE" == "true" ]]; then
+        "$script" --force "$HOST"
     else
         "$script" "$HOST"
     fi

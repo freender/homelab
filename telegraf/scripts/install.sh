@@ -7,6 +7,7 @@ set -e
 HOST=${1:-$(hostname)}
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD_DIR="$SCRIPT_DIR/build/$HOST"
+FORCE_UPDATE=${FORCE_UPDATE:-false}
 
 if [[ -f "$SCRIPT_DIR/lib/utils.sh" ]]; then
     source "$SCRIPT_DIR/lib/utils.sh"
@@ -36,12 +37,39 @@ apt-get install -y -qq telegraf lm-sensors smartmontools
 sensors-detect --auto >/dev/null 2>&1 || true
 
 mkdir -p /etc/telegraf/telegraf.d
-backup_config /etc/telegraf/telegraf.conf
-cp "$BUILD_DIR/telegraf.conf" /etc/telegraf/telegraf.conf
-cp -r "$BUILD_DIR/telegraf.d"/* /etc/telegraf/telegraf.d/
+
+if [[ "$FORCE_UPDATE" == "true" ]] || [[ ! -f /etc/telegraf/telegraf.conf ]] || ! cmp -s "$BUILD_DIR/telegraf.conf" /etc/telegraf/telegraf.conf; then
+    backup_config /etc/telegraf/telegraf.conf
+    cp "$BUILD_DIR/telegraf.conf" /etc/telegraf/telegraf.conf
+    print_sub "Updated /etc/telegraf/telegraf.conf"
+else
+    print_sub "telegraf.conf unchanged; skipping update"
+fi
+
+telegraf_d_updated=false
+shopt -s nullglob
+for source_file in "$BUILD_DIR/telegraf.d"/*; do
+    target_file="/etc/telegraf/telegraf.d/$(basename "$source_file")"
+    if [[ "$FORCE_UPDATE" == "true" ]] || [[ ! -f "$target_file" ]] || ! cmp -s "$source_file" "$target_file"; then
+        cp "$source_file" "$target_file"
+        telegraf_d_updated=true
+    fi
+done
+shopt -u nullglob
+
+if [[ "$telegraf_d_updated" == "true" ]]; then
+    print_sub "Updated telegraf.d snippets"
+else
+    print_sub "telegraf.d snippets unchanged; skipping update"
+fi
 
 if [[ -f "$BUILD_DIR/telegraf-smartctl-sudoers" ]]; then
-    cp "$BUILD_DIR/telegraf-smartctl-sudoers" /etc/sudoers.d/telegraf-smartctl
+    if [[ "$FORCE_UPDATE" == "true" ]] || [[ ! -f /etc/sudoers.d/telegraf-smartctl ]] || ! cmp -s "$BUILD_DIR/telegraf-smartctl-sudoers" /etc/sudoers.d/telegraf-smartctl; then
+        cp "$BUILD_DIR/telegraf-smartctl-sudoers" /etc/sudoers.d/telegraf-smartctl
+        print_sub "Updated smartctl sudoers rule"
+    else
+        print_sub "smartctl sudoers rule unchanged; skipping update"
+    fi
     chmod 440 /etc/sudoers.d/telegraf-smartctl
 fi
 

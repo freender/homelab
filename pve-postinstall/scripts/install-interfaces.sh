@@ -7,6 +7,7 @@ set -e
 HOST=${1:-$(hostname)}
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD_DIR="$SCRIPT_DIR/build/$HOST"
+FORCE_UPDATE=${FORCE_UPDATE:-false}
 
 if [[ -f "$SCRIPT_DIR/lib/utils.sh" ]]; then
     source "$SCRIPT_DIR/lib/utils.sh"
@@ -24,7 +25,11 @@ if [[ ! -f "$BUILD_DIR/interfaces" ]]; then
     exit 1
 fi
 
-print_sub "Backing up /etc/network/interfaces..."
-backup_config /etc/network/interfaces
-print_sub "Installing /etc/network/interfaces..."
-cp "$BUILD_DIR/interfaces" /etc/network/interfaces
+if [[ "$FORCE_UPDATE" == "true" ]] || [[ ! -f /etc/network/interfaces ]] || ! cmp -s "$BUILD_DIR/interfaces" /etc/network/interfaces; then
+    print_sub "Backing up /etc/network/interfaces..."
+    backup_config /etc/network/interfaces
+    print_sub "Installing /etc/network/interfaces..."
+    cp "$BUILD_DIR/interfaces" /etc/network/interfaces
+else
+    print_sub "Network interfaces unchanged; skipping update"
+fi

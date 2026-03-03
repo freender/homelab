@@ -39,6 +39,13 @@ cd apcupsd && ./deploy.sh --dry-run all
 ./deploy-all.sh --dry-run ace     # single host, all applicable modules
 ```
 
+### Force Apply Managed Files
+```bash
+./deploy-all.sh --force all
+cd <module> && ./deploy.sh --force <host>
+```
+Forces installers to rewrite managed files even when content is unchanged.
+
 ### Debugging
 ```bash
 bash -x apcupsd/deploy.sh ace    # trace execution
@@ -71,7 +78,7 @@ source "$(dirname "$0")/../lib/common.sh"
 ```
 This provides: `set -e`, `HOMELAB_ROOT`, `hosts`, `filter_hosts`, `render_template`,
 `prepare_build_dir`, `show_build_diff`, `diff_remote_config`, `diff_remote_build`,
-`parse_common_flags`, `deploy_init`/`deploy_run`/`deploy_finish`, and print helpers.
+`parse_common_flags` (`--dry-run`, `--force`), `deploy_init`/`deploy_run`/`deploy_finish`, and print helpers.
 
 Remote `install.sh` scripts cannot source `common.sh`. Instead they defensively source
 `lib/utils.sh` with inline fallbacks:
@@ -179,7 +186,7 @@ HOST=${1:-$(hostname)}
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD_DIR="$SCRIPT_DIR/build/$HOST"
 # Source utils defensively (see Imports section above)
-# backup_config before overwriting files
+# Use file_needs_update/copy_if_changed/backup_and_copy_if_changed for idempotent writes
 # Idempotent package install (check command -v first)
 # Stop service -> copy configs -> enable+start service
 ```

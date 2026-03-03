@@ -18,7 +18,12 @@ cd ~/homelab
 ./deploy-all.sh          # all modules, all hosts
 ./deploy-all.sh ace      # all applicable modules, single host
 ./deploy-all.sh --dry-run all   # dry-run everything
+./deploy-all.sh --force all     # force overwrite managed files
 ```
+
+Flags supported by `deploy.sh` and `deploy-all.sh`:
+- `--dry-run`, `-n`: preview actions only
+- `--force`, `--force-update`: overwrite managed files even when content matches
 
 ## Modules
 
@@ -106,6 +111,9 @@ cd ~/homelab && git pull
 
 # Single module dry-run
 cd <module> && ./deploy.sh --dry-run <host>
+
+# Single module forced deploy
+cd <module> && ./deploy.sh --force <host>
 
 # UPS status
 ssh <host> "apcaccess status"

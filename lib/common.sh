@@ -223,6 +223,7 @@ render_template() {
 
 # Global flags
 DRY_RUN=${DRY_RUN:-false}
+FORCE_UPDATE=${FORCE_UPDATE:-false}
 
 
 # Parse common deployment flags
@@ -235,6 +236,10 @@ parse_common_flags() {
         case "$1" in
             --dry-run|-n)
                 DRY_RUN=true
+                shift
+                ;;
+            --force|--force-update)
+                FORCE_UPDATE=true
                 shift
                 ;;
             *)
@@ -292,20 +297,25 @@ diff_remote_config() {
     local host="$1"
     local local_file="$2"
     local remote_path="$3"
-    
-    local remote_content
-    if ! remote_content=$(ssh "$host" "cat '$remote_path' 2>/dev/null"); then
+    local remote_tmp
+
+    remote_tmp=$(mktemp)
+
+    if ! ssh "$host" "cat '$remote_path' 2>/dev/null" > "$remote_tmp"; then
+        rm -f "$remote_tmp"
         print_sub "[NEW] $remote_path"
         return 2
     fi
-    
-    if diff -q <(echo "$remote_content") "$local_file" > /dev/null 2>&1; then
+
+    if diff -q "$remote_tmp" "$local_file" > /dev/null 2>&1; then
+        rm -f "$remote_tmp"
         print_sub "[=] $remote_path (no changes)"
         return 0
     else
         print_sub "[~] $remote_path:"
         diff --color=always -u -L "$host:$remote_path" -L "local:$remote_path" \
-            <(echo "$remote_content") "$local_file" | head -200 || true
+            "$remote_tmp" "$local_file" | head -200 || true
+        rm -f "$remote_tmp"
         return 1
     fi
 }

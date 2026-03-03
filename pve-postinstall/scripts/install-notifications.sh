@@ -7,6 +7,7 @@ set -e
 HOST=${1:-$(hostname)}
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD_DIR="$SCRIPT_DIR/build/$HOST"
+FORCE_UPDATE=${FORCE_UPDATE:-false}
 
 if [[ -f "$SCRIPT_DIR/lib/utils.sh" ]]; then
     source "$SCRIPT_DIR/lib/utils.sh"
@@ -30,14 +31,23 @@ if [[ ! -f "$BUILD_DIR/priv-notifications.cfg" ]]; then
     exit 1
 fi
 
-print_sub "Backing up notification config..."
-backup_config /etc/pve/notifications.cfg
-backup_config /etc/pve/priv/notifications.cfg
-
-print_sub "Installing notifications config..."
 mkdir -p /etc/pve/priv
-cp "$BUILD_DIR/notifications.cfg" /etc/pve/notifications.cfg
-cp "$BUILD_DIR/priv-notifications.cfg" /etc/pve/priv/notifications.cfg
+
+if [[ "$FORCE_UPDATE" == "true" ]] || [[ ! -f /etc/pve/notifications.cfg ]] || ! cmp -s "$BUILD_DIR/notifications.cfg" /etc/pve/notifications.cfg; then
+    backup_config /etc/pve/notifications.cfg
+    print_sub "Installing notifications.cfg..."
+    cp "$BUILD_DIR/notifications.cfg" /etc/pve/notifications.cfg
+else
+    print_sub "notifications.cfg unchanged; skipping update"
+fi
+
+if [[ "$FORCE_UPDATE" == "true" ]] || [[ ! -f /etc/pve/priv/notifications.cfg ]] || ! cmp -s "$BUILD_DIR/priv-notifications.cfg" /etc/pve/priv/notifications.cfg; then
+    backup_config /etc/pve/priv/notifications.cfg
+    print_sub "Installing priv-notifications.cfg..."
+    cp "$BUILD_DIR/priv-notifications.cfg" /etc/pve/priv/notifications.cfg
+else
+    print_sub "priv-notifications.cfg unchanged; skipping update"
+fi
 
 chown root:www-data /etc/pve/notifications.cfg /etc/pve/priv/notifications.cfg
 chmod 640 /etc/pve/notifications.cfg

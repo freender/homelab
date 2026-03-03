@@ -51,7 +51,7 @@ deploy() {
     scp -q "$HOMELAB_ROOT/lib/print.sh" "$HOMELAB_ROOT/lib/utils.sh" "$host:/tmp/homelab-ssh/lib/"
 
     print_sub "Running installer..."
-    ssh "$host" "cd /tmp/homelab-ssh && chmod +x scripts/install.sh && ./scripts/install.sh $host"
+    ssh "$host" "cd /tmp/homelab-ssh && chmod +x scripts/install.sh && FORCE_UPDATE='$FORCE_UPDATE' ./scripts/install.sh $host"
 }
 
 # --- Main ---
