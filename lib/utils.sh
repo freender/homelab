@@ -16,6 +16,33 @@ else
 fi
 
 FORCE_UPDATE=${FORCE_UPDATE:-false}
+BACKUP_KEEP_COUNT=${BACKUP_KEEP_COUNT:-3}
+
+prune_backup_history() {
+    local path="$1"
+    local keep_count="${2:-$BACKUP_KEEP_COUNT}"
+    local backup
+    local count=0
+
+    if [[ ! "$keep_count" =~ ^[0-9]+$ ]]; then
+        keep_count=3
+    fi
+
+    shopt -s nullglob
+    local backups=("${path}.bak."*)
+    shopt -u nullglob
+
+    if (( ${#backups[@]} <= keep_count )); then
+        return 0
+    fi
+
+    while IFS= read -r backup; do
+        count=$((count + 1))
+        if (( count > keep_count )); then
+            rm -rf "$backup"
+        fi
+    done < <(printf '%s\n' "${backups[@]}" | sort -r)
+}
 
 # Backup a file or directory
 # Usage: backup_config /etc/foo/bar.conf
@@ -31,6 +58,8 @@ backup_config() {
     else
         cp "$path" "$backup"
     fi
+
+    prune_backup_history "$path"
 }
 
 # Return success when destination file is missing or content differs
