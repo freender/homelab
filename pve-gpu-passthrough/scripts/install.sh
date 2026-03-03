@@ -33,21 +33,45 @@ print_sub "Backing up configs..."
 backup_config /etc/kernel/cmdline
 backup_config /etc/modules
 
+initramfs_needs_update=false
+boot_refresh_needed=false
+
 print_sub "Updating systemd-boot cmdline..."
 cmdline=$(head -n 1 "$BUILD_DIR/cmdline")
-printf '%s\n' "$cmdline" > /etc/kernel/cmdline
-proxmox-boot-tool refresh
+current_cmdline=""
+if [[ -f /etc/kernel/cmdline ]]; then
+    current_cmdline=$(head -n 1 /etc/kernel/cmdline)
+fi
+if [[ "$current_cmdline" != "$cmdline" ]]; then
+    printf '%s\n' "$cmdline" > /etc/kernel/cmdline
+    boot_refresh_needed=true
+fi
 
 print_sub "Deploying modprobe configs..."
-cp "$BUILD_DIR/blacklist.conf" /etc/modprobe.d/blacklist.conf
-cp "$BUILD_DIR/vfio.conf" /etc/modprobe.d/vfio.conf
+if [[ ! -f /etc/modprobe.d/blacklist.conf ]] || ! cmp -s "$BUILD_DIR/blacklist.conf" /etc/modprobe.d/blacklist.conf; then
+    cp "$BUILD_DIR/blacklist.conf" /etc/modprobe.d/blacklist.conf
+    initramfs_needs_update=true
+fi
+if [[ ! -f /etc/modprobe.d/vfio.conf ]] || ! cmp -s "$BUILD_DIR/vfio.conf" /etc/modprobe.d/vfio.conf; then
+    cp "$BUILD_DIR/vfio.conf" /etc/modprobe.d/vfio.conf
+    initramfs_needs_update=true
+fi
 
 print_sub "Deploying VFIO modules..."
-cp "$BUILD_DIR/modules" /etc/modules-load.d/vfio.conf
+if [[ ! -f /etc/modules-load.d/vfio.conf ]] || ! cmp -s "$BUILD_DIR/modules" /etc/modules-load.d/vfio.conf; then
+    cp "$BUILD_DIR/modules" /etc/modules-load.d/vfio.conf
+    initramfs_needs_update=true
+fi
 
 print_sub "Cleaning legacy /etc/modules..."
 if [[ -f /etc/modules ]]; then
-    grep -v '^vfio' /etc/modules > /tmp/modules.clean && mv /tmp/modules.clean /etc/modules
+    grep -v '^vfio' /etc/modules > /tmp/modules.clean
+    if ! cmp -s /tmp/modules.clean /etc/modules; then
+        mv /tmp/modules.clean /etc/modules
+        initramfs_needs_update=true
+    else
+        rm -f /tmp/modules.clean
+    fi
 fi
 
 print_sub "Deploying emergency removal script..."
@@ -57,4 +81,15 @@ if [[ -f "$SCRIPT_DIR/scripts/remove-local.sh" ]]; then
 fi
 
 print_sub "Updating initramfs..."
-update-initramfs -u -k all
+if [[ "$initramfs_needs_update" == "true" ]]; then
+    update-initramfs -u -k all
+else
+    print_sub "No module changes detected; skipping initramfs update"
+fi
+
+if [[ "$boot_refresh_needed" == "true" ]]; then
+    print_sub "Refreshing systemd-boot..."
+    proxmox-boot-tool refresh
+else
+    print_sub "Kernel cmdline unchanged; skipping systemd-boot refresh"
+fi

@@ -74,7 +74,24 @@ deploy() {
         done
     fi
 
-    diff_remote_build "$host" "$build_dir" "/etc/telegraf"
+    local diff_build_dir="$build_dir"
+    local temp_diff_dir=""
+    if [[ -f "$build_dir/telegraf-smartctl-sudoers" ]]; then
+        temp_diff_dir=$(mktemp -d)
+        diff_build_dir="$temp_diff_dir"
+        cp -r "$build_dir/telegraf.d" "$diff_build_dir/telegraf.d"
+        cp "$build_dir/telegraf.conf" "$diff_build_dir/telegraf.conf"
+    fi
+
+    diff_remote_build "$host" "$diff_build_dir" "/etc/telegraf"
+
+    if [[ -f "$build_dir/telegraf-smartctl-sudoers" ]]; then
+        diff_remote_config "$host" "$build_dir/telegraf-smartctl-sudoers" "/etc/sudoers.d/telegraf-smartctl" || true
+    fi
+
+    if [[ -n "$temp_diff_dir" ]]; then
+        rm -rf "$temp_diff_dir"
+    fi
 
     if [[ "$DRY_RUN" == true ]]; then
         print_sub "[DRY-RUN] Would deploy to $host:/tmp/homelab-telegraf/"
