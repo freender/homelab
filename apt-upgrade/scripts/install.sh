@@ -1,5 +1,5 @@
 #!/bin/bash
-# install.sh - Run apt dist-upgrade and optionally clean old kernels
+# install.sh - Run apt dist-upgrade and optionally cleanup
 
 set -e
 
@@ -13,7 +13,7 @@ else
     print_warn() { echo "    ✗ Warning: $*"; }
 fi
 
-CLEAN_KERNELS="false"
+CLEANUP="false"
 if [[ -f "$ENV_FILE" ]]; then
     # shellcheck source=/dev/null
     source "$ENV_FILE"
@@ -25,13 +25,13 @@ apt update &>/dev/null || print_warn "apt update failed"
 print_sub "Running dist-upgrade..."
 apt -y dist-upgrade &>/dev/null || print_warn "apt dist-upgrade failed"
 
-if [[ "$CLEAN_KERNELS" == "true" ]]; then
+if [[ "$CLEANUP" == "true" ]]; then
+    # --- Old kernels ---
     print_sub "Removing old kernels..."
 
     current_kernel=$(uname -r)
     print_sub "Current kernel: $current_kernel"
 
-    # Find installed kernel packages that are NOT the currently running kernel
     old_kernels=$(dpkg -l 'linux-image-*' 'pve-kernel-*' 2>/dev/null \
         | awk '/^ii/ { print $2 }' \
         | grep -v "$current_kernel" \
@@ -48,8 +48,20 @@ if [[ "$CLEAN_KERNELS" == "true" ]]; then
         done
         # shellcheck disable=SC2086 # intentional word splitting, package names are controlled
         apt -y purge $old_kernels &>/dev/null || print_warn "kernel purge failed"
-        apt -y autoremove &>/dev/null || print_warn "autoremove failed"
         update-grub 2>/dev/null || true
         print_sub "Old kernels removed"
     fi
+
+    # --- Autoremove orphaned packages ---
+    print_sub "Removing orphaned packages..."
+    apt -y autoremove &>/dev/null || print_warn "autoremove failed"
+
+    # --- Clean apt cache ---
+    print_sub "Cleaning apt cache..."
+    apt -y autoclean &>/dev/null || print_warn "autoclean failed"
+fi
+
+# --- Reboot check ---
+if [[ -f /var/run/reboot-required ]]; then
+    print_warn "Reboot required on $(hostname)"
 fi

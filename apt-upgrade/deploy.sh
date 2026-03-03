@@ -1,12 +1,13 @@
 #!/bin/bash
 # Deploy apt dist-upgrade workflow
-# Usage: ./deploy.sh [--clean-kernels] [--dry-run] [host|all]
+# Usage: ./deploy.sh [--cleanup] [--dry-run] [host|all]
+#   --cleanup: remove old kernels, autoremove orphaned packages, clean apt cache
 
 source "$(dirname "$0")/../lib/common.sh"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BUILD_ROOT="$SCRIPT_DIR/build"
-CLEAN_KERNELS=false
+CLEANUP=false
 
 parse_common_flags "$@"
 set -- "${PARSED_ARGS[@]}"
@@ -15,8 +16,8 @@ set -- "${PARSED_ARGS[@]}"
 REMAINING_ARGS=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --clean-kernels)
-            CLEAN_KERNELS=true
+        --cleanup)
+            CLEANUP=true
             shift
             ;;
         *)
@@ -49,14 +50,14 @@ deploy() {
 
     if [[ "$DRY_RUN" == true ]]; then
         print_sub "[DRY-RUN] Would run apt dist-upgrade on $host"
-        [[ "$CLEAN_KERNELS" == true ]] && print_sub "[DRY-RUN] Would remove old kernels"
+        [[ "$CLEANUP" == true ]] && print_sub "[DRY-RUN] Would cleanup (old kernels, autoremove, autoclean)"
         return 0
     fi
 
     local build_dir="$BUILD_ROOT/$host"
     mkdir -p "$build_dir"
     cat > "$build_dir/env" <<EOF
-CLEAN_KERNELS="$CLEAN_KERNELS"
+CLEANUP="$CLEANUP"
 EOF
 
     print_sub "Staging bundle..."
