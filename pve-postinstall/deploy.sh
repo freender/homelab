@@ -12,7 +12,6 @@ HOSTS_FILE="$HOMELAB_ROOT/hosts.conf"
 SECRETS_DIR="$HOMELAB_ROOT/secrets"
 PBS_ENV_BACKUP_MAIN="$SECRETS_DIR/pbs-backup-main.env"
 PBS_ENV_BACKUP_CINCI="$SECRETS_DIR/pbs-backup-cinci.env"
-TELEGRAM_ENV_SOURCE="$SECRETS_DIR/telegram.env"
 INTERFACES_TEMPLATE="$SCRIPT_DIR/templates/pve-interfaces"
 
 PVE_FILES=(
@@ -236,50 +235,6 @@ EOF
     } > "$build_dir/restore-plan.conf"
 }
 
-build_notifications_bundle() {
-    local host="$1"
-    local build_dir="$2"
-    local notifications_enabled
-    local token_b64
-    local chatid_b64
-    local env_file="$TELEGRAM_ENV_SOURCE"
-
-    notifications_enabled=$(yq e ".\"$host\".features.pve-postinstall.notifications // false" "$HOSTS_FILE")
-    if [[ "$notifications_enabled" != "true" ]]; then
-        return 0
-    fi
-
-    if [[ ! -f "$env_file" ]]; then
-        print_warn "telegram env file not found for notifications"
-        print_warn "Create $TELEGRAM_ENV_SOURCE from secrets/telegram.env.example"
-        return 1
-    fi
-
-    # shellcheck source=/dev/null
-    source "$env_file"
-
-    if [[ -z "${TELEGRAM_TOKEN:-}" || -z "${TELEGRAM_CHATID:-}" ]]; then
-        print_warn "TELEGRAM_TOKEN and TELEGRAM_CHATID must be set in $env_file"
-        return 1
-    fi
-
-    if [[ ! -f "$CONFIGS_DIR/notifications.cfg" ]]; then
-        print_warn "Missing notifications config: $CONFIGS_DIR/notifications.cfg"
-        return 1
-    fi
-
-    token_b64=$(printf '%s' "$TELEGRAM_TOKEN" | base64 | tr -d '\n')
-    chatid_b64=$(printf '%s' "$TELEGRAM_CHATID" | base64 | tr -d '\n')
-
-    cp "$CONFIGS_DIR/notifications.cfg" "$build_dir/notifications.cfg"
-
-    cat > "$build_dir/priv-notifications.cfg" <<EOF
-webhook: Telegram
-	secret name=bot_id,value=${token_b64}
-	secret name=chat_id,value=${chatid_b64}
-EOF
-}
-
 build_network_interfaces_bundle() {
     local host="$1"
     local build_dir="$2"
@@ -368,10 +323,6 @@ deploy() {
         return 1
     fi
 
-    if ! build_notifications_bundle "$host" "$build_dir"; then
-        return 1
-    fi
-
     if ! build_network_interfaces_bundle "$host" "$build_dir"; then
         return 1
     fi
@@ -382,11 +333,6 @@ deploy() {
         remote_path=$(remote_path_for_file "$file") || { print_warn "No remote path mapping for $file"; return 1; }
         diff_remote_config "$host" "$build_dir/$file" "$remote_path" || true
     done
-
-    if [[ -f "$build_dir/notifications.cfg" ]]; then
-        diff_remote_config "$host" "$build_dir/notifications.cfg" "/etc/pve/notifications.cfg" || true
-        diff_remote_config "$host" "$build_dir/priv-notifications.cfg" "/etc/pve/priv/notifications.cfg" || true
-    fi
 
     if [[ -f "$build_dir/interfaces" ]]; then
         diff_remote_config "$host" "$build_dir/interfaces" "/etc/network/interfaces" || true
@@ -407,12 +353,6 @@ deploy() {
             print_sub "Cluster config backup subfeature: enabled"
         else
             print_sub "Cluster config backup subfeature: disabled"
-        fi
-
-        if [[ -f "$build_dir/notifications.cfg" ]]; then
-            print_sub "Notifications subfeature: enabled"
-        else
-            print_sub "Notifications subfeature: disabled"
         fi
 
         if [[ -f "$build_dir/interfaces" ]]; then

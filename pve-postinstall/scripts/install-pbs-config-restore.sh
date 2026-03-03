@@ -11,6 +11,30 @@ ENV_FILE_SOURCE="$BUILD_DIR/pbs.env"
 RESTORE_ROOT="/tmp/pve-config-restore"
 RESTORE_OUTPUT_DIR="/var/lib/homelab/pve-config-restore"
 
+apply_restored_notifications() {
+    local restored_root="$1"
+    local source_notifications="$restored_root/notifications.cfg"
+    local source_priv_notifications="$restored_root/priv/notifications.cfg"
+
+    if [[ ! -f "$source_notifications" ]]; then
+        print_sub "No restored notifications.cfg found; skipping auto-apply"
+        return 0
+    fi
+
+    if [[ ! -f "$source_priv_notifications" ]]; then
+        print_sub "No restored priv/notifications.cfg found; skipping auto-apply"
+        return 0
+    fi
+
+    mkdir -p /etc/pve/priv
+    cp "$source_notifications" /etc/pve/notifications.cfg
+    cp "$source_priv_notifications" /etc/pve/priv/notifications.cfg
+    chown root:www-data /etc/pve/notifications.cfg /etc/pve/priv/notifications.cfg
+    chmod 640 /etc/pve/notifications.cfg
+    chmod 600 /etc/pve/priv/notifications.cfg
+    print_sub "Auto-applied restored notifications config"
+}
+
 if [[ -f "$SCRIPT_DIR/lib/utils.sh" ]]; then
     source "$SCRIPT_DIR/lib/utils.sh"
 else
@@ -90,6 +114,8 @@ fi
 rm -rf "$RESTORE_OUTPUT_DIR/latest"
 cp -r "$src_pve" "$RESTORE_OUTPUT_DIR/latest"
 print_sub "Fetched /etc/pve backup to $RESTORE_OUTPUT_DIR/latest"
+
+apply_restored_notifications "$RESTORE_OUTPUT_DIR/latest"
 
 if [[ "${CEPH_ENABLED:-false}" == "true" ]]; then
     if proxmox-backup-client restore "$snapshot" "etc-ceph.pxar" "$RESTORE_ROOT/etc-ceph" --repository "$REPOSITORY" >/dev/null 2>&1; then
