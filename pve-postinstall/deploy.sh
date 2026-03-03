@@ -9,9 +9,12 @@ BUILD_ROOT="$SCRIPT_DIR/build"
 PVE_CONFIG_DIR="$SCRIPT_DIR/configs/pve"
 CONFIGS_DIR="$SCRIPT_DIR/configs"
 HOSTS_FILE="$HOMELAB_ROOT/hosts.conf"
-PBS_ENV_DIR="$CONFIGS_DIR/pbs-env"
+SECRETS_DIR="$HOMELAB_ROOT/secrets"
+PBS_ENV_BACKUP_MAIN="$SECRETS_DIR/pbs-backup-main.env"
+PBS_ENV_BACKUP_CINCI="$SECRETS_DIR/pbs-backup-cinci.env"
+PBS_ENV_DIR_LEGACY="$CONFIGS_DIR/pbs-env"
 PBS_ENV_LEGACY_SOURCE="$CONFIGS_DIR/pbs.env"
-TELEGRAM_ENV_SOURCE="$CONFIGS_DIR/telegram.env"
+TELEGRAM_ENV_SOURCE="$SECRETS_DIR/telegram.env"
 TELEGRAM_ENV_FALLBACK="$HOMELAB_ROOT/apcupsd/configs/telegram/telegram.env"
 INTERFACES_TEMPLATE="$SCRIPT_DIR/templates/pve-interfaces"
 
@@ -151,6 +154,7 @@ build_cluster_config_backup_bundle() {
     local archive_name
     local ceph_enabled="false"
     local pbs_env_source
+    local secret_profile
 
     repository=$(yq e ".\"$host\".features.pve-postinstall.backup.cluster.repository // \"\"" "$HOSTS_FILE")
     if [[ -z "$repository" || "$repository" == "null" ]]; then
@@ -165,14 +169,36 @@ build_cluster_config_backup_bundle() {
         ceph_enabled="true"
     fi
 
-    pbs_env_source="$PBS_ENV_DIR/$host.env"
-    if [[ ! -f "$pbs_env_source" && -f "$PBS_ENV_LEGACY_SOURCE" ]]; then
-        pbs_env_source="$PBS_ENV_LEGACY_SOURCE"
-    fi
+    secret_profile=$(yq e ".\"$host\".features.pve-postinstall.backup.cluster.secret_profile // \"\"" "$HOSTS_FILE")
+    case "$secret_profile" in
+        backup-main)
+            pbs_env_source="$PBS_ENV_BACKUP_MAIN"
+            ;;
+        backup-cinci)
+            pbs_env_source="$PBS_ENV_BACKUP_CINCI"
+            ;;
+        "")
+            pbs_env_source="$PBS_ENV_DIR_LEGACY/$host.env"
+            if [[ ! -f "$pbs_env_source" && -f "$PBS_ENV_LEGACY_SOURCE" ]]; then
+                pbs_env_source="$PBS_ENV_LEGACY_SOURCE"
+            fi
+            ;;
+        *)
+            print_warn "Invalid secret profile '$secret_profile' for $host"
+            print_warn "Expected: backup-main or backup-cinci"
+            return 1
+            ;;
+    esac
 
     if [[ ! -f "$pbs_env_source" ]]; then
-        print_warn "Missing secret file: $PBS_ENV_DIR/$host.env"
-        print_warn "Create it from: $PBS_ENV_DIR/.env.example"
+        if [[ -n "$secret_profile" ]]; then
+            print_warn "Missing secret file: $pbs_env_source"
+            print_warn "Create it under: $SECRETS_DIR"
+        else
+            print_warn "Missing secret file: $PBS_ENV_DIR_LEGACY/$host.env"
+            print_warn "Create it from: $PBS_ENV_DIR_LEGACY/.env.example"
+            print_warn "or set backup.cluster.secret_profile in hosts.conf"
+        fi
         return 1
     fi
 
@@ -238,7 +264,7 @@ build_notifications_bundle() {
 
     if [[ ! -f "$env_file" ]]; then
         print_warn "telegram env file not found for notifications"
-        print_warn "Create $TELEGRAM_ENV_SOURCE from $CONFIGS_DIR/telegram.env.example"
+        print_warn "Create $TELEGRAM_ENV_SOURCE from secrets/telegram.env.example"
         print_warn "or provide $TELEGRAM_ENV_FALLBACK"
         return 1
     fi

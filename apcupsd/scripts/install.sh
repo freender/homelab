@@ -82,8 +82,10 @@ if [[ ! -f "$CONFIGS_DIR/telegram/telegram.sh" ]]; then
 fi
 
 if [[ ! -f "$CONFIGS_DIR/telegram/telegram.env" ]]; then
-    echo "Error: Missing $CONFIGS_DIR/telegram/telegram.env"
-    exit 1
+    if [[ ! -f "$BUILD_DIR/telegram.env" ]]; then
+        echo "Error: Missing telegram.env in $BUILD_DIR or $CONFIGS_DIR/telegram/"
+        exit 1
+    fi
 fi
 
 # Install package if needed
@@ -126,7 +128,11 @@ else
 fi
 
 ENV_FILE_DEST="/etc/apcupsd/telegram/telegram.env"
-if copy_if_changed "$CONFIGS_DIR/telegram/telegram.env" "$ENV_FILE_DEST" "telegram.env"; then
+env_source="$BUILD_DIR/telegram.env"
+if [[ ! -f "$env_source" ]]; then
+    env_source="$CONFIGS_DIR/telegram/telegram.env"
+fi
+if copy_if_changed "$env_source" "$ENV_FILE_DEST" "telegram.env"; then
     apcupsd_changed=true
 else
     rc=$?

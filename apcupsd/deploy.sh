@@ -8,7 +8,9 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 TEMPLATES_DIR="$SCRIPT_DIR/templates"
 CONFIGS_DIR="$SCRIPT_DIR/configs"
 BUILD_ROOT="$SCRIPT_DIR/build"
-TELEGRAM_ENV="$CONFIGS_DIR/telegram/telegram.env"
+TELEGRAM_ENV_PRIMARY="$HOMELAB_ROOT/secrets/telegram.env"
+TELEGRAM_ENV_LEGACY="$CONFIGS_DIR/telegram/telegram.env"
+TELEGRAM_ENV=""
 
 # --- Host Selection ---
 get_apcupsd_hosts() {
@@ -27,9 +29,16 @@ fi
 
 
 # --- Validation ---
-[[ ! -f "$TELEGRAM_ENV" ]] && {
+if [[ -f "$TELEGRAM_ENV_PRIMARY" ]]; then
+    TELEGRAM_ENV="$TELEGRAM_ENV_PRIMARY"
+elif [[ -f "$TELEGRAM_ENV_LEGACY" ]]; then
+    TELEGRAM_ENV="$TELEGRAM_ENV_LEGACY"
+fi
+
+[[ -z "$TELEGRAM_ENV" ]] && {
     echo "ERROR: telegram.env not found!"
-    echo "  cp apcupsd/configs/telegram/telegram.env.example apcupsd/configs/telegram/telegram.env"
+    echo "  cp secrets/telegram.env.example secrets/telegram.env"
+    echo "  (fallback legacy path: apcupsd/configs/telegram/telegram.env)"
     exit 1
 }
 
@@ -71,6 +80,7 @@ render_configs() {
         HOST="$host" UPSNAME="$upsname" DEVICE="$device" NISIP="$nisip" SLAVE_HOSTS="$slave_hosts"
     
     chmod +x "$host_dir/doshutdown"
+    cp "$TELEGRAM_ENV" "$host_dir/telegram.env"
 
     cat > "$host_dir/env" <<EOF
 ROLE="$role"
@@ -106,6 +116,7 @@ deploy() {
     diff_remote_config "$host" "$BUILD_ROOT/$host/doshutdown" "/etc/apcupsd/doshutdown" || true
     diff_remote_config "$host" "$CONFIGS_DIR/shared/apcupsd.notify" "/etc/apcupsd/apcupsd.notify" || true
     diff_remote_config "$host" "$CONFIGS_DIR/telegram/telegram.sh" "/etc/apcupsd/telegram/telegram.sh" || true
+    diff_remote_config "$host" "$TELEGRAM_ENV" "/etc/apcupsd/telegram/telegram.env" || true
 
     if [[ "$DRY_RUN" == true ]]; then
         print_sub "[DRY-RUN] Would deploy to $host:/tmp/homelab-apcupsd/"
