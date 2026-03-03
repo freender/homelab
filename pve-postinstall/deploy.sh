@@ -12,10 +12,7 @@ HOSTS_FILE="$HOMELAB_ROOT/hosts.conf"
 SECRETS_DIR="$HOMELAB_ROOT/secrets"
 PBS_ENV_BACKUP_MAIN="$SECRETS_DIR/pbs-backup-main.env"
 PBS_ENV_BACKUP_CINCI="$SECRETS_DIR/pbs-backup-cinci.env"
-PBS_ENV_DIR_LEGACY="$CONFIGS_DIR/pbs-env"
-PBS_ENV_LEGACY_SOURCE="$CONFIGS_DIR/pbs.env"
 TELEGRAM_ENV_SOURCE="$SECRETS_DIR/telegram.env"
-TELEGRAM_ENV_FALLBACK="$HOMELAB_ROOT/apcupsd/configs/telegram/telegram.env"
 INTERFACES_TEMPLATE="$SCRIPT_DIR/templates/pve-interfaces"
 
 PVE_FILES=(
@@ -178,10 +175,8 @@ build_cluster_config_backup_bundle() {
             pbs_env_source="$PBS_ENV_BACKUP_CINCI"
             ;;
         "")
-            pbs_env_source="$PBS_ENV_DIR_LEGACY/$host.env"
-            if [[ ! -f "$pbs_env_source" && -f "$PBS_ENV_LEGACY_SOURCE" ]]; then
-                pbs_env_source="$PBS_ENV_LEGACY_SOURCE"
-            fi
+            print_warn "Missing backup.cluster.secret_profile for $host"
+            print_warn "Set one of: backup-main, backup-cinci"
             ;;
         *)
             print_warn "Invalid secret profile '$secret_profile' for $host"
@@ -190,15 +185,11 @@ build_cluster_config_backup_bundle() {
             ;;
     esac
 
-    if [[ ! -f "$pbs_env_source" ]]; then
-        if [[ -n "$secret_profile" ]]; then
+    if [[ -z "$pbs_env_source" || ! -f "$pbs_env_source" ]]; then
+        if [[ -n "$pbs_env_source" ]]; then
             print_warn "Missing secret file: $pbs_env_source"
-            print_warn "Create it under: $SECRETS_DIR"
-        else
-            print_warn "Missing secret file: $PBS_ENV_DIR_LEGACY/$host.env"
-            print_warn "Create it from: $PBS_ENV_DIR_LEGACY/.env.example"
-            print_warn "or set backup.cluster.secret_profile in hosts.conf"
         fi
+        print_warn "Create it under: $SECRETS_DIR"
         return 1
     fi
 
@@ -258,14 +249,9 @@ build_notifications_bundle() {
         return 0
     fi
 
-    if [[ ! -f "$env_file" && -f "$TELEGRAM_ENV_FALLBACK" ]]; then
-        env_file="$TELEGRAM_ENV_FALLBACK"
-    fi
-
     if [[ ! -f "$env_file" ]]; then
         print_warn "telegram env file not found for notifications"
         print_warn "Create $TELEGRAM_ENV_SOURCE from secrets/telegram.env.example"
-        print_warn "or provide $TELEGRAM_ENV_FALLBACK"
         return 1
     fi
 

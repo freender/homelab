@@ -73,7 +73,7 @@ PVE post-install configuration
   - `backup.cluster`: `/etc/pve` backup to PBS with systemd timer (`secret_profile` selects PBS credential file)
   - `backup.standalone`: PBS storage definitions + backup jobs (osiris standalone scope)
 - Requires:
-  - `secrets/telegram.env` (from `secrets/telegram.env.example`) or fallback `apcupsd/configs/telegram/telegram.env`
+  - `secrets/telegram.env` (from `secrets/telegram.env.example`)
   - `secrets/pbs-backup-main.env` and/or `secrets/pbs-backup-cinci.env` for cluster config backup credentials
   - `/etc/homelab/pbs-tokens.env` on target host (see `pve-postinstall/configs/pbs-tokens.env.example`) for standalone PBS storage auth
 

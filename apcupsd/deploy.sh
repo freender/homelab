@@ -8,9 +8,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 TEMPLATES_DIR="$SCRIPT_DIR/templates"
 CONFIGS_DIR="$SCRIPT_DIR/configs"
 BUILD_ROOT="$SCRIPT_DIR/build"
-TELEGRAM_ENV_PRIMARY="$HOMELAB_ROOT/secrets/telegram.env"
-TELEGRAM_ENV_LEGACY="$CONFIGS_DIR/telegram/telegram.env"
-TELEGRAM_ENV=""
+TELEGRAM_ENV="$HOMELAB_ROOT/secrets/telegram.env"
 
 # --- Host Selection ---
 get_apcupsd_hosts() {
@@ -29,16 +27,9 @@ fi
 
 
 # --- Validation ---
-if [[ -f "$TELEGRAM_ENV_PRIMARY" ]]; then
-    TELEGRAM_ENV="$TELEGRAM_ENV_PRIMARY"
-elif [[ -f "$TELEGRAM_ENV_LEGACY" ]]; then
-    TELEGRAM_ENV="$TELEGRAM_ENV_LEGACY"
-fi
-
-[[ -z "$TELEGRAM_ENV" ]] && {
+[[ ! -f "$TELEGRAM_ENV" ]] && {
     echo "ERROR: telegram.env not found!"
     echo "  cp secrets/telegram.env.example secrets/telegram.env"
-    echo "  (fallback legacy path: apcupsd/configs/telegram/telegram.env)"
     exit 1
 }
 

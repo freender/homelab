@@ -301,7 +301,7 @@ diff_remote_config() {
 
     remote_tmp=$(mktemp)
 
-    if ! ssh "$host" "cat '$remote_path' 2>/dev/null" > "$remote_tmp"; then
+    if ! ssh "$host" "cat \"$remote_path\" 2>/dev/null" > "$remote_tmp"; then
         rm -f "$remote_tmp"
         print_sub "[NEW] $remote_path"
         return 2
