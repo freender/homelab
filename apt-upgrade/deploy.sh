@@ -1,13 +1,31 @@
 #!/bin/bash
 # Deploy apt dist-upgrade workflow
-# Usage: ./deploy.sh [host|all]
+# Usage: ./deploy.sh [--clean-kernels] [--dry-run] [host|all]
 
 source "$(dirname "$0")/../lib/common.sh"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BUILD_ROOT="$SCRIPT_DIR/build"
+CLEAN_KERNELS=false
 
 parse_common_flags "$@"
 set -- "${PARSED_ARGS[@]}"
+
+# Parse module-specific flags
+REMAINING_ARGS=()
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --clean-kernels)
+            CLEAN_KERNELS=true
+            shift
+            ;;
+        *)
+            REMAINING_ARGS+=("$1")
+            shift
+            ;;
+    esac
+done
+set -- "${REMAINING_ARGS[@]}"
 
 read -r -a SUPPORTED_HOSTS <<< "$(hosts list --feature apt-upgrade)"
 if ! HOSTS=$(filter_hosts "${1:-all}" "${SUPPORTED_HOSTS[@]}"); then
@@ -31,12 +49,20 @@ deploy() {
 
     if [[ "$DRY_RUN" == true ]]; then
         print_sub "[DRY-RUN] Would run apt dist-upgrade on $host"
+        [[ "$CLEAN_KERNELS" == true ]] && print_sub "[DRY-RUN] Would remove old kernels"
         return 0
     fi
 
+    local build_dir="$BUILD_ROOT/$host"
+    mkdir -p "$build_dir"
+    cat > "$build_dir/env" <<EOF
+CLEAN_KERNELS="$CLEAN_KERNELS"
+EOF
+
     print_sub "Staging bundle..."
-    ssh "$host" "rm -rf /tmp/homelab-apt-upgrade && mkdir -p /tmp/homelab-apt-upgrade/lib /tmp/homelab-apt-upgrade/scripts"
+    ssh "$host" "rm -rf /tmp/homelab-apt-upgrade && mkdir -p /tmp/homelab-apt-upgrade/build /tmp/homelab-apt-upgrade/lib /tmp/homelab-apt-upgrade/scripts"
     scp -rq "$SCRIPT_DIR/scripts" "$host:/tmp/homelab-apt-upgrade/"
+    scp -q "$build_dir/env" "$host:/tmp/homelab-apt-upgrade/build/"
     scp -q "$HOMELAB_ROOT/lib/print.sh" "$HOMELAB_ROOT/lib/utils.sh" "$host:/tmp/homelab-apt-upgrade/lib/"
 
     print_sub "Running installer..."

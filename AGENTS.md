@@ -1,135 +1,215 @@
 # Agent Instructions for Homelab Repository
 
 ## Project Overview
-This repository contains shell-based infrastructure automation for a Proxmox homelab.
-It uses modular Bash scripts to deploy configurations to hosts defined in `hosts.conf`.
-**Primary Language:** Bash (Shell)
-**Config Format:** YAML (`hosts.conf`)
-**Hosts:** Proxmox nodes (ace, bray, clovis, osiris) and VMs.
+Shell-based infrastructure automation for a Proxmox homelab.
+Modular Bash scripts deploy configurations to hosts defined in `hosts.conf`.
+
+- **Language:** Bash (Shell)
+- **Config:** YAML (`hosts.conf`) parsed by `yq`
+- **Hosts:** Proxmox nodes (ace, bray, clovis, osiris), TrueNAS (tower), Ubuntu VMs, macOS
+- **CI:** GitHub Actions runs ShellCheck, YAML lint, and dry-run on push/PR to `main`
 
 ---
 
 ## 1. Build, Lint, and Test Commands
 
-### Validation (Run before committing)
-Run the full validation suite which includes linting (ShellCheck), YAML validation, and dry-run deployments for all modules.
+### Full Validation (run before committing)
 ```bash
 ./validate.sh
 ```
+Runs ShellCheck, YAML validation, and dry-run deployments for all modules.
 
 ### Linting
-Lint all shell scripts using ShellCheck.
 ```bash
 find . -name '*.sh' -not -path './.bin/*' -exec shellcheck -S warning {} +
 ```
 
-### Running "Tests" (Dry Runs)
-Since this is an infrastructure repo, "testing" primarily means performing a dry-run deployment to verify configuration generation and script logic without applying changes.
-
-**Run a single test (Dry run for one module on one host):**
+### Single Module Dry Run (primary way to "test")
 ```bash
-# Syntax: cd <module> && ./deploy.sh --dry-run <host>
+# Single host:
 cd apcupsd && ./deploy.sh --dry-run ace
-```
 
-**Run dry-run for all hosts in a module:**
-```bash
+# All hosts for a module:
 cd apcupsd && ./deploy.sh --dry-run all
 ```
 
-### Operational Debugging
-To trace execution during a deploy:
+### Full Dry Run
 ```bash
-bash -x apcupsd/deploy.sh ace
+./deploy-all.sh --dry-run all
+./deploy-all.sh --dry-run ace     # single host, all applicable modules
 ```
 
-**Post-Deploy Verification:**
+### Debugging
 ```bash
-ssh <host> "systemctl is-active --quiet <service>"
-ssh <host> "systemctl status <service>"
-ssh <host> "journalctl -u <service> -n 50"
+bash -x apcupsd/deploy.sh ace    # trace execution
 ```
 
 ---
 
 ## 2. Code Style & Conventions
 
-### Bash formatting and Standards
-- **Shebang:** Always start with `#!/bin/bash`.
-- **Indentation:** Use **4 spaces** for indentation. No tabs.
-- **Strict Mode:** All scripts must handle errors. `lib/common.sh` sets `set -e`.
-- **Conditionals:** Use `[[ ... ]]` instead of `[ ... ]`.
-- **Quoting:** **ALWAYS** quote variables: `"$VAR"`, `"$host"`, `"${ARRAY[@]}"`.
-- **Command Substitution:** Use `$(...)` instead of backticks.
+### Bash Standards
+- **Shebang:** `#!/bin/bash` (always first line)
+- **Indentation:** 4 spaces, no tabs
+- **Strict mode:** `lib/common.sh` sets `set -e`; remote `install.sh` scripts set `set -e` directly
+- **Conditionals:** `[[ ... ]]` not `[ ... ]`
+- **Quoting:** Always quote variables: `"$VAR"`, `"$host"`, `"${ARRAY[@]}"`
+- **Command substitution:** `$(...)` not backticks
+- **No `cd` in functions:** Use absolute paths via `$SCRIPT_DIR`, `$BUILD_ROOT`, `$HOMELAB_ROOT`
 
 ### Naming Conventions
-- **Constants/Globals:** `UPPERCASE_WITH_UNDERSCORES` (e.g., `HOMELAB_ROOT`).
-- **Variables/Locals:** `snake_case` or `lowercase` (e.g., `host_dir`, `config_file`).
-- **Functions:** `snake_case` (e.g., `render_template`, `deploy_run`).
-- **Module Names:** `kebab-case` (matching directory names).
-
-### Error Handling
-- **Dependencies:** Check for required files/vars early.
-- **Exit Codes:** Return `1` on failure, `0` on success.
-- **Failures:** `deploy.sh` should track failed hosts in `${DEPLOY_FAILED_HOSTS[@]}` rather than exiting immediately if possible, but `set -e` will catch unhandled errors.
-- **Cleanup:** Use `trap` if creating temporary files outside standard build dirs.
+- **Constants/globals:** `UPPERCASE_WITH_UNDERSCORES` (`HOMELAB_ROOT`, `BUILD_ROOT`, `DRY_RUN`)
+- **Local variables:** `snake_case` (`host_dir`, `config_file`, `build_dir`)
+- **Functions:** `snake_case` (`render_template`, `deploy_run`, `filter_hosts`)
+- **Module directories:** `kebab-case` (`pve-gpu-passthrough`, `apt-upgrade`)
+- **Arrays for failures:** `DEPLOY_FAILED_HOSTS`, `FAILED_MODULES`
 
 ### Imports & Libraries
-- **Common Lib:** Every `deploy.sh` **MUST** source `lib/common.sh`.
-  ```bash
-  source "$(dirname "$0")/../lib/common.sh"
-  ```
-- **Utils:** Use functions from `lib/utils.sh` (sourced by common) for remote-safe operations.
-- **Output:** Use `print_action`, `print_ok`, `print_warn`, `print_sub` from `lib/print.sh`.
+Every `deploy.sh` **MUST** source `lib/common.sh` first:
+```bash
+source "$(dirname "$0")/../lib/common.sh"
+```
+This provides: `set -e`, `HOMELAB_ROOT`, `hosts`, `filter_hosts`, `render_template`,
+`prepare_build_dir`, `show_build_diff`, `diff_remote_config`, `diff_remote_build`,
+`parse_common_flags`, `deploy_init`/`deploy_run`/`deploy_finish`, and print helpers.
+
+Remote `install.sh` scripts cannot source `common.sh`. Instead they defensively source
+`lib/utils.sh` with inline fallbacks:
+```bash
+if [[ -f "$SCRIPT_DIR/lib/utils.sh" ]]; then
+    source "$SCRIPT_DIR/lib/utils.sh"
+else
+    backup_config() { ... }
+    print_sub() { echo "    $*"; }
+fi
+```
+
+### Output Functions (from `lib/print.sh`)
+Use these instead of raw `echo`:
+- `print_header "Title"` -- section header (`=== Title ===`)
+- `print_action "Step"` -- action (`==> Step`)
+- `print_sub "Detail"` -- indented detail
+- `print_ok "Done"` -- success (`✓ Done`)
+- `print_warn "Issue"` -- warning (`✗ Warning: Issue`)
+- `print_error "Msg"` -- error to stderr
+
+### Error Handling
+- Check required files/vars early; fail fast with `exit 1`
+- Track failed hosts in `DEPLOY_FAILED_HOSTS[@]` rather than aborting
+- Use `trap` for cleanup of temporary files outside standard `build/` dirs
+- Diff commands must use `|| true` to prevent `set -e` from aborting on differences
+- Exit `0` when a module is not applicable to a host (graceful skip, not failure)
+
+### ShellCheck Directives
+Use sparingly, with an explanatory comment:
+```bash
+# shellcheck disable=SC2086  # intentional word splitting, paths are controlled
+# shellcheck source=/dev/null  # dynamic source path
+# shellcheck disable=SC1090    # alternative for dynamic source
+```
+
+### Secrets
+- Stored in `.env` files (e.g., `telegram.env`) -- **NEVER** commit these
+- All `.env` files are gitignored; only `.env.example` files are tracked
+- Scripts must verify secret file existence before running
 
 ---
 
 ## 3. Architecture & Patterns
 
 ### Module Structure
-Each directory (e.g., `apcupsd`, `telegraf`) is a self-contained module:
-- `deploy.sh`: Main entry point.
-- `hosts.conf` (root): Controls which hosts get which module.
-- `templates/`: Config templates with `${VAR}` placeholders.
-- `configs/`: Static configuration files.
-- `scripts/`: Helper scripts to run on the remote host (installers).
-- `build/`: Local scratch space (gitignored) for rendering configs before scp.
+Each top-level directory is a self-contained module:
+```
+<module>/
+  deploy.sh          # Entry point (runs locally)
+  templates/         # Config templates with ${VAR} placeholders
+  configs/           # Static config files (some have per-host subdirs)
+  scripts/install.sh # Runs on remote host after scp
+  build/             # Gitignored scratch space for rendered configs
+```
 
-### Deployment Pattern
-1.  **Parse Flags:** `parse_common_flags "$@"` handles `--dry-run`.
-2.  **Filter Hosts:** `filter_hosts` ensures the module only runs on relevant hosts.
-3.  **Render:** Use `render_template "tpl" "out" VAR=VAL`.
-4.  **Diff:** Use `prepare_build_dir` and `show_build_diff` to show changes.
-5.  **Staging:** `scp` build directory to `/tmp/homelab-<module>/` on remote.
-6.  **Execution:** `ssh` to remote and run a script (e.g., `install.sh`) inside the staging dir.
-7.  **Idempotency:** Remote scripts should verify state before restarting services.
+### deploy.sh Canonical Pattern
+Every `deploy.sh` follows this exact six-phase structure:
 
-### Configuration (`hosts.conf`)
-- Central source of truth.
-- YAML format processed by `yq`.
-- **Do not** hardcode hostnames in scripts; query them:
-  ```bash
-  hosts list --feature myfeature
-  hosts get myhost mykey "default_value"
-  ```
+```bash
+#!/bin/bash
+source "$(dirname "$0")/../lib/common.sh"
 
-### Secrets
-- **Storage:** `.env` files or specific secret files (e.g., `telegram.env`).
-- **Git:** NEVER commit secrets. Ensure secret files are in `.gitignore`.
-- **Check:** Scripts should verify secret file existence before running.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BUILD_ROOT="$SCRIPT_DIR/build"
+
+# Phase 1: Parse flags
+parse_common_flags "$@"
+set -- "${PARSED_ARGS[@]}"
+
+# Phase 2: Filter hosts
+read -r -a SUPPORTED_HOSTS <<< "$(hosts list --feature <module>)"
+if ! HOSTS=$(filter_hosts "${1:-all}" "${SUPPORTED_HOSTS[@]}"); then
+    print_action "Skipping <module> (not applicable to $1)"
+    exit 0
+fi
+
+# Phase 3: Pre-validation (optional -- check secrets, required files)
+
+# Phase 4: Per-host deploy function
+deploy() {
+    local host="$1"
+    local build_dir="$BUILD_ROOT/$host"
+
+    # Query host config:  hosts get "$host" "feature.key" "default"
+    # Prepare build:      prepare_build_dir "$build_dir"
+    # Render templates:   render_template "tpl" "out" VAR=VAL
+    # Diff remote:        diff_remote_config "$host" local_file remote_path
+    # Dry-run gate:       [[ "$DRY_RUN" == "true" ]] && return 0
+    # SCP to remote:      scp to /tmp/homelab-<module>/
+    # Run installer:      ssh "$host" "cd /tmp/homelab-<module> && ./scripts/install.sh"
+}
+
+# Phase 5: Execute
+deploy_init "<Module Name>"
+deploy_run deploy $HOSTS
+deploy_finish
+```
+
+### install.sh Pattern (remote)
+```bash
+#!/bin/bash
+set -e
+HOST=${1:-$(hostname)}
+SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+BUILD_DIR="$SCRIPT_DIR/build/$HOST"
+# Source utils defensively (see Imports section above)
+# backup_config before overwriting files
+# Idempotent package install (check command -v first)
+# Stop service -> copy configs -> enable+start service
+```
+
+### hosts.conf Queries
+Never hardcode hostnames. Use the `hosts` command:
+```bash
+hosts list                          # all hosts
+hosts list --feature telegraf       # hosts with a feature
+hosts get ace apcupsd.role "slave"  # get config value with default
+hosts has ace telegraf               # boolean check
+```
+
+### Key Variations Between Modules
+- **Template rendering:** Some use `render_template` with `VAR=VAL`, others use plain `cp`
+- **Config overlay:** Some modules support per-host config dirs (e.g., `configs/$host/`)
+- **Root requirements:** PVE modules hard-require root; docker uses sudo fallback; ssh needs no root
+- **Env file passing:** Some modules generate an `env` file for `install.sh` to source
 
 ---
 
 ## 4. Git & Workflow
 
-- **Branching:** Work on feature branches, merge to `main`.
-- **Commits:** Use semantic commit messages:
-  - `feat: ...` for new modules/capabilities.
-  - `fix: ...` for bug fixes.
-  - `refactor: ...` for code cleanup.
-- **Safety:** Verify `validate.sh` passes before asking for a review or commit.
-- **Agent Protocol:**
-    1.  **Understand:** Read `deploy.sh` and `hosts.conf` to grasp scope.
-    2.  **Plan:** Identify necessary changes to templates or logic.
-    3.  **Edit:** Apply changes using `edit` or `write` tools.
-    4.  **Verify:** Run `./validate.sh` and specific dry-runs to ensure no regressions.
+- **Branching:** Feature branches, merge to `main`
+- **Commits:** Semantic messages: `feat:`, `fix:`, `refactor:`, `docs:`
+- **Pre-commit:** Run `./validate.sh` before committing
+- **CI:** GitHub Actions validates on push/PR to `main` (ShellCheck + YAML lint + dry-run)
+
+### Agent Protocol
+1. **Understand:** Read the module's `deploy.sh`, `hosts.conf` entries, and `install.sh`
+2. **Plan:** Identify changes to templates, configs, or logic
+3. **Edit:** Follow existing patterns exactly -- match the six-phase `deploy.sh` structure
+4. **Verify:** Run `./validate.sh` and module-specific dry-runs before committing
