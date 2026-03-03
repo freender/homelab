@@ -135,6 +135,22 @@ install_backup_subfeatures() {
     fi
 }
 
+install_other_subfeatures() {
+    if [[ -f "$BUILD_DIR/notifications.cfg" ]]; then
+        print_sub "Configuring PVE notifications..."
+        bash "$SCRIPT_DIR/scripts/install-notifications.sh" "$HOST" || return 1
+    else
+        print_sub "PVE notifications not configured; skipping"
+    fi
+
+    if [[ -f "$BUILD_DIR/interfaces" ]]; then
+        print_sub "Configuring network interfaces..."
+        bash "$SCRIPT_DIR/scripts/install-interfaces.sh" "$HOST" || return 1
+    else
+        print_sub "Network interfaces not configured; skipping"
+    fi
+}
+
 if [[ -z "$HOST_TYPE" ]]; then
     print_error "host type not provided and could not be detected"
     exit 1
@@ -198,6 +214,9 @@ case "$HOST_TYPE" in
 
         print_sub "Applying backup subfeatures..."
         install_backup_subfeatures || exit 1
+
+        print_sub "Applying additional subfeatures..."
+        install_other_subfeatures || exit 1
 
         ;;
     *)

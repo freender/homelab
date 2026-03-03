@@ -10,6 +10,9 @@ PVE_CONFIG_DIR="$SCRIPT_DIR/configs/pve"
 CONFIGS_DIR="$SCRIPT_DIR/configs"
 HOSTS_FILE="$HOMELAB_ROOT/hosts.conf"
 PBS_ENV_SOURCE="$CONFIGS_DIR/pbs.env"
+TELEGRAM_ENV_SOURCE="$CONFIGS_DIR/telegram.env"
+TELEGRAM_ENV_FALLBACK="$HOMELAB_ROOT/apcupsd/configs/telegram/telegram.env"
+INTERFACES_TEMPLATE="$SCRIPT_DIR/templates/pve-interfaces"
 
 PVE_FILES=(
     proxmox.sources
@@ -196,6 +199,86 @@ EOF
     cp "$PBS_ENV_SOURCE" "$build_dir/pbs.env"
 }
 
+build_notifications_bundle() {
+    local host="$1"
+    local build_dir="$2"
+    local notifications_enabled
+    local token_b64
+    local chatid_b64
+    local env_file="$TELEGRAM_ENV_SOURCE"
+
+    notifications_enabled=$(yq e ".\"$host\".features.pve-postinstall.notifications // false" "$HOSTS_FILE")
+    if [[ "$notifications_enabled" != "true" ]]; then
+        return 0
+    fi
+
+    if [[ ! -f "$env_file" && -f "$TELEGRAM_ENV_FALLBACK" ]]; then
+        env_file="$TELEGRAM_ENV_FALLBACK"
+    fi
+
+    if [[ ! -f "$env_file" ]]; then
+        print_warn "telegram env file not found for notifications"
+        print_warn "Create $TELEGRAM_ENV_SOURCE from $CONFIGS_DIR/telegram.env.example"
+        print_warn "or provide $TELEGRAM_ENV_FALLBACK"
+        return 1
+    fi
+
+    # shellcheck source=/dev/null
+    source "$env_file"
+
+    if [[ -z "${TELEGRAM_TOKEN:-}" || -z "${TELEGRAM_CHATID:-}" ]]; then
+        print_warn "TELEGRAM_TOKEN and TELEGRAM_CHATID must be set in $env_file"
+        return 1
+    fi
+
+    if [[ ! -f "$CONFIGS_DIR/notifications.cfg" ]]; then
+        print_warn "Missing notifications config: $CONFIGS_DIR/notifications.cfg"
+        return 1
+    fi
+
+    token_b64=$(printf '%s' "$TELEGRAM_TOKEN" | base64 | tr -d '\n')
+    chatid_b64=$(printf '%s' "$TELEGRAM_CHATID" | base64 | tr -d '\n')
+
+    cp "$CONFIGS_DIR/notifications.cfg" "$build_dir/notifications.cfg"
+
+    cat > "$build_dir/priv-notifications.cfg" <<EOF
+webhook: Telegram
+	secret name=bot_id,value=${token_b64}
+	secret name=chat_id,value=${chatid_b64}
+EOF
+}
+
+build_network_interfaces_bundle() {
+    local host="$1"
+    local build_dir="$2"
+    local interfaces_config
+    local mgmt_ip
+    local storage_ip
+    local gateway
+
+    interfaces_config=$(yq e ".\"$host\".features.pve-postinstall.interfaces // \"\"" "$HOSTS_FILE")
+    if [[ -z "$interfaces_config" || "$interfaces_config" == "null" ]]; then
+        return 0
+    fi
+
+    if [[ ! -f "$INTERFACES_TEMPLATE" ]]; then
+        print_warn "Template not found: $INTERFACES_TEMPLATE"
+        return 1
+    fi
+
+    mgmt_ip=$(yq e ".\"$host\".features.pve-postinstall.interfaces.mgmt_ip // \"\"" "$HOSTS_FILE")
+    gateway=$(yq e ".\"$host\".features.pve-postinstall.interfaces.gateway // \"\"" "$HOSTS_FILE")
+    storage_ip=$(yq e ".\"$host\".features.pve-postinstall.interfaces.storage_ip // \"\"" "$HOSTS_FILE")
+
+    if [[ -z "$mgmt_ip" || -z "$gateway" || -z "$storage_ip" ]]; then
+        print_warn "pve-postinstall.interfaces.{mgmt_ip,gateway,storage_ip} required for $host"
+        return 1
+    fi
+
+    render_template "$INTERFACES_TEMPLATE" "$build_dir/interfaces" \
+        NET_MGMT_IP="$mgmt_ip" NET_GATEWAY="$gateway" NET_STORAGE_IP="$storage_ip"
+}
+
 parse_common_flags "$@"
 set -- "${PARSED_ARGS[@]}"
 
@@ -253,12 +336,29 @@ deploy() {
         return 1
     fi
 
+    if ! build_notifications_bundle "$host" "$build_dir"; then
+        return 1
+    fi
+
+    if ! build_network_interfaces_bundle "$host" "$build_dir"; then
+        return 1
+    fi
+
     print_sub "Comparing with remote configs..."
     for file in "${files[@]}"; do
         local remote_path
         remote_path=$(remote_path_for_file "$file") || { print_warn "No remote path mapping for $file"; return 1; }
         diff_remote_config "$host" "$build_dir/$file" "$remote_path" || true
     done
+
+    if [[ -f "$build_dir/notifications.cfg" ]]; then
+        diff_remote_config "$host" "$build_dir/notifications.cfg" "/etc/pve/notifications.cfg" || true
+        diff_remote_config "$host" "$build_dir/priv-notifications.cfg" "/etc/pve/priv/notifications.cfg" || true
+    fi
+
+    if [[ -f "$build_dir/interfaces" ]]; then
+        diff_remote_config "$host" "$build_dir/interfaces" "/etc/network/interfaces" || true
+    fi
 
     if [[ "$DRY_RUN" == true ]]; then
         print_sub "[DRY-RUN] Would deploy to $host:/tmp/homelab-pve-postinstall/"
@@ -276,6 +376,18 @@ deploy() {
         else
             print_sub "Cluster config backup subfeature: disabled"
         fi
+
+        if [[ -f "$build_dir/notifications.cfg" ]]; then
+            print_sub "Notifications subfeature: enabled"
+        else
+            print_sub "Notifications subfeature: disabled"
+        fi
+
+        if [[ -f "$build_dir/interfaces" ]]; then
+            print_sub "Network interfaces subfeature: enabled"
+        else
+            print_sub "Network interfaces subfeature: disabled"
+        fi
         return 0
     fi
 
@@ -292,3 +404,8 @@ deploy() {
 deploy_init "PVE Post-Install Configs"
 deploy_run deploy $HOSTS
 deploy_finish
+
+echo ""
+echo "Apply changes:"
+echo "  ssh <node> ifreload -a   # Apply without reboot (may disrupt connections)"
+echo "  ssh <node> reboot        # Or reboot to apply safely"

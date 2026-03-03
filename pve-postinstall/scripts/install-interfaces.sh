@@ -1,6 +1,6 @@
 #!/bin/bash
-# install.sh - Install network interfaces config
-# Usage: ./scripts/install.sh [hostname]
+# install-interfaces.sh - Install network interfaces config
+# Usage: ./scripts/install-interfaces.sh [hostname]
 
 set -e
 
@@ -20,9 +20,11 @@ else
 fi
 
 if [[ ! -f "$BUILD_DIR/interfaces" ]]; then
-    echo "Error: Missing interfaces file at $BUILD_DIR/interfaces"
+    echo "Error: Missing interfaces file at $BUILD_DIR/interfaces" >&2
     exit 1
 fi
 
+print_sub "Backing up /etc/network/interfaces..."
 backup_config /etc/network/interfaces
+print_sub "Installing /etc/network/interfaces..."
 cp "$BUILD_DIR/interfaces" /etc/network/interfaces

@@ -57,32 +57,17 @@ Proxmox GPU passthrough configs
 cd ~/homelab/pve-gpu-passthrough && ./deploy.sh all
 ```
 
-### [pve-interfaces](pve-interfaces/)
-Proxmox network interface configuration
-- Per-node `/etc/network/interfaces` from templates
-
-```bash
-cd ~/homelab/pve-interfaces && ./deploy.sh all
-```
-
-### [pve-notifications](pve-notifications/)
-Proxmox notification targets and matchers
-- Deploys `/etc/pve/notifications.cfg` and `/etc/pve/priv/notifications.cfg`
-- Uses Telegram credentials from `configs/telegram.env` (not tracked)
-
-```bash
-cp pve-notifications/configs/telegram.env.example pve-notifications/configs/telegram.env
-cd ~/homelab/pve-notifications && ./deploy.sh all
-```
-
 ### [pve-postinstall](pve-postinstall/)
 PVE post-install configuration
 - No-subscription repo sources, nag removal
 - Timezone, local-zfs storage, Ceph reconciliation
-- Backup subfeatures (configured in `hosts.conf` under `pve-postinstall.backup`):
-  - `cluster`: `/etc/pve` backup to PBS with systemd timer (cluster scope)
-  - `standalone`: PBS storage definitions + backup jobs (osiris standalone scope)
+- Subfeatures (configured in `hosts.conf` under `pve-postinstall`):
+  - `notifications`: Telegram notification targets and matchers
+  - `interfaces`: per-node `/etc/network/interfaces` rendering
+  - `backup.cluster`: `/etc/pve` backup to PBS with systemd timer
+  - `backup.standalone`: PBS storage definitions + backup jobs (osiris standalone scope)
 - Requires:
+  - `pve-postinstall/configs/telegram.env` (from `telegram.env.example`) or fallback `apcupsd/configs/telegram/telegram.env`
   - `pve-postinstall/configs/pbs.env` (from `pbs.env.example`) for cluster config backup
   - `/etc/homelab/pbs-tokens.env` on target host (see `pve-postinstall/configs/pbs-tokens.env.example`) for standalone PBS storage auth
 

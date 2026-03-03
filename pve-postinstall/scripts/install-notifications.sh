@@ -1,6 +1,6 @@
 #!/bin/bash
-# install.sh - Install Proxmox notification config
-# Usage: ./scripts/install.sh [hostname]
+# install-notifications.sh - Install Proxmox notification config
+# Usage: ./scripts/install-notifications.sh [hostname]
 
 set -e
 
