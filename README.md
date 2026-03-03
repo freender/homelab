@@ -56,6 +56,7 @@ cd ~/homelab/docker && ./deploy.sh all
 ### [pve-gpu-passthrough](pve-gpu-passthrough/)
 Proxmox GPU passthrough configs
 - Updates boot cmdline, VFIO modules, and modprobe configs
+- Safety checks: managed cmdline must include `root=ZFS=rpool/ROOT/pve-1` and target host must have dataset `rpool/ROOT/pve-1`, or deploy/install aborts
 - Requires reboot after deploy
 
 ```bash

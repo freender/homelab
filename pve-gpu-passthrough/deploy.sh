@@ -10,6 +10,8 @@ BLACKLIST_FILE="$SCRIPT_DIR/configs/blacklist.conf"
 CMDLINE_FILE="$SCRIPT_DIR/configs/cmdline"
 VFIO_TEMPLATE="$SCRIPT_DIR/configs/vfio.conf.tpl"
 BUILD_ROOT="$SCRIPT_DIR/build"
+REQUIRED_ROOT_TOKEN="root=ZFS=rpool/ROOT/pve-1"
+ROOT_DATASET=""
 
 # --- Host Selection ---
 parse_common_flags "$@"
@@ -27,6 +29,15 @@ fi
 [[ ! -f "$CMDLINE_FILE" ]] && { print_warn "cmdline file not found: $CMDLINE_FILE"; exit 1; }
 [[ ! -f "$VFIO_TEMPLATE" ]] && { print_warn "vfio template not found: $VFIO_TEMPLATE"; exit 1; }
 
+cmdline_value=$(head -n 1 "$CMDLINE_FILE")
+if [[ "$cmdline_value" != *"$REQUIRED_ROOT_TOKEN"* ]]; then
+    print_warn "Unsafe cmdline in $CMDLINE_FILE"
+    print_warn "Missing required token: $REQUIRED_ROOT_TOKEN"
+    print_warn "Refusing deploy to avoid boot breakage"
+    exit 1
+fi
+ROOT_DATASET="${REQUIRED_ROOT_TOKEN#root=ZFS=}"
+
 # --- Per-Host Deployment ---
 deploy() {
     local host="$1"
@@ -34,6 +45,12 @@ deploy() {
     local build_dir="$BUILD_ROOT/$host"
 
     pci_ids=$(hosts get "$host" "pve-gpu-passthrough.pci_ids") || { print_warn "pve-gpu-passthrough.pci_ids missing"; return 1; }
+
+    if ! ssh "$host" "zfs list -H -o name '$ROOT_DATASET' >/dev/null 2>&1"; then
+        print_warn "Required ZFS dataset not found on $host: $ROOT_DATASET"
+        print_warn "Refusing deploy to avoid boot breakage"
+        return 1
+    fi
 
     prepare_build_dir "$build_dir"
 

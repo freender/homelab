@@ -35,9 +35,20 @@ backup_config /etc/modules
 
 initramfs_needs_update=false
 boot_refresh_needed=false
+required_root_token="root=ZFS=rpool/ROOT/pve-1"
+required_root_dataset="${required_root_token#root=ZFS=}"
 
 print_sub "Updating systemd-boot cmdline..."
 cmdline=$(head -n 1 "$BUILD_DIR/cmdline")
+if [[ "$cmdline" != *"$required_root_token"* ]]; then
+    echo "Error: Refusing to write /etc/kernel/cmdline without required token: $required_root_token" >&2
+    exit 1
+fi
+if ! zfs list -H -o name "$required_root_dataset" >/dev/null 2>&1; then
+    echo "Error: Required ZFS dataset not found: $required_root_dataset" >&2
+    exit 1
+fi
+
 current_cmdline=""
 if [[ -f /etc/kernel/cmdline ]]; then
     current_cmdline=$(head -n 1 /etc/kernel/cmdline)

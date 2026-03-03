@@ -205,6 +205,7 @@ hosts has ace telegraf               # boolean check
 - **Config overlay:** Some modules support per-host config dirs (e.g., `configs/$host/`)
 - **Root requirements:** PVE modules hard-require root; docker uses sudo fallback; ssh needs no root
 - **Env file passing:** Some modules generate an `env` file for `install.sh` to source
+- **GPU cmdline safety:** `pve-gpu-passthrough` must include `root=ZFS=rpool/ROOT/pve-1` in managed cmdline and refuse deploy/install if missing; deploy/install must also validate dataset `rpool/ROOT/pve-1` exists on target host
 
 ---
 

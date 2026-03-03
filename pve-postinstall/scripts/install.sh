@@ -102,12 +102,8 @@ install_file() {
 repo_files_need_backup() {
     local file
     for file in proxmox.sources ceph.sources pve-test.sources; do
-        if file_needs_update "$BUILD_DIR/$file" "/etc/apt/sources.list.d/$file"; then
+        if [[ ! -e "/etc/apt/sources.list.d/$file" ]] || ! cmp -s "$BUILD_DIR/$file" "/etc/apt/sources.list.d/$file"; then
             return 0
-        fi
-        local rc=$?
-        if [[ $rc -ne 1 ]]; then
-            return "$rc"
         fi
     done
     return 1
@@ -213,14 +209,15 @@ print_sub "Checking if repo configs need backup..."
 if repo_files_need_backup; then
     print_sub "Backing up /etc/apt/sources.list.d..."
     backup_sources_list_dir
+else
+    print_sub "/etc/apt/sources.list.d unchanged; skipping backup"
 fi
 
-if file_needs_update "$BUILD_DIR/no-nag-script" "/etc/apt/apt.conf.d/no-nag-script"; then
+if [[ ! -e "/etc/apt/apt.conf.d/no-nag-script" ]] || ! cmp -s "$BUILD_DIR/no-nag-script" "/etc/apt/apt.conf.d/no-nag-script"; then
     print_sub "Backing up no-nag-script..."
     backup_no_nag_script
 else
-    rc=$?
-    [[ $rc -eq 1 ]] || exit "$rc"
+    print_sub "no-nag-script unchanged; skipping backup"
 fi
 
 print_sub "Removing enterprise repository definitions..."

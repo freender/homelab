@@ -64,6 +64,10 @@ ssh clovis reboot
 Kernel parameters are managed as a full `/etc/kernel/cmdline` line in:
 `pve-gpu-passthrough/configs/cmdline`
 
+Safety guard: deploy/install validates that cmdline contains
+`root=ZFS=rpool/ROOT/pve-1` and aborts if missing.
+Deploy/install also validates dataset `rpool/ROOT/pve-1` exists on target host.
+
 **Notes:**
 - `video=efifb:off` disables EFI framebuffer (prevents host from using GPU)
 - `pcie_acs_override=downstream` required for NVMe passthrough
