@@ -112,6 +112,29 @@ ensure_local_zfs_storage() {
     pvesm add zfspool local-zfs --pool rpool --content images,rootdir --sparse 0 || print_warn "failed to create local-zfs storage"
 }
 
+install_backup_subfeatures() {
+    if [[ -f "$BUILD_DIR/storage-plan.conf" ]]; then
+        print_sub "Configuring standalone PBS storage definitions..."
+        bash "$SCRIPT_DIR/scripts/install-pbs-storage.sh" "$HOST" || return 1
+    else
+        print_sub "Standalone PBS storage definitions not configured; skipping"
+    fi
+
+    if [[ -f "$BUILD_DIR/jobs-plan.conf" ]]; then
+        print_sub "Configuring standalone backup jobs..."
+        bash "$SCRIPT_DIR/scripts/install-backup-jobs.sh" "$HOST" || return 1
+    else
+        print_sub "Standalone backup jobs not configured; skipping"
+    fi
+
+    if [[ -f "$BUILD_DIR/pve-config-backup.timer" ]]; then
+        print_sub "Configuring cluster config backup timer..."
+        bash "$SCRIPT_DIR/scripts/install-config-backup.sh" "$HOST" || return 1
+    else
+        print_sub "Cluster config backup not configured; skipping"
+    fi
+}
+
 if [[ -z "$HOST_TYPE" ]]; then
     print_error "host type not provided and could not be detected"
     exit 1
@@ -172,6 +195,9 @@ case "$HOST_TYPE" in
 
         print_sub "Reconciling local ZFS storage..."
         ensure_local_zfs_storage
+
+        print_sub "Applying backup subfeatures..."
+        install_backup_subfeatures || exit 1
 
         ;;
     *)

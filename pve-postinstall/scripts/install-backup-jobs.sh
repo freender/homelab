@@ -1,10 +1,12 @@
 #!/bin/bash
-# install.sh - Install Proxmox backup jobs
+# install-backup-jobs.sh - Install PVE standalone backup jobs
 
 set -e
 
+HOST=${1:-$(hostname)}
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-PLAN_FILE="$SCRIPT_DIR/build/jobs-plan.conf"
+BUILD_DIR="$SCRIPT_DIR/build/$HOST"
+PLAN_FILE="$BUILD_DIR/jobs-plan.conf"
 
 if [[ -f "$SCRIPT_DIR/lib/utils.sh" ]]; then
     source "$SCRIPT_DIR/lib/utils.sh"

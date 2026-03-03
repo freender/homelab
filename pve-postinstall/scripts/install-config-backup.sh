@@ -1,5 +1,5 @@
 #!/bin/bash
-# install.sh - Install PVE cluster config backup timer
+# install-config-backup.sh - Install PVE cluster config backup timer
 
 set -e
 

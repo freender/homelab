@@ -48,28 +48,6 @@ Docker management scripts
 cd ~/homelab/docker && ./deploy.sh all
 ```
 
-### [pbs-config-sync](pbs-config-sync/)
-Proxmox Backup Server config sync (in progress)
-
-### [pve-backup](pve-backup/)
-Proxmox VM backup job definitions via PVE API
-- Declarative backup jobs from `hosts.conf`
-- Create or update existing jobs idempotently
-
-```bash
-cd ~/homelab/pve-backup && ./deploy.sh all
-```
-
-### [pve-config-backup](pve-config-backup/)
-PVE cluster config backup to PBS via systemd timer
-- Backs up `/etc/pve` to Proxmox Backup Server
-- Configurable schedule, repository, and archive name
-- Requires `configs/pbs.env` (see `pbs.env.example`)
-
-```bash
-cd ~/homelab/pve-config-backup && ./deploy.sh all
-```
-
 ### [pve-gpu-passthrough](pve-gpu-passthrough/)
 Proxmox GPU passthrough configs
 - Updates boot cmdline, VFIO modules, and modprobe configs
@@ -101,18 +79,15 @@ cd ~/homelab/pve-notifications && ./deploy.sh all
 PVE post-install configuration
 - No-subscription repo sources, nag removal
 - Timezone, local-zfs storage, Ceph reconciliation
+- Backup subfeatures (configured in `hosts.conf` under `pve-postinstall.backup`):
+  - `cluster`: `/etc/pve` backup to PBS with systemd timer (cluster scope)
+  - `standalone`: PBS storage definitions + backup jobs (osiris standalone scope)
+- Requires:
+  - `pve-postinstall/configs/pbs.env` (from `pbs.env.example`) for cluster config backup
+  - `/etc/homelab/pbs-tokens.env` on target host (see `pve-postinstall/configs/pbs-tokens.env.example`) for standalone PBS storage auth
 
 ```bash
 cd ~/homelab/pve-postinstall && ./deploy.sh all
-```
-
-### [pve-storage](pve-storage/)
-PVE PBS storage definitions via PVE API
-- Declarative PBS storage entries from `hosts.conf`
-- Requires `/etc/homelab/pbs-tokens.env` on target (see `configs/pbs-tokens.env.example`)
-
-```bash
-cd ~/homelab/pve-storage && ./deploy.sh all
 ```
 
 ### [ssh](ssh/)

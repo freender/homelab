@@ -1,10 +1,12 @@
 #!/bin/bash
-# install.sh - Install PVE storage definitions
+# install-pbs-storage.sh - Install PVE standalone PBS storage definitions
 
 set -e
 
+HOST=${1:-$(hostname)}
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-PLAN_FILE="$SCRIPT_DIR/build/storage-plan.conf"
+BUILD_DIR="$SCRIPT_DIR/build/$HOST"
+PLAN_FILE="$BUILD_DIR/storage-plan.conf"
 TOKENS_FILE="/etc/homelab/pbs-tokens.env"
 
 if [[ -f "$SCRIPT_DIR/lib/utils.sh" ]]; then
@@ -59,7 +61,7 @@ for (( i=0; i<STORAGE_COUNT; i++ )); do
         password="${!password_var_name:-}"
         if [[ -z "$password" ]]; then
             print_error "Missing $password_var_name in $TOKENS_FILE"
-            print_sub "Create $TOKENS_FILE from pve-storage/configs/pbs-tokens.env.example"
+            print_sub "Create $TOKENS_FILE from pve-postinstall/configs/pbs-tokens.env.example"
             exit 1
         fi
 
