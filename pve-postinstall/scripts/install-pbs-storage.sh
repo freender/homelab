@@ -8,6 +8,8 @@ SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD_DIR="$SCRIPT_DIR/build/$HOST"
 PLAN_FILE="$BUILD_DIR/storage-plan.conf"
 TOKENS_FILE="/etc/homelab/pbs-tokens.env"
+STATE_DIR="/run/homelab-pve-postinstall"
+STATE_FILE="$STATE_DIR/backup-state.env"
 
 if [[ -f "$SCRIPT_DIR/lib/utils.sh" ]]; then
     source "$SCRIPT_DIR/lib/utils.sh"
@@ -34,6 +36,9 @@ if [[ -f "$TOKENS_FILE" ]]; then
     # shellcheck disable=SC1090
     source "$TOKENS_FILE"
 fi
+
+mkdir -p "$STATE_DIR"
+storage_created="false"
 
 for (( i=0; i<STORAGE_COUNT; i++ )); do
     name_var="STORAGE_${i}_NAME"
@@ -73,8 +78,11 @@ for (( i=0; i<STORAGE_COUNT; i++ )); do
             --fingerprint "$fingerprint" \
             --password "$password" \
             --content backup
+        storage_created="true"
     fi
 
     print_sub "Ensuring prune policy on $name..."
     pvesm set "$name" --prune-backups keep-all=1
 done
+
+printf 'PBS_STORAGE_CREATED=%q\n' "$storage_created" > "$STATE_FILE"

@@ -9,7 +9,8 @@ BUILD_ROOT="$SCRIPT_DIR/build"
 PVE_CONFIG_DIR="$SCRIPT_DIR/configs/pve"
 CONFIGS_DIR="$SCRIPT_DIR/configs"
 HOSTS_FILE="$HOMELAB_ROOT/hosts.conf"
-PBS_ENV_SOURCE="$CONFIGS_DIR/pbs.env"
+PBS_ENV_DIR="$CONFIGS_DIR/pbs-env"
+PBS_ENV_LEGACY_SOURCE="$CONFIGS_DIR/pbs.env"
 TELEGRAM_ENV_SOURCE="$CONFIGS_DIR/telegram.env"
 TELEGRAM_ENV_FALLBACK="$HOMELAB_ROOT/apcupsd/configs/telegram/telegram.env"
 INTERFACES_TEMPLATE="$SCRIPT_DIR/templates/pve-interfaces"
@@ -148,6 +149,8 @@ build_cluster_config_backup_bundle() {
     local repository
     local backup_id
     local archive_name
+    local ceph_enabled="false"
+    local pbs_env_source
 
     repository=$(yq e ".\"$host\".features.pve-postinstall.backup.cluster.repository // \"\"" "$HOSTS_FILE")
     if [[ -z "$repository" || "$repository" == "null" ]]; then
@@ -158,16 +161,26 @@ build_cluster_config_backup_bundle() {
     backup_id=$(yq e ".\"$host\".features.pve-postinstall.backup.cluster.backup_id // \"pve-cluster-config\"" "$HOSTS_FILE")
     archive_name=$(yq e ".\"$host\".features.pve-postinstall.backup.cluster.archive_name // \"etc-pve\"" "$HOSTS_FILE")
 
-    if [[ ! -f "$PBS_ENV_SOURCE" ]]; then
-        print_warn "Missing secret file: $PBS_ENV_SOURCE"
-        print_warn "Create it from: $CONFIGS_DIR/pbs.env.example"
+    if hosts has "$host" "ceph"; then
+        ceph_enabled="true"
+    fi
+
+    pbs_env_source="$PBS_ENV_DIR/$host.env"
+    if [[ ! -f "$pbs_env_source" && -f "$PBS_ENV_LEGACY_SOURCE" ]]; then
+        pbs_env_source="$PBS_ENV_LEGACY_SOURCE"
+    fi
+
+    if [[ ! -f "$pbs_env_source" ]]; then
+        print_warn "Missing secret file: $PBS_ENV_DIR/$host.env"
+        print_warn "Create it from: $PBS_ENV_DIR/.env.example"
         return 1
     fi
 
     render_template "$CONFIGS_DIR/pve-config-backup.sh.tpl" "$build_dir/pve-config-backup.sh" \
         REPOSITORY="$repository" \
         BACKUP_ID="$backup_id" \
-        ARCHIVE_NAME="$archive_name"
+        ARCHIVE_NAME="$archive_name" \
+        CEPH_ENABLED="$ceph_enabled"
     chmod 700 "$build_dir/pve-config-backup.sh"
 
     cat > "$build_dir/pve-config-backup.service" <<EOF
@@ -196,7 +209,14 @@ Unit=pve-config-backup.service
 WantedBy=timers.target
 EOF
 
-    cp "$PBS_ENV_SOURCE" "$build_dir/pbs.env"
+    cp "$pbs_env_source" "$build_dir/pbs.env"
+
+    {
+        printf 'REPOSITORY=%q\n' "$repository"
+        printf 'BACKUP_ID=%q\n' "$backup_id"
+        printf 'ARCHIVE_NAME=%q\n' "$archive_name"
+        printf 'CEPH_ENABLED=%q\n' "$ceph_enabled"
+    } > "$build_dir/restore-plan.conf"
 }
 
 build_notifications_bundle() {

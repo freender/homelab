@@ -11,6 +11,8 @@ CEPH_ENABLED=${4:-false}
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD_DIR="$SCRIPT_DIR/build/$HOST"
 BACKUP_DIR="/var/backups/homelab/pve-postinstall"
+STATE_DIR="/run/homelab-pve-postinstall"
+STATE_FILE="$STATE_DIR/backup-state.env"
 
 if [[ -f "$SCRIPT_DIR/lib/utils.sh" ]]; then
     source "$SCRIPT_DIR/lib/utils.sh"
@@ -157,11 +159,29 @@ ensure_local_zfs_storage() {
 }
 
 install_backup_subfeatures() {
+    local pbs_storage_created="false"
+
+    mkdir -p "$STATE_DIR"
+    rm -f "$STATE_FILE"
+
     if [[ -f "$BUILD_DIR/storage-plan.conf" ]]; then
         print_sub "Configuring standalone PBS storage definitions..."
         bash "$SCRIPT_DIR/scripts/install-pbs-storage.sh" "$HOST" || return 1
+
+        if [[ -f "$STATE_FILE" ]]; then
+            # shellcheck disable=SC1090
+            source "$STATE_FILE"
+            pbs_storage_created="${PBS_STORAGE_CREATED:-false}"
+        fi
     else
         print_sub "Standalone PBS storage definitions not configured; skipping"
+    fi
+
+    if [[ "$pbs_storage_created" == "true" && -f "$BUILD_DIR/restore-plan.conf" ]]; then
+        print_sub "Fresh standalone install detected; restoring config from PBS..."
+        bash "$SCRIPT_DIR/scripts/install-pbs-config-restore.sh" "$HOST" || return 1
+    else
+        print_sub "PBS config restore not required; skipping"
     fi
 
     if [[ -f "$BUILD_DIR/jobs-plan.conf" ]]; then
