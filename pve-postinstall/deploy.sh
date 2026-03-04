@@ -58,8 +58,8 @@ build_standalone_backup_plans() {
     local job_count
     local index
 
-    storage_count=$(yq e ".\"$host\".features.pve-postinstall.backup.standalone.storages | length" "$HOSTS_FILE")
-    job_count=$(yq e ".\"$host\".features.pve-postinstall.backup.standalone.jobs | length" "$HOSTS_FILE")
+    storage_count=$(yq e ".\"$host\".features.pve-postinstall.pbs_setup.storages | length" "$HOSTS_FILE")
+    job_count=$(yq e ".\"$host\".features.pve-postinstall.pbs_setup.jobs | length" "$HOSTS_FILE")
 
     if [[ "$storage_count" == "null" ]]; then
         storage_count="0"
@@ -79,11 +79,11 @@ build_standalone_backup_plans() {
     for (( index=0; index<storage_count; index++ )); do
         local name server datastore username fingerprint password_var_name normalized_name
 
-        name=$(yq e ".\"$host\".features.pve-postinstall.backup.standalone.storages[$index].name" "$HOSTS_FILE")
-        server=$(yq e ".\"$host\".features.pve-postinstall.backup.standalone.storages[$index].server" "$HOSTS_FILE")
-        datastore=$(yq e ".\"$host\".features.pve-postinstall.backup.standalone.storages[$index].datastore" "$HOSTS_FILE")
-        username=$(yq e ".\"$host\".features.pve-postinstall.backup.standalone.storages[$index].username" "$HOSTS_FILE")
-        fingerprint=$(yq e ".\"$host\".features.pve-postinstall.backup.standalone.storages[$index].fingerprint" "$HOSTS_FILE")
+        name=$(yq e ".\"$host\".features.pve-postinstall.pbs_setup.storages[$index].name" "$HOSTS_FILE")
+        server=$(yq e ".\"$host\".features.pve-postinstall.pbs_setup.storages[$index].server" "$HOSTS_FILE")
+        datastore=$(yq e ".\"$host\".features.pve-postinstall.pbs_setup.storages[$index].datastore" "$HOSTS_FILE")
+        username=$(yq e ".\"$host\".features.pve-postinstall.pbs_setup.storages[$index].username" "$HOSTS_FILE")
+        fingerprint=$(yq e ".\"$host\".features.pve-postinstall.pbs_setup.storages[$index].fingerprint" "$HOSTS_FILE")
 
         if [[ -z "$name" || "$name" == "null" || -z "$server" || "$server" == "null" || -z "$datastore" || "$datastore" == "null" || -z "$username" || "$username" == "null" || -z "$fingerprint" || "$fingerprint" == "null" ]]; then
             print_warn "Invalid standalone storage entry at index $index for $host"
@@ -110,16 +110,16 @@ build_standalone_backup_plans() {
     for (( index=0; index<job_count; index++ )); do
         local schedule storage vmid compress mode notes_template notification_mode prune_backups enabled fleecing
 
-        schedule=$(yq e ".\"$host\".features.pve-postinstall.backup.standalone.jobs[$index].schedule" "$HOSTS_FILE")
-        storage=$(yq e ".\"$host\".features.pve-postinstall.backup.standalone.jobs[$index].storage" "$HOSTS_FILE")
-        vmid=$(yq e ".\"$host\".features.pve-postinstall.backup.standalone.jobs[$index].vmid // \"\"" "$HOSTS_FILE")
-        compress=$(yq e ".\"$host\".features.pve-postinstall.backup.standalone.jobs[$index].compress // \"zstd\"" "$HOSTS_FILE")
-        mode=$(yq e ".\"$host\".features.pve-postinstall.backup.standalone.jobs[$index].mode // \"snapshot\"" "$HOSTS_FILE")
-        notes_template=$(yq e ".\"$host\".features.pve-postinstall.backup.standalone.jobs[$index].notes_template // \"{{guestname}}\"" "$HOSTS_FILE")
-        notification_mode=$(yq e ".\"$host\".features.pve-postinstall.backup.standalone.jobs[$index].notification_mode // \"notification-system\"" "$HOSTS_FILE")
-        prune_backups=$(yq e ".\"$host\".features.pve-postinstall.backup.standalone.jobs[$index].prune_backups // \"keep-all=1\"" "$HOSTS_FILE")
-        enabled=$(yq e ".\"$host\".features.pve-postinstall.backup.standalone.jobs[$index].enabled // \"1\"" "$HOSTS_FILE")
-        fleecing=$(yq e ".\"$host\".features.pve-postinstall.backup.standalone.jobs[$index].fleecing // \"0\"" "$HOSTS_FILE")
+        schedule=$(yq e ".\"$host\".features.pve-postinstall.pbs_setup.jobs[$index].schedule" "$HOSTS_FILE")
+        storage=$(yq e ".\"$host\".features.pve-postinstall.pbs_setup.jobs[$index].storage" "$HOSTS_FILE")
+        vmid=$(yq e ".\"$host\".features.pve-postinstall.pbs_setup.jobs[$index].vmid // \"\"" "$HOSTS_FILE")
+        compress=$(yq e ".\"$host\".features.pve-postinstall.pbs_setup.jobs[$index].compress // \"zstd\"" "$HOSTS_FILE")
+        mode=$(yq e ".\"$host\".features.pve-postinstall.pbs_setup.jobs[$index].mode // \"snapshot\"" "$HOSTS_FILE")
+        notes_template=$(yq e ".\"$host\".features.pve-postinstall.pbs_setup.jobs[$index].notes_template // \"{{guestname}}\"" "$HOSTS_FILE")
+        notification_mode=$(yq e ".\"$host\".features.pve-postinstall.pbs_setup.jobs[$index].notification_mode // \"notification-system\"" "$HOSTS_FILE")
+        prune_backups=$(yq e ".\"$host\".features.pve-postinstall.pbs_setup.jobs[$index].prune_backups // \"keep-all=1\"" "$HOSTS_FILE")
+        enabled=$(yq e ".\"$host\".features.pve-postinstall.pbs_setup.jobs[$index].enabled // \"1\"" "$HOSTS_FILE")
+        fleecing=$(yq e ".\"$host\".features.pve-postinstall.pbs_setup.jobs[$index].fleecing // \"0\"" "$HOSTS_FILE")
 
         if [[ -z "$schedule" || "$schedule" == "null" || -z "$storage" || "$storage" == "null" ]]; then
             print_warn "Invalid standalone backup job at index $index for $host"
@@ -152,20 +152,20 @@ build_cluster_config_backup_bundle() {
     local pbs_env_source
     local secret_profile
 
-    repository=$(yq e ".\"$host\".features.pve-postinstall.backup.cluster.repository // \"\"" "$HOSTS_FILE")
+    repository=$(yq e ".\"$host\".features.pve-postinstall.proxmox_backup_client.repository // \"\"" "$HOSTS_FILE")
     if [[ -z "$repository" || "$repository" == "null" ]]; then
         return 0
     fi
 
-    schedule=$(yq e ".\"$host\".features.pve-postinstall.backup.cluster.schedule // \"00:30\"" "$HOSTS_FILE")
-    backup_id=$(yq e ".\"$host\".features.pve-postinstall.backup.cluster.backup_id // \"pve-cluster-config\"" "$HOSTS_FILE")
-    archive_name=$(yq e ".\"$host\".features.pve-postinstall.backup.cluster.archive_name // \"etc-pve\"" "$HOSTS_FILE")
+    schedule=$(yq e ".\"$host\".features.pve-postinstall.proxmox_backup_client.schedule // \"00:30\"" "$HOSTS_FILE")
+    backup_id=$(yq e ".\"$host\".features.pve-postinstall.proxmox_backup_client.backup_id // \"pve-config\"" "$HOSTS_FILE")
+    archive_name=$(yq e ".\"$host\".features.pve-postinstall.proxmox_backup_client.archive_name // \"etc-pve\"" "$HOSTS_FILE")
 
     if hosts has "$host" "ceph"; then
         ceph_enabled="true"
     fi
 
-    secret_profile=$(yq e ".\"$host\".features.pve-postinstall.backup.cluster.secret_profile // \"\"" "$HOSTS_FILE")
+    secret_profile=$(yq e ".\"$host\".features.pve-postinstall.proxmox_backup_client.secret_profile // \"\"" "$HOSTS_FILE")
     case "$secret_profile" in
         backup-main)
             pbs_env_source="$PBS_ENV_BACKUP_MAIN"
@@ -174,7 +174,7 @@ build_cluster_config_backup_bundle() {
             pbs_env_source="$PBS_ENV_BACKUP_CINCI"
             ;;
         "")
-            print_warn "Missing backup.cluster.secret_profile for $host"
+            print_warn "Missing proxmox_backup_client.secret_profile for $host"
             print_warn "Set one of: backup-main, backup-cinci"
             ;;
         *)

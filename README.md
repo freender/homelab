@@ -69,8 +69,8 @@ PVE post-install configuration
 - Timezone, local-zfs storage, Ceph reconciliation
 - Subfeatures (configured in `hosts.conf` under `pve-postinstall`):
   - `interfaces`: per-node `/etc/network/interfaces` rendering
-  - `backup.cluster`: `/etc/pve` backup to PBS with systemd timer (`secret_profile` selects PBS credential file)
-  - `backup.standalone`: PBS storage definitions + backup jobs (osiris standalone scope)
+  - `proxmox_backup_client`: `/etc/pve` backup to PBS with systemd timer (`secret_profile` selects PBS credential file)
+  - `pbs_setup`: PBS storage definitions + backup jobs (osiris standalone scope)
 - Requires:
   - `secrets/pbs-backup-main.env` and/or `secrets/pbs-backup-cinci.env` for cluster config backup credentials
   - `/etc/homelab/pbs-tokens.env` on target host (see `pve-postinstall/configs/pbs-tokens.env.example`) for standalone PBS storage auth
