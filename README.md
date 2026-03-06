@@ -36,6 +36,15 @@ UPS monitoring with coordinated cluster shutdown
 cd ~/homelab/apcupsd && ./deploy.sh all
 ```
 
+### [apcupsd-exporter](apcupsd-exporter/)
+Prometheus-native UPS metrics for apcupsd master nodes
+- Exposes local UPS metrics on `:9162`
+- Scraped by vmagent/VictoriaMetrics
+
+```bash
+cd ~/homelab/apcupsd-exporter && ./deploy.sh all
+```
+
 ### [apt-upgrade](apt-upgrade/)
 Remote apt dist-upgrade across PVE and Ubuntu hosts
 

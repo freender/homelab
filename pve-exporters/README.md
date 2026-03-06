@@ -6,6 +6,7 @@ Prometheus-native host metrics exporters for Proxmox nodes.
 - ace (Proxmox)
 - bray (Proxmox)
 - clovis (Proxmox)
+- osiris (Proxmox)
 
 ## What It Collects
 - Host metrics via node_exporter (CPU, memory, load, uptime, disk, network, hwmon, ZFS)

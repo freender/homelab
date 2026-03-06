@@ -1,0 +1,15 @@
+[Unit]
+Description=Prometheus apcupsd exporter
+After=network-online.target apcupsd.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/default/apcupsd-exporter
+ExecStart=/usr/bin/python3 /usr/local/bin/apcupsd-exporter
+Restart=always
+RestartSec=5s
+User=root
+
+[Install]
+WantedBy=multi-user.target
