@@ -9,6 +9,14 @@ CONFIGS_DIR="$SCRIPT_DIR/configs"
 COMMON_DIR="$CONFIGS_DIR/common"
 BUILD_ROOT="$SCRIPT_DIR/build"
 
+has_apcupsd_exporter() {
+    local host="$1"
+    local role
+
+    role=$(hosts get "$host" "apcupsd.role" "none")
+    [[ "$role" == "master" || "$role" == "master-standalone" ]]
+}
+
 parse_common_flags "$@"
 set -- "${PARSED_ARGS[@]}"
 
@@ -19,7 +27,7 @@ if ! HOSTS=$(filter_hosts "${1:-all}" "${SUPPORTED_HOSTS[@]}"); then
 fi
 
 validate() {
-    local required=(node-exporter.defaults smartctl-exporter.defaults smartctl-exporter.service)
+    local required=(node-exporter.defaults smartctl-exporter.defaults smartctl-exporter.service apcupsd-exporter.env apcupsd-exporter.service apcupsd-exporter.py)
     [[ ! -d "$COMMON_DIR" ]] && { echo "Error: $COMMON_DIR not found"; return 1; }
     for conf in "${required[@]}"; do
         [[ ! -f "$COMMON_DIR/$conf" ]] && { echo "Error: Missing $COMMON_DIR/$conf"; return 1; }
@@ -31,6 +39,7 @@ validate || exit 1
 deploy() {
     local host="$1"
     local build_dir="$BUILD_ROOT/$host"
+    local upsname serial
 
     prepare_build_dir "$build_dir"
     mkdir -p "$build_dir/configs"
@@ -38,6 +47,20 @@ deploy() {
     cp "$COMMON_DIR/node-exporter.defaults" "$build_dir/configs/node-exporter.defaults"
     cp "$COMMON_DIR/smartctl-exporter.defaults" "$build_dir/configs/smartctl-exporter.defaults"
     cp "$COMMON_DIR/smartctl-exporter.service" "$build_dir/configs/smartctl-exporter.service"
+
+    if has_apcupsd_exporter "$host"; then
+        upsname=$(hosts get "$host" "apcupsd.name") || { print_warn "apcupsd.name missing"; return 1; }
+        serial=$(ssh "$host" "apcaccess status 2>/dev/null | sed -n 's/^SERIALNO[[:space:]]*:[[:space:]]*//p' | xargs" 2>/dev/null || true)
+
+        cp "$COMMON_DIR/apcupsd-exporter.py" "$build_dir/configs/apcupsd-exporter.py"
+        cp "$COMMON_DIR/apcupsd-exporter.service" "$build_dir/configs/apcupsd-exporter.service"
+        render_template "$COMMON_DIR/apcupsd-exporter.env" "$build_dir/configs/apcupsd-exporter.env" \
+            UPS_NAME="$upsname" UPS_HOST="$host" UPS_SERIAL="$serial"
+
+        diff_remote_config "$host" "$build_dir/configs/apcupsd-exporter.py" "/usr/local/bin/apcupsd-exporter" || true
+        diff_remote_config "$host" "$build_dir/configs/apcupsd-exporter.service" "/etc/systemd/system/apcupsd-exporter.service" || true
+        diff_remote_config "$host" "$build_dir/configs/apcupsd-exporter.env" "/etc/default/apcupsd-exporter" || true
+    fi
 
     diff_remote_config "$host" "$build_dir/configs/node-exporter.defaults" "/etc/default/prometheus-node-exporter" || true
     diff_remote_config "$host" "$build_dir/configs/smartctl-exporter.defaults" "/etc/default/smartctl-exporter" || true

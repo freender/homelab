@@ -11,10 +11,12 @@ Prometheus-native host metrics exporters for Proxmox nodes.
 ## What It Collects
 - Host metrics via node_exporter (CPU, memory, load, uptime, disk, network, hwmon, ZFS)
 - SMART metrics via smartctl_exporter
+- UPS metrics via apcupsd exporter on `master` / `master-standalone` UPS hosts
 
 ## Ports
 - node_exporter: `:9100`
 - smartctl_exporter: `:9633`
+- apcupsd exporter: `:9162`
 
 ## Configuration Files
 
@@ -22,12 +24,20 @@ Prometheus-native host metrics exporters for Proxmox nodes.
 - `/etc/default/prometheus-node-exporter`
 - `/etc/systemd/system/smartctl-exporter.service`
 - `/etc/default/smartctl-exporter`
+- `/usr/local/bin/apcupsd-exporter`
+- `/etc/systemd/system/apcupsd-exporter.service`
+- `/etc/default/apcupsd-exporter`
 
 **In this repo:**
 - `configs/common/node-exporter.defaults`
 - `configs/common/smartctl-exporter.defaults`
 - `configs/common/smartctl-exporter.service`
+- `configs/common/apcupsd-exporter.py`
+- `configs/common/apcupsd-exporter.service`
+- `configs/common/apcupsd-exporter.env`
 - `deploy.sh`
+
+`prometheus-node-exporter`, `smartmontools`, and `python3` are installed via `apt`. `smartctl_exporter` is still fetched from the upstream GitHub release because Proxmox/Debian does not provide the exporter package in the default repos.
 
 ## Deployment
 
@@ -60,5 +70,7 @@ ssh bray "curl -s http://127.0.0.1:9633/metrics | head"
 
 **What it does:**
 - Stops and disables smartctl-exporter service
+- Stops and disables apcupsd-exporter service
 - Removes smartctl-exporter binary and config
+- Removes apcupsd-exporter binary and config
 - Optionally purges node_exporter package

@@ -42,7 +42,7 @@ fi
 if [[ "$SKIP_CONFIRM" == "false" ]]; then
     print_header "pve-exporters Removal Plan"
     echo "Hosts: $HOSTS"
-    echo "Actions: stop services, remove smartctl exporter files"
+    echo "Actions: stop services, remove smartctl/apcupsd exporter files"
     [[ "$PURGE" == "true" ]] && echo "Also purge prometheus-node-exporter package"
     echo ""
     read -p "Proceed with removal? [y/N]: " -n 1 -r
@@ -56,8 +56,9 @@ for HOST in $HOSTS; do
     print_action "Removing from $HOST..."
 
     ssh "$HOST" "systemctl disable --now smartctl-exporter 2>/dev/null || true" || host_failed=true
+    ssh "$HOST" "systemctl disable --now apcupsd-exporter 2>/dev/null || true" || host_failed=true
     ssh "$HOST" "systemctl disable --now prometheus-node-exporter 2>/dev/null || true" || host_failed=true
-    ssh "$HOST" "rm -f /etc/systemd/system/smartctl-exporter.service /etc/default/smartctl-exporter /usr/local/bin/smartctl_exporter" || host_failed=true
+    ssh "$HOST" "rm -f /etc/systemd/system/smartctl-exporter.service /etc/default/smartctl-exporter /usr/local/bin/smartctl_exporter /etc/systemd/system/apcupsd-exporter.service /etc/default/apcupsd-exporter /usr/local/bin/apcupsd-exporter" || host_failed=true
     ssh "$HOST" "systemctl daemon-reload" || host_failed=true
 
     if [[ "$PURGE" == "true" ]]; then

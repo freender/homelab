@@ -22,16 +22,28 @@ if [[ ! -d "$BUILD_DIR/configs" ]]; then
 fi
 
 apt-get update -qq
-apt-get install -y -qq prometheus-node-exporter smartmontools curl tar
+apt-get install -y -qq prometheus-node-exporter smartmontools python3 curl tar
 
 NODE_ENV_SRC="$BUILD_DIR/configs/node-exporter.defaults"
 SMART_ENV_SRC="$BUILD_DIR/configs/smartctl-exporter.defaults"
 SMART_SVC_SRC="$BUILD_DIR/configs/smartctl-exporter.service"
+APC_BIN_SRC="$BUILD_DIR/configs/apcupsd-exporter.py"
+APC_ENV_SRC="$BUILD_DIR/configs/apcupsd-exporter.env"
+APC_SVC_SRC="$BUILD_DIR/configs/apcupsd-exporter.service"
 
 mkdir -p /etc/default
 cp "$NODE_ENV_SRC" /etc/default/prometheus-node-exporter
 cp "$SMART_ENV_SRC" /etc/default/smartctl-exporter
 cp "$SMART_SVC_SRC" /etc/systemd/system/smartctl-exporter.service
+
+if [[ -f "$APC_BIN_SRC" && -f "$APC_ENV_SRC" && -f "$APC_SVC_SRC" ]]; then
+    install -m 755 "$APC_BIN_SRC" /usr/local/bin/apcupsd-exporter
+    install -m 644 "$APC_ENV_SRC" /etc/default/apcupsd-exporter
+    install -m 644 "$APC_SVC_SRC" /etc/systemd/system/apcupsd-exporter.service
+else
+    systemctl disable --now apcupsd-exporter 2>/dev/null || true
+    rm -f /etc/systemd/system/apcupsd-exporter.service /etc/default/apcupsd-exporter /usr/local/bin/apcupsd-exporter
+fi
 
 # shellcheck source=/etc/default/smartctl-exporter
 source /etc/default/smartctl-exporter
@@ -60,5 +72,9 @@ fi
 systemctl daemon-reload
 systemctl enable --now prometheus-node-exporter
 systemctl enable --now smartctl-exporter
+if [[ -f "$APC_BIN_SRC" && -f "$APC_ENV_SRC" && -f "$APC_SVC_SRC" ]]; then
+    systemctl enable --now apcupsd-exporter
+    systemctl is-active --quiet apcupsd-exporter
+fi
 systemctl is-active --quiet prometheus-node-exporter
 systemctl is-active --quiet smartctl-exporter
