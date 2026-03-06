@@ -41,29 +41,57 @@ fi
 
 if [[ "$SKIP_CONFIRM" == "false" ]]; then
     print_header "pve-exporters Removal Plan"
-    echo "Hosts: $HOSTS"
-    echo "Actions: stop services, remove smartctl/apcupsd exporter files"
-    [[ "$PURGE" == "true" ]] && echo "Also purge prometheus-node-exporter package"
+    print_sub "Hosts: $HOSTS"
+    print_sub "Actions: stop services, backup and remove smartctl/apcupsd exporter files"
+    [[ "$PURGE" == "true" ]] && print_sub "Also purge prometheus-node-exporter package"
     echo ""
     read -p "Proceed with removal? [y/N]: " -n 1 -r
     echo
     [[ $REPLY =~ ^[Yy]$ ]] || exit 0
 fi
 
+for HOST in $HOSTS; do
+    if ! ssh "$HOST" "rm -rf /tmp/homelab-pve-exporters-remove && mkdir -p /tmp/homelab-pve-exporters-remove/lib"; then
+        print_warn "Failed to stage utils on $HOST"
+    else
+        scp -q "$HOMELAB_ROOT/lib/print.sh" "$HOMELAB_ROOT/lib/utils.sh" "$HOST:/tmp/homelab-pve-exporters-remove/lib/" || true
+    fi
+done
+
 FAILED_HOSTS=()
 for HOST in $HOSTS; do
     host_failed=false
     print_action "Removing from $HOST..."
 
+    print_sub "Stopping services..."
     ssh "$HOST" "systemctl disable --now smartctl-exporter 2>/dev/null || true" || host_failed=true
     ssh "$HOST" "systemctl disable --now apcupsd-exporter 2>/dev/null || true" || host_failed=true
     ssh "$HOST" "systemctl disable --now prometheus-node-exporter 2>/dev/null || true" || host_failed=true
+
+    print_sub "Backing up configs..."
+    if ! ssh "$HOST" bash <<'EOF'
+source /tmp/homelab-pve-exporters-remove/lib/utils.sh
+backup_config /etc/systemd/system/smartctl-exporter.service
+backup_config /etc/default/smartctl-exporter
+backup_config /usr/local/bin/smartctl_exporter
+backup_config /etc/systemd/system/apcupsd-exporter.service
+backup_config /etc/default/apcupsd-exporter
+backup_config /usr/local/bin/apcupsd-exporter
+EOF
+    then
+        host_failed=true
+    fi
+
+    print_sub "Removing files..."
     ssh "$HOST" "rm -f /etc/systemd/system/smartctl-exporter.service /etc/default/smartctl-exporter /usr/local/bin/smartctl_exporter /etc/systemd/system/apcupsd-exporter.service /etc/default/apcupsd-exporter /usr/local/bin/apcupsd-exporter" || host_failed=true
     ssh "$HOST" "systemctl daemon-reload" || host_failed=true
 
     if [[ "$PURGE" == "true" ]]; then
+        print_sub "Purging package..."
         ssh "$HOST" "DEBIAN_FRONTEND=noninteractive apt-get purge -y prometheus-node-exporter >/dev/null 2>&1 || true" || host_failed=true
     fi
+
+    ssh "$HOST" "rm -rf /tmp/homelab-pve-exporters-remove" >/dev/null 2>&1 || true
 
     if [[ "$host_failed" == "true" ]]; then
         print_warn "Removal completed with errors on $HOST"
@@ -74,7 +102,10 @@ for HOST in $HOSTS; do
     echo ""
 done
 
+print_header "Removal complete"
+
 if [[ ${#FAILED_HOSTS[@]} -gt 0 ]]; then
-    echo "Failed hosts: ${FAILED_HOSTS[*]}"
+    echo ""
+    print_sub "Failed hosts: ${FAILED_HOSTS[*]}"
     exit 1
 fi

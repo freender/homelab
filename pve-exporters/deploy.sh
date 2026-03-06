@@ -50,7 +50,11 @@ deploy() {
 
     if has_apcupsd_exporter "$host"; then
         upsname=$(hosts get "$host" "apcupsd.name") || { print_warn "apcupsd.name missing"; return 1; }
-        serial=$(ssh "$host" "apcaccess status 2>/dev/null | sed -n 's/^SERIALNO[[:space:]]*:[[:space:]]*//p' | xargs" 2>/dev/null || true)
+        if [[ "$DRY_RUN" == "true" ]]; then
+            serial=""
+        else
+            serial=$(ssh "$host" "apcaccess status 2>/dev/null | sed -n 's/^SERIALNO[[:space:]]*:[[:space:]]*//p' | xargs" 2>/dev/null || true)
+        fi
 
         cp "$COMMON_DIR/apcupsd-exporter.py" "$build_dir/configs/apcupsd-exporter.py"
         cp "$COMMON_DIR/apcupsd-exporter.service" "$build_dir/configs/apcupsd-exporter.service"
@@ -78,7 +82,7 @@ deploy() {
     scp -q "$HOMELAB_ROOT/lib/print.sh" "$HOMELAB_ROOT/lib/utils.sh" "$host:/tmp/homelab-pve-exporters/lib/"
 
     print_sub "Running installer..."
-    ssh "$host" "cd /tmp/homelab-pve-exporters && chmod +x scripts/install.sh && if [ \"\$(id -u)\" -ne 0 ]; then echo Error: PVE deploy requires root SSH user >&2; exit 1; fi && FORCE_UPDATE= ./scripts/install.sh "
+    ssh "$host" "cd /tmp/homelab-pve-exporters && chmod +x scripts/install.sh && if [ \"\$(id -u)\" -ne 0 ]; then echo Error: PVE deploy requires root SSH user >&2; exit 1; fi && FORCE_UPDATE='$FORCE_UPDATE' ./scripts/install.sh '$host'"
 }
 
 deploy_init "PVE Prometheus Exporters"

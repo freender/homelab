@@ -17,7 +17,7 @@ else
 fi
 
 if [[ ! -d "$BUILD_DIR/configs" ]]; then
-    echo "Error: Build directory not found: $BUILD_DIR/configs"
+    print_error "Build directory not found: $BUILD_DIR/configs"
     exit 1
 fi
 
@@ -32,14 +32,17 @@ APC_ENV_SRC="$BUILD_DIR/configs/apcupsd-exporter.env"
 APC_SVC_SRC="$BUILD_DIR/configs/apcupsd-exporter.service"
 
 mkdir -p /etc/default
-cp "$NODE_ENV_SRC" /etc/default/prometheus-node-exporter
-cp "$SMART_ENV_SRC" /etc/default/smartctl-exporter
-cp "$SMART_SVC_SRC" /etc/systemd/system/smartctl-exporter.service
+backup_and_copy_if_changed "$NODE_ENV_SRC" /etc/default/prometheus-node-exporter
+backup_and_copy_if_changed "$SMART_ENV_SRC" /etc/default/smartctl-exporter
+backup_and_copy_if_changed "$SMART_SVC_SRC" /etc/systemd/system/smartctl-exporter.service
 
 if [[ -f "$APC_BIN_SRC" && -f "$APC_ENV_SRC" && -f "$APC_SVC_SRC" ]]; then
-    install -m 755 "$APC_BIN_SRC" /usr/local/bin/apcupsd-exporter
-    install -m 644 "$APC_ENV_SRC" /etc/default/apcupsd-exporter
-    install -m 644 "$APC_SVC_SRC" /etc/systemd/system/apcupsd-exporter.service
+    if file_needs_update "$APC_BIN_SRC" /usr/local/bin/apcupsd-exporter; then
+        backup_config /usr/local/bin/apcupsd-exporter
+        install -m 755 "$APC_BIN_SRC" /usr/local/bin/apcupsd-exporter
+    fi
+    backup_and_copy_if_changed "$APC_ENV_SRC" /etc/default/apcupsd-exporter
+    backup_and_copy_if_changed "$APC_SVC_SRC" /etc/systemd/system/apcupsd-exporter.service
 else
     systemctl disable --now apcupsd-exporter 2>/dev/null || true
     rm -f /etc/systemd/system/apcupsd-exporter.service /etc/default/apcupsd-exporter /usr/local/bin/apcupsd-exporter
@@ -57,7 +60,7 @@ esac
 SMART_BIN="/usr/local/bin/smartctl_exporter"
 SMART_URL="https://github.com/prometheus-community/smartctl_exporter/releases/download/v${SMARTCTL_EXPORTER_VERSION}/smartctl_exporter-${SMARTCTL_EXPORTER_VERSION}.linux-${ARCH_TAG}.tar.gz"
 TMP_DIR="$(mktemp -d)"
-trap "rm -rf """ EXIT
+trap 'rm -rf "$TMP_DIR"' EXIT
 
 if [[ "$FORCE_UPDATE" == "true" ]] || [[ ! -x "$SMART_BIN" ]]; then
     print_sub "Installing smartctl_exporter v${SMARTCTL_EXPORTER_VERSION}"
