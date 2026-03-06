@@ -28,9 +28,9 @@ fi
 
 validate() {
     local required=(node-exporter.defaults smartctl-exporter.defaults smartctl-exporter.service apcupsd-exporter.env apcupsd-exporter.service apcupsd-exporter.py)
-    [[ ! -d "$COMMON_DIR" ]] && { echo "Error: $COMMON_DIR not found"; return 1; }
+    [[ ! -d "$COMMON_DIR" ]] && { print_warn "configs/common not found: $COMMON_DIR"; return 1; }
     for conf in "${required[@]}"; do
-        [[ ! -f "$COMMON_DIR/$conf" ]] && { echo "Error: Missing $COMMON_DIR/$conf"; return 1; }
+        [[ ! -f "$COMMON_DIR/$conf" ]] && { print_warn "Missing required config: $COMMON_DIR/$conf"; return 1; }
     done
     return 0
 }
@@ -50,7 +50,7 @@ deploy() {
 
     if has_apcupsd_exporter "$host"; then
         upsname=$(hosts get "$host" "apcupsd.name") || { print_warn "apcupsd.name missing"; return 1; }
-        if [[ "$DRY_RUN" == "true" ]]; then
+        if [[ "$DRY_RUN" == true ]]; then
             serial=""
         else
             serial=$(ssh "$host" "apcaccess status 2>/dev/null | sed -n 's/^SERIALNO[[:space:]]*:[[:space:]]*//p' | xargs" 2>/dev/null || true)
@@ -82,7 +82,7 @@ deploy() {
     scp -q "$HOMELAB_ROOT/lib/print.sh" "$HOMELAB_ROOT/lib/utils.sh" "$host:/tmp/homelab-pve-exporters/lib/"
 
     print_sub "Running installer..."
-    ssh "$host" "cd /tmp/homelab-pve-exporters && chmod +x scripts/install.sh && if [ \"\$(id -u)\" -ne 0 ]; then echo Error: PVE deploy requires root SSH user >&2; exit 1; fi && FORCE_UPDATE='$FORCE_UPDATE' ./scripts/install.sh '$host'"
+    ssh "$host" "cd /tmp/homelab-pve-exporters && chmod +x scripts/install.sh && if [ \"\$(id -u)\" -ne 0 ]; then echo 'Error: PVE deploy requires root SSH user' >&2; exit 1; fi && FORCE_UPDATE='$FORCE_UPDATE' ./scripts/install.sh '$host'"
 }
 
 deploy_init "PVE Prometheus Exporters"
