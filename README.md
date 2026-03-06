@@ -88,6 +88,14 @@ SSH config auto-deployment
 cd ~/homelab/ssh && ./deploy.sh all
 ```
 
+### [pve-exporters](pve-exporters/)
+Prometheus-native exporters for PVE host metrics
+- node_exporter + smartctl_exporter
+
+```bash
+cd ~/homelab/pve-exporters && ./deploy.sh all
+```
+
 ### [telegraf](telegraf/)
 Metrics collection (CPU, disk, network, sensors, smartctl)
 - Sends to VictoriaMetrics
