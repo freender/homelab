@@ -24,8 +24,8 @@ Prometheus-native host metrics exporters for Proxmox nodes.
 - `/etc/default/smartctl-exporter`
 
 **In this repo:**
-- `configs/common/node-exporter.env`
-- `configs/common/smartctl-exporter.env`
+- `configs/common/node-exporter.defaults`
+- `configs/common/smartctl-exporter.defaults`
 - `configs/common/smartctl-exporter.service`
 - `deploy.sh`
 

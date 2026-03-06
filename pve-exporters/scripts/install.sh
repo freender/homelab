@@ -24,8 +24,8 @@ fi
 apt-get update -qq
 apt-get install -y -qq prometheus-node-exporter smartmontools curl tar
 
-NODE_ENV_SRC="$BUILD_DIR/configs/node-exporter.env"
-SMART_ENV_SRC="$BUILD_DIR/configs/smartctl-exporter.env"
+NODE_ENV_SRC="$BUILD_DIR/configs/node-exporter.defaults"
+SMART_ENV_SRC="$BUILD_DIR/configs/smartctl-exporter.defaults"
 SMART_SVC_SRC="$BUILD_DIR/configs/smartctl-exporter.service"
 
 mkdir -p /etc/default

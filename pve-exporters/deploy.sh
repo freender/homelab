@@ -19,7 +19,7 @@ if ! HOSTS=$(filter_hosts "${1:-all}" "${SUPPORTED_HOSTS[@]}"); then
 fi
 
 validate() {
-    local required=(node-exporter.env smartctl-exporter.env smartctl-exporter.service)
+    local required=(node-exporter.defaults smartctl-exporter.defaults smartctl-exporter.service)
     [[ ! -d "$COMMON_DIR" ]] && { echo "Error: $COMMON_DIR not found"; return 1; }
     for conf in "${required[@]}"; do
         [[ ! -f "$COMMON_DIR/$conf" ]] && { echo "Error: Missing $COMMON_DIR/$conf"; return 1; }
@@ -35,12 +35,12 @@ deploy() {
     prepare_build_dir "$build_dir"
     mkdir -p "$build_dir/configs"
 
-    cp "$COMMON_DIR/node-exporter.env" "$build_dir/configs/node-exporter.env"
-    cp "$COMMON_DIR/smartctl-exporter.env" "$build_dir/configs/smartctl-exporter.env"
+    cp "$COMMON_DIR/node-exporter.defaults" "$build_dir/configs/node-exporter.defaults"
+    cp "$COMMON_DIR/smartctl-exporter.defaults" "$build_dir/configs/smartctl-exporter.defaults"
     cp "$COMMON_DIR/smartctl-exporter.service" "$build_dir/configs/smartctl-exporter.service"
 
-    diff_remote_config "$host" "$build_dir/configs/node-exporter.env" "/etc/default/prometheus-node-exporter" || true
-    diff_remote_config "$host" "$build_dir/configs/smartctl-exporter.env" "/etc/default/smartctl-exporter" || true
+    diff_remote_config "$host" "$build_dir/configs/node-exporter.defaults" "/etc/default/prometheus-node-exporter" || true
+    diff_remote_config "$host" "$build_dir/configs/smartctl-exporter.defaults" "/etc/default/smartctl-exporter" || true
     diff_remote_config "$host" "$build_dir/configs/smartctl-exporter.service" "/etc/systemd/system/smartctl-exporter.service" || true
 
     if [[ "$DRY_RUN" == true ]]; then
