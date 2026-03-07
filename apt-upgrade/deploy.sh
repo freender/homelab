@@ -1,7 +1,10 @@
 #!/bin/bash
-# Deploy apt dist-upgrade timer
+# Deploy apt dist-upgrade
 # Usage: ./deploy.sh [--cleanup] [--dry-run] [host|all]
-#   --cleanup: remove old kernels, autoremove orphaned packages, clean apt cache
+#
+# Behaviour per host:
+#   apt-upgrade:               on-demand only (running this script upgrades the host)
+#   apt-upgrade.autoupgrade:   also installs a daily systemd timer at apt-upgrade.schedule
 
 source "$(dirname "$0")/../lib/common.sh"
 
@@ -36,7 +39,7 @@ fi
 
 deploy() {
     local host="$1"
-    local host_type schedule
+    local host_type autoupgrade schedule
 
     host_type=$(hosts get "$host" "type") || { print_warn "type missing for $host"; return 1; }
     case "$host_type" in
@@ -48,11 +51,14 @@ deploy() {
             ;;
     esac
 
+    # autoupgrade subfeature: install persistent daily timer
+    autoupgrade=$(hosts get "$host" "apt-upgrade.autoupgrade" "false") || autoupgrade="false"
     schedule=$(hosts get "$host" "apt-upgrade.schedule" "09:00") || schedule="09:00"
 
     local build_dir="$BUILD_ROOT/$host"
     prepare_build_dir "$build_dir"
 
+    # Service unit (always rendered; used both by on-demand deploy and autoupgrade timer)
     cat > "$build_dir/service" <<EOF
 [Unit]
 Description=Homelab daily apt update and dist-upgrade
@@ -72,7 +78,9 @@ ExecStart=/usr/bin/apt-get -y autoclean
 EOF
     fi
 
-    cat > "$build_dir/timer" <<EOF
+    # Timer unit (only rendered when autoupgrade is enabled)
+    if [[ "$autoupgrade" == "true" ]]; then
+        cat > "$build_dir/timer" <<EOF
 [Unit]
 Description=Run homelab daily apt update and dist-upgrade
 
@@ -83,26 +91,38 @@ Persistent=true
 [Install]
 WantedBy=timers.target
 EOF
+    fi
 
     cat > "$build_dir/env" <<EOF
 CLEANUP="$CLEANUP"
+AUTOUPGRADE="$autoupgrade"
 SCHEDULE="$schedule"
 EOF
 
     # Show remote diffs
     diff_remote_config "$host" "$build_dir/service" "/etc/systemd/system/homelab-apt-dist-upgrade.service" || true
-    diff_remote_config "$host" "$build_dir/timer" "/etc/systemd/system/homelab-apt-dist-upgrade.timer" || true
+    if [[ "$autoupgrade" == "true" ]]; then
+        diff_remote_config "$host" "$build_dir/timer" "/etc/systemd/system/homelab-apt-dist-upgrade.timer" || true
+    fi
 
     if [[ "$DRY_RUN" == true ]]; then
-        print_sub "[DRY-RUN] Would install daily apt dist-upgrade timer on $host at $schedule"
-        [[ "$CLEANUP" == true ]] && print_sub "[DRY-RUN] Would enable cleanup (old kernels, autoremove, autoclean)"
+        if [[ "$autoupgrade" == "true" ]]; then
+            print_sub "[DRY-RUN] Would install daily apt dist-upgrade timer on $host at $schedule"
+        else
+            print_sub "[DRY-RUN] Would run apt dist-upgrade on $host (on-demand only)"
+        fi
+        [[ "$CLEANUP" == true ]] && print_sub "[DRY-RUN] Would enable cleanup (autoremove, autoclean)"
         return 0
     fi
 
     print_sub "Staging bundle..."
     ssh "$host" "rm -rf /tmp/homelab-apt-upgrade && mkdir -p /tmp/homelab-apt-upgrade/build /tmp/homelab-apt-upgrade/lib /tmp/homelab-apt-upgrade/scripts"
     scp -rq "$SCRIPT_DIR/scripts" "$host:/tmp/homelab-apt-upgrade/"
-    scp -q "$build_dir/service" "$build_dir/timer" "$build_dir/env" "$host:/tmp/homelab-apt-upgrade/build/"
+    if [[ "$autoupgrade" == "true" ]]; then
+        scp -q "$build_dir/service" "$build_dir/timer" "$build_dir/env" "$host:/tmp/homelab-apt-upgrade/build/"
+    else
+        scp -q "$build_dir/service" "$build_dir/env" "$host:/tmp/homelab-apt-upgrade/build/"
+    fi
     scp -q "$HOMELAB_ROOT/lib/print.sh" "$HOMELAB_ROOT/lib/utils.sh" "$host:/tmp/homelab-apt-upgrade/lib/"
 
     print_sub "Running installer..."
