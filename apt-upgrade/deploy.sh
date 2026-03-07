@@ -12,6 +12,7 @@ CLEANUP=false
 parse_common_flags "$@"
 set -- "${PARSED_ARGS[@]}"
 
+# Parse module-specific flags
 REMAINING_ARGS=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -49,27 +50,63 @@ deploy() {
 
     schedule=$(hosts get "$host" "apt-upgrade.schedule" "09:00") || schedule="09:00"
 
+    local build_dir="$BUILD_ROOT/$host"
+    prepare_build_dir "$build_dir"
+
+    cat > "$build_dir/service" <<EOF
+[Unit]
+Description=Homelab daily apt update and dist-upgrade
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/apt-get update
+ExecStart=/usr/bin/env DEBIAN_FRONTEND=noninteractive /usr/bin/apt-get -y dist-upgrade
+EOF
+
+    if [[ "$CLEANUP" == true ]]; then
+        cat >> "$build_dir/service" <<EOF
+ExecStart=/usr/bin/env DEBIAN_FRONTEND=noninteractive /usr/bin/apt-get -y autoremove
+ExecStart=/usr/bin/apt-get -y autoclean
+EOF
+    fi
+
+    cat > "$build_dir/timer" <<EOF
+[Unit]
+Description=Run homelab daily apt update and dist-upgrade
+
+[Timer]
+OnCalendar=*-*-* ${schedule}:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+
+    cat > "$build_dir/env" <<EOF
+CLEANUP="$CLEANUP"
+SCHEDULE="$schedule"
+EOF
+
+    # Show remote diffs
+    diff_remote_config "$host" "$build_dir/service" "/etc/systemd/system/homelab-apt-dist-upgrade.service" || true
+    diff_remote_config "$host" "$build_dir/timer" "/etc/systemd/system/homelab-apt-dist-upgrade.timer" || true
+
     if [[ "$DRY_RUN" == true ]]; then
         print_sub "[DRY-RUN] Would install daily apt dist-upgrade timer on $host at $schedule"
         [[ "$CLEANUP" == true ]] && print_sub "[DRY-RUN] Would enable cleanup (old kernels, autoremove, autoclean)"
         return 0
     fi
 
-    local build_dir="$BUILD_ROOT/$host"
-    mkdir -p "$build_dir"
-    cat > "$build_dir/env" <<EOF2
-CLEANUP="$CLEANUP"
-SCHEDULE="$schedule"
-EOF2
-
     print_sub "Staging bundle..."
     ssh "$host" "rm -rf /tmp/homelab-apt-upgrade && mkdir -p /tmp/homelab-apt-upgrade/build /tmp/homelab-apt-upgrade/lib /tmp/homelab-apt-upgrade/scripts"
     scp -rq "$SCRIPT_DIR/scripts" "$host:/tmp/homelab-apt-upgrade/"
-    scp -q "$build_dir/env" "$host:/tmp/homelab-apt-upgrade/build/"
+    scp -q "$build_dir/service" "$build_dir/timer" "$build_dir/env" "$host:/tmp/homelab-apt-upgrade/build/"
     scp -q "$HOMELAB_ROOT/lib/print.sh" "$HOMELAB_ROOT/lib/utils.sh" "$host:/tmp/homelab-apt-upgrade/lib/"
 
     print_sub "Running installer..."
-    ssh "$host" "cd /tmp/homelab-apt-upgrade && chmod +x scripts/install.sh && if [ \"\$(id -u)\" -ne 0 ]; then echo Error: deploy requires root SSH user >&2; exit 1; fi && ./scripts/install.sh"
+    ssh "$host" "cd /tmp/homelab-apt-upgrade && chmod +x scripts/install.sh && if [ \"\$(id -u)\" -ne 0 ]; then echo 'Error: deploy requires root SSH user' >&2; exit 1; fi && FORCE_UPDATE='$FORCE_UPDATE' ./scripts/install.sh"
 }
 
 deploy_init "APT Dist-Upgrade"

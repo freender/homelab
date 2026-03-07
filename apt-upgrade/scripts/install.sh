@@ -1,10 +1,12 @@
 #!/bin/bash
 # install.sh - Install apt dist-upgrade timer and service
 
-set -euo pipefail
+set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-ENV_FILE="$SCRIPT_DIR/build/env"
+BUILD_DIR="$SCRIPT_DIR/build"
+FORCE_UPDATE=${FORCE_UPDATE:-false}
+
 SERVICE_NAME="homelab-apt-dist-upgrade.service"
 TIMER_NAME="homelab-apt-dist-upgrade.timer"
 SERVICE_PATH="/etc/systemd/system/$SERVICE_NAME"
@@ -14,51 +16,70 @@ if [[ -f "$SCRIPT_DIR/lib/utils.sh" ]]; then
     # shellcheck source=/dev/null
     source "$SCRIPT_DIR/lib/utils.sh"
 else
-    print_sub() { echo "    $*"; }
-    print_warn() { echo "    Warning: $*"; }
+    print_sub()    { echo "    $*"; }
+    print_ok()     { echo "    ✓ $*"; }
+    print_warn()   { echo "    ✗ Warning: $*"; }
+    print_error()  { echo "    ✗ Error: $*" >&2; }
+    file_needs_update() {
+        local src="$1" dst="$2"
+        [[ ! -f "$src" ]] && { print_error "source file not found: $src"; return 2; }
+        [[ ! -f "$dst" ]] && return 0
+        [[ "$FORCE_UPDATE" == "true" ]] && return 0
+        cmp -s "$src" "$dst" && return 1
+        return 0
+    }
+    copy_if_changed() {
+        local src="$1"
+        local dst="$2"
+        local label="${3:-$dst}"
+        if file_needs_update "$src" "$dst"; then
+            cp "$src" "$dst"
+            print_sub "Updated $label"
+            return 0
+        fi
+        local rc=$?
+        if [[ $rc -eq 1 ]]; then
+            print_sub "$label unchanged; skipping update"
+            return 1
+        fi
+        return "$rc"
+    }
 fi
 
-CLEANUP="false"
-SCHEDULE="09:00"
-if [[ -f "$ENV_FILE" ]]; then
-    # shellcheck source=/dev/null
-    source "$ENV_FILE"
+if [[ ! -d "$BUILD_DIR" ]]; then
+    print_error "Build directory not found: $BUILD_DIR"
+    exit 1
 fi
 
-print_sub "Installing $SERVICE_NAME"
-cat > "$SERVICE_PATH" <<EOF2
-[Unit]
-Description=Homelab daily apt update and dist-upgrade
-Wants=network-online.target
-After=network-online.target
-
-[Service]
-Type=oneshot
-ExecStart=/usr/bin/apt-get update
-ExecStart=/usr/bin/env DEBIAN_FRONTEND=noninteractive /usr/bin/apt-get -y dist-upgrade
-EOF2
-
-if [[ "$CLEANUP" == "true" ]]; then
-cat >> "$SERVICE_PATH" <<'EOF2'
-ExecStart=/usr/bin/env DEBIAN_FRONTEND=noninteractive /usr/bin/apt-get -y autoremove
-ExecStart=/usr/bin/apt-get -y autoclean
-EOF2
+# Install service and timer units (idempotent)
+local_changed=false
+if copy_if_changed "$BUILD_DIR/service" "$SERVICE_PATH" "$SERVICE_NAME"; then
+    local_changed=true
+fi
+if copy_if_changed "$BUILD_DIR/timer" "$TIMER_PATH" "$TIMER_NAME"; then
+    local_changed=true
 fi
 
-print_sub "Installing $TIMER_NAME at $SCHEDULE"
-cat > "$TIMER_PATH" <<EOF2
-[Unit]
-Description=Run homelab daily apt update and dist-upgrade
+if [[ "$local_changed" == true ]]; then
+    systemctl daemon-reload
+fi
 
-[Timer]
-OnCalendar=*-*-* ${SCHEDULE}:00
-Persistent=true
+# Enable timer (idempotent)
+if ! systemctl is-enabled --quiet "$TIMER_NAME" 2>/dev/null; then
+    systemctl enable --now "$TIMER_NAME" >/dev/null
+    print_sub "Timer enabled"
+else
+    if [[ "$local_changed" == true ]]; then
+        systemctl restart "$TIMER_NAME" >/dev/null
+        print_sub "Timer restarted"
+    else
+        print_sub "Timer already enabled"
+    fi
+fi
 
-[Install]
-WantedBy=timers.target
-EOF2
-
-systemctl daemon-reload
-systemctl enable --now "$TIMER_NAME" >/dev/null
-print_sub "Timer enabled"
 systemctl list-timers --all --no-pager | grep -F "$TIMER_NAME" || true
+
+# Reboot check
+if [[ -f /var/run/reboot-required ]]; then
+    print_warn "Reboot required on $(hostname)"
+fi
