@@ -1,5 +1,5 @@
 #!/bin/bash
-# Deploy apt dist-upgrade workflow
+# Deploy apt dist-upgrade timer
 # Usage: ./deploy.sh [--cleanup] [--dry-run] [host|all]
 #   --cleanup: remove old kernels, autoremove orphaned packages, clean apt cache
 
@@ -12,7 +12,6 @@ CLEANUP=false
 parse_common_flags "$@"
 set -- "${PARSED_ARGS[@]}"
 
-# Parse module-specific flags
 REMAINING_ARGS=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -36,7 +35,7 @@ fi
 
 deploy() {
     local host="$1"
-    local host_type
+    local host_type schedule
 
     host_type=$(hosts get "$host" "type") || { print_warn "type missing for $host"; return 1; }
     case "$host_type" in
@@ -48,17 +47,20 @@ deploy() {
             ;;
     esac
 
+    schedule=$(hosts get "$host" "apt-upgrade.schedule" "09:00") || schedule="09:00"
+
     if [[ "$DRY_RUN" == true ]]; then
-        print_sub "[DRY-RUN] Would run apt dist-upgrade on $host"
-        [[ "$CLEANUP" == true ]] && print_sub "[DRY-RUN] Would cleanup (old kernels, autoremove, autoclean)"
+        print_sub "[DRY-RUN] Would install daily apt dist-upgrade timer on $host at $schedule"
+        [[ "$CLEANUP" == true ]] && print_sub "[DRY-RUN] Would enable cleanup (old kernels, autoremove, autoclean)"
         return 0
     fi
 
     local build_dir="$BUILD_ROOT/$host"
     mkdir -p "$build_dir"
-    cat > "$build_dir/env" <<EOF
+    cat > "$build_dir/env" <<EOF2
 CLEANUP="$CLEANUP"
-EOF
+SCHEDULE="$schedule"
+EOF2
 
     print_sub "Staging bundle..."
     ssh "$host" "rm -rf /tmp/homelab-apt-upgrade && mkdir -p /tmp/homelab-apt-upgrade/build /tmp/homelab-apt-upgrade/lib /tmp/homelab-apt-upgrade/scripts"
@@ -67,7 +69,7 @@ EOF
     scp -q "$HOMELAB_ROOT/lib/print.sh" "$HOMELAB_ROOT/lib/utils.sh" "$host:/tmp/homelab-apt-upgrade/lib/"
 
     print_sub "Running installer..."
-    ssh "$host" "cd /tmp/homelab-apt-upgrade && chmod +x scripts/install.sh && if [ \"\$(id -u)\" -ne 0 ]; then echo 'Error: deploy requires root SSH user' >&2; exit 1; fi && ./scripts/install.sh"
+    ssh "$host" "cd /tmp/homelab-apt-upgrade && chmod +x scripts/install.sh && if [ \"\$(id -u)\" -ne 0 ]; then echo Error: deploy requires root SSH user >&2; exit 1; fi && ./scripts/install.sh"
 }
 
 deploy_init "APT Dist-Upgrade"
