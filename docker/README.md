@@ -22,7 +22,7 @@ Per-host settings live in `docker/hosts.conf` using `docker.*` keys.
 ### What Gets Deployed
 
 **All hosts** (`/mnt/cache/appdata/`):
-- `start.sh` - Updates and starts Docker stacks (Traefik first), cleans up unused images
+- `start.sh` - Updates and starts Docker stacks (Traefik first), cleans up unused images and volumes
 - `rm.sh` - Stops all Docker stacks with confirmation
 
 **helm only** (`/mnt/cache/appdata/scripts/`):
@@ -73,7 +73,7 @@ Orchestrates Docker Compose stacks with custom startup order:
 - Starts priority stacks first (Traefik)
 - Pulls latest images
 - Starts all remaining stacks
-- Cleans up unused Docker images
+- Cleans up unused Docker images and volumes
 - Skips directories without compose files
 
 ### rm.sh

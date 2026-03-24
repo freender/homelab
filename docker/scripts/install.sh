@@ -63,6 +63,7 @@ DOCKER_OWNER="${DOCKER_OWNER:-$DOCKER_USER}"
 DOCKER_GROUP="${DOCKER_GROUP:-$DOCKER_OWNER}"
 
 mkdir -p "$APPDATA_DEST"
+mkdir -p "$APPDATA_SCRIPTS_DIR"
 
 for script in start.sh rm.sh; do
     if ! copy_if_changed "$SCRIPT_DIR/scripts/$script" "${APPDATA_DEST}/${script}" "$script"; then
@@ -73,8 +74,15 @@ for script in start.sh rm.sh; do
     chmod +x "${APPDATA_DEST}/${script}"
 done
 
+if ! copy_if_changed "$SCRIPT_DIR/scripts/docker-common.sh" "$APPDATA_SCRIPTS_DIR/docker-common.sh" "docker-common.sh"; then
+    rc=$?
+    [[ $rc -eq 1 ]] || exit "$rc"
+fi
+chown "${DOCKER_OWNER}:${DOCKER_GROUP}" "$APPDATA_SCRIPTS_DIR/docker-common.sh"
+chmod +x "$APPDATA_SCRIPTS_DIR/docker-common.sh"
+
 if [[ "$DOCKER_BACKUP" == "true" ]]; then
-    mkdir -p "$APPDATA_SCRIPTS_DIR" "$APPDATA_LOGS_DIR"
+    mkdir -p "$APPDATA_LOGS_DIR"
     if ! copy_if_changed "$SCRIPT_DIR/scripts/backup.sh" "$APPDATA_SCRIPTS_DIR/backup.sh" "backup.sh"; then
         rc=$?
         [[ $rc -eq 1 ]] || exit "$rc"

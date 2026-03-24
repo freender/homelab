@@ -5,104 +5,110 @@
 
 set -u
 
-# Base directory = directory of this script
-ROOT="$(cd "$(dirname "$0")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+COMMON_SH=""
 
-# Define startup order (stacks that need to run first)
-# Add directory names here in the order they should start
-ORDERED_STACKS=()
-if [ -d "$ROOT/traefik" ]; then
-    ORDERED_STACKS+=("traefik")
-elif [ -d "$ROOT/traefik2" ]; then
-    ORDERED_STACKS+=("traefik2")
+if [[ -f "$SCRIPT_DIR/scripts/docker-common.sh" ]]; then
+    COMMON_SH="$SCRIPT_DIR/scripts/docker-common.sh"
+elif [[ -f "$SCRIPT_DIR/docker-common.sh" ]]; then
+    COMMON_SH="$SCRIPT_DIR/docker-common.sh"
+else
+    echo "!! docker-common.sh not found" >&2
+    exit 1
 fi
 
-# Directories to ignore (no compose.yml or should be skipped)
-IGNORE_DIRS=(
-  # Add directory names to skip here
-  # Example: "backup" "scripts" etc.
-)
+# shellcheck source=/dev/null
+source "$COMMON_SH"
+
+# Base directory = directory of deployed script location
+ROOT="$(resolve_appdata_root "$0")"
+
+if ! acquire_docker_lock "$ROOT" "start"; then
+    exit 1
+fi
+
+start_stack() {
+    local stack_dir="$1"
+    local stack_name="$2"
+    local code
+
+    run_compose "$stack_dir" pull
+    code=$?
+    if [[ $code -ne 0 ]]; then
+        echo "!! failed in $stack_dir during pull (exit $code)"
+        failed_stacks+=("$stack_name")
+        return 1
+    fi
+
+    run_compose "$stack_dir" up -d
+    code=$?
+    if [[ $code -ne 0 ]]; then
+        echo "!! failed in $stack_dir during up (exit $code)"
+        failed_stacks+=("$stack_name")
+        return 1
+    fi
+
+    return 0
+}
+
+# Define startup order (stacks that need to run first)
+mapfile -t ORDERED_STACKS < <(get_priority_stacks "$ROOT")
+mapfile -t STACK_DIRS < <(list_stack_dirs "$ROOT")
 
 # Track which stacks we've already started
 declare -A started_stacks
-
-# Build ignore lookup table
-declare -A ignore_lookup
-for dir in "${IGNORE_DIRS[@]}"; do
-  ignore_lookup["$dir"]=1
-done
+failed_stacks=()
+prune_failed=false
 
 echo "=== Starting Docker stacks with custom order ==="
 echo ""
 
 # Start ordered stacks first
 for stack in "${ORDERED_STACKS[@]}"; do
-  stack_dir="$ROOT/$stack"
-  if [ -d "$stack_dir" ]; then
-    if [ ! -f "$stack_dir/compose.yml" ] && [ ! -f "$stack_dir/docker-compose.yml" ]; then
-      echo "!! WARNING: No compose file found in $stack_dir, skipping"
-      started_stacks["$stack"]=1
-      continue
+    stack_dir="$ROOT/$stack"
+    if [[ ! -d "$stack_dir" ]]; then
+        echo "!! WARNING: Ordered stack '$stack' not found at $stack_dir"
+        continue
     fi
-    
+
     echo ">>> $stack_dir (priority order)"
-    (
-      cd "$stack_dir" && docker compose pull && docker compose up -d
-    ) || {
-      code=$?
-      echo "!! failed in $stack_dir (exit $code)"
-    }
+    start_stack "$stack_dir" "$stack" || true
     started_stacks["$stack"]=1
-  else
-    echo "!! WARNING: Ordered stack '$stack' not found at $stack_dir"
-  fi
 done
 
-[ ${#ORDERED_STACKS[@]} -gt 0 ] && echo "" && echo ">>> Starting remaining stacks..." && echo ""
+[[ ${#ORDERED_STACKS[@]} -gt 0 ]] && echo "" && echo ">>> Starting remaining stacks..." && echo ""
 
 # Now start all other stacks
 found=0
-skipped=0
-for d in "$ROOT"/*/; do
-  [ -d "$d" ] || continue
-  
-  # Get just the directory name
-  stack_name="$(basename "$d")"
-  
-  # Skip if in ignore list
-  if [ "${ignore_lookup[$stack_name]:-0}" = "1" ]; then
-    ((skipped++))
-    continue
-  fi
-  
-  # Skip if we already started this stack
-  [ "${started_stacks[$stack_name]:-0}" = "1" ] && continue
-  
-  # Skip if no compose file
-  if [ ! -f "$d/compose.yml" ] && [ ! -f "$d/docker-compose.yml" ]; then
-    echo "!! No compose file in $d, skipping"
-    ((skipped++))
-    continue
-  fi
-  
-  found=1
-  echo ">>> $d"
-  (
-    cd "$d" && docker compose pull && docker compose up -d
-  ) || {
-    code=$?
-    echo "!! failed in $d (exit $code)"
-  }
+for d in "${STACK_DIRS[@]}"; do
+    [[ -d "$d" ]] || continue
+
+    stack_name="$(basename "$d")"
+    [[ "${started_stacks[$stack_name]:-0}" == "1" ]] && continue
+
+    found=1
+    echo ">>> $d"
+    start_stack "$d" "$stack_name" || true
 done
 
 echo ""
-[ "$skipped" -gt 0 ] && echo "Skipped $skipped director(ies)"
-[ "$found" -eq 0 ] && [ ${#ORDERED_STACKS[@]} -eq 0 ] && echo "No subdirectories found under $ROOT"
+[[ "$found" -eq 0 && ${#ORDERED_STACKS[@]} -eq 0 ]] && echo "No compose stacks found under $ROOT"
 
 echo ""
 echo ">>> Pruning unused Docker images and volumes"
-docker system prune -f --volumes || {
-  code=$?
-  echo "!! docker system prune failed (exit $code)"
-}
+docker system prune -f --volumes
+code=$?
+if [[ $code -ne 0 ]]; then
+    echo "!! docker system prune failed (exit $code)"
+    prune_failed=true
+fi
+
+echo ""
 echo "=== Done ==="
+
+if [[ ${#failed_stacks[@]} -gt 0 ]]; then
+    print_failed_stacks "start" "${failed_stacks[@]}"
+    exit 1
+fi
+
+[[ "$prune_failed" == "true" ]] && exit 1

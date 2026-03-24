@@ -6,8 +6,28 @@
 # 5 9 * * * /mnt/cache/appdata/scripts/backup.sh >> /mnt/cache/appdata/scripts/logs/backup.log 2>&1
 # PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+COMMON_SH=""
+
+if [[ -f "$SCRIPT_DIR/docker-common.sh" ]]; then
+    COMMON_SH="$SCRIPT_DIR/docker-common.sh"
+elif [[ -f "$SCRIPT_DIR/scripts/docker-common.sh" ]]; then
+    COMMON_SH="$SCRIPT_DIR/scripts/docker-common.sh"
+fi
+
+if [[ -n "$COMMON_SH" ]]; then
+    # shellcheck source=/dev/null
+    source "$COMMON_SH"
+    ROOT="$(resolve_appdata_root "$0")"
+    if ! acquire_docker_lock "$ROOT" "backup"; then
+        exit 1
+    fi
+else
+    ROOT="/mnt/cache/appdata"
+fi
+
 # Define source and destination directories
-SRC="/mnt/cache/appdata/"
+SRC="${ROOT}/"
 DEST="/mnt/cache/backup/appdata/"
 
 # Define containers that should NEVER be stopped during backup
@@ -106,7 +126,7 @@ fi
 # Update docker containers
 echo ""
 echo "Running start.sh to update containers..."
-/mnt/cache/appdata/start.sh
+"$ROOT/start.sh"
 
 # Sleep 10 seconds to allow docker containers to start
 echo ""
