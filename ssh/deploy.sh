@@ -7,7 +7,6 @@ source "$(dirname "$0")/../lib/common.sh"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONFIGS_DIR="$SCRIPT_DIR/configs"
 COMMON_CONFIG="$CONFIGS_DIR/common.conf"
-TRAEFIK_SYNC_CONFIG="$CONFIGS_DIR/traefik-sync.conf"
 BUILD_ROOT="$SCRIPT_DIR/build"
 
 # --- Host Selection ---
@@ -22,13 +21,11 @@ fi
 
 # --- Validation ---
 [[ ! -f "$COMMON_CONFIG" ]] && { echo "Error: $COMMON_CONFIG not found"; exit 1; }
-[[ ! -f "$TRAEFIK_SYNC_CONFIG" ]] && { echo "Error: $TRAEFIK_SYNC_CONFIG not found"; exit 1; }
 
 # --- Per-Host Deployment ---
 deploy() {
     local host="$1"
     local build_dir="$BUILD_ROOT/$host"
-    local traefik_sync_enabled
 
     prepare_build_dir "$build_dir"
 
@@ -37,17 +34,8 @@ deploy() {
         cat "$CONFIGS_DIR/$host/append.conf" >> "$build_dir/config"
     fi
 
-    traefik_sync_enabled=$(hosts get "$host" "ssh.traefik_sync" "false")
-    if [[ "$traefik_sync_enabled" == "true" ]]; then
-        mkdir -p "$build_dir/traefik-sync"
-        cp "$TRAEFIK_SYNC_CONFIG" "$build_dir/traefik-sync/config"
-    fi
-
     print_sub "Comparing with remote config..."
     diff_remote_config "$host" "$build_dir/config" "\$HOME/.ssh/config" || true
-    if [[ "$traefik_sync_enabled" == "true" ]]; then
-        diff_remote_config "$host" "$build_dir/traefik-sync/config" "\$HOME/traefik-sync/.ssh/config" || true
-    fi
 
     if [[ "$DRY_RUN" == true ]]; then
         print_sub "[DRY-RUN] Would deploy to $host:/tmp/homelab-ssh/"
