@@ -92,6 +92,8 @@ cd ~/homelab/pve-postinstall && ./deploy.sh all
 SSH config auto-deployment
 - Uses `*.freender.internal` DNS for home
 - Uses `*.internal` DNS for remote sites
+- Deploys only to hosts with `ssh` enabled in `hosts.conf`
+- Generates dedicated `~/traefik-sync/.ssh/` bundles on hosts with `ssh.traefik_sync: true`
 
 ```bash
 cd ~/homelab/ssh && ./deploy.sh all
