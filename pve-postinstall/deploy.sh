@@ -20,6 +20,7 @@ PVE_FILES=(
     pve-test.sources
     no-nag-script
     pve-remove-nag.sh
+    sshd-hardening.conf
 )
 
 remote_path_for_file() {
@@ -33,6 +34,9 @@ remote_path_for_file() {
             ;;
         pve-remove-nag.sh)
             echo "/usr/local/bin/$file"
+            ;;
+        sshd-hardening.conf)
+            echo "/etc/ssh/sshd_config.d/99-disable-password-auth.conf"
             ;;
         *)
             return 1

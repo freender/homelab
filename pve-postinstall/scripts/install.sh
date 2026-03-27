@@ -60,6 +60,9 @@ install_file() {
         pve-remove-nag.sh)
             destination_file="/usr/local/bin/$file"
             ;;
+        sshd-hardening.conf)
+            destination_file="/etc/ssh/sshd_config.d/99-disable-password-auth.conf"
+            ;;
         *)
             print_warn "Unsupported file mapping: $file"
             return 1
@@ -269,6 +272,15 @@ case "$HOST_TYPE" in
         print_sub "Deploying nag removal..."
         install_file pve-remove-nag.sh || exit 1
         install_file no-nag-script || exit 1
+
+        print_sub "Deploying sshd hardening config..."
+        mkdir -p /etc/ssh/sshd_config.d
+        install_file sshd-hardening.conf || exit 1
+        if sshd -t 2>/dev/null; then
+            systemctl reload sshd && print_sub "sshd reloaded with hardened config"
+        else
+            print_warn "sshd -t failed; sshd not reloaded"
+        fi
 
         if [[ "$CEPH_ENABLED" == "true" ]]; then
             print_sub "Running Ceph daemon reconciliation..."
