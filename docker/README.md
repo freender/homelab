@@ -13,6 +13,7 @@ cd ~/homelab/docker
 ./deploy.sh all          # Deploy to all hosts
 ./deploy.sh tower        # Tower (Unraid) only
 ./deploy.sh helm         # helm only
+./deploy.sh orbit        # orbit only
 ```
 
 ## Host Registry
@@ -25,7 +26,7 @@ Per-host settings live in `docker/hosts.conf` using `docker.*` keys.
 - `start.sh` - Updates and starts Docker stacks (Traefik first), cleans up unused images and volumes
 - `rm.sh` - Stops all Docker stacks with confirmation
 
-**helm only** (`/mnt/cache/appdata/scripts/`):
+**Hosts with backup enabled** (`/mnt/cache/appdata/scripts/`):
 - `backup.sh` - Backup appdata with smart container orchestration
 
 ### Directory Structure
@@ -35,7 +36,7 @@ All hosts:
   /mnt/cache/appdata/
     - start.sh, rm.sh     # Docker management scripts
 
-helm:
+Hosts with backup enabled:
   /mnt/cache/appdata/scripts/
     - backup.sh           # Backup automation
   /mnt/cache/appdata/scripts/logs/
@@ -52,6 +53,15 @@ tower:
 
 **tower:**
 - Scheduling handled by User Scripts plugin
+
+## Traefik Sync
+
+- `tower` runs `traefik-sync` in source mode on `net_overlay`
+- `helm` runs `traefik-sync2` in client mode
+- `orbit` runs `traefik-sync3` in client mode
+- Clients pull `acme.json` and `fileConfig.yml` over overlay HTTP from `http://traefik-sync:8080`
+- Auth uses `TRAEFIK_SYNC_API_TOKEN` in the Traefik stack `.env`
+- `start.sh` is deployed to all docker hosts, including `orbit`, so Traefik stack updates can be applied with `cd /mnt/cache/appdata && ./start.sh`
 
 ### Manual Usage
 
@@ -85,7 +95,7 @@ Stops all Docker Compose stacks:
 ### backup.sh
 Smart backup with container orchestration (helm only):
 - Stops non-critical containers
-- Never stops: traefik2, socket-proxy2, crowdsec, traefik-redis2, traefik-kop2, traefik-logrotate
+- Never stops: traefik2, socket-proxy2, crowdsec, traefik-redis2, traefik-kop2, traefik-logrotate, traefik-sync2
 - Rsyncs appdata to backup location
 - Restarts containers and updates images
 - Verifies container health
