@@ -11,6 +11,7 @@ CEPH_ENABLED=${4:-false}
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD_DIR="$SCRIPT_DIR/build/$HOST"
 BACKUP_DIR="/var/backups/homelab/pve-postinstall"
+INSTALL_FILE_CHANGED="false"
 
 if [[ -f "$SCRIPT_DIR/lib/utils.sh" ]]; then
     source "$SCRIPT_DIR/lib/utils.sh"
@@ -67,6 +68,8 @@ install_file() {
     local mode
     local rc
 
+    INSTALL_FILE_CHANGED="false"
+
     if [[ -z "${FILE_MAP_DEST[$file]+x}" ]]; then
         print_warn "no mapping for file: $file"
         return 1
@@ -90,6 +93,7 @@ install_file() {
 
     cp "$source_file" "$destination_file"
     chmod "$mode" "$destination_file"
+    INSTALL_FILE_CHANGED="true"
     print_sub "Updated $destination_file"
 }
 
@@ -221,9 +225,13 @@ case "$HOST_TYPE" in
 
         print_sub "Deploying nag removal..."
         install_file pve-remove-nag.sh || exit 1
-        nag_changed=true
+        if [[ "$INSTALL_FILE_CHANGED" == "true" ]]; then
+            nag_changed=true
+        fi
         install_file no-nag-script || exit 1
-        nag_changed=true
+        if [[ "$INSTALL_FILE_CHANGED" == "true" ]]; then
+            nag_changed=true
+        fi
 
         print_sub "Deploying sshd hardening config..."
         if install_file sshd-hardening.conf; then
