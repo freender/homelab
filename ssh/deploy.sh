@@ -20,7 +20,20 @@ if ! HOSTS=$(filter_hosts "${1:-all}" "${SUPPORTED_HOSTS[@]}"); then
 fi
 
 # --- Validation ---
-[[ ! -f "$COMMON_CONFIG" ]] && { echo "Error: $COMMON_CONFIG not found"; exit 1; }
+validate() {
+    local host
+
+    if [[ ! -f "$COMMON_CONFIG" ]]; then
+        print_error "common config not found: $COMMON_CONFIG"
+        exit 1
+    fi
+
+    for host in "${SUPPORTED_HOSTS[@]}"; do
+        if [[ -d "$CONFIGS_DIR/$host" ]] && [[ ! -f "$CONFIGS_DIR/$host/append.conf" ]]; then
+            print_warn "host config directory exists without append.conf: $CONFIGS_DIR/$host"
+        fi
+    done
+}
 
 # --- Per-Host Deployment ---
 deploy() {
@@ -51,10 +64,11 @@ deploy() {
     scp -q "$HOMELAB_ROOT/lib/print.sh" "$HOMELAB_ROOT/lib/utils.sh" "$host:/tmp/homelab-ssh/lib/"
 
     print_sub "Running installer..."
-    ssh "$host" "cd /tmp/homelab-ssh && chmod +x scripts/install.sh && FORCE_UPDATE='$FORCE_UPDATE' ./scripts/install.sh $host"
+    ssh "$host" "cd /tmp/homelab-ssh && chmod +x scripts/install.sh && FORCE_UPDATE='$FORCE_UPDATE' ./scripts/install.sh '$host'"
 }
 
 # --- Main ---
+validate
 deploy_init "SSH Config"
 deploy_run deploy $HOSTS
 deploy_finish

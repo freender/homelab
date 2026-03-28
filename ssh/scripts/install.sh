@@ -18,20 +18,36 @@ else
         cp -r "$path" "${path}.bak.$(date +%Y%m%d%H%M%S)"
     }
     print_sub() { echo "    $*"; }
+    print_header() { echo "=== $* ==="; }
+    print_error() { echo "    ✗ Error: $*" >&2; }
+    backup_and_copy_if_changed() {
+        local src="$1"
+        local dst="$2"
+        local label="${3:-$dst}"
+
+        if [[ "$FORCE_UPDATE" == "true" ]] || [[ ! -f "$dst" ]] || ! cmp -s "$src" "$dst"; then
+            backup_config "$dst"
+            cp "$src" "$dst"
+            print_sub "Updated $label"
+            return 0
+        fi
+
+        print_sub "$label unchanged; skipping update"
+        return 1
+    }
 fi
 
 if [[ ! -f "$BUILD_DIR/config" ]]; then
-    echo "Error: Missing config at $BUILD_DIR/config"
+    print_error "missing config at $BUILD_DIR/config"
     exit 1
 fi
 
+print_header "Installing SSH config on $HOST"
+
 mkdir -p ~/.ssh
 chmod 700 ~/.ssh
-if [[ "$FORCE_UPDATE" == "true" ]] || [[ ! -f ~/.ssh/config ]] || ! cmp -s "$BUILD_DIR/config" ~/.ssh/config; then
-    backup_config ~/.ssh/config
-    cp "$BUILD_DIR/config" ~/.ssh/config
-    print_sub "Updated ~/.ssh/config"
-else
-    print_sub "$HOME/.ssh/config unchanged; skipping update"
-fi
+mkdir -p ~/.ssh/sockets
+chmod 700 ~/.ssh/sockets
+
+backup_and_copy_if_changed "$BUILD_DIR/config" ~/.ssh/config '~/.ssh/config' || true
 chmod 600 ~/.ssh/config
