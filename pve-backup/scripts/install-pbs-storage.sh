@@ -8,7 +8,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD_DIR="$SCRIPT_DIR/build/$HOST"
 PLAN_FILE="$BUILD_DIR/storage-plan.conf"
 TOKENS_FILE="/etc/homelab/pbs-tokens.env"
-STATE_DIR="/run/homelab-pve-postinstall"
+STATE_DIR="/run/homelab-pve-backup"
 STATE_FILE="$STATE_DIR/backup-state.env"
 
 if [[ -f "$SCRIPT_DIR/lib/utils.sh" ]]; then
@@ -66,7 +66,7 @@ for (( i=0; i<STORAGE_COUNT; i++ )); do
         password="${!password_var_name:-}"
         if [[ -z "$password" ]]; then
             print_error "Missing $password_var_name in $TOKENS_FILE"
-            print_sub "Create $TOKENS_FILE from pve-postinstall/configs/pbs-tokens.env.example"
+            print_sub "Create $TOKENS_FILE from pve-backup/configs/pbs-tokens.env.example"
             exit 1
         fi
 
