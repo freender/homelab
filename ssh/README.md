@@ -32,6 +32,7 @@ Current special aliases:
 ## Features
 
 - **Auto-accept host keys:** Uses `StrictHostKeyChecking=accept-new`
+- **Scoped agent forwarding:** Disabled by default, enabled only for `riven`
 - **Host-specific configs:** Special handling for hosts with custom requirements
 - **DNS-based:** All hosts use internal DNS instead of IPs
 

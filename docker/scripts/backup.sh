@@ -109,11 +109,8 @@ echo ""
 echo "Starting rsync backup..."
 if [[ "$(id -u)" -eq 0 ]]; then
   rsync -avh --chown=1000:1000 --progress --delete "$SRC" "$DEST"
-elif command -v sudo >/dev/null 2>&1; then
-  sudo rsync -avh --chown=1000:1000 --progress --delete "$SRC" "$DEST"
 else
-  echo "ERROR: current user is not root and sudo is not installed"
-  exit 1
+  rsync -avh --progress --delete "$SRC" "$DEST"
 fi
 
 # Start stopped containers

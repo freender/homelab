@@ -59,7 +59,7 @@ EOF
     scp -q "$HOMELAB_ROOT/lib/print.sh" "$HOMELAB_ROOT/lib/utils.sh" "$host:/tmp/homelab-docker/lib/"
 
     print_sub "Running installer..."
-    ssh "$host" "cd /tmp/homelab-docker && chmod +x scripts/install.sh && if [ \"\$(id -u)\" -eq 0 ]; then FORCE_UPDATE='$FORCE_UPDATE' ./scripts/install.sh '$host'; elif command -v sudo >/dev/null 2>&1; then sudo FORCE_UPDATE='$FORCE_UPDATE' /tmp/homelab-docker/scripts/install.sh '$host'; else echo 'Error: current user is not root and sudo is not installed' >&2; exit 1; fi"
+    ssh "$host" "cd /tmp/homelab-docker && chmod +x scripts/install.sh && FORCE_UPDATE='$FORCE_UPDATE' bash ./scripts/install.sh '$host'"
 }
 
 # --- Main ---
