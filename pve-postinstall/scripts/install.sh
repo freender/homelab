@@ -37,7 +37,7 @@ required_files_for_type() {
     local host_type="$1"
     case "$host_type" in
         pve)
-            printf '%s\n' proxmox.sources ceph.sources pve-test.sources no-nag-script pve-remove-nag.sh
+            printf '%s\n' proxmox.sources ceph.sources pve-test.sources no-nag-script pve-remove-nag.sh sshd-hardening.conf
             ;;
         *)
             return 1
@@ -45,62 +45,50 @@ required_files_for_type() {
     esac
 }
 
+load_file_map() {
+    local map_file="$BUILD_DIR/file-map.conf"
+    if [[ ! -f "$map_file" ]]; then
+        print_error "missing file-map.conf in $BUILD_DIR"
+        exit 1
+    fi
+    declare -g -A FILE_MAP_DEST=()
+    declare -g -A FILE_MAP_MODE=()
+    local line filename remote_path mode
+    while IFS='|' read -r filename remote_path mode; do
+        FILE_MAP_DEST["$filename"]="$remote_path"
+        FILE_MAP_MODE["$filename"]="${mode:-644}"
+    done < "$map_file"
+}
+
 install_file() {
     local file="$1"
     local source_file="$BUILD_DIR/$file"
     local destination_file
+    local mode
 
-    case "$file" in
-        proxmox.sources|ceph.sources|pve-test.sources)
-            destination_file="/etc/apt/sources.list.d/$file"
-            ;;
-        no-nag-script)
-            destination_file="/etc/apt/apt.conf.d/no-nag-script"
-            ;;
-        pve-remove-nag.sh)
-            destination_file="/usr/local/bin/$file"
-            ;;
-        sshd-hardening.conf)
-            destination_file="/etc/ssh/sshd_config.d/99-disable-password-auth.conf"
-            ;;
-        *)
-            print_warn "Unsupported file mapping: $file"
-            return 1
-            ;;
-    esac
+    if [[ -z "${FILE_MAP_DEST[$file]+x}" ]]; then
+        print_warn "no mapping for file: $file"
+        return 1
+    fi
 
-    if ! file_needs_update "$source_file" "$destination_file"; then
-        local rc=$?
+    destination_file="${FILE_MAP_DEST[$file]}"
+    mode="${FILE_MAP_MODE[$file]:-644}"
+
+    mkdir -p "$(dirname "$destination_file")"
+
+    file_needs_update "$source_file" "$destination_file"
+    local rc=$?
+    if [[ $rc -ne 0 ]]; then
         if [[ $rc -eq 1 ]]; then
             print_sub "$destination_file unchanged; skipping update"
-            case "$file" in
-                no-nag-script)
-                    chmod 644 "$destination_file"
-                    ;;
-                pve-remove-nag.sh)
-                    chmod 755 "$destination_file"
-                    ;;
-            esac
+            chmod "$mode" "$destination_file"
             return 0
         fi
         return "$rc"
     fi
 
-    case "$file" in
-        pve-remove-nag.sh)
-            mkdir -p /usr/local/bin
-            ;;
-    esac
-
     cp "$source_file" "$destination_file"
-    case "$file" in
-        no-nag-script)
-            chmod 644 "$destination_file"
-            ;;
-        pve-remove-nag.sh)
-            chmod 755 "$destination_file"
-            ;;
-    esac
+    chmod "$mode" "$destination_file"
     print_sub "Updated $destination_file"
 }
 
@@ -221,6 +209,8 @@ if [[ ! -d "$BUILD_DIR" ]]; then
     exit 1
 fi
 
+load_file_map
+
 print_sub "Checking if repo configs need backup..."
 if repo_files_need_backup; then
     print_sub "Backing up /etc/apt/sources.list.d..."
@@ -270,16 +260,17 @@ case "$HOST_TYPE" in
         done
 
         print_sub "Deploying nag removal..."
-        install_file pve-remove-nag.sh || exit 1
-        install_file no-nag-script || exit 1
+        local nag_changed=false
+        install_file pve-remove-nag.sh && nag_changed=true || { [[ $? -eq 0 ]] || exit 1; }
+        install_file no-nag-script && nag_changed=true || { [[ $? -eq 0 ]] || exit 1; }
 
         print_sub "Deploying sshd hardening config..."
-        mkdir -p /etc/ssh/sshd_config.d
-        install_file sshd-hardening.conf || exit 1
-        if sshd -t 2>/dev/null; then
-            systemctl reload sshd && print_sub "sshd reloaded with hardened config"
-        else
-            print_warn "sshd -t failed; sshd not reloaded"
+        if install_file sshd-hardening.conf; then
+            if sshd -t 2>/dev/null; then
+                systemctl reload sshd && print_sub "sshd reloaded with hardened config"
+            else
+                print_warn "sshd -t failed; sshd not reloaded"
+            fi
         fi
 
         if [[ "$CEPH_ENABLED" == "true" ]]; then
@@ -312,5 +303,11 @@ else
     print_sub "postfix service not present; skipping"
 fi
 
-print_sub "Refreshing proxmox widget toolkit..."
-apt --reinstall install proxmox-widget-toolkit &>/dev/null || print_warn "Widget toolkit reinstall failed"
+if [[ "${nag_changed:-false}" == "true" ]]; then
+    print_sub "Refreshing proxmox widget toolkit..."
+    if ! apt --reinstall install proxmox-widget-toolkit >/dev/null 2>&1; then
+        print_warn "Widget toolkit reinstall failed; run manually: apt --reinstall install proxmox-widget-toolkit"
+    fi
+else
+    print_sub "Nag files unchanged; skipping widget toolkit reinstall"
+fi

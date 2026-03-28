@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily PVE cluster config backup
+
+[Timer]
+OnCalendar=*-*-* ${SCHEDULE}
+RandomizedDelaySec=120
+Persistent=true
+Unit=pve-config-backup.service
+
+[Install]
+WantedBy=timers.target

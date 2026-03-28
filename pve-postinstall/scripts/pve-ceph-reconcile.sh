@@ -2,12 +2,18 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 NODE="$(hostname -s)"
 CEPH_CONF_FILE="/etc/pve/ceph.conf"
 
-log() {
-    echo "[pve-ceph-reconcile] $*"
-}
+if [[ -f "$SCRIPT_DIR/lib/utils.sh" ]]; then
+    source "$SCRIPT_DIR/lib/utils.sh"
+else
+    print_sub()  { echo "    [ceph] $*"; }
+    print_warn() { echo "    ✗ Warning: [ceph] $*"; }
+fi
+
+log() { print_sub "$*"; }
 
 osd_ids_from_systemd() {
     systemctl list-units 'ceph-osd@*.service' --no-pager --no-legend 2>/dev/null \

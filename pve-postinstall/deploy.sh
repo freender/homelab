@@ -23,25 +23,36 @@ PVE_FILES=(
     sshd-hardening.conf
 )
 
+# file-map.conf format: one entry per line: FILENAME|REMOTE_PATH|MODE
+# Consumed by deploy.sh (for diffing) and written into build/ for install.sh
+declare -A FILE_REMOTE_PATHS=(
+    [proxmox.sources]="/etc/apt/sources.list.d/proxmox.sources"
+    [ceph.sources]="/etc/apt/sources.list.d/ceph.sources"
+    [pve-test.sources]="/etc/apt/sources.list.d/pve-test.sources"
+    [no-nag-script]="/etc/apt/apt.conf.d/no-nag-script"
+    [pve-remove-nag.sh]="/usr/local/bin/pve-remove-nag.sh"
+    [sshd-hardening.conf]="/etc/ssh/sshd_config.d/99-disable-password-auth.conf"
+)
+declare -A FILE_MODES=(
+    [no-nag-script]="644"
+    [pve-remove-nag.sh]="755"
+)
+
+write_file_map() {
+    local build_dir="$1"
+    local file
+    for file in "${!FILE_REMOTE_PATHS[@]}"; do
+        printf '%s|%s|%s\n' "$file" "${FILE_REMOTE_PATHS[$file]}" "${FILE_MODES[$file]:-644}"
+    done > "$build_dir/file-map.conf"
+}
+
 remote_path_for_file() {
     local file="$1"
-    case "$file" in
-        proxmox.sources|ceph.sources|pve-test.sources)
-            echo "/etc/apt/sources.list.d/$file"
-            ;;
-        no-nag-script)
-            echo "/etc/apt/apt.conf.d/no-nag-script"
-            ;;
-        pve-remove-nag.sh)
-            echo "/usr/local/bin/$file"
-            ;;
-        sshd-hardening.conf)
-            echo "/etc/ssh/sshd_config.d/99-disable-password-auth.conf"
-            ;;
-        *)
-            return 1
-            ;;
-    esac
+    if [[ -n "${FILE_REMOTE_PATHS[$file]+x}" ]]; then
+        echo "${FILE_REMOTE_PATHS[$file]}"
+    else
+        return 1
+    fi
 }
 
 normalize_storage_name() {
@@ -178,21 +189,17 @@ build_cluster_config_backup_bundle() {
             pbs_env_source="$PBS_ENV_BACKUP_CINCI"
             ;;
         "")
-            print_warn "Missing proxmox_backup_client.secret_profile for $host"
-            print_warn "Set one of: backup-main, backup-cinci"
+            print_warn "proxmox_backup_client.secret_profile not set for $host; skipping config backup bundle"
+            return 0
             ;;
         *)
-            print_warn "Invalid secret profile '$secret_profile' for $host"
-            print_warn "Expected: backup-main or backup-cinci"
+            print_warn "invalid secret_profile '$secret_profile' for $host; expected: backup-main, backup-cinci"
             return 1
             ;;
     esac
 
-    if [[ -z "$pbs_env_source" || ! -f "$pbs_env_source" ]]; then
-        if [[ -n "$pbs_env_source" ]]; then
-            print_warn "Missing secret file: $pbs_env_source"
-        fi
-        print_warn "Create it under: $SECRETS_DIR"
+    if [[ ! -f "$pbs_env_source" ]]; then
+        print_warn "missing secret file for $host: $pbs_env_source"
         return 1
     fi
 
@@ -203,31 +210,10 @@ build_cluster_config_backup_bundle() {
         CEPH_ENABLED="$ceph_enabled"
     chmod 700 "$build_dir/pve-config-backup.sh"
 
-    cat > "$build_dir/pve-config-backup.service" <<EOF
-[Unit]
-Description=PVE cluster config backup to PBS
-After=network-online.target
-Wants=network-online.target
+    cp "$SCRIPT_DIR/templates/pve-config-backup.service" "$build_dir/pve-config-backup.service"
 
-[Service]
-Type=oneshot
-EnvironmentFile=/etc/homelab/pve-config-backup.env
-ExecStart=/root/pve-config-backup.sh
-EOF
-
-    cat > "$build_dir/pve-config-backup.timer" <<EOF
-[Unit]
-Description=Daily PVE cluster config backup
-
-[Timer]
-OnCalendar=*-*-* $schedule
-RandomizedDelaySec=120
-Persistent=true
-Unit=pve-config-backup.service
-
-[Install]
-WantedBy=timers.target
-EOF
+    render_template "$SCRIPT_DIR/templates/pve-config-backup.timer" "$build_dir/pve-config-backup.timer" \
+        SCHEDULE="$schedule"
 
     cp "$pbs_env_source" "$build_dir/pbs.env"
 
@@ -279,6 +265,69 @@ if ! HOSTS=$(filter_hosts "${1:-all}" "${SUPPORTED_HOSTS[@]}"); then
     exit 0
 fi
 
+# --- Validation ---
+validate() {
+    local errors=0
+    local host file secret_profile pbs_env_source
+
+    # Shared PVE config files
+    for file in "${PVE_FILES[@]}"; do
+        if [[ ! -f "$PVE_CONFIG_DIR/$file" ]]; then
+            print_error "missing config file: $PVE_CONFIG_DIR/$file"
+            errors=$(( errors + 1 ))
+        fi
+    done
+
+    # Templates
+    if [[ ! -f "$INTERFACES_TEMPLATE" ]]; then
+        print_error "missing interfaces template: $INTERFACES_TEMPLATE"
+        errors=$(( errors + 1 ))
+    fi
+
+    if [[ ! -f "$CONFIGS_DIR/pve-config-backup.sh.tpl" ]]; then
+        print_error "missing backup script template: $CONFIGS_DIR/pve-config-backup.sh.tpl"
+        errors=$(( errors + 1 ))
+    fi
+
+    for tmpl in pve-config-backup.service pve-config-backup.timer; do
+        if [[ ! -f "$SCRIPT_DIR/templates/$tmpl" ]]; then
+            print_error "missing template: $SCRIPT_DIR/templates/$tmpl"
+            errors=$(( errors + 1 ))
+        fi
+    done
+
+    # Per-host secrets
+    for host in "${SUPPORTED_HOSTS[@]}"; do
+        secret_profile=$(yq e ".\"$host\".features.pve-postinstall.proxmox_backup_client.secret_profile // \"\"" "$HOSTS_FILE")
+        case "$secret_profile" in
+            backup-main)
+                pbs_env_source="$PBS_ENV_BACKUP_MAIN"
+                ;;
+            backup-cinci)
+                pbs_env_source="$PBS_ENV_BACKUP_CINCI"
+                ;;
+            "")
+                pbs_env_source=""
+                ;;
+            *)
+                print_error "$host: invalid secret_profile '$secret_profile' (expected: backup-main, backup-cinci)"
+                errors=$(( errors + 1 ))
+                continue
+                ;;
+        esac
+
+        if [[ -n "$pbs_env_source" && ! -f "$pbs_env_source" ]]; then
+            print_error "$host: missing secret file: $pbs_env_source"
+            errors=$(( errors + 1 ))
+        fi
+    done
+
+    if [[ $errors -gt 0 ]]; then
+        print_error "validation failed with $errors error(s); aborting"
+        exit 1
+    fi
+}
+
 deploy() {
     local host="$1"
     local host_type
@@ -318,6 +367,8 @@ deploy() {
         fi
         cp "$config_dir/$file" "$build_dir/$file"
     done
+
+    write_file_map "$build_dir"
 
     if ! build_standalone_backup_plans "$host" "$build_dir"; then
         return 1
@@ -377,6 +428,7 @@ deploy() {
     ssh "$host" "cd /tmp/homelab-pve-postinstall && chmod +x scripts/install.sh && if [ \"\$(id -u)\" -ne 0 ]; then echo 'Error: PVE deploy requires root SSH user' >&2; exit 1; fi && FORCE_UPDATE='$FORCE_UPDATE' ./scripts/install.sh '$host' '$host_type' '$timezone' '$ceph_enabled'"
 }
 
+validate
 deploy_init "PVE Post-Install Configs"
 deploy_run deploy $HOSTS
 deploy_finish
