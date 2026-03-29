@@ -107,14 +107,6 @@ Prometheus-native exporters for PVE host metrics
 ./deploy pve-exporters all
 ```
 
-### [telegraf](telegraf/)
-Metrics collection (CPU, disk, network, sensors, smartctl)
-- Sends to VictoriaMetrics
-
-```bash
-./deploy telegraf all
-```
-
 ## Quick Reference
 
 ```bash

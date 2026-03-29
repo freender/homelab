@@ -1,2 +1,0 @@
-# Allow telegraf user to run smartctl without password
-telegraf ALL=(ALL) NOPASSWD: /usr/sbin/smartctl *

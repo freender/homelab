@@ -13,7 +13,6 @@ from .pve_exporters import deploy as deploy_pve_exporters
 from .pve_gpu_passthrough import deploy as deploy_pve_gpu_passthrough
 from .pve_postinstall import deploy as deploy_pve_postinstall
 from .ssh import deploy as deploy_ssh
-from .telegraf import deploy as deploy_telegraf
 
 
 @dataclass(frozen=True)
@@ -52,10 +51,6 @@ MODULES: dict[str, ModuleDefinition] = {
         deploy=deploy_pve_gpu_passthrough,
     ),
     "ssh": ModuleDefinition(name="SSH Config", deploy=deploy_ssh),
-    "telegraf": ModuleDefinition(
-        name="Telegraf Monitoring",
-        deploy=deploy_telegraf,
-    ),
 }
 
 MODULE_ORDER = [
@@ -63,7 +58,6 @@ MODULE_ORDER = [
     "pve-backup",
     "apcupsd",
     "pve-exporters",
-    "telegraf",
     "pve-gpu-passthrough",
     "ssh",
     "docker",
