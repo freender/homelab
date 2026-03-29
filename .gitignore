@@ -27,3 +27,10 @@ Thumbs.db
 
 # Build artifacts
 **/build/
+
+# Python artifacts
+.venv/
+**/__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
