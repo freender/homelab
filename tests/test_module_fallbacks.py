@@ -35,19 +35,19 @@ def test_pve_backup_uses_example_secret_in_offline_mode(tmp_path: Path) -> None:
 
 
 def test_pve_exporters_prefers_tracked_example_template(tmp_path: Path) -> None:
-    common_dir = tmp_path / "pve-exporters" / "configs" / "common"
-    common_dir.mkdir(parents=True)
-    example = common_dir / "apcupsd-exporter.env.example"
+    secrets_dir = tmp_path / "secrets"
+    secrets_dir.mkdir(parents=True)
+    example = secrets_dir / "apcupsd-exporter.env.example"
     example.write_text("APCUPSD_EXPORTER_UPS_HOST=\"{{ UPS_HOST }}\"\n", encoding="utf-8")
 
     assert pve_exporters.apcupsd_exporter_env_template(tmp_path) == example
 
 
 def test_pve_exporters_prefers_local_env_override_when_present(tmp_path: Path) -> None:
-    common_dir = tmp_path / "pve-exporters" / "configs" / "common"
-    common_dir.mkdir(parents=True)
-    local_template = common_dir / "apcupsd-exporter.env"
+    secrets_dir = tmp_path / "secrets"
+    secrets_dir.mkdir(parents=True)
+    local_template = secrets_dir / "apcupsd-exporter.env"
     local_template.write_text("override\n", encoding="utf-8")
-    (common_dir / "apcupsd-exporter.env.example").write_text("example\n", encoding="utf-8")
+    (secrets_dir / "apcupsd-exporter.env.example").write_text("example\n", encoding="utf-8")
 
     assert pve_exporters.apcupsd_exporter_env_template(tmp_path) == local_template

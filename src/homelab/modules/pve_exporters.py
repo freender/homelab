@@ -15,7 +15,6 @@ REQUIRED = [
     "smartctl-exporter.service",
     "apcupsd-exporter.service",
     "apcupsd-exporter.py",
-    "apcupsd-exporter.env.example",
 ]
 
 
@@ -44,6 +43,8 @@ def validate(root: Path) -> None:
     for name in REQUIRED:
         if not (common_dir / name).is_file():
             raise ValueError(f"Missing required config: {common_dir / name}")
+    if not apcupsd_exporter_env_template(root).is_file():
+        raise ValueError(f"Missing required config: {apcupsd_exporter_env_template(root)}")
 
 
 def has_apcupsd_exporter(root: Path, host: str) -> bool:
@@ -53,11 +54,11 @@ def has_apcupsd_exporter(root: Path, host: str) -> bool:
 
 
 def apcupsd_exporter_env_template(root: Path) -> Path:
-    common_dir = root / "pve-exporters" / "configs" / "common"
-    local_template = common_dir / "apcupsd-exporter.env"
+    secrets_dir = root / "secrets"
+    local_template = secrets_dir / "apcupsd-exporter.env"
     if local_template.is_file():
         return local_template
-    return common_dir / "apcupsd-exporter.env.example"
+    return secrets_dir / "apcupsd-exporter.env.example"
 
 
 def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
