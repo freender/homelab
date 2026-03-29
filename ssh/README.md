@@ -37,7 +37,6 @@ Hosts currently managed by this module:
 
 - **Auto-accept host keys:** Uses `StrictHostKeyChecking=accept-new`
 - **Connection keepalive:** Uses server alive probes to survive idle sessions
-- **Connection reuse:** Uses SSH multiplexing via `~/.ssh/sockets/`
 - **Known host privacy:** Uses `HashKnownHosts=yes`
 - **Scoped agent forwarding:** Disabled by default, enabled only for `riven`
 - **Host-specific configs:** Special handling for hosts with custom requirements
