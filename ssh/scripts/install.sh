@@ -49,5 +49,5 @@ chmod 700 ~/.ssh
 mkdir -p ~/.ssh/sockets
 chmod 700 ~/.ssh/sockets
 
-backup_and_copy_if_changed "$BUILD_DIR/config" ~/.ssh/config '~/.ssh/config' || true
+backup_and_copy_if_changed "$BUILD_DIR/config" ~/.ssh/config "$HOME/.ssh/config" || true
 chmod 600 ~/.ssh/config

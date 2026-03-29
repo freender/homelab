@@ -11,12 +11,9 @@ source lib/common.sh
 print_header "Homelab Validation"
 
 print_action "ShellCheck"
-if command -v shellcheck &>/dev/null; then
-    find . -name '*.sh' -not -path './.bin/*' -exec shellcheck -S warning {} +
-    print_ok "ShellCheck passed"
-else
-    print_warn "shellcheck not installed, skipping"
-fi
+ensure_shellcheck
+find . -name '*.sh' -not -path './.bin/*' -exec shellcheck -S warning {} +
+print_ok "ShellCheck passed"
 
 print_action "YAML Syntax"
 if [[ -f hosts.conf ]]; then

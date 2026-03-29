@@ -3,7 +3,7 @@
 # Source this from module deploy.sh scripts:
 #   source "$(dirname "$0")/../lib/common.sh"
 #
-# Dependencies: yq (auto-installed if missing)
+# Dependencies: yq (auto-installed if missing), shellcheck (available for local validation)
 
 set -e
 
@@ -11,12 +11,16 @@ source "$(dirname "${BASH_SOURCE[0]}")/utils.sh"
 
 # Resolve HOMELAB_ROOT (parent of lib/)
 HOMELAB_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+LOCAL_BIN_DIR="${HOMELAB_ROOT}/.bin"
+
+export PATH="${LOCAL_BIN_DIR}:$PATH"
 
 # -----------------------------------------------------------------------------
 # yq Installation
 # -----------------------------------------------------------------------------
 
 YQ_VERSION="v4.44.1"
+SHELLCHECK_VERSION="v0.11.0"
 
 ensure_yq() {
     # Check if yq is in PATH and functional
@@ -24,7 +28,7 @@ ensure_yq() {
         return 0
     fi
     
-    local yq_bin="${HOMELAB_ROOT}/.bin/yq"
+    local yq_bin="${LOCAL_BIN_DIR}/yq"
     local os arch
     
     os=$(uname -s | tr '[:upper:]' '[:lower:]')
@@ -44,7 +48,7 @@ ensure_yq() {
     local url="https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_${os}_${arch}"
     
     echo "==> Installing yq ${YQ_VERSION} for ${os}/${arch}..." >&2
-    mkdir -p "$(dirname "$yq_bin")"
+    mkdir -p "$LOCAL_BIN_DIR"
     
     if command -v curl &>/dev/null; then
         curl -fsSL "$url" -o "$yq_bin" || { echo "Error: Failed to download yq" >&2; return 1; }
@@ -56,8 +60,61 @@ ensure_yq() {
     fi
     
     chmod +x "$yq_bin"
-    export PATH="${HOMELAB_ROOT}/.bin:$PATH"
     echo "==> yq installed to $yq_bin" >&2
+}
+
+ensure_shellcheck() {
+    if command -v shellcheck &>/dev/null && shellcheck --version &>/dev/null; then
+        return 0
+    fi
+
+    local shellcheck_bin="${LOCAL_BIN_DIR}/shellcheck"
+    local os arch archive url tmp_dir release_dir
+
+    os=$(uname -s | tr '[:upper:]' '[:lower:]')
+    case "$os" in
+        linux)  os="linux" ;;
+        darwin) os="darwin" ;;
+        *)      echo "Error: Unsupported OS: $os" >&2; return 1 ;;
+    esac
+
+    arch=$(uname -m)
+    case "$arch" in
+        x86_64) arch="x86_64" ;;
+        aarch64|arm64) arch="aarch64" ;;
+        *)      echo "Error: Unsupported architecture: $arch" >&2; return 1 ;;
+    esac
+
+    archive="shellcheck-${SHELLCHECK_VERSION}.${os}.${arch}.tar.xz"
+    url="https://github.com/koalaman/shellcheck/releases/download/${SHELLCHECK_VERSION}/${archive}"
+
+    echo "==> Installing shellcheck ${SHELLCHECK_VERSION} for ${os}/${arch}..." >&2
+    mkdir -p "$LOCAL_BIN_DIR"
+    tmp_dir=$(mktemp -d)
+
+    if command -v curl &>/dev/null; then
+        curl -fsSL "$url" -o "$tmp_dir/$archive" || { rm -rf "$tmp_dir"; echo "Error: Failed to download shellcheck" >&2; return 1; }
+    elif command -v wget &>/dev/null; then
+        wget -q "$url" -O "$tmp_dir/$archive" || { rm -rf "$tmp_dir"; echo "Error: Failed to download shellcheck" >&2; return 1; }
+    else
+        rm -rf "$tmp_dir"
+        echo "Error: curl or wget required to install shellcheck" >&2
+        return 1
+    fi
+
+    tar -xf "$tmp_dir/$archive" -C "$tmp_dir" || { rm -rf "$tmp_dir"; echo "Error: Failed to extract shellcheck" >&2; return 1; }
+
+    release_dir="$tmp_dir/shellcheck-${SHELLCHECK_VERSION}"
+    if [[ ! -x "$release_dir/shellcheck" ]]; then
+        rm -rf "$tmp_dir"
+        echo "Error: shellcheck binary missing from archive" >&2
+        return 1
+    fi
+
+    cp "$release_dir/shellcheck" "$shellcheck_bin"
+    chmod +x "$shellcheck_bin"
+    rm -rf "$tmp_dir"
+    echo "==> shellcheck installed to $shellcheck_bin" >&2
 }
 
 # Auto-install yq on source
