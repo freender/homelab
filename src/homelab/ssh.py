@@ -76,6 +76,7 @@ class HostConnection:
         *args: str,
         env: dict[str, str] | None = None,
         require_root: bool = False,
+        interpreter: str | None = None,
     ) -> None:
         joined_args = " ".join(f'"{arg}"' for arg in args)
         command = f'cd "{remote_dir}" && chmod +x "{installer}"'
@@ -84,11 +85,14 @@ class HostConnection:
                 ' && if [ "$(id -u)" -ne 0 ]; then '
                 'echo "Error: deploy requires root SSH user" >&2; exit 1; fi'
             )
+        installer_command = f'"{installer}"'
+        if interpreter:
+            installer_command = f'{interpreter} "{installer}"'
         if env:
             exports = " ".join(f'{key}="{value}"' for key, value in env.items())
-            command += f' && env {exports} "{installer}" {joined_args}'
+            command += f' && env {exports} {installer_command} {joined_args}'
         else:
-            command += f' && "{installer}" {joined_args}'
+            command += f' && {installer_command} {joined_args}'
         self.connection.run(command, pty=False)
 
 

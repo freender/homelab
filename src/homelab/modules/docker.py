@@ -94,4 +94,5 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
         "scripts/install.sh",
         host,
         env={"FORCE_UPDATE": "true" if force else "false"},
+        interpreter="bash",
     )
