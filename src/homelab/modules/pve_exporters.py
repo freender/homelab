@@ -13,9 +13,9 @@ REQUIRED = [
     "node-exporter.defaults",
     "smartctl-exporter.defaults",
     "smartctl-exporter.service",
-    "apcupsd-exporter.env",
     "apcupsd-exporter.service",
     "apcupsd-exporter.py",
+    "apcupsd-exporter.env.example",
 ]
 
 
@@ -52,6 +52,14 @@ def has_apcupsd_exporter(root: Path, host: str) -> bool:
     return role in {"master", "master-standalone"}
 
 
+def apcupsd_exporter_env_template(root: Path) -> Path:
+    common_dir = root / "pve-exporters" / "configs" / "common"
+    local_template = common_dir / "apcupsd-exporter.env"
+    if local_template.is_file():
+        return local_template
+    return common_dir / "apcupsd-exporter.env.example"
+
+
 def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
     registry = default_registry(root)
     common_dir = root / "pve-exporters" / "configs" / "common"
@@ -84,7 +92,7 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
             serial = result.stdout.strip()
         copy_files(common_dir, configs_dir, ["apcupsd-exporter.py", "apcupsd-exporter.service"])
         render_file(
-            common_dir / "apcupsd-exporter.env",
+            apcupsd_exporter_env_template(root),
             configs_dir / "apcupsd-exporter.env",
             UPS_NAME=upsname,
             UPS_HOST=host,

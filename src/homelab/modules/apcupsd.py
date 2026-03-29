@@ -6,7 +6,7 @@ from ..build import render_file, write_env_file
 from ..deploy import DeploySession, force_env, prepare_build_dir, stage_and_run_remote_installer
 from ..hosts import HostLookupError, default_registry
 from ..output import print_action, print_error, print_sub
-from ..ssh import HostConnection, build_files, diff_many
+from ..ssh import HostConnection, build_files, diff_many, offline_mode
 
 REMOTE_ROOT = "/tmp/homelab-apcupsd"
 
@@ -40,12 +40,22 @@ def deploy(
 
 
 def validate(root: Path) -> None:
+    telegram_env_path(root)
+
+
+def telegram_env_path(root: Path) -> Path:
     telegram_env = root / "secrets" / "telegram.env"
-    if not telegram_env.is_file():
-        raise ValueError(
-            "telegram.env not found; copy secrets/telegram.env.example "
-            "secrets/telegram.env"
-        )
+    if telegram_env.is_file():
+        return telegram_env
+
+    telegram_example = root / "secrets" / "telegram.env.example"
+    if offline_mode() and telegram_example.is_file():
+        return telegram_example
+
+    raise ValueError(
+        "telegram.env not found; copy secrets/telegram.env.example "
+        "secrets/telegram.env"
+    )
 
 
 def get_slave_hosts(root: Path) -> str:
@@ -82,7 +92,7 @@ def deploy_host(root: Path, host: str, slave_hosts: str, dry_run: bool, force: b
             root / "apcupsd" / "configs" / "telegram" / "telegram.sh",
             "/etc/apcupsd/telegram/telegram.sh",
         ),
-        (root / "secrets" / "telegram.env", "/etc/apcupsd/telegram/telegram.env"),
+        (telegram_env_path(root), "/etc/apcupsd/telegram/telegram.env"),
     ]):
         print_sub(message)
 
@@ -137,7 +147,7 @@ def render_configs(
     render_file(shutdown_template, build_dir / "doshutdown", **context)
     (build_dir / "doshutdown").chmod(0o755)
     (build_dir / "telegram.env").write_text(
-        (root / "secrets" / "telegram.env").read_text(encoding="utf-8"),
+        telegram_env_path(root).read_text(encoding="utf-8"),
         encoding="utf-8",
     )
     write_env_file(build_dir / "env", {"ROLE": role, "HOST": host})

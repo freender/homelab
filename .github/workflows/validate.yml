@@ -18,7 +18,20 @@ jobs:
       - name: Install ruff
         run: python -m pip install ruff
       - name: Run ruff
-        run: python -m ruff check src
+        run: python -m ruff check src tests
+
+  pytest:
+    name: Pytest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install package and test deps
+        run: python -m pip install '.[dev]'
+      - name: Run pytest
+        run: python -m pytest
 
   shellcheck:
     name: ShellCheck
