@@ -2,10 +2,49 @@
 # remove.sh - Remove apcupsd config from remote hosts
 # Usage: ./remove.sh [--yes] [--purge] [host1 host2 ...] or ./remove.sh all
 
-source "$(dirname "$0")/../lib/common.sh"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+HOMELAB_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+# shellcheck source=/dev/null
+source "$HOMELAB_ROOT/lib/print.sh"
+
+list_feature_hosts() {
+    if [[ -x "$HOMELAB_ROOT/.venv/bin/python" ]]; then
+        PYTHONPATH="$HOMELAB_ROOT/src" "$HOMELAB_ROOT/.venv/bin/python" -m homelab.cli hosts list --feature "$1"
+        return
+    fi
+
+    if command -v uv >/dev/null 2>&1; then
+        PYTHONPATH="$HOMELAB_ROOT/src" uv run --directory "$HOMELAB_ROOT" python -m homelab.cli hosts list --feature "$1"
+        return
+    fi
+
+    PYTHONPATH="$HOMELAB_ROOT/src" python3 -m homelab.cli hosts list --feature "$1"
+}
+
+filter_hosts() {
+    local requested="${1:-all}"
+    shift
+    local supported=("$@")
+    local host
+
+    if [[ "$requested" == "" || "$requested" == "all" ]]; then
+        printf '%s\n' "${supported[@]}"
+        return 0
+    fi
+
+    for host in "${supported[@]}"; do
+        if [[ "$host" == "$requested" ]]; then
+            printf '%s\n' "$host"
+            return 0
+        fi
+    done
+
+    return 1
+}
 
 get_apcupsd_hosts() {
-    hosts list --feature apcupsd
+    list_feature_hosts apcupsd
 }
 
 PURGE=false

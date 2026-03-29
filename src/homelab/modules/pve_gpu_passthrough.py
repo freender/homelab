@@ -8,9 +8,8 @@ from ..build import copy_files, render_file
 from ..deploy import DeploySession, prepare_build_dir, stage_and_run_remote_installer
 from ..hosts import HostLookupError, default_registry
 from ..output import print_action, print_error, print_sub
-from ..ssh import HostConnection, build_files
+from ..ssh import HostConnection, build_files, offline_mode
 
-MODULE_NAME = "GPU Passthrough Configs"
 REMOTE_ROOT = "/tmp/homelab-pve-gpu-passthrough"
 REQUIRED_ROOT_TOKEN = "root=ZFS=rpool/ROOT/pve-1"
 
@@ -19,11 +18,9 @@ def deploy(
     root: Path,
     requested_host: str,
     dry_run: bool,
-    force: bool,
+    _force: bool,
     session: DeploySession,
 ) -> int:
-    del force
-
     registry = default_registry(root)
     supported_hosts = registry.list_hosts(feature="pve-gpu-passthrough")
     hosts = registry.filter_hosts(requested_host, supported_hosts)
@@ -75,7 +72,11 @@ def deploy_host(root: Path, host: str, dry_run: bool) -> None:
         raise ValueError(str(exc)) from exc
 
     connection = HostConnection(host)
-    if not dataset_exists(connection, root_dataset):
+    if not dry_run and not dataset_exists(connection, root_dataset):
+        raise ValueError(f"Required ZFS dataset not found on {host}: {root_dataset}")
+    if dry_run and offline_mode():
+        print_sub(f"[?] zfs dataset check skipped for {root_dataset} (offline validation)")
+    elif dry_run and not dataset_exists(connection, root_dataset):
         raise ValueError(f"Required ZFS dataset not found on {host}: {root_dataset}")
 
     prepare_build_dir(build_dir)

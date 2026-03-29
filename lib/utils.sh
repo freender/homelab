@@ -121,14 +121,17 @@ copy_if_changed() {
     local src="$1"
     local dst="$2"
     local label="${3:-$dst}"
+    local rc
 
-    if file_needs_update "$src" "$dst"; then
+    file_needs_update "$src" "$dst"
+    rc=$?
+
+    if [[ $rc -eq 0 ]]; then
         cp "$src" "$dst"
         print_sub "Updated $label"
         return 0
     fi
 
-    local rc=$?
     if [[ $rc -eq 1 ]]; then
         print_sub "$label unchanged; skipping update"
         return 1
@@ -144,15 +147,18 @@ backup_and_copy_if_changed() {
     local src="$1"
     local dst="$2"
     local label="${3:-$dst}"
+    local rc
 
-    if file_needs_update "$src" "$dst"; then
+    file_needs_update "$src" "$dst"
+    rc=$?
+
+    if [[ $rc -eq 0 ]]; then
         backup_config "$dst"
         cp "$src" "$dst"
         print_sub "Updated $label"
         return 0
     fi
 
-    local rc=$?
     if [[ $rc -eq 1 ]]; then
         print_sub "$label unchanged; skipping update"
         return 1
@@ -169,15 +175,18 @@ install_if_changed() {
     local dst="$2"
     local mode="$3"
     local label="${4:-$dst}"
+    local rc
 
-    if file_needs_update "$src" "$dst"; then
+    file_needs_update "$src" "$dst"
+    rc=$?
+
+    if [[ $rc -eq 0 ]]; then
         ensure_parent_dir "$dst"
         install -m "$mode" "$src" "$dst"
         print_sub "Updated $label"
         return 0
     fi
 
-    local rc=$?
     if [[ $rc -eq 1 ]]; then
         print_sub "$label unchanged; skipping update"
         chmod "$mode" "$dst"
@@ -195,8 +204,12 @@ backup_and_install_if_changed() {
     local dst="$2"
     local mode="$3"
     local label="${4:-$dst}"
+    local rc
 
-    if file_needs_update "$src" "$dst"; then
+    file_needs_update "$src" "$dst"
+    rc=$?
+
+    if [[ $rc -eq 0 ]]; then
         ensure_parent_dir "$dst"
         backup_config "$dst"
         install -m "$mode" "$src" "$dst"
@@ -204,7 +217,6 @@ backup_and_install_if_changed() {
         return 0
     fi
 
-    local rc=$?
     if [[ $rc -eq 1 ]]; then
         print_sub "$label unchanged; skipping update"
         chmod "$mode" "$dst"

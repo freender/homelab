@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import shutil
 import tempfile
 from pathlib import Path
@@ -14,6 +15,9 @@ class HostConnection:
         self.connection = Connection(host)
 
     def remote_diff(self, local_file: Path, remote_path: str) -> tuple[int, str]:
+        if offline_mode():
+            return offline_diff(remote_path)
+
         with tempfile.NamedTemporaryFile(delete=False) as handle:
             temp_path = Path(handle.name)
 
@@ -102,6 +106,14 @@ def diff_many(connection: HostConnection, file_pairs: list[tuple[Path, str]]) ->
         _, message = connection.remote_diff(local_path, remote_path)
         messages.append(message)
     return messages
+
+
+def offline_mode() -> bool:
+    return os.environ.get("HOMELAB_OFFLINE", "").lower() in {"1", "true", "yes"}
+
+
+def offline_diff(remote_path: str) -> tuple[int, str]:
+    return 3, f"[?] {remote_path} (offline validation; remote diff skipped)"
 
 
 def build_files(build_dir: Path) -> list[str]:

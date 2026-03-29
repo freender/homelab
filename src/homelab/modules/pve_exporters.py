@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from ..build import copy_files, render_file
-from ..deploy import DeploySession, prepare_build_dir, stage_and_run_remote_installer
+from ..deploy import DeploySession, force_env, prepare_build_dir, stage_and_run_remote_installer
 from ..hosts import HostLookupError, default_registry
 from ..output import print_action, print_sub
 from ..ssh import HostConnection, diff_many
@@ -124,7 +124,7 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
         ],
         "scripts/install.sh",
         host,
-        env={"FORCE_UPDATE": "true" if force else "false"},
+        env=force_env(force),
         require_root=True,
         remote_subdirs=("build", "lib"),
     )

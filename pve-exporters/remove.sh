@@ -2,7 +2,46 @@
 # remove.sh - Remove pve exporters from remote hosts
 # Usage: ./remove.sh [--yes] [--purge] <hostname|all>
 
-source "$(dirname "$0")/../lib/common.sh"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+HOMELAB_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+# shellcheck source=/dev/null
+source "$HOMELAB_ROOT/lib/print.sh"
+
+list_feature_hosts() {
+    if [[ -x "$HOMELAB_ROOT/.venv/bin/python" ]]; then
+        PYTHONPATH="$HOMELAB_ROOT/src" "$HOMELAB_ROOT/.venv/bin/python" -m homelab.cli hosts list --feature "$1"
+        return
+    fi
+
+    if command -v uv >/dev/null 2>&1; then
+        PYTHONPATH="$HOMELAB_ROOT/src" uv run --directory "$HOMELAB_ROOT" python -m homelab.cli hosts list --feature "$1"
+        return
+    fi
+
+    PYTHONPATH="$HOMELAB_ROOT/src" python3 -m homelab.cli hosts list --feature "$1"
+}
+
+filter_hosts() {
+    local requested="${1:-all}"
+    shift
+    local supported=("$@")
+    local host
+
+    if [[ "$requested" == "" || "$requested" == "all" ]]; then
+        printf '%s\n' "${supported[@]}"
+        return 0
+    fi
+
+    for host in "${supported[@]}"; do
+        if [[ "$host" == "$requested" ]]; then
+            printf '%s\n' "$host"
+            return 0
+        fi
+    done
+
+    return 1
+}
 
 PURGE=false
 SKIP_CONFIRM=false
@@ -33,7 +72,7 @@ USAGE
     esac
 done
 
-read -r -a SUPPORTED_HOSTS <<< "$(hosts list --feature pve-exporters)"
+read -r -a SUPPORTED_HOSTS <<< "$(list_feature_hosts pve-exporters)"
 if ! HOSTS=$(filter_hosts "${1:-all}" "${SUPPORTED_HOSTS[@]}"); then
     print_action "Skipping pve-exporters removal (not applicable to $1)"
     exit 0

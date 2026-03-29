@@ -12,6 +12,7 @@ from .deploy import DeploySession
 from .hosts import HostLookupError, default_registry
 from .modules import MODULES, ordered_modules
 from .output import print_action, print_error, print_header, print_ok, print_sub, print_warn
+from .ssh import offline_mode
 
 
 def repo_root() -> Path:
@@ -90,6 +91,8 @@ def validate() -> None:
         print_warn("shellcheck not installed; skipping shell lint")
 
     print_action("Dry-run Modules")
+    if offline_mode():
+        print_sub("Offline mode enabled; remote SSH diffs are skipped")
     failed_modules: list[str] = []
     for module_name in ordered_modules():
         print_sub(module_name)

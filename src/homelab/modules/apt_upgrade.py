@@ -3,12 +3,11 @@ from __future__ import annotations
 from pathlib import Path
 
 from ..build import write_env_file
-from ..deploy import DeploySession, prepare_build_dir, stage_and_run_remote_installer
+from ..deploy import DeploySession, force_env, prepare_build_dir, stage_and_run_remote_installer
 from ..hosts import HostLookupError, default_registry
 from ..output import print_action, print_sub
 from ..ssh import HostConnection
 
-MODULE_NAME = "APT Dist-Upgrade"
 REMOTE_ROOT = "/tmp/homelab-apt-upgrade"
 SERVICE_NAME = "homelab-apt-dist-upgrade.service"
 TIMER_NAME = "homelab-apt-dist-upgrade.timer"
@@ -148,7 +147,7 @@ def stage_and_install(root: Path, build_dir: Path, connection: HostConnection, f
         REMOTE_ROOT,
         upload_paths,
         "scripts/install.sh",
-        env={"FORCE_UPDATE": "true" if force else "false"},
+        env=force_env(force),
         require_root=True,
         remote_subdirs=("build", "lib", "scripts"),
     )

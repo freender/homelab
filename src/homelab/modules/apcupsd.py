@@ -3,12 +3,11 @@ from __future__ import annotations
 from pathlib import Path
 
 from ..build import render_file, write_env_file
-from ..deploy import DeploySession, prepare_build_dir, stage_and_run_remote_installer
+from ..deploy import DeploySession, force_env, prepare_build_dir, stage_and_run_remote_installer
 from ..hosts import HostLookupError, default_registry
 from ..output import print_action, print_error, print_sub
 from ..ssh import HostConnection, build_files, diff_many
 
-MODULE_NAME = "apcupsd"
 REMOTE_ROOT = "/tmp/homelab-apcupsd"
 
 
@@ -163,7 +162,7 @@ def stage_and_install(
         ],
         "scripts/install.sh",
         host,
-        env={"FORCE_UPDATE": "true" if force else "false"},
+        env=force_env(force),
         require_root=True,
         remote_subdirs=("build", "lib"),
     )

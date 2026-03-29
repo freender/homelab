@@ -7,12 +7,11 @@ from pathlib import Path
 from fabric.transfer import Transfer
 from invoke.exceptions import UnexpectedExit
 
-from ..deploy import DeploySession, prepare_build_dir, stage_and_run_remote_installer
+from ..deploy import DeploySession, force_env, prepare_build_dir, stage_and_run_remote_installer
 from ..hosts import default_registry
 from ..output import print_action, print_error, print_sub, print_warn
-from ..ssh import HostConnection, build_files
+from ..ssh import HostConnection, build_files, offline_diff, offline_mode
 
-MODULE_NAME = "SSH Config"
 REMOTE_ROOT = "/tmp/homelab-ssh"
 
 
@@ -89,6 +88,9 @@ def build_config(output_path: Path, common_config: Path, append_config: Path) ->
 
 
 def dry_run_remote_diff(host: str, local_file: Path) -> tuple[int, str]:
+    if offline_mode():
+        return offline_diff("$HOME/.ssh/config")
+
     connection = HostConnection(host)
     transfer = Transfer(connection.connection)
     remote_path = ".ssh/config"
@@ -121,7 +123,7 @@ def stage_and_install(root: Path, host: str, build_dir: Path, force: bool) -> No
         ],
         "scripts/install.sh",
         host,
-        env={"FORCE_UPDATE": "true" if force else "false"},
+        env=force_env(force),
         require_root=False,
         remote_subdirs=("build", "lib"),
     )

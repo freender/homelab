@@ -43,20 +43,18 @@ mkdir -p "$APPDATA_DEST"
 mkdir -p "$APPDATA_SCRIPTS_DIR"
 
 for script in start.sh rm.sh; do
-    if ! copy_if_changed "$SCRIPT_DIR/scripts/$script" "${APPDATA_DEST}/${script}" "$script"; then
-        rc=$?
-        [[ $rc -eq 1 ]] || exit "$rc"
-    fi
+    rc=0
+    copy_if_changed "$SCRIPT_DIR/scripts/$script" "${APPDATA_DEST}/${script}" "$script" || rc=$?
+    [[ $rc -eq 1 ]] || [[ $rc -eq 0 ]] || exit "$rc"
     if [[ "$RUN_AS_ROOT" == "true" ]]; then
         chown "${DOCKER_OWNER}:${DOCKER_GROUP}" "${APPDATA_DEST}/${script}"
     fi
     chmod +x "${APPDATA_DEST}/${script}"
 done
 
-if ! copy_if_changed "$SCRIPT_DIR/scripts/docker-common.sh" "$APPDATA_SCRIPTS_DIR/docker-common.sh" "docker-common.sh"; then
-    rc=$?
-    [[ $rc -eq 1 ]] || exit "$rc"
-fi
+rc=0
+copy_if_changed "$SCRIPT_DIR/scripts/docker-common.sh" "$APPDATA_SCRIPTS_DIR/docker-common.sh" "docker-common.sh" || rc=$?
+[[ $rc -eq 1 ]] || [[ $rc -eq 0 ]] || exit "$rc"
 if [[ "$RUN_AS_ROOT" == "true" ]]; then
     chown "${DOCKER_OWNER}:${DOCKER_GROUP}" "$APPDATA_SCRIPTS_DIR/docker-common.sh"
 fi
@@ -64,10 +62,9 @@ chmod +x "$APPDATA_SCRIPTS_DIR/docker-common.sh"
 
 if [[ "$DOCKER_BACKUP" == "true" ]]; then
     mkdir -p "$APPDATA_LOGS_DIR"
-    if ! copy_if_changed "$SCRIPT_DIR/scripts/backup.sh" "$APPDATA_SCRIPTS_DIR/backup.sh" "backup.sh"; then
-        rc=$?
-        [[ $rc -eq 1 ]] || exit "$rc"
-    fi
+    rc=0
+    copy_if_changed "$SCRIPT_DIR/scripts/backup.sh" "$APPDATA_SCRIPTS_DIR/backup.sh" "backup.sh" || rc=$?
+    [[ $rc -eq 1 ]] || [[ $rc -eq 0 ]] || exit "$rc"
     if [[ "$RUN_AS_ROOT" == "true" ]]; then
         chown "${DOCKER_OWNER}:${DOCKER_GROUP}" "$APPDATA_SCRIPTS_DIR/backup.sh"
     fi

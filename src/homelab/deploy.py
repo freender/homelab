@@ -18,6 +18,10 @@ def prepare_build_dir(build_dir: Path) -> None:
     build_dir.mkdir(parents=True, exist_ok=True)
 
 
+def force_env(force: bool) -> dict[str, str]:
+    return {"FORCE_UPDATE": "true" if force else "false"}
+
+
 @dataclass
 class DeploySession:
     module: str

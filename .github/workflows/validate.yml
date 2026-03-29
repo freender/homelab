@@ -65,4 +65,5 @@ jobs:
       - name: Dry-run all modules
         run: |
           export PATH="$PWD/.bin:$PATH"
+          export HOMELAB_OFFLINE=true
           PYTHONPATH=src python -m homelab.cli validate

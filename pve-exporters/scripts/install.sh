@@ -42,9 +42,17 @@ else
 fi
 
 mkdir -p /etc/default
-backup_and_copy_if_changed "$NODE_ENV_SRC" /etc/default/prometheus-node-exporter
-backup_and_copy_if_changed "$SMART_ENV_SRC" /etc/default/smartctl-exporter
-backup_and_copy_if_changed "$SMART_SVC_SRC" /etc/systemd/system/smartctl-exporter.service
+rc=0
+backup_and_copy_if_changed "$NODE_ENV_SRC" /etc/default/prometheus-node-exporter || rc=$?
+[[ $rc -eq 1 ]] || [[ $rc -eq 0 ]] || exit "$rc"
+
+rc=0
+backup_and_copy_if_changed "$SMART_ENV_SRC" /etc/default/smartctl-exporter || rc=$?
+[[ $rc -eq 1 ]] || [[ $rc -eq 0 ]] || exit "$rc"
+
+rc=0
+backup_and_copy_if_changed "$SMART_SVC_SRC" /etc/systemd/system/smartctl-exporter.service || rc=$?
+[[ $rc -eq 1 ]] || [[ $rc -eq 0 ]] || exit "$rc"
 
 if [[ -f "$APC_BIN_SRC" && -f "$APC_ENV_SRC" && -f "$APC_SVC_SRC" ]]; then
     if file_needs_update "$APC_BIN_SRC" /usr/local/bin/apcupsd-exporter; then
@@ -54,8 +62,13 @@ if [[ -f "$APC_BIN_SRC" && -f "$APC_ENV_SRC" && -f "$APC_SVC_SRC" ]]; then
     else
         print_sub "apcupsd-exporter unchanged; skipping update"
     fi
-    backup_and_copy_if_changed "$APC_ENV_SRC" /etc/default/apcupsd-exporter
-    backup_and_copy_if_changed "$APC_SVC_SRC" /etc/systemd/system/apcupsd-exporter.service
+    rc=0
+    backup_and_copy_if_changed "$APC_ENV_SRC" /etc/default/apcupsd-exporter || rc=$?
+    [[ $rc -eq 1 ]] || [[ $rc -eq 0 ]] || exit "$rc"
+
+    rc=0
+    backup_and_copy_if_changed "$APC_SVC_SRC" /etc/systemd/system/apcupsd-exporter.service || rc=$?
+    [[ $rc -eq 1 ]] || [[ $rc -eq 0 ]] || exit "$rc"
 else
     systemctl disable --now apcupsd-exporter 2>/dev/null || true
     rm -f /etc/systemd/system/apcupsd-exporter.service /etc/default/apcupsd-exporter /usr/local/bin/apcupsd-exporter
