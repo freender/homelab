@@ -1,3 +1,18 @@
+Metadata-Version: 2.4
+Name: homelab
+Version: 0.1.0
+Summary: Python orchestration for homelab deployments
+Requires-Python: >=3.13
+Description-Content-Type: text/markdown
+Requires-Dist: click<9,>=8.1
+Requires-Dist: fabric<4,>=3.2
+Requires-Dist: jinja2<4,>=3.1
+Requires-Dist: pyyaml<7,>=6.0
+Requires-Dist: rich<14,>=13.9
+Provides-Extra: dev
+Requires-Dist: pytest<9,>=8.3; extra == "dev"
+Requires-Dist: ruff<0.12,>=0.11; extra == "dev"
+
 # Homelab Infrastructure
 
 Automation and configuration management for Proxmox-based homelab infrastructure.

@@ -22,8 +22,8 @@ iface nic1 inet manual
 
 auto vmbr0
 iface vmbr0 inet static
-	address ${NET_MGMT_IP}
-	gateway ${NET_GATEWAY}
+	address {{ NET_MGMT_IP }}
+	gateway {{ NET_GATEWAY }}
 	bridge-ports nic0
 	bridge-stp off
 	bridge-fd 0
@@ -32,7 +32,7 @@ iface vmbr0 inet static
 
 auto vmbr1
 iface vmbr1 inet static
-	address ${NET_STORAGE_IP}
+	address {{ NET_STORAGE_IP }}
 	bridge-ports nic1
 	bridge-stp off
 	bridge-fd 0

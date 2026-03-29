@@ -7,6 +7,19 @@ on:
     branches: [main]
 
 jobs:
+  python-lint:
+    name: Python Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install ruff
+        run: python -m pip install ruff
+      - name: Run ruff
+        run: python -m ruff check src
+
   shellcheck:
     name: ShellCheck
     runs-on: ubuntu-latest
@@ -39,19 +52,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install Python deps
+        run: python -m pip install click pyyaml jinja2 rich fabric
       - name: Install yq
         run: |
           mkdir -p .bin
           wget -qO .bin/yq https://github.com/mikefarah/yq/releases/download/v4.44.1/yq_linux_amd64
           chmod +x .bin/yq
-      - name: Dry-run all deploy scripts
+      - name: Dry-run all modules
         run: |
           export PATH="$PWD/.bin:$PATH"
-          failed=0
-          for module in */deploy.sh; do
-            echo "=== Testing $(dirname "$module") ==="
-            if ! ./$module --dry-run all 2>&1 | head -20; then
-              failed=1
-            fi
-          done
-          exit $failed
+          PYTHONPATH=src python -m homelab.cli validate

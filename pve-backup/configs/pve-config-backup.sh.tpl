@@ -1,10 +1,10 @@
 #!/bin/bash
 set -e
 
-REPOSITORY="${REPOSITORY}"
-BACKUP_ID="${BACKUP_ID}"
-ARCHIVE_NAME="${ARCHIVE_NAME}"
-CEPH_ENABLED="${CEPH_ENABLED}"
+REPOSITORY="{{ REPOSITORY }}"
+BACKUP_ID="{{ BACKUP_ID }}"
+ARCHIVE_NAME="{{ ARCHIVE_NAME }}"
+CEPH_ENABLED="{{ CEPH_ENABLED }}"
 
 if [[ -z "$REPOSITORY" || -z "$BACKUP_ID" || -z "$ARCHIVE_NAME" ]]; then
     echo "Missing required backup configuration" >&2

@@ -1,5 +1,5 @@
 #!/bin/bash
-# ${HOST} doshutdown - Master cluster controller
+# {{ HOST }} doshutdown - Master cluster controller
 # Stop ALL VMs cluster-wide, wait for them to stop, then poweroff hosts
 
 LOGGER="logger -t apcupsd-shutdown"
@@ -8,9 +8,9 @@ $LOGGER "UPS battery critical - initiating cluster shutdown"
 SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5"
 
 # Notify via Telegram
-/etc/apcupsd/telegram/telegram.sh -s "SHUTDOWN" -d "${HOST} UPS critical - initiating cluster shutdown"
+/etc/apcupsd/telegram/telegram.sh -s "SHUTDOWN" -d "{{ HOST }} UPS critical - initiating cluster shutdown"
 
-SLAVE_HOSTS=(${SLAVE_HOSTS})
+SLAVE_HOSTS=({{ SLAVE_HOSTS }})
 
 # PHASE 1: Shutdown ALL VMs on ALL nodes simultaneously
 $LOGGER "PHASE 1: Initiating graceful shutdown of all VMs cluster-wide"
@@ -26,7 +26,7 @@ done
 
 # Shutdown VMs on master
 for VMID in $(qm list 2>/dev/null | awk '$3=="running"{print $1}'); do
-  $LOGGER "Shutting down VM $VMID on ${HOST}"
+  $LOGGER "Shutting down VM $VMID on {{ HOST }}"
   qm shutdown $VMID --timeout 120 &
 done
 
@@ -66,12 +66,12 @@ if [ "$ALL_STOPPED" = false ]; then
     NODE_RUNNING=$(ssh $SSH_OPTS "$NODE" "qm list 2>/dev/null | awk '\$3==\"running\"{print \$1}'" 2>/dev/null)
     [ -n "$NODE_RUNNING" ] && $LOGGER "$NODE still has running VMs: $NODE_RUNNING"
   done
-  [ -n "$MASTER_RUNNING" ] && $LOGGER "${HOST} still has running VMs: $MASTER_RUNNING"
+  [ -n "$MASTER_RUNNING" ] && $LOGGER "{{ HOST }} still has running VMs: $MASTER_RUNNING"
 fi
 
 # PHASE 3: Poweroff all hosts (slaves immediate, master after 30 seconds)
-$LOGGER "PHASE 3: Powering off hosts: slaves immediate, ${HOST} in 30 seconds"
-/etc/apcupsd/telegram/telegram.sh -s "SHUTDOWN" -d "All VMs stopped - powering off cluster (slaves now, ${HOST} in 30s)"
+$LOGGER "PHASE 3: Powering off hosts: slaves immediate, {{ HOST }} in 30 seconds"
+/etc/apcupsd/telegram/telegram.sh -s "SHUTDOWN" -d "All VMs stopped - powering off cluster (slaves now, {{ HOST }} in 30s)"
 
 # Poweroff slaves immediately
 for NODE in "${SLAVE_HOSTS[@]}"; do
@@ -79,9 +79,9 @@ for NODE in "${SLAVE_HOSTS[@]}"; do
 done
 
 # Schedule master poweroff in background (30 seconds delay) so script can exit immediately with code 99
-$LOGGER "Scheduling ${HOST} poweroff in 30 seconds"
-nohup sh -c 'sleep 30 && logger -t apcupsd-shutdown "Executing poweroff on ${HOST}" && systemctl poweroff' >/dev/null 2>&1 &
+$LOGGER "Scheduling {{ HOST }} poweroff in 30 seconds"
+nohup sh -c 'sleep 30 && logger -t apcupsd-shutdown "Executing poweroff on {{ HOST }}" && systemctl poweroff' >/dev/null 2>&1 &
 
 # Exit immediately with code 99 to prevent apccontrol from running its default shutdown
-$LOGGER "Exiting doshutdown with code 99 (${HOST} poweroff scheduled in background)"
+$LOGGER "Exiting doshutdown with code 99 ({{ HOST }} poweroff scheduled in background)"
 exit 99

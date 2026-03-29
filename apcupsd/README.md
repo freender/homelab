@@ -37,12 +37,12 @@ Per-host settings live in `hosts.conf` using `apcupsd.*` keys.
 
 **Single host:**
 ```bash
-./deploy.sh <hostname>
+cd ~/homelab && ./deploy apcupsd <hostname>
 ```
 
 **All hosts:**
 ```bash
-./deploy.sh all
+cd ~/homelab && ./deploy apcupsd all
 ```
 
 ## Removal

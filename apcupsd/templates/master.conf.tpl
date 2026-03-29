@@ -1,15 +1,15 @@
 ## apcupsd.conf v1.1 ##
-## apcupsd.conf - ${HOST} (Master)
-## USB connection to UPS on ${HOST}
+## apcupsd.conf - {{ HOST }} (Master)
+## USB connection to UPS on {{ HOST }}
 ## Triggers coordinated shutdown of cluster
 
-UPSNAME ${UPSNAME}
+UPSNAME {{ UPSNAME }}
 UPSCABLE usb
 UPSTYPE usb
 DEVICE
 
 # Network Information Server (NIS) - allows slaves to monitor
-NISIP ${NISIP}
+NISIP {{ NISIP }}
 NISPORT 3551
 NETSERVER on
 

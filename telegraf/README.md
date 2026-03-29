@@ -36,19 +36,20 @@ Minimal Telegraf configuration for collecting hardware metrics from selected hos
 - `configs/common/diskio.conf` - Disk I/O monitoring configuration
 - `configs/common/net.conf` - Network interface monitoring configuration
 - `configs/roles/apc/apcupsd.conf` - UPS monitoring input plugin (APC role)
-- `deploy.sh` - Deployment script
+- `../deploy` - Repo-root deployment wrapper
 
 ## Deployment
 
 Deploy to all hosts:
 ```bash
-cd ~/homelab/telegraf
-./deploy.sh all
+cd ~/homelab
+./deploy telegraf all
 ```
 
 Deploy to specific hosts:
 ```bash
-./deploy.sh ace bray
+./deploy telegraf ace
+./deploy telegraf bray
 ```
 
 ## Verification

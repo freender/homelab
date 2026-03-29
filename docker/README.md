@@ -9,11 +9,11 @@ Docker management scripts for homelab infrastructure.
 Deploy scripts from helm to hosts:
 
 ```bash
-cd ~/homelab/docker
-./deploy.sh all          # Deploy to all hosts
-./deploy.sh tower        # Tower (Unraid) only
-./deploy.sh helm         # helm only
-./deploy.sh orbit        # orbit only
+cd ~/homelab
+./deploy docker all
+./deploy docker tower
+./deploy docker helm
+./deploy docker orbit
 ```
 
 ## Host Registry

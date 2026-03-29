@@ -1,0 +1,44 @@
+[project]
+name = "homelab"
+version = "0.1.0"
+description = "Python orchestration for homelab deployments"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "click>=8.1,<9",
+    "fabric>=3.2,<4",
+    "jinja2>=3.1,<4",
+    "pyyaml>=6.0,<7",
+    "rich>=13.9,<14",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3,<9",
+    "ruff>=0.11,<0.12",
+]
+
+[project.scripts]
+homelab = "homelab.cli:main"
+
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+target-version = "py313"
+line-length = 100
+
+[tool.ruff.lint]
+select = [
+    "E",
+    "F",
+    "I",
+    "UP",
+]

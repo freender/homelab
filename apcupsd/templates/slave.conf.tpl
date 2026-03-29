@@ -1,15 +1,15 @@
 ## apcupsd.conf v1.1 ##
-## apcupsd.conf - ${HOST} (Slave)
+## apcupsd.conf - {{ HOST }} (Slave)
 ## Network client monitoring master UPS via NIS
 ## Shutdown triggered by master via SSH
 
-UPSNAME ${UPSNAME}
+UPSNAME {{ UPSNAME }}
 UPSCABLE ether
 UPSTYPE net
-DEVICE ${DEVICE}
+DEVICE {{ DEVICE }}
 
 # NIS disabled on slave (only monitors master)
-NISIP ${NISIP}
+NISIP {{ NISIP }}
 NISPORT 3551
 NETSERVER off
 

@@ -35,7 +35,7 @@ Prometheus-native host metrics exporters for Proxmox nodes.
 - `configs/common/apcupsd-exporter.py`
 - `configs/common/apcupsd-exporter.service`
 - `configs/common/apcupsd-exporter.env`
-- `deploy.sh`
+- `../deploy`
 
 `prometheus-node-exporter`, `smartmontools`, and `python3` are installed via `apt`. `smartctl_exporter` is still fetched from the upstream GitHub release because Proxmox/Debian does not provide the exporter package in the default repos.
 
@@ -43,13 +43,14 @@ Prometheus-native host metrics exporters for Proxmox nodes.
 
 Deploy to all supported hosts:
 ```bash
-cd ~/homelab/pve-exporters
-./deploy.sh all
+cd ~/homelab
+./deploy pve-exporters all
 ```
 
 Deploy to specific hosts:
 ```bash
-./deploy.sh ace bray
+./deploy pve-exporters ace
+./deploy pve-exporters bray
 ```
 
 ## Verification

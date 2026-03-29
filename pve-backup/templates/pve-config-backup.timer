@@ -2,7 +2,7 @@
 Description=Daily PVE cluster config backup
 
 [Timer]
-OnCalendar=*-*-* ${SCHEDULE}
+OnCalendar=*-*-* {{ SCHEDULE }}
 RandomizedDelaySec=120
 Persistent=true
 Unit=pve-config-backup.service

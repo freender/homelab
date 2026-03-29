@@ -20,7 +20,7 @@ This directory contains automated GPU passthrough configuration for Proxmox host
 
 ```
 pve-gpu-passthrough/
-├── deploy.sh              # Deployment script (run from helm)
+├── ../deploy              # Repo-root deployment wrapper
 ├── README.md              # This file
 └── configs/               # Static config inputs (cmdline/blacklist/vfio/modules)
 ```
@@ -34,14 +34,14 @@ kernel cmdline, blacklist, and VFIO options; only `pci_ids` varies per host.
 
 Deploy to specific host:
 ```bash
-cd ~/homelab/pve-gpu-passthrough
-./deploy.sh ace      # Deploy to ace
-./deploy.sh clovis   # Deploy to clovis
+cd ~/homelab
+./deploy pve-gpu-passthrough ace
+./deploy pve-gpu-passthrough clovis
 ```
 
 Deploy to all hosts:
 ```bash
-./deploy.sh all
+./deploy pve-gpu-passthrough all
 ```
 
 Reboot to apply:
@@ -192,7 +192,7 @@ ssh ace reboot
 **Re-enable passthrough:**
 ```bash
 cd ~/homelab/pve-gpu-passthrough
-./deploy.sh ace
+./deploy pve-gpu-passthrough ace
 ssh ace reboot
 ```
 
@@ -271,7 +271,7 @@ lspci -nn | grep -E "VGA|3D|Audio controller.*NVIDIA"
 **Deployment:**
 ```bash
 cd ~/homelab/pve-gpu-passthrough
-./deploy.sh <host>
+./deploy pve-gpu-passthrough <host>
 ssh <host> reboot
 ```
 

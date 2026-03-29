@@ -1,23 +1,24 @@
 # Homelab Agent Guide (AGENTS.md)
 
 ## Purpose
-This repository is Bash-first automation for a Proxmox homelab.
+This repository is Python-orchestrated automation for a Proxmox homelab.
 Use this file to make coding agents consistent with existing patterns.
 
 ## Repo Summary
-- Languages: Bash + YAML.
-- Inventory: `hosts.conf` (access through helper functions, not ad-hoc parsing).
-- Shared libs: `lib/common.sh`, `lib/utils.sh`, `lib/print.sh`.
-- Pattern: per-module `deploy.sh` stages files, then runs remote `scripts/install.sh`.
+- Languages: Python + Bash + YAML.
+- Inventory: `hosts.conf`.
+- Local orchestration: `src/homelab/`.
+- Shared remote libs: `lib/utils.sh`, `lib/print.sh`.
+- Pattern: Python module builds/stages files, then runs remote `scripts/install.sh`.
 - CI: `.github/workflows/validate.yml`.
 
 ## Build, Lint, and Test Commands
 
 ### Full validation (best pre-PR check)
 ```bash
-./validate.sh
+./validate
 ```
-Includes ShellCheck, `hosts.conf` parse validation, and module dry-runs.
+Includes Python compile checks, ShellCheck, `hosts.conf` parse validation, and module dry-runs.
 
 ### Lint all scripts + YAML
 ```bash
@@ -27,31 +28,31 @@ yq eval '.' hosts.conf >/dev/null
 
 ### Single-file lint (fast targeted check)
 ```bash
-shellcheck -S warning lib/common.sh
-shellcheck -S warning pve-postinstall/deploy.sh
+python -m ruff check src/homelab/cli.py
+shellcheck -S warning pve-postinstall/scripts/install.sh
 ```
 
 ### Single module dry-run (primary "single test")
 ```bash
-cd apcupsd && ./deploy.sh --dry-run ace
-cd pve-postinstall && ./deploy.sh --dry-run all
+./deploy --dry-run apcupsd ace
+./deploy --dry-run pve-postinstall all
 ```
 
 ### Full dry-run
 ```bash
-./deploy-all.sh --dry-run all
+./deploy --dry-run all all
 ```
 
 ### Module-specific check scripts
 ```bash
 ./apcupsd/scripts/test-shutdown.sh
 ```
-If a module has no dedicated test script, use `deploy.sh --dry-run` as the test.
+If a module has no dedicated test script, use `./deploy --dry-run` as the test.
 
 ## Layout and Runtime Pattern
-- `*/deploy.sh`: local orchestrator for one module.
+- `src/homelab/modules/*.py`: local orchestrator for one module.
 - `*/scripts/install.sh`: remote installer for staged bundle.
-- `*/templates`: rendered files with `${VAR}` placeholders.
+- `*/templates`: rendered files with Jinja `{{ VAR }}` placeholders when templated.
 - `*/configs`: static files copied directly.
 - `*/build`: generated output (gitignored).
 - `secrets/`: local operator inputs.
@@ -59,36 +60,29 @@ If a module has no dedicated test script, use `deploy.sh --dry-run` as the test.
 ## Coding Style Guidelines
 
 ### Imports and shared functions
-- In every module `deploy.sh`, source `lib/common.sh` first:
-  `source "$(dirname "$0")/../lib/common.sh"`
+- Reuse `src/homelab/hosts.py`, `templates.py`, `ssh.py`, and `deploy.py` from Python modules.
 - Remote installers should source staged `lib/utils.sh` when present.
 - Keep fallback helper functions only where remote context may lack `utils.sh`.
 
 ### Formatting and syntax
-- Shebang: `#!/bin/bash`.
-- Deploy scripts may be run from Linux or macOS (`exo`), so keep Bash compatible with the older macOS Bash 3.x baseline.
+- Python target: 3.13.
+- Local orchestration should be Python.
+- Remote Bash should stay compatible with the older macOS Bash 3.x baseline when shared locally, though most remote scripts are Linux-only.
 - Indentation: 4 spaces, no tabs.
 - Tests: prefer `[[ ... ]]`.
 - Always quote variables unless deliberate splitting is required.
 - Use `$(...)` command substitution, never backticks.
 - Use `local` for function-scoped variables.
-- Avoid Bash 4+ features in shared/deploy scripts unless the script is explicitly Linux-only (for example associative arrays).
+- Avoid Bash 4+ features in shared/deploy scripts unless the script is explicitly Linux-only.
 
 ### Strict mode
-- Existing baseline is `set -e` in `common.sh` and most installers.
-- Use `set -u` only where pattern already exists (for example `deploy-all.sh`).
-- Use `set -euo pipefail` only in scripts that already rely on it.
-- Guard expected non-zero commands (for example `diff`) with `|| true`.
+- Python should raise on hard failures and return `0` for not-applicable module skips.
+- Remote Bash strict mode should match nearby patterns.
+- Guard expected non-zero commands (for example `diff`) with `|| true` in Bash.
 
-### Types and data handling (Bash)
-- Treat booleans as `true`/`false` strings.
-- Use arrays for lists (`local -a files`).
-- Use arithmetic loops for numeric iteration.
-- Validate `yq` output for empty/null before use.
-- Prefer helper APIs over direct YAML scraping:
-  - `hosts list [--feature <feature>]`
-  - `hosts get <host> <key> [default]`
-  - `hosts has <host> <feature>`
+### Types and data handling
+- Prefer `HostRegistry` helpers over ad-hoc YAML traversal.
+- Treat booleans passed into remote env files as `true`/`false` strings where existing installers expect them.
 
 ### Naming conventions
 - Globals/constants: `UPPER_SNAKE_CASE` (`BUILD_ROOT`, `FORCE_UPDATE`).
@@ -96,19 +90,17 @@ If a module has no dedicated test script, use `deploy.sh --dry-run` as the test.
 - Module directories: kebab-case (`pve-gpu-passthrough`).
 - Function names should describe action (`render_template`, `deploy_finish`).
 
-### Deploy script shape
+### Deploy module shape
 Keep the same flow used across modules:
-1. Source common library and define paths.
-2. Parse common flags (`parse_common_flags`) and module-specific flags.
-3. Resolve supported hosts and filter target (`filter_hosts`).
-4. Validate required templates/configs/secrets/host fields.
-5. Implement `deploy()` per host:
+1. Resolve supported hosts via `hosts.conf`.
+2. Validate required templates/configs/secrets/host fields.
+3. Implement `deploy_host()` per host:
    - prepare/render build artifacts
    - show remote diffs
    - obey dry-run mode
    - stage files to `/tmp/homelab-<module>/`
    - run remote `scripts/install.sh`
-6. Finish with `deploy_init`, `deploy_run`, `deploy_finish`.
+4. Use `DeploySession` for host-level success/failure reporting.
 
 ### Logging/output
 - Prefer `print_header`, `print_action`, `print_sub`, `print_ok`, `print_warn`, `print_error`.
@@ -139,10 +131,11 @@ Keep the same flow used across modules:
 
 ## CI Expectations
 CI on push/PR to `main` runs:
+- Python lint.
 - ShellCheck (warning severity).
 - YAML lint for `hosts.conf`.
-- Module dry-runs.
-Run `./validate.sh` locally for CI parity.
+- `homelab validate`.
+Run `PYTHONPATH=src python -m homelab.cli validate` locally for CI parity.
 
 ## Cursor/Copilot Rules
 Checked paths:
@@ -153,8 +146,8 @@ No Cursor/Copilot-specific rule files currently exist in this repo.
 If they are added later, follow them and update this guide.
 
 ## Agent Checklist
-1. Read the module's `deploy.sh` and `scripts/install.sh` before editing.
+1. Read the module's Python orchestrator and `scripts/install.sh` before editing.
 2. Match nearby patterns; avoid introducing new framework styles.
-3. Run targeted validation first (single-file shellcheck + module dry-run).
-4. Run `./validate.sh` when practical before handing off.
+3. Run targeted validation first (ruff/shellcheck + module dry-run).
+4. Run `PYTHONPATH=src python -m homelab.cli validate` when practical before handing off.
 5. Never commit secret files or generated `build/` artifacts.

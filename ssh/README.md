@@ -6,17 +6,17 @@ Automated SSH config deployment across homelab infrastructure.
 
 Deploy to all hosts:
 ```bash
-cd ~/homelab/ssh && ./deploy.sh all
+cd ~/homelab && ./deploy ssh all
 ```
 
 Deploy to specific hosts:
 ```bash
-cd ~/homelab/ssh && ./deploy.sh helm
+cd ~/homelab && ./deploy ssh helm
 ```
 
 Deploy to single host:
 ```bash
-cd ~/homelab/ssh && ./deploy.sh exo
+cd ~/homelab && ./deploy ssh exo
 ```
 
 ## Configuration
@@ -59,5 +59,5 @@ ssh cinci 'sudo incus exec zavala -- chown root:root /root/.ssh/authorized_keys 
 configs/common.conf         # Shared SSH config
 configs/<host>/append.conf  # Host-specific overrides
 scripts/install.sh          # Remote installer
-deploy.sh                   # Deployment script
+../deploy                   # Repo-root deployment wrapper
 ```
