@@ -10,52 +10,14 @@ BUILD_DIR="$SCRIPT_DIR/build/$HOST"
 FORCE_UPDATE=${FORCE_UPDATE:-false}
 
 if [[ -f "$SCRIPT_DIR/lib/utils.sh" ]]; then
+    # shellcheck source=/dev/null
     source "$SCRIPT_DIR/lib/utils.sh"
 else
-    backup_config() {
-        local path="$1"
-        [[ -e "$path" ]] || return 0
-        cp -r "$path" "${path}.bak.$(date +%Y%m%d%H%M%S)"
-    }
-    print_sub()   { echo "    $*"; }
-    print_error() { echo "    ✗ Error: $*" >&2; }
-    file_needs_update() {
-        local src="$1" dst="$2"
-        [[ -f "$src" ]] || return 2
-        [[ ! -f "$dst" ]] && return 0
-        [[ "$FORCE_UPDATE" == "true" ]] && return 0
-        cmp -s "$src" "$dst" && return 1
-        return 0
-    }
-    copy_if_changed() {
-        local src="$1" dst="$2" label="${3:-$2}"
-        if file_needs_update "$src" "$dst"; then
-            cp "$src" "$dst"
-            print_sub "Updated $label"
-            return 0
-        fi
-        local rc=$?
-        [[ $rc -eq 1 ]] && { print_sub "$label unchanged; skipping update"; return 1; }
-        return "$rc"
-    }
-    backup_and_copy_if_changed() {
-        local src="$1" dst="$2" label="${3:-$2}"
-        if file_needs_update "$src" "$dst"; then
-            backup_config "$dst"
-            cp "$src" "$dst"
-            print_sub "Updated $label"
-            return 0
-        fi
-        local rc=$?
-        [[ $rc -eq 1 ]] && { print_sub "$label unchanged; skipping update"; return 1; }
-        return "$rc"
-    }
-fi
-
-if [[ ! -d "$BUILD_DIR/configs" ]]; then
-    print_error "Build directory not found: $BUILD_DIR/configs"
+    echo "Error: Missing shared utils at $SCRIPT_DIR/lib/utils.sh" >&2
     exit 1
 fi
+
+require_dir "$BUILD_DIR/configs" "$BUILD_DIR/configs" || exit 1
 
 NODE_ENV_SRC="$BUILD_DIR/configs/node-exporter.defaults"
 SMART_ENV_SRC="$BUILD_DIR/configs/smartctl-exporter.defaults"

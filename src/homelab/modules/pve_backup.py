@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from ..deploy import DeploySession, prepare_build_dir
+from ..deploy import DeploySession, prepare_build_dir, stage_and_run_remote_installer
 from ..hosts import default_registry
 from ..output import print_action, print_sub
 from ..ssh import HostConnection, build_files
@@ -100,19 +100,19 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
         )
         return
 
-    connection.prepare_remote_dir(REMOTE_ROOT, "build", "lib")
-    connection.upload_paths([
-        (build_dir, f"{REMOTE_ROOT}/build/{host}"),
-        (root / "pve-backup" / "scripts", f"{REMOTE_ROOT}/scripts"),
-    ])
-    connection.upload_shared_libs(root, REMOTE_ROOT)
-    print_sub("Running installer...")
-    connection.run_remote_installer(
+    stage_and_run_remote_installer(
+        root,
+        connection,
         REMOTE_ROOT,
+        [
+            (build_dir, f"{REMOTE_ROOT}/build/{host}"),
+            (root / "pve-backup" / "scripts", f"{REMOTE_ROOT}/scripts"),
+        ],
         "scripts/install.sh",
         host,
         env={"FORCE_UPDATE": "true" if force else "false"},
         require_root=True,
+        remote_subdirs=("build", "lib"),
     )
 
 

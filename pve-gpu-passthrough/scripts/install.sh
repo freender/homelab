@@ -9,20 +9,17 @@ SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD_DIR="$SCRIPT_DIR/build/$HOST"
 
 if [[ -f "$SCRIPT_DIR/lib/utils.sh" ]]; then
+    # shellcheck source=/dev/null
     source "$SCRIPT_DIR/lib/utils.sh"
 else
-    backup_config() {
-        local path="$1"
-        [[ -e "$path" ]] || return 0
-        cp -r "$path" "${path}.bak.$(date +%Y%m%d%H%M%S)" 2>/dev/null || true
-    }
-    print_sub() { echo "    $*"; }
-fi
-
-if [[ ! -f "$BUILD_DIR/blacklist.conf" || ! -f "$BUILD_DIR/cmdline" || ! -f "$BUILD_DIR/vfio.conf" || ! -f "$BUILD_DIR/modules" ]]; then
-    echo "Error: Missing build artifacts in $BUILD_DIR"
+    echo "Error: Missing shared utils at $SCRIPT_DIR/lib/utils.sh" >&2
     exit 1
 fi
+
+require_file "$BUILD_DIR/blacklist.conf" "$BUILD_DIR/blacklist.conf" || exit 1
+require_file "$BUILD_DIR/cmdline" "$BUILD_DIR/cmdline" || exit 1
+require_file "$BUILD_DIR/vfio.conf" "$BUILD_DIR/vfio.conf" || exit 1
+require_file "$BUILD_DIR/modules" "$BUILD_DIR/modules" || exit 1
 
 if [[ ! -f /etc/kernel/cmdline ]]; then
     echo "Error: /etc/kernel/cmdline not found (systemd-boot required)"

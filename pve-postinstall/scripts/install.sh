@@ -14,16 +14,11 @@ BACKUP_DIR="/var/backups/homelab/pve-postinstall"
 INSTALL_FILE_CHANGED="false"
 
 if [[ -f "$SCRIPT_DIR/lib/utils.sh" ]]; then
+    # shellcheck source=/dev/null
     source "$SCRIPT_DIR/lib/utils.sh"
 else
-    backup_config() {
-        local path="$1"
-        [[ -e "$path" ]] || return 0
-        cp -r "$path" "${path}.bak.$(date +%Y%m%d%H%M%S)" 2>/dev/null || true
-    }
-    print_sub() { echo "    $*"; }
-    print_warn() { echo "    ✗ Warning: $*"; }
-    print_error() { echo "    ✗ Error: $*" >&2; }
+    echo "Error: Missing shared utils at $SCRIPT_DIR/lib/utils.sh" >&2
+    exit 1
 fi
 
 if [[ -z "$HOST_TYPE" ]]; then
@@ -48,10 +43,7 @@ load_file_map() {
     local map_file="$BUILD_DIR/file-map.conf"
     local filename remote_path mode
 
-    if [[ ! -f "$map_file" ]]; then
-        print_error "missing file-map.conf in $BUILD_DIR"
-        exit 1
-    fi
+    require_file "$map_file" "$map_file" || exit 1
 
     declare -g -A FILE_MAP_DEST=()
     declare -g -A FILE_MAP_MODE=()
@@ -168,10 +160,7 @@ if [[ -z "$HOST_TYPE" ]]; then
     exit 1
 fi
 
-if [[ ! -d "$BUILD_DIR" ]]; then
-    print_error "Missing build directory $BUILD_DIR"
-    exit 1
-fi
+require_dir "$BUILD_DIR" "$BUILD_DIR" || exit 1
 
 load_file_map
 

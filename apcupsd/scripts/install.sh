@@ -12,50 +12,11 @@ ENV_FILE="$BUILD_DIR/env"
 FORCE_UPDATE=${FORCE_UPDATE:-false}
 
 if [[ -f "$SCRIPT_DIR/lib/utils.sh" ]]; then
+    # shellcheck source=/dev/null
     source "$SCRIPT_DIR/lib/utils.sh"
 else
-    backup_config() {
-        local path="$1"
-        [[ -e "$path" ]] || return 0
-        cp -r "$path" "${path}.bak.$(date +%Y%m%d%H%M%S)"
-    }
-    print_sub() { echo "    $*"; }
-    file_needs_update() {
-        local src="$1"
-        local dst="$2"
-        [[ -f "$src" ]] || return 2
-        [[ ! -f "$dst" ]] && return 0
-        [[ "$FORCE_UPDATE" == "true" ]] && return 0
-        cmp -s "$src" "$dst" && return 1
-        return 0
-    }
-    copy_if_changed() {
-        local src="$1"
-        local dst="$2"
-        local label="${3:-$dst}"
-        if file_needs_update "$src" "$dst"; then
-            cp "$src" "$dst"
-            print_sub "Updated $label"
-            return 0
-        fi
-        local rc=$?
-        [[ $rc -eq 1 ]] && { print_sub "$label unchanged; skipping update"; return 1; }
-        return "$rc"
-    }
-    backup_and_copy_if_changed() {
-        local src="$1"
-        local dst="$2"
-        local label="${3:-$dst}"
-        if file_needs_update "$src" "$dst"; then
-            backup_config "$dst"
-            cp "$src" "$dst"
-            print_sub "Updated $label"
-            return 0
-        fi
-        local rc=$?
-        [[ $rc -eq 1 ]] && { print_sub "$label unchanged; skipping update"; return 1; }
-        return "$rc"
-    }
+    echo "Error: Missing shared utils at $SCRIPT_DIR/lib/utils.sh" >&2
+    exit 1
 fi
 
 ROLE="unknown"
@@ -66,25 +27,10 @@ fi
 
 echo "=== Installing apcupsd $ROLE on $HOST ==="
 
-if [[ ! -d "$BUILD_DIR" ]]; then
-    echo "Error: Rendered config directory not found: $BUILD_DIR"
-    exit 1
-fi
-
-if [[ ! -f "$CONFIGS_DIR/shared/apcupsd.notify" ]]; then
-    echo "Error: Missing $CONFIGS_DIR/shared/apcupsd.notify"
-    exit 1
-fi
-
-if [[ ! -f "$CONFIGS_DIR/telegram/telegram.sh" ]]; then
-    echo "Error: Missing $CONFIGS_DIR/telegram/telegram.sh"
-    exit 1
-fi
-
-if [[ ! -f "$BUILD_DIR/telegram.env" ]]; then
-    echo "Error: Missing telegram.env in $BUILD_DIR"
-    exit 1
-fi
+require_dir "$BUILD_DIR" "$BUILD_DIR" || exit 1
+require_file "$CONFIGS_DIR/shared/apcupsd.notify" "$CONFIGS_DIR/shared/apcupsd.notify" || exit 1
+require_file "$CONFIGS_DIR/telegram/telegram.sh" "$CONFIGS_DIR/telegram/telegram.sh" || exit 1
+require_file "$BUILD_DIR/telegram.env" "$BUILD_DIR/telegram.env" || exit 1
 
 # Install package if needed
 if ! command -v apcupsd >/dev/null 2>&1; then

@@ -2,11 +2,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ..deploy import DeploySession, prepare_build_dir
+from ..build import copy_files, render_file
+from ..deploy import DeploySession, prepare_build_dir, stage_and_run_remote_installer
 from ..hosts import HostLookupError, default_registry
 from ..output import print_action, print_error, print_sub
 from ..ssh import HostConnection, build_files, diff_many
-from ..templates import render_template
 
 MODULE_NAME = "PVE Post-Install Configs"
 REMOTE_ROOT = "/tmp/homelab-pve-postinstall"
@@ -91,10 +91,7 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
         source_path = config_dir / file_name
         if not source_path.is_file():
             raise ValueError(f"Missing config file: {source_path}")
-        (build_dir / file_name).write_text(
-            source_path.read_text(encoding="utf-8"),
-            encoding="utf-8",
-        )
+    copy_files(config_dir, build_dir, PVE_FILES)
 
     write_file_map(build_dir)
     build_network_interfaces_bundle(root, host, build_dir)
@@ -162,7 +159,7 @@ def build_network_interfaces_bundle(root: Path, host: str, build_dir: Path) -> N
             f"pve-postinstall.interfaces.{{mgmt_ip,gateway,storage_ip}} required for {host}"
         ) from exc
 
-    render_template(
+    render_file(
         root / "pve-postinstall" / "templates" / "pve-interfaces",
         build_dir / "interfaces",
         NET_MGMT_IP=mgmt_ip,
@@ -181,17 +178,14 @@ def stage_and_install(
     connection: HostConnection,
     force: bool,
 ) -> None:
-    print_sub("Staging bundle...")
-    connection.prepare_remote_dir(REMOTE_ROOT, "build", "lib")
-    connection.upload_paths([
-        (build_dir, f"{REMOTE_ROOT}/build/{host}"),
-        (root / "pve-postinstall" / "scripts", f"{REMOTE_ROOT}/scripts"),
-    ])
-    connection.upload_shared_libs(root, REMOTE_ROOT)
-
-    print_sub("Running installer...")
-    connection.run_remote_installer(
+    stage_and_run_remote_installer(
+        root,
+        connection,
         REMOTE_ROOT,
+        [
+            (build_dir, f"{REMOTE_ROOT}/build/{host}"),
+            (root / "pve-postinstall" / "scripts", f"{REMOTE_ROOT}/scripts"),
+        ],
         "scripts/install.sh",
         host,
         host_type,
@@ -199,4 +193,5 @@ def stage_and_install(
         ceph_enabled,
         env={"FORCE_UPDATE": "true" if force else "false"},
         require_root=True,
+        remote_subdirs=("build", "lib"),
     )

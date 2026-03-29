@@ -8,17 +8,14 @@ STATE_DIR="/run/homelab-pve-backup"
 STATE_FILE="$STATE_DIR/backup-state.env"
 
 if [[ -f "$SCRIPT_DIR/lib/utils.sh" ]]; then
+    # shellcheck source=/dev/null
     source "$SCRIPT_DIR/lib/utils.sh"
 else
-    print_sub() { echo "    $*"; }
-    print_warn() { echo "    ✗ Warning: $*"; }
-    print_error() { echo "    ✗ Error: $*" >&2; }
-fi
-
-if [[ ! -d "$BUILD_DIR" ]]; then
-    print_error "Missing build directory $BUILD_DIR"
+    echo "Error: Missing shared utils at $SCRIPT_DIR/lib/utils.sh" >&2
     exit 1
 fi
+
+require_dir "$BUILD_DIR" "$BUILD_DIR" || exit 1
 
 mkdir -p "$STATE_DIR"
 rm -f "$STATE_FILE"

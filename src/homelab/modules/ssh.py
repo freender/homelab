@@ -7,7 +7,7 @@ from pathlib import Path
 from fabric.transfer import Transfer
 from invoke.exceptions import UnexpectedExit
 
-from ..deploy import DeploySession, prepare_build_dir
+from ..deploy import DeploySession, prepare_build_dir, stage_and_run_remote_installer
 from ..hosts import default_registry
 from ..output import print_action, print_error, print_sub, print_warn
 from ..ssh import HostConnection, build_files
@@ -111,19 +111,17 @@ def dry_run_remote_diff(host: str, local_file: Path) -> tuple[int, str]:
 
 def stage_and_install(root: Path, host: str, build_dir: Path, force: bool) -> None:
     connection = HostConnection(host)
-    print_sub("Staging bundle...")
-    connection.prepare_remote_dir(REMOTE_ROOT, "build", "lib")
-    connection.upload_paths([
-        (build_dir, f"{REMOTE_ROOT}/build/{host}"),
-        (root / "ssh" / "scripts", f"{REMOTE_ROOT}/scripts"),
-    ])
-    connection.upload_shared_libs(root, REMOTE_ROOT)
-
-    print_sub("Running installer...")
-    connection.run_remote_installer(
+    stage_and_run_remote_installer(
+        root,
+        connection,
         REMOTE_ROOT,
+        [
+            (build_dir, f"{REMOTE_ROOT}/build/{host}"),
+            (root / "ssh" / "scripts", f"{REMOTE_ROOT}/scripts"),
+        ],
         "scripts/install.sh",
         host,
         env={"FORCE_UPDATE": "true" if force else "false"},
         require_root=False,
+        remote_subdirs=("build", "lib"),
     )

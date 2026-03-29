@@ -18,6 +18,32 @@ fi
 FORCE_UPDATE=${FORCE_UPDATE:-false}
 BACKUP_KEEP_COUNT=${BACKUP_KEEP_COUNT:-3}
 
+require_file() {
+    local path="$1"
+    local label="${2:-$path}"
+
+    if [[ ! -f "$path" ]]; then
+        print_error "missing file: $label"
+        return 1
+    fi
+}
+
+require_dir() {
+    local path="$1"
+    local label="${2:-$path}"
+
+    if [[ ! -d "$path" ]]; then
+        print_error "missing directory: $label"
+        return 1
+    fi
+}
+
+ensure_parent_dir() {
+    local path="$1"
+
+    mkdir -p "$(dirname "$path")"
+}
+
 prune_backup_history() {
     local path="$1"
     local keep_count="${2:-$BACKUP_KEEP_COUNT}"
@@ -129,6 +155,59 @@ backup_and_copy_if_changed() {
     local rc=$?
     if [[ $rc -eq 1 ]]; then
         print_sub "$label unchanged; skipping update"
+        return 1
+    fi
+
+    return "$rc"
+}
+
+# Install file with mode only when destination differs or is missing.
+# Returns: 0 when changed, 1 when unchanged, 2 on error
+# Usage: install_if_changed source destination mode [label]
+install_if_changed() {
+    local src="$1"
+    local dst="$2"
+    local mode="$3"
+    local label="${4:-$dst}"
+
+    if file_needs_update "$src" "$dst"; then
+        ensure_parent_dir "$dst"
+        install -m "$mode" "$src" "$dst"
+        print_sub "Updated $label"
+        return 0
+    fi
+
+    local rc=$?
+    if [[ $rc -eq 1 ]]; then
+        print_sub "$label unchanged; skipping update"
+        chmod "$mode" "$dst"
+        return 1
+    fi
+
+    return "$rc"
+}
+
+# Backup destination and install file with mode only when changed.
+# Returns: 0 when changed, 1 when unchanged, 2 on error
+# Usage: backup_and_install_if_changed source destination mode [label]
+backup_and_install_if_changed() {
+    local src="$1"
+    local dst="$2"
+    local mode="$3"
+    local label="${4:-$dst}"
+
+    if file_needs_update "$src" "$dst"; then
+        ensure_parent_dir "$dst"
+        backup_config "$dst"
+        install -m "$mode" "$src" "$dst"
+        print_sub "Updated $label"
+        return 0
+    fi
+
+    local rc=$?
+    if [[ $rc -eq 1 ]]; then
+        print_sub "$label unchanged; skipping update"
+        chmod "$mode" "$dst"
         return 1
     fi
 

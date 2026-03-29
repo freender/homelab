@@ -2,11 +2,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ..deploy import DeploySession, prepare_build_dir
+from ..build import copy_files, render_file
+from ..deploy import DeploySession, prepare_build_dir, stage_and_run_remote_installer
 from ..hosts import HostLookupError, default_registry
 from ..output import print_action, print_sub
 from ..ssh import HostConnection, diff_many
-from ..templates import render_template
 
 REMOTE_ROOT = "/tmp/homelab-pve-exporters"
 REQUIRED = [
@@ -59,15 +59,11 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
     prepare_build_dir(build_dir)
     configs_dir = build_dir / "configs"
     configs_dir.mkdir(parents=True, exist_ok=True)
-    for name in [
+    copy_files(common_dir, configs_dir, [
         "node-exporter.defaults",
         "smartctl-exporter.defaults",
         "smartctl-exporter.service",
-    ]:
-        (configs_dir / name).write_text(
-            (common_dir / name).read_text(encoding="utf-8"),
-            encoding="utf-8",
-        )
+    ])
 
     connection = HostConnection(host)
     if has_apcupsd_exporter(root, host):
@@ -86,12 +82,8 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
                 hide=True,
             )
             serial = result.stdout.strip()
-        for name in ["apcupsd-exporter.py", "apcupsd-exporter.service"]:
-            (configs_dir / name).write_text(
-                (common_dir / name).read_text(encoding="utf-8"),
-                encoding="utf-8",
-            )
-        render_template(
+        copy_files(common_dir, configs_dir, ["apcupsd-exporter.py", "apcupsd-exporter.service"])
+        render_file(
             common_dir / "apcupsd-exporter.env",
             configs_dir / "apcupsd-exporter.env",
             UPS_NAME=upsname,
@@ -122,18 +114,17 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
         print_sub(f"[DRY-RUN] Would deploy to {host}:{REMOTE_ROOT}/")
         return
 
-    print_sub("Staging bundle...")
-    connection.prepare_remote_dir(REMOTE_ROOT, "build", "lib")
-    connection.upload_paths([
-        (build_dir, f"{REMOTE_ROOT}/build/{host}"),
-        (root / "pve-exporters" / "scripts", f"{REMOTE_ROOT}/scripts"),
-    ])
-    connection.upload_shared_libs(root, REMOTE_ROOT)
-    print_sub("Running installer...")
-    connection.run_remote_installer(
+    stage_and_run_remote_installer(
+        root,
+        connection,
         REMOTE_ROOT,
+        [
+            (build_dir, f"{REMOTE_ROOT}/build/{host}"),
+            (root / "pve-exporters" / "scripts", f"{REMOTE_ROOT}/scripts"),
+        ],
         "scripts/install.sh",
         host,
         env={"FORCE_UPDATE": "true" if force else "false"},
         require_root=True,
+        remote_subdirs=("build", "lib"),
     )

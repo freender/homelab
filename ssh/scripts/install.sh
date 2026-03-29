@@ -10,37 +10,14 @@ BUILD_DIR="$SCRIPT_DIR/build/$HOST"
 FORCE_UPDATE=${FORCE_UPDATE:-false}
 
 if [[ -f "$SCRIPT_DIR/lib/utils.sh" ]]; then
+    # shellcheck source=/dev/null
     source "$SCRIPT_DIR/lib/utils.sh"
 else
-    backup_config() {
-        local path="$1"
-        [[ -e "$path" ]] || return 0
-        cp -r "$path" "${path}.bak.$(date +%Y%m%d%H%M%S)"
-    }
-    print_sub() { echo "    $*"; }
-    print_header() { echo "=== $* ==="; }
-    print_error() { echo "    ✗ Error: $*" >&2; }
-    backup_and_copy_if_changed() {
-        local src="$1"
-        local dst="$2"
-        local label="${3:-$dst}"
-
-        if [[ "$FORCE_UPDATE" == "true" ]] || [[ ! -f "$dst" ]] || ! cmp -s "$src" "$dst"; then
-            backup_config "$dst"
-            cp "$src" "$dst"
-            print_sub "Updated $label"
-            return 0
-        fi
-
-        print_sub "$label unchanged; skipping update"
-        return 1
-    }
-fi
-
-if [[ ! -f "$BUILD_DIR/config" ]]; then
-    print_error "missing config at $BUILD_DIR/config"
+    echo "Error: Missing shared utils at $SCRIPT_DIR/lib/utils.sh" >&2
     exit 1
 fi
+
+require_file "$BUILD_DIR/config" "$BUILD_DIR/config" || exit 1
 
 print_header "Installing SSH config on $HOST"
 

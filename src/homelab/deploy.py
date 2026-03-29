@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .output import print_action, print_ok, print_sub, print_warn
+from .ssh import HostConnection
 
 
 def prepare_build_dir(build_dir: Path) -> None:
@@ -45,3 +46,31 @@ class DeploySession:
             print_warn(f"Failed hosts: {' '.join(self.failed_hosts)}")
             return False
         return True
+
+
+def stage_and_run_remote_installer(
+    root: Path,
+    connection: HostConnection,
+    remote_root: str,
+    upload_paths: list[tuple[Path, str]],
+    installer: str,
+    *args: str,
+    env: dict[str, str] | None = None,
+    require_root: bool = False,
+    interpreter: str | None = None,
+    remote_subdirs: tuple[str, ...] = ("build", "lib"),
+) -> None:
+    print_sub("Staging bundle...")
+    connection.prepare_remote_dir(remote_root, *remote_subdirs)
+    connection.upload_paths(upload_paths)
+    connection.upload_shared_libs(root, remote_root)
+
+    print_sub("Running installer...")
+    connection.run_remote_installer(
+        remote_root,
+        installer,
+        *args,
+        env=env,
+        require_root=require_root,
+        interpreter=interpreter,
+    )

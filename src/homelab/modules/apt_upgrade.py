@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ..deploy import DeploySession, prepare_build_dir
+from ..build import write_env_file
+from ..deploy import DeploySession, prepare_build_dir, stage_and_run_remote_installer
 from ..hosts import HostLookupError, default_registry
 from ..output import print_action, print_sub
 from ..ssh import HostConnection
@@ -122,31 +123,32 @@ def write_timer(build_dir: Path, schedule: str) -> None:
 
 
 def write_env(build_dir: Path, autoupgrade: str, schedule: str) -> None:
-    content = "\n".join(
-        [
-            'CLEANUP="false"',
-            f'AUTOUPGRADE="{autoupgrade}"',
-            f'SCHEDULE="{schedule}"',
-            "",
-        ]
+    write_env_file(
+        build_dir / "env",
+        {
+            "CLEANUP": "false",
+            "AUTOUPGRADE": autoupgrade,
+            "SCHEDULE": schedule,
+        },
     )
-    (build_dir / "env").write_text(content, encoding="utf-8")
 
 
 def stage_and_install(root: Path, build_dir: Path, connection: HostConnection, force: bool) -> None:
-    print_sub("Staging bundle...")
-    connection.prepare_remote_dir(REMOTE_ROOT, "build", "lib", "scripts")
-    connection.upload(root / "apt-upgrade" / "scripts", f"{REMOTE_ROOT}/scripts")
+    upload_paths: list[tuple[Path, str]] = [
+        (root / "apt-upgrade" / "scripts", f"{REMOTE_ROOT}/scripts")
+    ]
     for file_name in ["service", "env", "timer"]:
         file_path = build_dir / file_name
         if file_path.is_file():
-            connection.upload(file_path, f"{REMOTE_ROOT}/build/{file_name}")
-    connection.upload_shared_libs(root, REMOTE_ROOT)
+            upload_paths.append((file_path, f"{REMOTE_ROOT}/build/{file_name}"))
 
-    print_sub("Running installer...")
-    connection.run_remote_installer(
+    stage_and_run_remote_installer(
+        root,
+        connection,
         REMOTE_ROOT,
+        upload_paths,
         "scripts/install.sh",
         env={"FORCE_UPDATE": "true" if force else "false"},
         require_root=True,
+        remote_subdirs=("build", "lib", "scripts"),
     )

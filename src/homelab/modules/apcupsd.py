@@ -2,11 +2,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ..deploy import DeploySession, prepare_build_dir
+from ..build import render_file, write_env_file
+from ..deploy import DeploySession, prepare_build_dir, stage_and_run_remote_installer
 from ..hosts import HostLookupError, default_registry
 from ..output import print_action, print_error, print_sub
 from ..ssh import HostConnection, build_files, diff_many
-from ..templates import render_template
 
 MODULE_NAME = "apcupsd"
 REMOTE_ROOT = "/tmp/homelab-apcupsd"
@@ -134,14 +134,14 @@ def render_configs(
         "NISIP": nisip,
         "SLAVE_HOSTS": slave_hosts,
     }
-    render_template(conf_template, build_dir / "apcupsd.conf", **context)
-    render_template(shutdown_template, build_dir / "doshutdown", **context)
+    render_file(conf_template, build_dir / "apcupsd.conf", **context)
+    render_file(shutdown_template, build_dir / "doshutdown", **context)
     (build_dir / "doshutdown").chmod(0o755)
     (build_dir / "telegram.env").write_text(
         (root / "secrets" / "telegram.env").read_text(encoding="utf-8"),
         encoding="utf-8",
     )
-    (build_dir / "env").write_text(f'ROLE="{role}"\nHOST="{host}"\n', encoding="utf-8")
+    write_env_file(build_dir / "env", {"ROLE": role, "HOST": host})
     return build_dir
 
 
@@ -152,20 +152,18 @@ def stage_and_install(
     connection: HostConnection,
     force: bool,
 ) -> None:
-    print_sub("Staging bundle...")
-    connection.prepare_remote_dir(REMOTE_ROOT, "build", "lib")
-    connection.upload_paths([
-        (build_dir, f"{REMOTE_ROOT}/build/{host}"),
-        (root / "apcupsd" / "scripts", f"{REMOTE_ROOT}/scripts"),
-        (root / "apcupsd" / "configs", f"{REMOTE_ROOT}/configs"),
-    ])
-    connection.upload_shared_libs(root, REMOTE_ROOT)
-
-    print_sub("Running installer...")
-    connection.run_remote_installer(
+    stage_and_run_remote_installer(
+        root,
+        connection,
         REMOTE_ROOT,
+        [
+            (build_dir, f"{REMOTE_ROOT}/build/{host}"),
+            (root / "apcupsd" / "scripts", f"{REMOTE_ROOT}/scripts"),
+            (root / "apcupsd" / "configs", f"{REMOTE_ROOT}/configs"),
+        ],
         "scripts/install.sh",
         host,
         env={"FORCE_UPDATE": "true" if force else "false"},
         require_root=True,
+        remote_subdirs=("build", "lib"),
     )

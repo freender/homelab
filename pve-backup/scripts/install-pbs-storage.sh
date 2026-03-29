@@ -12,17 +12,14 @@ STATE_DIR="/run/homelab-pve-backup"
 STATE_FILE="$STATE_DIR/backup-state.env"
 
 if [[ -f "$SCRIPT_DIR/lib/utils.sh" ]]; then
+    # shellcheck source=/dev/null
     source "$SCRIPT_DIR/lib/utils.sh"
 else
-    print_sub() { echo "    $*"; }
-    print_warn() { echo "    ✗ Warning: $*"; }
-    print_error() { echo "    ✗ Error: $*" >&2; }
-fi
-
-if [[ ! -f "$PLAN_FILE" ]]; then
-    print_error "Missing storage plan: $PLAN_FILE"
+    echo "Error: Missing shared utils at $SCRIPT_DIR/lib/utils.sh" >&2
     exit 1
 fi
+
+require_file "$PLAN_FILE" "$PLAN_FILE" || exit 1
 
 # shellcheck disable=SC1090
 source "$PLAN_FILE"

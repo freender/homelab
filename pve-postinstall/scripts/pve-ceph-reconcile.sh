@@ -7,10 +7,11 @@ NODE="$(hostname -s)"
 CEPH_CONF_FILE="/etc/pve/ceph.conf"
 
 if [[ -f "$SCRIPT_DIR/lib/utils.sh" ]]; then
+    # shellcheck source=/dev/null
     source "$SCRIPT_DIR/lib/utils.sh"
 else
-    print_sub()  { echo "    [ceph] $*"; }
-    print_warn() { echo "    ✗ Warning: [ceph] $*"; }
+    echo "Error: Missing shared utils at $SCRIPT_DIR/lib/utils.sh" >&2
+    exit 1
 fi
 
 log() { print_sub "$*"; }

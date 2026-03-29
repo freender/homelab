@@ -8,11 +8,11 @@ SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD_DIR="$SCRIPT_DIR/build/$HOST"
 
 if [[ -f "$SCRIPT_DIR/lib/utils.sh" ]]; then
+    # shellcheck source=/dev/null
     source "$SCRIPT_DIR/lib/utils.sh"
 else
-    print_sub() { echo "    $*"; }
-    print_warn() { echo "    Warning: $*"; }
-    print_error() { echo "    Error: $*" >&2; }
+    echo "Error: Missing shared utils at $SCRIPT_DIR/lib/utils.sh" >&2
+    exit 1
 fi
 
 BACKUP_SCRIPT="$BUILD_DIR/pve-config-backup.sh"

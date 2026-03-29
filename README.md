@@ -38,13 +38,13 @@ UPS monitoring with coordinated cluster shutdown
 ./deploy apcupsd all
 ```
 
-### [apcupsd-exporter](apcupsd-exporter/)
-Prometheus-native UPS metrics for apcupsd master nodes
+### [pve-exporters](pve-exporters/)
+Prometheus-native host metrics for Proxmox nodes, including UPS metrics on apcupsd master nodes
 - Exposes local UPS metrics on `:9162`
 - Scraped by vmagent/VictoriaMetrics
 
 ```bash
-cd ~/homelab/pve-exporters && ./deploy pve-exporters all
+./deploy pve-exporters all
 ```
 
 ### [apt-upgrade](apt-upgrade/)
@@ -64,6 +64,21 @@ Docker management scripts
 ./deploy docker all
 ```
 
+### [pve-backup](pve-backup/)
+PVE backup configuration
+- Cluster config backup of `/etc/pve` to PBS with systemd timer
+- Standalone PBS storage definitions and backup jobs
+- Subfeatures (configured in `hosts.conf` under `pve-backup`):
+  - `proxmox_backup_client`: `/etc/pve` backup to PBS (`secret_profile` selects the local secret file)
+  - `pbs_setup`: standalone PBS storage definitions and backup jobs
+- Requires:
+  - `secrets/pbs-backup-main.env` and/or `secrets/pbs-backup-cinci.env` for cluster config backup credentials
+  - `/etc/homelab/pbs-tokens.env` on target host (see `pve-backup/configs/pbs-tokens.env.example`) for standalone PBS storage auth
+
+```bash
+./deploy pve-backup all
+```
+
 ### [pve-gpu-passthrough](pve-gpu-passthrough/)
 Proxmox GPU passthrough configs
 - Updates boot cmdline, VFIO modules, and modprobe configs
@@ -80,11 +95,6 @@ PVE post-install configuration
 - Timezone, local-zfs storage, Ceph reconciliation
 - Subfeatures (configured in `hosts.conf` under `pve-postinstall`):
   - `interfaces`: per-node `/etc/network/interfaces` rendering
-  - `proxmox_backup_client`: `/etc/pve` backup to PBS with systemd timer (`secret_profile` selects PBS credential file)
-  - `pbs_setup`: PBS storage definitions + backup jobs (osiris standalone scope)
-- Requires:
-  - `secrets/pbs-backup-main.env` and/or `secrets/pbs-backup-cinci.env` for cluster config backup credentials
-  - `/etc/homelab/pbs-tokens.env` on target host (see `pve-postinstall/configs/pbs-tokens.env.example`) for standalone PBS storage auth
 
 ```bash
 ./deploy pve-postinstall all
@@ -97,14 +107,6 @@ SSH config auto-deployment
 
 ```bash
 ./deploy ssh all
-```
-
-### [pve-exporters](pve-exporters/)
-Prometheus-native exporters for PVE host metrics
-- node_exporter + smartctl_exporter
-
-```bash
-./deploy pve-exporters all
 ```
 
 ## Quick Reference

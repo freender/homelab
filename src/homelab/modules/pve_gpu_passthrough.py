@@ -4,11 +4,11 @@ from pathlib import Path
 
 from invoke.exceptions import UnexpectedExit
 
-from ..deploy import DeploySession, prepare_build_dir
+from ..build import copy_files, render_file
+from ..deploy import DeploySession, prepare_build_dir, stage_and_run_remote_installer
 from ..hosts import HostLookupError, default_registry
 from ..output import print_action, print_error, print_sub
 from ..ssh import HostConnection, build_files
-from ..templates import render_template
 
 MODULE_NAME = "GPU Passthrough Configs"
 REMOTE_ROOT = "/tmp/homelab-pve-gpu-passthrough"
@@ -79,19 +79,8 @@ def deploy_host(root: Path, host: str, dry_run: bool) -> None:
         raise ValueError(f"Required ZFS dataset not found on {host}: {root_dataset}")
 
     prepare_build_dir(build_dir)
-    (build_dir / "blacklist.conf").write_text(
-        (configs_dir / "blacklist.conf").read_text(encoding="utf-8"),
-        encoding="utf-8",
-    )
-    (build_dir / "cmdline").write_text(
-        (configs_dir / "cmdline").read_text(encoding="utf-8"),
-        encoding="utf-8",
-    )
-    (build_dir / "modules").write_text(
-        (configs_dir / "modules").read_text(encoding="utf-8"),
-        encoding="utf-8",
-    )
-    render_template(configs_dir / "vfio.conf.tpl", build_dir / "vfio.conf", PCI_IDS=pci_ids)
+    copy_files(configs_dir, build_dir, ["blacklist.conf", "cmdline", "modules"])
+    render_file(configs_dir / "vfio.conf.tpl", build_dir / "vfio.conf", PCI_IDS=pci_ids)
 
     print_sub("Comparing with remote configs...")
     diff_remote_files(connection, build_dir)
@@ -130,19 +119,17 @@ def diff_remote_files(connection: HostConnection, build_dir: Path) -> None:
 
 
 def stage_and_install(root: Path, host: str, build_dir: Path, connection: HostConnection) -> None:
-    print_sub("Staging bundle...")
-    connection.prepare_remote_dir(REMOTE_ROOT, "build", "lib")
-    connection.upload_paths([
-        (build_dir, f"{REMOTE_ROOT}/build/{host}"),
-        (root / "pve-gpu-passthrough" / "scripts", f"{REMOTE_ROOT}/scripts"),
-        (root / "pve-gpu-passthrough" / "remove.sh", f"{REMOTE_ROOT}/remove.sh"),
-    ])
-    connection.upload_shared_libs(root, REMOTE_ROOT)
-
-    print_sub("Running installer...")
-    connection.run_remote_installer(
+    stage_and_run_remote_installer(
+        root,
+        connection,
         REMOTE_ROOT,
+        [
+            (build_dir, f"{REMOTE_ROOT}/build/{host}"),
+            (root / "pve-gpu-passthrough" / "scripts", f"{REMOTE_ROOT}/scripts"),
+            (root / "pve-gpu-passthrough" / "remove.sh", f"{REMOTE_ROOT}/remove.sh"),
+        ],
         "scripts/install.sh",
         host,
         require_root=True,
+        remote_subdirs=("build", "lib"),
     )

@@ -10,20 +10,14 @@ BUILD_DIR="$SCRIPT_DIR/build/$HOST"
 FORCE_UPDATE=${FORCE_UPDATE:-false}
 
 if [[ -f "$SCRIPT_DIR/lib/utils.sh" ]]; then
+    # shellcheck source=/dev/null
     source "$SCRIPT_DIR/lib/utils.sh"
 else
-    backup_config() {
-        local path="$1"
-        [[ -e "$path" ]] || return 0
-        cp -r "$path" "${path}.bak.$(date +%Y%m%d%H%M%S)"
-    }
-    print_sub() { echo "    $*"; }
-fi
-
-if [[ ! -f "$BUILD_DIR/interfaces" ]]; then
-    echo "Error: Missing interfaces file at $BUILD_DIR/interfaces" >&2
+    echo "Error: Missing shared utils at $SCRIPT_DIR/lib/utils.sh" >&2
     exit 1
 fi
+
+require_file "$BUILD_DIR/interfaces" "$BUILD_DIR/interfaces" || exit 1
 
 if [[ "$FORCE_UPDATE" == "true" ]] || [[ ! -f /etc/network/interfaces ]] || ! cmp -s "$BUILD_DIR/interfaces" /etc/network/interfaces; then
     print_sub "Backing up /etc/network/interfaces..."

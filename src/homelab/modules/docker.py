@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ..deploy import DeploySession, prepare_build_dir
+from ..build import write_env_file
+from ..deploy import DeploySession, prepare_build_dir, stage_and_run_remote_installer
 from ..hosts import HostLookupError, default_registry
 from ..output import print_action, print_sub
 from ..ssh import HostConnection, build_files, diff_many
@@ -41,17 +42,14 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
 
     build_dir = root / "docker" / "build" / host
     prepare_build_dir(build_dir)
-    (build_dir / "env").write_text(
-        "\n".join(
-            [
-                f'DOCKER_USER="{user}"',
-                f'DOCKER_OWNER="{owner}"',
-                f'DOCKER_GROUP="{group}"',
-                f'DOCKER_BACKUP="{backup_enabled}"',
-                "",
-            ]
-        ),
-        encoding="utf-8",
+    write_env_file(
+        build_dir / "env",
+        {
+            "DOCKER_USER": user,
+            "DOCKER_OWNER": owner,
+            "DOCKER_GROUP": group,
+            "DOCKER_BACKUP": backup_enabled,
+        },
     )
 
     connection = HostConnection(host)
@@ -80,19 +78,17 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
             print_sub(f"    {file_name}")
         return
 
-    print_sub("Staging bundle...")
-    connection.prepare_remote_dir(REMOTE_ROOT, "build", "lib")
-    connection.upload_paths([
-        (build_dir, f"{REMOTE_ROOT}/build/{host}"),
-        (root / "docker" / "scripts", f"{REMOTE_ROOT}/scripts"),
-    ])
-    connection.upload_shared_libs(root, REMOTE_ROOT)
-
-    print_sub("Running installer...")
-    connection.run_remote_installer(
+    stage_and_run_remote_installer(
+        root,
+        connection,
         REMOTE_ROOT,
+        [
+            (build_dir, f"{REMOTE_ROOT}/build/{host}"),
+            (root / "docker" / "scripts", f"{REMOTE_ROOT}/scripts"),
+        ],
         "scripts/install.sh",
         host,
         env={"FORCE_UPDATE": "true" if force else "false"},
         interpreter="bash",
+        remote_subdirs=("build", "lib"),
     )
