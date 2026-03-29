@@ -140,7 +140,7 @@ def stage_and_install(root: Path, build_dir: Path, connection: HostConnection, f
     for file_name in ["service", "env", "timer"]:
         file_path = build_dir / file_name
         if file_path.is_file():
-            connection.upload(file_path, f"{REMOTE_ROOT}/build/{build_dir.name}/{file_name}")
+            connection.upload(file_path, f"{REMOTE_ROOT}/build/{file_name}")
     connection.upload_shared_libs(root, REMOTE_ROOT)
 
     print_sub("Running installer...")
