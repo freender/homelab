@@ -19,36 +19,58 @@ PVE_FILES=(
     sshd-hardening.conf
 )
 
-declare -A FILE_REMOTE_PATHS=(
-    [proxmox.sources]="/etc/apt/sources.list.d/proxmox.sources"
-    [ceph.sources]="/etc/apt/sources.list.d/ceph.sources"
-    [pve-test.sources]="/etc/apt/sources.list.d/pve-test.sources"
-    [no-nag-script]="/etc/apt/apt.conf.d/no-nag-script"
-    [pve-remove-nag.sh]="/usr/local/bin/pve-remove-nag.sh"
-    [sshd-hardening.conf]="/etc/ssh/sshd_config.d/99-disable-password-auth.conf"
-)
-declare -A FILE_MODES=(
-    [no-nag-script]="644"
-    [pve-remove-nag.sh]="755"
-)
-
 write_file_map() {
     local build_dir="$1"
     local file
+    local remote_path
+    local mode
 
-    for file in "${!FILE_REMOTE_PATHS[@]}"; do
-        printf '%s|%s|%s\n' "$file" "${FILE_REMOTE_PATHS[$file]}" "${FILE_MODES[$file]:-644}"
+    for file in "${PVE_FILES[@]}"; do
+        remote_path=$(remote_path_for_file "$file") || return 1
+        mode=$(mode_for_file "$file") || return 1
+        printf '%s|%s|%s\n' "$file" "$remote_path" "$mode"
     done > "$build_dir/file-map.conf"
 }
 
 remote_path_for_file() {
     local file="$1"
 
-    if [[ -n "${FILE_REMOTE_PATHS[$file]+x}" ]]; then
-        echo "${FILE_REMOTE_PATHS[$file]}"
-    else
-        return 1
-    fi
+    case "$file" in
+        proxmox.sources)
+            echo "/etc/apt/sources.list.d/proxmox.sources"
+            ;;
+        ceph.sources)
+            echo "/etc/apt/sources.list.d/ceph.sources"
+            ;;
+        pve-test.sources)
+            echo "/etc/apt/sources.list.d/pve-test.sources"
+            ;;
+        no-nag-script)
+            echo "/etc/apt/apt.conf.d/no-nag-script"
+            ;;
+        pve-remove-nag.sh)
+            echo "/usr/local/bin/pve-remove-nag.sh"
+            ;;
+        sshd-hardening.conf)
+            echo "/etc/ssh/sshd_config.d/99-disable-password-auth.conf"
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+mode_for_file() {
+    local file="$1"
+
+    case "$file" in
+        pve-remove-nag.sh)
+            echo "755"
+            ;;
+        *)
+            echo "644"
+            ;;
+    esac
 }
 
 build_network_interfaces_bundle() {
