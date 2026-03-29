@@ -66,11 +66,13 @@ If a module has no dedicated test script, use `deploy.sh --dry-run` as the test.
 
 ### Formatting and syntax
 - Shebang: `#!/bin/bash`.
+- Deploy scripts may be run from Linux or macOS (`exo`), so keep Bash compatible with the older macOS Bash 3.x baseline.
 - Indentation: 4 spaces, no tabs.
 - Tests: prefer `[[ ... ]]`.
 - Always quote variables unless deliberate splitting is required.
 - Use `$(...)` command substitution, never backticks.
 - Use `local` for function-scoped variables.
+- Avoid Bash 4+ features in shared/deploy scripts unless the script is explicitly Linux-only (for example associative arrays).
 
 ### Strict mode
 - Existing baseline is `set -e` in `common.sh` and most installers.
