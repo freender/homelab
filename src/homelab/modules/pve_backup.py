@@ -169,7 +169,8 @@ def build_standalone_backup_plans(root: Path, host: str, build_dir: Path) -> Non
         has_exclude = bool(job.get("exclude"))
         if has_vmid and has_exclude:
             raise ValueError(
-                f"Standalone backup job at index {index} for {host} cannot set both vmid and exclude"
+                "Standalone backup job at index "
+                f"{index} for {host} cannot set both vmid and exclude"
             )
         defaults = {
             "vmid": "",
