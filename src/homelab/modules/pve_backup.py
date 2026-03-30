@@ -165,8 +165,15 @@ def build_standalone_backup_plans(root: Path, host: str, build_dir: Path) -> Non
             raise ValueError(
                 f"Invalid standalone backup job at index {index} for {host}"
             )
+        has_vmid = bool(job.get("vmid"))
+        has_exclude = bool(job.get("exclude"))
+        if has_vmid and has_exclude:
+            raise ValueError(
+                f"Standalone backup job at index {index} for {host} cannot set both vmid and exclude"
+            )
         defaults = {
             "vmid": "",
+            "exclude": "",
             "compress": "zstd",
             "mode": "snapshot",
             "notes_template": "{{guestname}}",
@@ -180,6 +187,7 @@ def build_standalone_backup_plans(root: Path, host: str, build_dir: Path) -> Non
             "schedule",
             "storage",
             "vmid",
+            "exclude",
             "compress",
             "mode",
             "notes_template",

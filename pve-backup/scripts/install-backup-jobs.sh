@@ -34,6 +34,7 @@ fi
 find_job_id() {
     local storage="$1"
     local vmid="$2"
+    local exclude="$3"
     local jobs_json
 
     jobs_json=$(pvesh get /cluster/backup --output-format json 2>/dev/null || printf '[]')
@@ -44,6 +45,7 @@ import sys
 
 storage = sys.argv[1]
 vmid = sys.argv[2]
+exclude = sys.argv[3]
 
 try:
     jobs = json.loads(os.environ.get("JOBS_JSON", "[]"))
@@ -58,23 +60,25 @@ for job in jobs:
         continue
 
     current_vmid = str(job.get("vmid", ""))
+    current_exclude = str(job.get("exclude", ""))
     if vmid:
-        if current_vmid == vmid:
+        if current_vmid == vmid and current_exclude == exclude:
             print(job.get("id", ""))
             break
     else:
-        if str(job.get("all", 0)) == "1":
+        if str(job.get("all", 0)) == "1" and current_exclude == exclude:
             print(job.get("id", ""))
             break
 else:
     print("")
-' "$storage" "$vmid"
+' "$storage" "$vmid" "$exclude"
 }
 
 for (( i=0; i<JOB_COUNT; i++ )); do
     schedule_var="JOB_${i}_SCHEDULE"
     storage_var="JOB_${i}_STORAGE"
     vmid_var="JOB_${i}_VMID"
+    exclude_var="JOB_${i}_EXCLUDE"
     compress_var="JOB_${i}_COMPRESS"
     mode_var="JOB_${i}_MODE"
     notes_template_var="JOB_${i}_NOTES_TEMPLATE"
@@ -86,6 +90,7 @@ for (( i=0; i<JOB_COUNT; i++ )); do
     schedule="${!schedule_var}"
     storage="${!storage_var}"
     vmid="${!vmid_var}"
+    exclude="${!exclude_var}"
     compress="${!compress_var}"
     mode="${!mode_var}"
     notes_template="${!notes_template_var}"
@@ -99,7 +104,12 @@ for (( i=0; i<JOB_COUNT; i++ )); do
         exit 1
     fi
 
-    job_id=$(find_job_id "$storage" "$vmid")
+    if [[ -n "$vmid" && -n "$exclude" ]]; then
+        print_error "Job $i cannot set both vmid and exclude"
+        exit 1
+    fi
+
+    job_id=$(find_job_id "$storage" "$vmid" "$exclude")
 
     if [[ -n "$job_id" ]]; then
         print_sub "Updating backup job $job_id (storage=$storage vmid=${vmid:-all})..."
@@ -116,8 +126,15 @@ for (( i=0; i<JOB_COUNT; i++ )); do
 
         if [[ -n "$vmid" ]]; then
             pvesh set "/cluster/backup/$job_id" --vmid "$vmid"
+            pvesh set "/cluster/backup/$job_id" --delete exclude >/dev/null
         else
             pvesh set "/cluster/backup/$job_id" --all 1
+            pvesh set "/cluster/backup/$job_id" --delete vmid >/dev/null
+            if [[ -n "$exclude" ]]; then
+                pvesh set "/cluster/backup/$job_id" --exclude "$exclude"
+            else
+                pvesh set "/cluster/backup/$job_id" --delete exclude >/dev/null
+            fi
         fi
     else
         print_sub "Creating backup job (storage=$storage vmid=${vmid:-all})..."
@@ -134,17 +151,32 @@ for (( i=0; i<JOB_COUNT; i++ )); do
                 --enabled "$enabled" \
                 --fleecing "$fleecing"
         else
-            pvesh create /cluster/backup \
-                --schedule "$schedule" \
-                --storage "$storage" \
-                --all 1 \
-                --compress "$compress" \
-                --mode "$mode" \
-                --notes-template "$notes_template" \
-                --notification-mode "$notification_mode" \
-                --prune-backups "$prune_backups" \
-                --enabled "$enabled" \
-                --fleecing "$fleecing"
+            if [[ -n "$exclude" ]]; then
+                pvesh create /cluster/backup \
+                    --schedule "$schedule" \
+                    --storage "$storage" \
+                    --all 1 \
+                    --exclude "$exclude" \
+                    --compress "$compress" \
+                    --mode "$mode" \
+                    --notes-template "$notes_template" \
+                    --notification-mode "$notification_mode" \
+                    --prune-backups "$prune_backups" \
+                    --enabled "$enabled" \
+                    --fleecing "$fleecing"
+            else
+                pvesh create /cluster/backup \
+                    --schedule "$schedule" \
+                    --storage "$storage" \
+                    --all 1 \
+                    --compress "$compress" \
+                    --mode "$mode" \
+                    --notes-template "$notes_template" \
+                    --notification-mode "$notification_mode" \
+                    --prune-backups "$prune_backups" \
+                    --enabled "$enabled" \
+                    --fleecing "$fleecing"
+            fi
         fi
     fi
 done
