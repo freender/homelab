@@ -25,11 +25,6 @@ source "$BUILD_DIR/env"
 APPDATA_DEST="/mnt/cache/appdata"
 APPDATA_SCRIPTS_DIR="${APPDATA_DEST}/scripts"
 APPDATA_LOGS_DIR="${APPDATA_SCRIPTS_DIR}/logs"
-RUN_AS_ROOT=false
-
-if [[ "$(id -u)" -eq 0 ]]; then
-    RUN_AS_ROOT=true
-fi
 
 mkdir -p "$APPDATA_DEST"
 mkdir -p "$APPDATA_SCRIPTS_DIR"
