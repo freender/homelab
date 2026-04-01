@@ -23,11 +23,11 @@ cd ~/homelab && ./deploy ssh-config exo
 
 Global SSH defaults live in `ssh-config/configs/common.conf`.
 
-Per-host SSH connection metadata lives in `hosts.conf` under `ssh`:
-- `ssh.hostname`
-- `ssh.user`
-- `ssh.key`
-- `ssh.agent` (only where needed, like `exo`)
+Per-host connection metadata lives in `hosts.conf` under `config`:
+- `config.hostname`
+- `config.user`
+- `config.sshkey`
+- `config.agent` (only where needed, like `exo`)
 
 Hosts currently managed by this module:
 - `riven`
@@ -38,8 +38,8 @@ Hosts currently managed by this module:
 - **Auto-accept host keys:** Uses `StrictHostKeyChecking=accept-new`
 - **Connection keepalive:** Uses server alive probes to survive idle sessions
 - **Known host privacy:** Uses `HashKnownHosts=yes`
-- **Inventory-driven identities:** Uses `hosts.conf` `ssh.key` metadata to assign `homelab` vs `infra`
-- **Agent-aware paths:** `exo` uses `ssh.agent: op` and `.pub` identity stubs; other hosts use standard key paths
+- **Inventory-driven identities:** Uses `hosts.conf` `config.sshkey` metadata to assign `homelab` vs `infra`
+- **Agent-aware paths:** `exo` uses `config.agent: op` and `.pub` identity stubs; other hosts use standard key paths
 - **DNS-based:** All hosts use internal DNS instead of IPs
 
 ## Troubleshooting

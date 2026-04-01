@@ -177,7 +177,7 @@ cd ~/homelab/pve-gpu-passthrough
 ssh ace reboot
 ```
 
-**Note:** The script discovers and validates Proxmox hosts from `hosts.conf` (type: pve).
+**Note:** The script discovers and validates Proxmox hosts from `hosts.conf` (`config.type: pve`).
 
 **What it does:**
 - Removes `video=efifb:off` from kernel cmdline

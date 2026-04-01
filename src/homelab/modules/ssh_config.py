@@ -53,11 +53,11 @@ def validate(root: Path, supported_hosts: list[str]) -> None:
     registry = default_registry(root)
     for host in registry.list_hosts():
         try:
-            registry.get(host, "ssh.key")
+            registry.get(host, "config.sshkey")
         except HostLookupError:
             continue
-        registry.get(host, "ssh.hostname")
-        registry.get(host, "ssh.user")
+        registry.get(host, "config.hostname")
+        registry.get(host, "config.user")
 
 
 def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
@@ -103,8 +103,8 @@ def render_host_config(registry) -> str:
     blocks: list[str] = []
     for host in registry.list_hosts():
         try:
-            hostname = str(registry.get(host, "ssh.hostname"))
-            user = str(registry.get(host, "ssh.user"))
+            hostname = str(registry.get(host, "config.hostname"))
+            user = str(registry.get(host, "config.user"))
         except (HostLookupError, ValueError):
             continue
         blocks.append(
@@ -121,13 +121,13 @@ def render_host_config(registry) -> str:
 
 
 def render_identities_config(registry, deploy_host: str) -> str:
-    agent = registry.get(deploy_host, "ssh.agent", "ssh-add")
+    agent = registry.get(deploy_host, "config.agent", "ssh-add")
     suffix = ".pub" if agent == "op" else ""
     grouped_hosts: dict[str, list[str]] = {}
 
     for host in registry.list_hosts():
         try:
-            key_name = str(registry.get(host, "ssh.key"))
+            key_name = str(registry.get(host, "config.sshkey"))
         except (HostLookupError, ValueError):
             continue
         grouped_hosts.setdefault(key_name, []).append(host)

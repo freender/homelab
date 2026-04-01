@@ -60,7 +60,7 @@ If a module has no dedicated test script, use `./deploy --dry-run` as the test.
 ## Coding Style Guidelines
 
 ### Imports and shared functions
-- Reuse `src/homelab/hosts.py`, `templates.py`, `ssh.py`, and `deploy.py` from Python modules.
+- Reuse `src/homelab/hosts.py`, `src/homelab/ssh.py`, and `deploy.py` from Python modules.
 - Remote installers should source staged `lib/utils.sh` when present.
 - Keep fallback helper functions only where remote context may lack `utils.sh`.
 
@@ -115,6 +115,7 @@ Keep the same flow used across modules:
 
 ### SSH and remote execution
 - Do not hardcode host lists; derive from `hosts list --feature ...`.
+- Keep per-host connection metadata in `hosts.conf` under `config` (`type`, `hostname`, `user`, `sshkey`, optional `agent`) instead of duplicating it in static config files.
 - Stage module bundles in `/tmp/homelab-<module>/`.
 - Preserve root-user checks where module logic requires root SSH sessions.
 

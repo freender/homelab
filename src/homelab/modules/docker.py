@@ -4,7 +4,7 @@ from pathlib import Path
 
 from ..build import write_env_file
 from ..deploy import DeploySession, force_env, prepare_build_dir, stage_and_run_remote_installer
-from ..hosts import HostLookupError, default_registry
+from ..hosts import default_registry
 from ..output import print_action, print_sub
 from ..ssh import HostConnection, build_files, diff_many
 
@@ -31,13 +31,6 @@ def deploy(
 
 def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
     registry = default_registry(root)
-    try:
-        user = str(registry.get(host, "docker.user"))
-    except HostLookupError as exc:
-        raise ValueError(str(exc)) from exc
-
-    owner = str(registry.get(host, "docker.owner", user))
-    group = str(registry.get(host, "docker.group", owner))
     backup_enabled = str(registry.get(host, "docker.backup", "false")).lower()
 
     build_dir = root / "docker" / "build" / host
@@ -45,9 +38,6 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
     write_env_file(
         build_dir / "env",
         {
-            "DOCKER_USER": user,
-            "DOCKER_OWNER": owner,
-            "DOCKER_GROUP": group,
             "DOCKER_BACKUP": backup_enabled,
         },
     )

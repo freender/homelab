@@ -67,9 +67,9 @@ def secret_path(root: Path, profile: str, allow_example: bool = False) -> Path:
 
 def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
     registry = default_registry(root)
-    if str(registry.get(host, "type")) != "pve":
+    if str(registry.get(host, "config.type")) != "pve":
         raise ValueError(
-            f"Unsupported host type for {host}: {registry.get(host, 'type')}"
+            f"Unsupported host type for {host}: {registry.get(host, 'config.type')}"
         )
     build_dir = root / "pve-backup" / "build" / host
     prepare_build_dir(build_dir)

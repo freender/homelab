@@ -31,14 +31,6 @@ if [[ "$(id -u)" -eq 0 ]]; then
     RUN_AS_ROOT=true
 fi
 
-if [[ -z "$DOCKER_USER" ]]; then
-    echo "Error: DOCKER_USER missing"
-    exit 1
-fi
-
-DOCKER_OWNER="${DOCKER_OWNER:-$DOCKER_USER}"
-DOCKER_GROUP="${DOCKER_GROUP:-$DOCKER_OWNER}"
-
 mkdir -p "$APPDATA_DEST"
 mkdir -p "$APPDATA_SCRIPTS_DIR"
 
@@ -46,18 +38,12 @@ for script in start.sh rm.sh; do
     rc=0
     copy_if_changed "$SCRIPT_DIR/scripts/$script" "${APPDATA_DEST}/${script}" "$script" || rc=$?
     [[ $rc -eq 1 ]] || [[ $rc -eq 0 ]] || exit "$rc"
-    if [[ "$RUN_AS_ROOT" == "true" ]]; then
-        chown "${DOCKER_OWNER}:${DOCKER_GROUP}" "${APPDATA_DEST}/${script}"
-    fi
     chmod +x "${APPDATA_DEST}/${script}"
 done
 
 rc=0
 copy_if_changed "$SCRIPT_DIR/scripts/docker-common.sh" "$APPDATA_SCRIPTS_DIR/docker-common.sh" "docker-common.sh" || rc=$?
 [[ $rc -eq 1 ]] || [[ $rc -eq 0 ]] || exit "$rc"
-if [[ "$RUN_AS_ROOT" == "true" ]]; then
-    chown "${DOCKER_OWNER}:${DOCKER_GROUP}" "$APPDATA_SCRIPTS_DIR/docker-common.sh"
-fi
 chmod +x "$APPDATA_SCRIPTS_DIR/docker-common.sh"
 
 if [[ "$DOCKER_BACKUP" == "true" ]]; then
@@ -65,8 +51,5 @@ if [[ "$DOCKER_BACKUP" == "true" ]]; then
     rc=0
     copy_if_changed "$SCRIPT_DIR/scripts/backup.sh" "$APPDATA_SCRIPTS_DIR/backup.sh" "backup.sh" || rc=$?
     [[ $rc -eq 1 ]] || [[ $rc -eq 0 ]] || exit "$rc"
-    if [[ "$RUN_AS_ROOT" == "true" ]]; then
-        chown "${DOCKER_OWNER}:${DOCKER_GROUP}" "$APPDATA_SCRIPTS_DIR/backup.sh"
-    fi
     chmod +x "$APPDATA_SCRIPTS_DIR/backup.sh"
 fi

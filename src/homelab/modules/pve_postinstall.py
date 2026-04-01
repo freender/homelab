@@ -72,7 +72,7 @@ def validate(root: Path) -> None:
 def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
     registry = default_registry(root)
     try:
-        host_type = registry.get(host, "type")
+        host_type = registry.get(host, "config.type")
     except HostLookupError as exc:
         raise ValueError(str(exc)) from exc
 
