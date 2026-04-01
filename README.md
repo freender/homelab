@@ -100,13 +100,13 @@ PVE post-install configuration
 ./deploy pve-postinstall all
 ```
 
-### [ssh](ssh/)
+### [ssh-config](ssh-config/)
 SSH config auto-deployment
 - Uses `*.freender.internal` DNS for home
 - Uses `*.internal` DNS for remote sites
 
 ```bash
-./deploy ssh all
+./deploy ssh-config all
 ```
 
 ## Quick Reference

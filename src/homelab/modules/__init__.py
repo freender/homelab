@@ -12,7 +12,7 @@ from .pve_backup import deploy as deploy_pve_backup
 from .pve_exporters import deploy as deploy_pve_exporters
 from .pve_gpu_passthrough import deploy as deploy_pve_gpu_passthrough
 from .pve_postinstall import deploy as deploy_pve_postinstall
-from .ssh import deploy as deploy_ssh
+from .ssh_config import deploy as deploy_ssh_config
 
 
 @dataclass(frozen=True)
@@ -50,7 +50,7 @@ MODULES: dict[str, ModuleDefinition] = {
         name="GPU Passthrough Configs",
         deploy=deploy_pve_gpu_passthrough,
     ),
-    "ssh": ModuleDefinition(name="SSH Config", deploy=deploy_ssh),
+    "ssh-config": ModuleDefinition(name="SSH Config", deploy=deploy_ssh_config),
 }
 
 MODULE_ORDER = [
@@ -59,7 +59,7 @@ MODULE_ORDER = [
     "apcupsd",
     "pve-exporters",
     "pve-gpu-passthrough",
-    "ssh",
+    "ssh-config",
     "docker",
     "apt-upgrade",
 ]

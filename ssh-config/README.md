@@ -6,30 +6,30 @@ Automated SSH config deployment across homelab infrastructure.
 
 Deploy to all hosts:
 ```bash
-cd ~/homelab && ./deploy ssh all
+cd ~/homelab && ./deploy ssh-config all
 ```
 
 Deploy to specific hosts:
 ```bash
-cd ~/homelab && ./deploy ssh helm
+cd ~/homelab && ./deploy ssh-config riven
 ```
 
 Deploy to single host:
 ```bash
-cd ~/homelab && ./deploy ssh exo
+cd ~/homelab && ./deploy ssh-config exo
 ```
 
 ## Configuration
 
-SSH config uses internal DNS naming:
-- Home network: `*.freender.internal`
-- Remote sites: `cottonwood.internal`, `cinci.internal`
+Global SSH defaults live in `ssh-config/configs/common.conf`.
 
-Current special aliases:
-- `orbit` -> `orbit.freender.internal` (root, key-only)
+Per-host SSH connection metadata lives in `hosts.conf` under `ssh`:
+- `ssh.hostname`
+- `ssh.user`
+- `ssh.key`
+- `ssh.agent` (only where needed, like `exo`)
 
 Hosts currently managed by this module:
-- `helm`
 - `riven`
 - `exo`
 
@@ -38,13 +38,11 @@ Hosts currently managed by this module:
 - **Auto-accept host keys:** Uses `StrictHostKeyChecking=accept-new`
 - **Connection keepalive:** Uses server alive probes to survive idle sessions
 - **Known host privacy:** Uses `HashKnownHosts=yes`
-- **Scoped agent forwarding:** Disabled by default, enabled only for `riven`
-- **Host-specific configs:** Special handling for hosts with custom requirements
+- **Inventory-driven identities:** Uses `hosts.conf` `ssh.key` metadata to assign `homelab` vs `infra`
+- **Agent-aware paths:** `exo` uses `ssh.agent: op` and `.pub` identity stubs; other hosts use standard key paths
 - **DNS-based:** All hosts use internal DNS instead of IPs
 
 ## Troubleshooting
-
-- If a host-specific key path only exists on one machine, keep it in that host's append config instead of `configs/common.conf`.
 
 - If `zavala` asks for password even with key present, fix key ownership inside the Incus container:
 
@@ -55,8 +53,7 @@ ssh cinci 'sudo incus exec zavala -- chown root:root /root/.ssh/authorized_keys 
 ## Structure
 
 ```
-configs/common.conf         # Shared SSH config
-configs/<host>/append.conf  # Host-specific overrides
+configs/common.conf         # Shared Host * defaults
 scripts/install.sh          # Remote installer
 ../deploy                   # Repo-root deployment wrapper
 ```

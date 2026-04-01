@@ -14,10 +14,12 @@ def hosts_file(tmp_path: Path) -> Path:
         """
 ace:
   type: pve
+  ssh:
+    key: infra
   features:
     docker:
       user: freender
-    ssh: {}
+    ssh-config: {}
 bray:
   type: ubuntu
   docker:
@@ -42,13 +44,14 @@ def test_list_hosts_and_feature_filtering(hosts_file: Path) -> None:
 
     assert registry.list_hosts() == ["ace", "bray", "nullbox", "badhost"]
     assert registry.list_hosts(feature="docker") == ["ace", "bray", "nullbox"]
-    assert registry.list_hosts(feature="ssh") == ["ace"]
+    assert registry.list_hosts(feature="ssh-config") == ["ace"]
 
 
 def test_has_and_get_support_top_level_and_feature_keys(hosts_file: Path) -> None:
     registry = HostRegistry(hosts_file)
 
-    assert registry.has("ace", "ssh") is True
+    assert registry.has("ace", "ssh-config") is True
+    assert registry.get("ace", "ssh.key") == "infra"
     assert registry.has("bray", "docker") is True
     assert registry.get("ace", "type") == "pve"
     assert registry.get("ace", "docker.user") == "freender"

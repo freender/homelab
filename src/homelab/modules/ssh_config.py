@@ -8,11 +8,15 @@ from fabric.transfer import Transfer
 from invoke.exceptions import UnexpectedExit
 
 from ..deploy import DeploySession, force_env, prepare_build_dir, stage_and_run_remote_installer
-from ..hosts import default_registry
-from ..output import print_action, print_error, print_sub, print_warn
+from ..hosts import HostLookupError, default_registry
+from ..output import print_action, print_error, print_sub
 from ..ssh import HostConnection, build_files, offline_diff, offline_mode
 
-REMOTE_ROOT = "/tmp/homelab-ssh"
+REMOTE_ROOT = "/tmp/homelab-ssh-config"
+IDENTITY_FILES = {
+    "homelab": "id_ed25519",
+    "infra": "id_ed25519_pve",
+}
 
 
 def deploy(
@@ -23,10 +27,10 @@ def deploy(
     session: DeploySession,
 ) -> int:
     registry = default_registry(root)
-    supported_hosts = registry.list_hosts(feature="ssh")
+    supported_hosts = registry.list_hosts(feature="ssh-config")
     hosts = registry.filter_hosts(requested_host, supported_hosts)
     if not hosts:
-        print_action(f"Skipping ssh (not applicable to {requested_host})")
+        print_action(f"Skipping ssh-config (not applicable to {requested_host})")
         return 0
 
     try:
@@ -40,27 +44,30 @@ def deploy(
 
 
 def validate(root: Path, supported_hosts: list[str]) -> None:
-    configs_dir = root / "ssh" / "configs"
+    del supported_hosts
+    configs_dir = root / "ssh-config" / "configs"
     common_config = configs_dir / "common.conf"
     if not common_config.is_file():
         raise ValueError(f"common config not found: {common_config}")
 
-    for host in supported_hosts:
-        host_dir = configs_dir / host
-        append_config = host_dir / "append.conf"
-        if host_dir.is_dir() and not append_config.is_file():
-            print_warn(f"host config directory exists without append.conf: {host_dir}")
+    registry = default_registry(root)
+    for host in registry.list_hosts():
+        try:
+            registry.get(host, "ssh.key")
+        except HostLookupError:
+            continue
+        registry.get(host, "ssh.hostname")
+        registry.get(host, "ssh.user")
 
 
 def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
-    module_dir = root / "ssh"
+    module_dir = root / "ssh-config"
     configs_dir = module_dir / "configs"
     build_dir = module_dir / "build" / host
     common_config = configs_dir / "common.conf"
-    append_config = configs_dir / host / "append.conf"
 
     prepare_build_dir(build_dir)
-    build_config(build_dir / "config", common_config, append_config)
+    build_config(root, host, build_dir / "config", common_config)
 
     print_sub("Comparing with remote config...")
     if dry_run:
@@ -80,11 +87,67 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
     stage_and_install(root, host, build_dir, force=force)
 
 
-def build_config(output_path: Path, common_config: Path, append_config: Path) -> None:
-    content = common_config.read_text(encoding="utf-8")
-    if append_config.is_file():
-        content += append_config.read_text(encoding="utf-8")
+def build_config(root: Path, deploy_host: str, output_path: Path, common_config: Path) -> None:
+    registry = default_registry(root)
+    content = common_config.read_text(encoding="utf-8").rstrip() + "\n\n"
+    host_config = render_host_config(registry)
+    if host_config:
+        content += host_config + "\n\n"
+    identities_config = render_identities_config(registry, deploy_host)
+    if identities_config:
+        content += identities_config + "\n"
     output_path.write_text(content, encoding="utf-8")
+
+
+def render_host_config(registry) -> str:
+    blocks: list[str] = []
+    for host in registry.list_hosts():
+        try:
+            hostname = str(registry.get(host, "ssh.hostname"))
+            user = str(registry.get(host, "ssh.user"))
+        except (HostLookupError, ValueError):
+            continue
+        blocks.append(
+            "\n".join(
+                [
+                    f"Host {host}",
+                    f"  HostName {hostname}",
+                    f"  User {user}",
+                ]
+            )
+        )
+
+    return "\n\n".join(blocks)
+
+
+def render_identities_config(registry, deploy_host: str) -> str:
+    agent = registry.get(deploy_host, "ssh.agent", "ssh-add")
+    suffix = ".pub" if agent == "op" else ""
+    grouped_hosts: dict[str, list[str]] = {}
+
+    for host in registry.list_hosts():
+        try:
+            key_name = str(registry.get(host, "ssh.key"))
+        except (HostLookupError, ValueError):
+            continue
+        grouped_hosts.setdefault(key_name, []).append(host)
+
+    blocks: list[str] = []
+    for key_name, hosts in grouped_hosts.items():
+        identity_file = IDENTITY_FILES.get(key_name)
+        if identity_file is None:
+            raise ValueError(f"unknown ssh key '{key_name}' for generated config")
+        blocks.append(
+            "\n".join(
+                [
+                    f"Host {' '.join(hosts)}",
+                    f"  IdentityFile ~/.ssh/{identity_file}{suffix}",
+                    "  IdentitiesOnly yes",
+                ]
+            )
+        )
+
+    return "\n\n".join(blocks)
 
 
 def dry_run_remote_diff(host: str, local_file: Path) -> tuple[int, str]:
@@ -94,7 +157,7 @@ def dry_run_remote_diff(host: str, local_file: Path) -> tuple[int, str]:
     connection = HostConnection(host)
     transfer = Transfer(connection.connection)
     remote_path = ".ssh/config"
-    temp_dir = Path(tempfile.mkdtemp(prefix="homelab-ssh-diff-"))
+    temp_dir = Path(tempfile.mkdtemp(prefix="homelab-ssh-config-diff-"))
     temp_file = temp_dir / "config"
 
     try:
@@ -119,7 +182,7 @@ def stage_and_install(root: Path, host: str, build_dir: Path, force: bool) -> No
         REMOTE_ROOT,
         [
             (build_dir, f"{REMOTE_ROOT}/build/{host}"),
-            (root / "ssh" / "scripts", f"{REMOTE_ROOT}/scripts"),
+            (root / "ssh-config" / "scripts", f"{REMOTE_ROOT}/scripts"),
         ],
         "scripts/install.sh",
         host,
