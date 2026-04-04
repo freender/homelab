@@ -1,0 +1,8 @@
+[Unit]
+Description=Homelab ZFS snapshots via sanoid
+
+[Service]
+Type=oneshot
+ExecStart={{ ZFS_MOUNTPOINT }}/appdata/scripts/zfs_snapshots.sh
+StandardOutput=journal
+StandardError=journal

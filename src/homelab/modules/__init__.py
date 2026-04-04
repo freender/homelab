@@ -13,6 +13,7 @@ from .pve_exporters import deploy as deploy_pve_exporters
 from .pve_gpu_passthrough import deploy as deploy_pve_gpu_passthrough
 from .pve_postinstall import deploy as deploy_pve_postinstall
 from .ssh_config import deploy as deploy_ssh_config
+from .ubuntu_setup import deploy as deploy_ubuntu_setup
 
 
 @dataclass(frozen=True)
@@ -51,6 +52,7 @@ MODULES: dict[str, ModuleDefinition] = {
         deploy=deploy_pve_gpu_passthrough,
     ),
     "ssh-config": ModuleDefinition(name="SSH Config", deploy=deploy_ssh_config),
+    "ubuntu-setup": ModuleDefinition(name="Ubuntu OS Setup", deploy=deploy_ubuntu_setup),
 }
 
 MODULE_ORDER = [
@@ -60,6 +62,7 @@ MODULE_ORDER = [
     "pve-exporters",
     "pve-gpu-passthrough",
     "ssh-config",
+    "ubuntu-setup",
     "docker",
     "apt-upgrade",
 ]

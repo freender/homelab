@@ -28,6 +28,12 @@ class HostConnection:
                 return 2, f"[NEW] {remote_path}"
             except FileNotFoundError:
                 return 2, f"[NEW] {remote_path}"
+            except PermissionError:
+                return 0, f"[?] {remote_path} (not diffable: permission denied)"
+            except OSError as exc:
+                if exc.errno == 13:  # EACCES — root-only file
+                    return 0, f"[?] {remote_path} (not diffable: permission denied)"
+                raise
 
             if local_file.read_bytes() == temp_path.read_bytes():
                 return 0, f"[=] {remote_path} (no changes)"

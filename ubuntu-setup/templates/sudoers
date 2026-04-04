@@ -1,0 +1,13 @@
+# Managed by homelab
+Defaults:{{ USER }} timestamp_timeout=1440
+
+# Package management
+{{ USER }} ALL=(ALL:ALL) NOPASSWD: /usr/bin/apt-get update, /usr/bin/apt update
+{{ USER }} ALL=(ALL:ALL) NOPASSWD: /usr/bin/apt-get -y dist-upgrade, /usr/bin/apt -y dist-upgrade
+{{ USER }} ALL=(ALL:ALL) NOPASSWD: /usr/bin/apt-get -y full-upgrade, /usr/bin/apt -y full-upgrade
+{{ USER }} ALL=(ALL:ALL) NOPASSWD: /usr/bin/apt-get -y autoremove, /usr/bin/apt -y autoremove
+{{ USER }} ALL=(ALL:ALL) NOPASSWD: /usr/bin/apt-get -y autoclean, /usr/bin/apt -y autoclean
+
+# System operations
+{{ USER }} ALL=(ALL:ALL) NOPASSWD: /usr/sbin/reboot
+{{ USER }} ALL=(ALL:ALL) NOPASSWD: /usr/bin/systemctl restart *
