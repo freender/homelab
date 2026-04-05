@@ -112,3 +112,4 @@ if [[ ${#failed_stacks[@]} -gt 0 ]]; then
 fi
 
 [[ "$prune_failed" == "true" ]] && exit 1
+exit 0
