@@ -1,0 +1,2 @@
+# Pin ethernet interface to {{ INTERFACE_NAME }}
+SUBSYSTEM=="net", ACTION=="add", ATTR{address}=="{{ INTERFACE_MAC }}", NAME="{{ INTERFACE_NAME }}"

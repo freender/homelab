@@ -28,12 +28,17 @@ ensure_docker_installed() {
     local install_reason=""
     local installer_path
     local install_args=""
+    local has_docker_repo=false
 
     remove_snap_docker
 
+    if [[ -f /etc/apt/sources.list.d/docker.list ]] || [[ -f /etc/apt/sources.list.d/docker.sources ]]; then
+        has_docker_repo=true
+    fi
+
     if ! command -v docker >/dev/null 2>&1; then
         install_reason="Docker CE not installed"
-    elif [[ ! -f /etc/apt/sources.list.d/docker.list ]]; then
+    elif [[ "$has_docker_repo" != "true" ]]; then
         install_reason="Docker apt source missing"
         install_args="--setup-repo"
     fi

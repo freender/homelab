@@ -10,9 +10,10 @@ from invoke.exceptions import UnexpectedExit
 
 
 class HostConnection:
-    def __init__(self, host: str) -> None:
+    def __init__(self, host: str, user: str | None = None, hostname: str | None = None) -> None:
         self.host = host
-        self.connection = Connection(host)
+        connect_target = hostname or host
+        self.connection = Connection(connect_target, user=user)
 
     def remote_diff(self, local_file: Path, remote_path: str) -> tuple[int, str]:
         if offline_mode():

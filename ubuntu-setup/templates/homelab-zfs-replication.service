@@ -1,12 +1,14 @@
 [Unit]
-Description=Homelab ZFS replication, PBS permissions fix, and docker update
+Description=Homelab ZFS replication and docker update
 Wants=network-online.target docker.service
 After=network-online.target docker.service
 
 [Service]
 Type=oneshot
-ExecStart={{ ZFS_MOUNTPOINT }}/appdata/scripts/zfs_replication_appdata.sh
-ExecStartPost={{ ZFS_MOUNTPOINT }}/appdata/scripts/fix_pbs_backup_permissions.sh
+ExecStart=/usr/sbin/syncoid -r --delete-target-snapshots --force-delete {{ ZFS_POOL }}/appdata {{ ZFS_POOL }}/backup/appdata
+{% if REPLICATION_POST_HOOK %}
+ExecStartPost={{ REPLICATION_POST_HOOK }}
+{% endif %}
 ExecStartPost={{ ZFS_MOUNTPOINT }}/appdata/start.sh
 StandardOutput=journal
 StandardError=journal

@@ -13,6 +13,7 @@ APPDATA="${ZFS_MOUNTPOINT}/appdata"
 SCRIPTS_DIR="${APPDATA}/scripts"
 WG_BACKUP="${ZFS_MOUNTPOINT}/.system/wireguard/wg0.conf"
 DOCKER_INSTALL_SH="${SCRIPTS_DIR}/docker-install.sh"
+PIN_PRIMARY_NIC_SH="${SCRIPTS_DIR}/pin-primary-nic.sh"
 SANOID_CONF_BACKUP="${SCRIPTS_DIR}/sanoid.conf"
 
 info() { echo "==> $*"; }
@@ -44,6 +45,26 @@ info "Hostname and timezone"
 hostnamectl set-hostname "$SYSTEM_HOSTNAME"
 timedatectl set-timezone "$SYSTEM_TIMEZONE"
 ok "Configured hostname=$SYSTEM_HOSTNAME timezone=$SYSTEM_TIMEZONE"
+
+if [[ -f "$PIN_PRIMARY_NIC_SH" ]]; then
+    info "Primary NIC pinning"
+    mkdir -p /etc/udev/rules.d
+    nic_rule_before=""
+    if [[ -f /etc/udev/rules.d/10-network-names.rules ]]; then
+        nic_rule_before="$(cat /etc/udev/rules.d/10-network-names.rules)"
+    fi
+    # shellcheck source=/dev/null
+    source "$PIN_PRIMARY_NIC_SH"
+    write_primary_nic_rule \
+        /etc/udev/rules.d/10-network-names.rules \
+        "$PRIMARY_INTERFACE_NAME" \
+        "$PRIMARY_INTERFACE_MAC"
+    ok "Pinned primary interface as $PRIMARY_INTERFACE_NAME"
+    nic_rule_after="$(cat /etc/udev/rules.d/10-network-names.rules)"
+    if [[ "$nic_rule_before" != "$nic_rule_after" ]]; then
+        warn "Primary NIC pinning changed; reboot before relying on WireGuard or interface-name-dependent networking"
+    fi
+fi
 
 # shellcheck source=/dev/null
 source "$DOCKER_INSTALL_SH"

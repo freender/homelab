@@ -19,11 +19,14 @@ fi
 require_dir "$BUILD_DIR" "$BUILD_DIR" || exit 1
 require_file "$BUILD_DIR/env" "$BUILD_DIR/env" || exit 1
 require_file "$SCRIPT_DIR/scripts/docker-install.sh" "$SCRIPT_DIR/scripts/docker-install.sh" || exit 1
+require_file "$SCRIPT_DIR/scripts/pin-primary-nic.sh" "$SCRIPT_DIR/scripts/pin-primary-nic.sh" || exit 1
 
 # shellcheck source=/dev/null
 source "$BUILD_DIR/env"
 # shellcheck source=/dev/null
 source "$SCRIPT_DIR/scripts/docker-install.sh"
+# shellcheck source=/dev/null
+source "$SCRIPT_DIR/scripts/pin-primary-nic.sh"
 
 APPDATA_ROOT="${ZFS_MOUNTPOINT}/appdata"
 APPDATA_SCRIPTS_DIR="${APPDATA_ROOT}/scripts"
@@ -46,6 +49,34 @@ if [[ "$(timedatectl show --property=Timezone --value)" != "$SYSTEM_TIMEZONE" ]]
 else
     print_sub "Timezone already set to $SYSTEM_TIMEZONE"
 fi
+
+print_action "Primary NIC pinning"
+mkdir -p /etc/udev/rules.d
+nic_rule_before=""
+if [[ -f /etc/udev/rules.d/10-network-names.rules ]]; then
+    nic_rule_before="$(cat /etc/udev/rules.d/10-network-names.rules)"
+fi
+if write_primary_nic_rule \
+    /etc/udev/rules.d/10-network-names.rules \
+    "$PRIMARY_INTERFACE_NAME" \
+    "$PRIMARY_INTERFACE_MAC"
+then
+    print_ok "Pinned primary interface as $PRIMARY_INTERFACE_NAME"
+    nic_rule_after="$(cat /etc/udev/rules.d/10-network-names.rules)"
+    if [[ "$nic_rule_before" != "$nic_rule_after" ]]; then
+        print_warn "Primary NIC pinning changed; reboot may be required before interface-name-dependent services are reliable"
+    fi
+else
+    print_warn "Could not determine a primary ethernet interface to pin"
+fi
+
+rc=0
+install_if_changed \
+    "$SCRIPT_DIR/scripts/pin-primary-nic.sh" \
+    "$APPDATA_SCRIPTS_DIR/pin-primary-nic.sh" \
+    "755" \
+    "$APPDATA_SCRIPTS_DIR/pin-primary-nic.sh" || rc=$?
+[[ $rc -eq 0 || $rc -eq 1 ]] || exit "$rc"
 
 print_action "Docker CE"
 ensure_docker_installed
@@ -88,8 +119,6 @@ if [[ "$ZFS_AUTOMATION_ENABLED" == "true" ]]; then
 
     for helper in \
         sanoid.conf \
-        zfs_snapshots.sh \
-        zfs_replication_appdata.sh \
         homelab-zfs-snapshots.service \
         homelab-zfs-snapshots.timer \
         homelab-zfs-replication.service \
@@ -173,7 +202,7 @@ install_if_changed "$BUILD_DIR/zfs.conf" "/etc/modprobe.d/zfs.conf" "644" "/etc/
 [[ $rc -eq 0 || $rc -eq 1 ]] || exit "$rc"
 if [[ $rc -eq 0 ]]; then
     update-initramfs -u
-    echo 8589934592 > /sys/module/zfs/parameters/zfs_arc_max
+    echo "$ZFS_ARC_MAX" > /sys/module/zfs/parameters/zfs_arc_max
     print_ok "ZFS ARC limit applied"
 fi
 
