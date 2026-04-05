@@ -18,6 +18,8 @@ fi
 
 require_dir "$BUILD_DIR" "$BUILD_DIR" || exit 1
 require_file "$BUILD_DIR/env" "$BUILD_DIR/env" || exit 1
+require_file "$SCRIPT_DIR/lib/utils.sh" "$SCRIPT_DIR/lib/utils.sh" || exit 1
+require_file "$SCRIPT_DIR/lib/print.sh" "$SCRIPT_DIR/lib/print.sh" || exit 1
 require_file "$SCRIPT_DIR/scripts/docker-install.sh" "$SCRIPT_DIR/scripts/docker-install.sh" || exit 1
 require_file "$SCRIPT_DIR/scripts/notify-failure.sh" "$SCRIPT_DIR/scripts/notify-failure.sh" || exit 1
 require_file "$SCRIPT_DIR/scripts/pin-primary-nic.sh" "$SCRIPT_DIR/scripts/pin-primary-nic.sh" || exit 1
@@ -31,8 +33,64 @@ source "$SCRIPT_DIR/scripts/pin-primary-nic.sh"
 
 APPDATA_ROOT="${ZFS_MOUNTPOINT}/appdata"
 APPDATA_SCRIPTS_DIR="${APPDATA_ROOT}/scripts"
+REBUILD_BUNDLE_ROOT="${APPDATA_SCRIPTS_DIR}/ubuntu-setup"
+REBUILD_BUNDLE_BUILD_DIR="${REBUILD_BUNDLE_ROOT}/build/${HOST}"
+REBUILD_BUNDLE_SCRIPTS_DIR="${REBUILD_BUNDLE_ROOT}/scripts"
+REBUILD_BUNDLE_LIB_DIR="${REBUILD_BUNDLE_ROOT}/lib"
 
 mkdir -p "$APPDATA_ROOT" "$APPDATA_SCRIPTS_DIR"
+
+sync_rebuild_bundle() {
+    local changed=false
+    local file
+    local file_name
+    local mode
+    local rc
+
+    mkdir -p "$REBUILD_BUNDLE_BUILD_DIR" "$REBUILD_BUNDLE_SCRIPTS_DIR" "$REBUILD_BUNDLE_LIB_DIR"
+
+    shopt -s nullglob
+    for file in "$BUILD_DIR"/*; do
+        file_name="$(basename "$file")"
+        mode="644"
+        if [[ "$file_name" == "rebuild.sh" ]]; then
+            mode="755"
+        fi
+        rc=0
+        install_if_changed "$file" "$REBUILD_BUNDLE_BUILD_DIR/$file_name" "$mode" "$REBUILD_BUNDLE_BUILD_DIR/$file_name" || rc=$?
+        [[ $rc -eq 0 || $rc -eq 1 ]] || return "$rc"
+        [[ $rc -eq 0 ]] && changed=true
+    done
+    shopt -u nullglob
+
+    for file_name in install.sh docker-install.sh notify-failure.sh pin-primary-nic.sh; do
+        rc=0
+        install_if_changed \
+            "$SCRIPT_DIR/scripts/$file_name" \
+            "$REBUILD_BUNDLE_SCRIPTS_DIR/$file_name" \
+            "755" \
+            "$REBUILD_BUNDLE_SCRIPTS_DIR/$file_name" || rc=$?
+        [[ $rc -eq 0 || $rc -eq 1 ]] || return "$rc"
+        [[ $rc -eq 0 ]] && changed=true
+    done
+
+    for file_name in utils.sh print.sh; do
+        rc=0
+        install_if_changed \
+            "$SCRIPT_DIR/lib/$file_name" \
+            "$REBUILD_BUNDLE_LIB_DIR/$file_name" \
+            "644" \
+            "$REBUILD_BUNDLE_LIB_DIR/$file_name" || rc=$?
+        [[ $rc -eq 0 || $rc -eq 1 ]] || return "$rc"
+        [[ $rc -eq 0 ]] && changed=true
+    done
+
+    if [[ "$changed" == true ]]; then
+        print_ok "Rebuild bundle synced to $REBUILD_BUNDLE_ROOT"
+    else
+        print_sub "Rebuild bundle already up to date"
+    fi
+}
 
 print_header "Ubuntu Setup"
 
@@ -364,5 +422,8 @@ install_if_changed \
 if [[ $rc -eq 0 ]]; then
     print_ok "rebuild.sh deployed"
 fi
+
+print_action "Rebuild bundle"
+sync_rebuild_bundle
 
 print_header "Ubuntu Setup Complete"
