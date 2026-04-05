@@ -86,8 +86,14 @@ sync_rebuild_bundle() {
     done
 
     if [[ "$changed" == true ]]; then
+        if [[ -n "$DEPLOY_USER" ]] && id "$DEPLOY_USER" >/dev/null 2>&1; then
+            chown -R "$DEPLOY_USER:$DEPLOY_USER" "$REBUILD_BUNDLE_ROOT"
+        fi
         print_ok "Rebuild bundle synced to $REBUILD_BUNDLE_ROOT"
     else
+        if [[ -n "$DEPLOY_USER" ]] && id "$DEPLOY_USER" >/dev/null 2>&1; then
+            chown -R "$DEPLOY_USER:$DEPLOY_USER" "$REBUILD_BUNDLE_ROOT"
+        fi
         print_sub "Rebuild bundle already up to date"
     fi
 }
