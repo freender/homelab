@@ -119,6 +119,21 @@ Keep the same flow used across modules:
 - Stage module bundles in `/tmp/homelab-<module>/`.
 - Preserve root-user checks where module logic requires root SSH sessions.
 
+### Module boundaries
+- Prefer a new module when the capability is independently deployable (`./deploy <module> <host>` makes sense on its own), has its own validation requirements, or has a distinct service/restart/reboot/rebuild boundary.
+- Prefer a feature or subfeature when it only changes what a parent module renders or installs and shares the same install/reload lifecycle.
+- Good module examples in this repo: `pve-gpu-passthrough`, `ssh-config`, `zfs-automation`, `pve-backup`.
+- Good feature examples in this repo: `ubuntu-setup.wireguard`, `ubuntu-setup.samba`, `ubuntu-setup.network.pin_interface`, `docker.backup`, `zfs-automation.sanoid`, `zfs-automation.replication`.
+- If a concern owns packages, systemd units, generated config, and its own rebuild behavior, it usually deserves a module.
+- If a concern is just policy/data for a parent module, keep it inside the parent instead of creating a thin wrapper module.
+
+### Inventory and aliases
+- Treat `hosts.conf` as canonical inventory for real managed hosts, not as a place to model convenience SSH aliases.
+- Keep real per-host connection metadata under `config` (`hostname`, `user`, `sshkey`, optional `agent`).
+- Prefer expressing alternate SSH behaviors as SSH config aliases or as module/framework connection overrides, rather than adding duplicate inventory entries like `foo-root` for the same machine.
+- Only add a second inventory entry for the same machine when it is meaningfully managed as a separate target with different features or lifecycle; avoid alias-only inventory duplication.
+- Long term, favor one inventory host per real machine and keep alias/routing concerns in SSH config or connection logic.
+
 ### Secrets and sensitive data
 - Never commit `.env`, `telegram.env`, or actual secret values.
 - `.env.example` is allowed.
