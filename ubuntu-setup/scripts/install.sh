@@ -18,6 +18,7 @@ fi
 
 require_dir "$BUILD_DIR" "$BUILD_DIR" || exit 1
 require_file "$BUILD_DIR/env" "$BUILD_DIR/env" || exit 1
+require_file "$BUILD_DIR/file-map.conf" "$BUILD_DIR/file-map.conf" || exit 1
 require_file "$SCRIPT_DIR/lib/utils.sh" "$SCRIPT_DIR/lib/utils.sh" || exit 1
 require_file "$SCRIPT_DIR/lib/print.sh" "$SCRIPT_DIR/lib/print.sh" || exit 1
 require_file "$SCRIPT_DIR/scripts/docker-install.sh" "$SCRIPT_DIR/scripts/docker-install.sh" || exit 1
@@ -33,12 +34,54 @@ source "$SCRIPT_DIR/scripts/pin-primary-nic.sh"
 
 APPDATA_ROOT="${ZFS_MOUNTPOINT}/appdata"
 APPDATA_SCRIPTS_DIR="${APPDATA_ROOT}/scripts"
-REBUILD_BUNDLE_ROOT="${APPDATA_SCRIPTS_DIR}/ubuntu-setup"
+REBUILD_BUNDLE_ROOT="${REBUILD_BUNDLE_ROOT:-${APPDATA_SCRIPTS_DIR}/ubuntu-setup}"
 REBUILD_BUNDLE_BUILD_DIR="${REBUILD_BUNDLE_ROOT}/build/${HOST}"
 REBUILD_BUNDLE_SCRIPTS_DIR="${REBUILD_BUNDLE_ROOT}/scripts"
 REBUILD_BUNDLE_LIB_DIR="${REBUILD_BUNDLE_ROOT}/lib"
 
 mkdir -p "$APPDATA_ROOT" "$APPDATA_SCRIPTS_DIR"
+
+load_file_map() {
+    local map_file="$BUILD_DIR/file-map.conf"
+    local filename remote_path mode
+
+    declare -g -A FILE_MAP_DEST=()
+    declare -g -A FILE_MAP_MODE=()
+    while IFS='|' read -r filename remote_path mode; do
+        FILE_MAP_DEST["$filename"]="$remote_path"
+        FILE_MAP_MODE["$filename"]="${mode:-644}"
+    done < "$map_file"
+}
+
+mapped_dest() {
+    local name="$1"
+    printf '%s\n' "${FILE_MAP_DEST[$name]}"
+}
+
+mapped_mode() {
+    local name="$1"
+    printf '%s\n' "${FILE_MAP_MODE[$name]:-644}"
+}
+
+install_build_file() {
+    local name="$1"
+    local rc=0
+
+    install_if_changed "$BUILD_DIR/$name" "$(mapped_dest "$name")" "$(mapped_mode "$name")" "$(mapped_dest "$name")" || rc=$?
+    [[ $rc -eq 0 || $rc -eq 1 ]] || exit "$rc"
+    return "$rc"
+}
+
+install_script_file() {
+    local name="$1"
+    local rc=0
+
+    install_if_changed "$SCRIPT_DIR/scripts/$name" "$(mapped_dest "$name")" "$(mapped_mode "$name")" "$(mapped_dest "$name")" || rc=$?
+    [[ $rc -eq 0 || $rc -eq 1 ]] || exit "$rc"
+    return "$rc"
+}
+
+load_file_map
 
 sync_rebuild_bundle() {
     local changed=false
@@ -85,15 +128,13 @@ sync_rebuild_bundle() {
         [[ $rc -eq 0 ]] && changed=true
     done
 
+    if [[ -n "$DEPLOY_USER" ]] && id "$DEPLOY_USER" >/dev/null 2>&1; then
+        chown -R "$DEPLOY_USER:$DEPLOY_USER" "$REBUILD_BUNDLE_ROOT"
+    fi
+
     if [[ "$changed" == true ]]; then
-        if [[ -n "$DEPLOY_USER" ]] && id "$DEPLOY_USER" >/dev/null 2>&1; then
-            chown -R "$DEPLOY_USER:$DEPLOY_USER" "$REBUILD_BUNDLE_ROOT"
-        fi
         print_ok "Rebuild bundle synced to $REBUILD_BUNDLE_ROOT"
     else
-        if [[ -n "$DEPLOY_USER" ]] && id "$DEPLOY_USER" >/dev/null 2>&1; then
-            chown -R "$DEPLOY_USER:$DEPLOY_USER" "$REBUILD_BUNDLE_ROOT"
-        fi
         print_sub "Rebuild bundle already up to date"
     fi
 }
@@ -136,23 +177,13 @@ else
 fi
 
 rc=0
-install_if_changed \
-    "$SCRIPT_DIR/scripts/pin-primary-nic.sh" \
-    "$APPDATA_SCRIPTS_DIR/pin-primary-nic.sh" \
-    "755" \
-    "$APPDATA_SCRIPTS_DIR/pin-primary-nic.sh" || rc=$?
-[[ $rc -eq 0 || $rc -eq 1 ]] || exit "$rc"
+install_script_file "pin-primary-nic.sh" || rc=$?
 
 print_action "Docker CE"
 ensure_docker_installed
 
 rc=0
-install_if_changed \
-    "$SCRIPT_DIR/scripts/docker-install.sh" \
-    "$APPDATA_SCRIPTS_DIR/docker-install.sh" \
-    "755" \
-    "$APPDATA_SCRIPTS_DIR/docker-install.sh" || rc=$?
-[[ $rc -eq 0 || $rc -eq 1 ]] || exit "$rc"
+install_script_file "docker-install.sh" || rc=$?
 
 if [[ -n "$DEPLOY_USER" ]]; then
     if ! id -nG "$DEPLOY_USER" | grep -qw docker; then
@@ -176,8 +207,7 @@ if [[ "$ZFS_AUTOMATION_ENABLED" == "true" ]]; then
     mkdir -p /etc/sanoid
 
     rc=0
-    install_if_changed "$BUILD_DIR/sanoid.conf" "/etc/sanoid/sanoid.conf" "644" "/etc/sanoid/sanoid.conf" || rc=$?
-    [[ $rc -eq 0 || $rc -eq 1 ]] || exit "$rc"
+    install_build_file "sanoid.conf" || rc=$?
     if [[ $rc -eq 0 ]]; then
         print_ok "sanoid.conf updated"
     fi
@@ -189,16 +219,20 @@ if [[ "$ZFS_AUTOMATION_ENABLED" == "true" ]]; then
         homelab-zfs-replication.service \
         homelab-zfs-replication.timer
     do
-        mode="644"
-        case "$helper" in
-            *.sh) mode="755" ;;
-        esac
         rc=0
-        install_if_changed \
-            "$BUILD_DIR/$helper" \
-            "$APPDATA_SCRIPTS_DIR/$helper" \
-            "$mode" \
-            "$APPDATA_SCRIPTS_DIR/$helper" || rc=$?
+        if [[ "$helper" == "sanoid.conf" ]]; then
+            install_if_changed \
+                "$BUILD_DIR/$helper" \
+                "$APPDATA_SCRIPTS_DIR/$helper" \
+                "$(mapped_mode "$helper")" \
+                "$APPDATA_SCRIPTS_DIR/$helper" || rc=$?
+        else
+            install_if_changed \
+                "$BUILD_DIR/$helper" \
+                "$APPDATA_SCRIPTS_DIR/$helper" \
+                "644" \
+                "$APPDATA_SCRIPTS_DIR/$helper" || rc=$?
+        fi
         [[ $rc -eq 0 || $rc -eq 1 ]] || exit "$rc"
     done
 
@@ -210,11 +244,7 @@ if [[ "$ZFS_AUTOMATION_ENABLED" == "true" ]]; then
         homelab-zfs-replication.timer
     do
         rc=0
-        install_if_changed \
-            "$BUILD_DIR/$unit" \
-            "/etc/systemd/system/$unit" \
-            "644" \
-            "$unit" || rc=$?
+        install_build_file "$unit" || rc=$?
         [[ $rc -eq 0 || $rc -eq 1 ]] || exit "$rc"
         [[ $rc -eq 0 ]] && zfs_units_changed=true
     done
@@ -242,19 +272,15 @@ if [[ "$ZFS_AUTOMATION_ENABLED" == "true" ]]; then
 fi
 
 print_action "Sudoers"
-SUDOERS_FILE="/etc/sudoers.d/99-${DEPLOY_USER}-homelab"
 rc=0
-install_if_changed "$BUILD_DIR/sudoers" "$SUDOERS_FILE" "440" "$SUDOERS_FILE" || rc=$?
-[[ $rc -eq 0 || $rc -eq 1 ]] || exit "$rc"
+install_build_file "sudoers" || rc=$?
 if [[ $rc -eq 0 ]]; then
-    visudo -cf "$SUDOERS_FILE"
+    visudo -cf "$(mapped_dest "sudoers")"
 fi
 
 print_action "SSH hardening"
-SSH_CONF="/etc/ssh/sshd_config.d/99-disable-password-auth.conf"
 rc=0
-install_if_changed "$BUILD_DIR/sshd-hardening.conf" "$SSH_CONF" "644" "$SSH_CONF" || rc=$?
-[[ $rc -eq 0 || $rc -eq 1 ]] || exit "$rc"
+install_build_file "sshd-hardening.conf" || rc=$?
 if [[ $rc -eq 0 ]]; then
     sshd -t
     systemctl reload ssh
@@ -263,8 +289,7 @@ fi
 
 print_action "ZFS ARC limit"
 rc=0
-install_if_changed "$BUILD_DIR/zfs.conf" "/etc/modprobe.d/zfs.conf" "644" "/etc/modprobe.d/zfs.conf" || rc=$?
-[[ $rc -eq 0 || $rc -eq 1 ]] || exit "$rc"
+install_build_file "zfs.conf" || rc=$?
 if [[ $rc -eq 0 ]]; then
     update-initramfs -u
     echo "$ZFS_ARC_MAX" > /sys/module/zfs/parameters/zfs_arc_max
@@ -273,12 +298,7 @@ fi
 
 print_action "Inotify limits"
 rc=0
-install_if_changed \
-    "$BUILD_DIR/99-inotify.conf" \
-    "/etc/sysctl.d/99-inotify.conf" \
-    "644" \
-    "/etc/sysctl.d/99-inotify.conf" || rc=$?
-[[ $rc -eq 0 || $rc -eq 1 ]] || exit "$rc"
+install_build_file "99-inotify.conf" || rc=$?
 if [[ $rc -eq 0 ]]; then
     sysctl --system >/dev/null
     print_ok "Inotify limits applied"
@@ -287,12 +307,7 @@ fi
 if [[ "$WIREGUARD_ENABLED" == "true" ]]; then
     print_action "WireGuard sysctl"
     rc=0
-    install_if_changed \
-        "$BUILD_DIR/99-wireguard.conf" \
-        "/etc/sysctl.d/99-wireguard.conf" \
-        "644" \
-        "/etc/sysctl.d/99-wireguard.conf" || rc=$?
-    [[ $rc -eq 0 || $rc -eq 1 ]] || exit "$rc"
+    install_build_file "99-wireguard.conf" || rc=$?
     if [[ $rc -eq 0 ]]; then
         sysctl --system >/dev/null
         print_ok "WireGuard sysctl applied"
@@ -317,21 +332,11 @@ fi
 print_action "ZFS scrub timer"
 changed=false
 rc=0
-install_if_changed \
-    "$BUILD_DIR/zfs-scrub.service" \
-    "/etc/systemd/system/zfs-scrub.service" \
-    "644" \
-    "zfs-scrub.service" || rc=$?
-[[ $rc -eq 0 || $rc -eq 1 ]] || exit "$rc"
+install_build_file "zfs-scrub.service" || rc=$?
 [[ $rc -eq 0 ]] && changed=true
 
 rc=0
-install_if_changed \
-    "$BUILD_DIR/zfs-scrub.timer" \
-    "/etc/systemd/system/zfs-scrub.timer" \
-    "644" \
-    "zfs-scrub.timer" || rc=$?
-[[ $rc -eq 0 || $rc -eq 1 ]] || exit "$rc"
+install_build_file "zfs-scrub.timer" || rc=$?
 [[ $rc -eq 0 ]] && changed=true
 
 if [[ "$changed" == true ]]; then
@@ -363,9 +368,9 @@ if [[ "$SAMBA_ENABLED" == "true" ]]; then
     rc=0
     backup_and_install_if_changed \
         "$BUILD_DIR/smb.conf" \
-        "/etc/samba/smb.conf" \
-        "644" \
-        "/etc/samba/smb.conf" || rc=$?
+        "$(mapped_dest "smb.conf")" \
+        "$(mapped_mode "smb.conf")" \
+        "$(mapped_dest "smb.conf")" || rc=$?
     [[ $rc -eq 0 || $rc -eq 1 ]] || exit "$rc"
     if [[ $rc -eq 0 ]]; then
         systemctl restart smbd
@@ -375,24 +380,14 @@ fi
 
 print_action "Failure notifications"
 rc=0
-install_if_changed \
-    "$SCRIPT_DIR/scripts/notify-failure.sh" \
-    "/usr/local/bin/homelab-notify-failure" \
-    "755" \
-    "/usr/local/bin/homelab-notify-failure" || rc=$?
-[[ $rc -eq 0 || $rc -eq 1 ]] || exit "$rc"
+install_script_file "notify-failure.sh" || rc=$?
 if [[ $rc -eq 0 ]]; then
     print_ok "notify-failure.sh deployed"
 fi
 
 notify_unit_changed=false
 rc=0
-install_if_changed \
-    "$BUILD_DIR/homelab-notify-failure@.service" \
-    "/etc/systemd/system/homelab-notify-failure@.service" \
-    "644" \
-    "homelab-notify-failure@.service" || rc=$?
-[[ $rc -eq 0 || $rc -eq 1 ]] || exit "$rc"
+install_build_file "homelab-notify-failure@.service" || rc=$?
 [[ $rc -eq 0 ]] && notify_unit_changed=true
 
 if [[ "$notify_unit_changed" == true ]]; then
@@ -403,12 +398,7 @@ fi
 if [[ "$NOTIFICATIONS_ENABLED" == "true" ]]; then
     mkdir -p /etc/homelab
     rc=0
-    install_if_changed \
-        "$BUILD_DIR/telegram.env" \
-        "/etc/homelab/telegram.env" \
-        "600" \
-        "/etc/homelab/telegram.env" || rc=$?
-    [[ $rc -eq 0 || $rc -eq 1 ]] || exit "$rc"
+    install_build_file "telegram.env" || rc=$?
     if [[ $rc -eq 0 ]]; then
         print_ok "telegram.env deployed"
     fi
@@ -419,12 +409,7 @@ fi
 
 print_action "Rebuild helpers"
 rc=0
-install_if_changed \
-    "$BUILD_DIR/rebuild.sh" \
-    "$APPDATA_SCRIPTS_DIR/rebuild.sh" \
-    "755" \
-    "$APPDATA_SCRIPTS_DIR/rebuild.sh" || rc=$?
-[[ $rc -eq 0 || $rc -eq 1 ]] || exit "$rc"
+install_build_file "rebuild.sh" || rc=$?
 if [[ $rc -eq 0 ]]; then
     print_ok "rebuild.sh deployed"
 fi

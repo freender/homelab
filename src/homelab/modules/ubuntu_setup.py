@@ -6,13 +6,12 @@ from pathlib import Path
 from ..build import copy_file, copy_files, render_file, write_env_file
 from ..deploy import DeploySession, force_env, prepare_build_dir, stage_and_run_remote_installer
 from ..hosts import HostLookupError, default_registry
-from ..output import print_action, print_ok, print_sub, print_warn
+from ..modules.apcupsd import telegram_env_path
+from ..output import print_action, print_sub
 from ..ssh import HostConnection, build_files, diff_many
 
 REMOTE_ROOT = "/tmp/homelab-ubuntu-setup"
 NETWORK_MACS_ENV = "network-macs.env"
-TELEGRAM_ENV = "telegram.env"
-NOTIFY_SCRIPT_DEST = "/usr/local/bin/homelab-notify-failure"
 
 STATIC_CONFIG_FILES = [
     "99-inotify.conf",
@@ -28,10 +27,13 @@ ZFS_AUTOMATION_TEMPLATE_FILES = [
     "homelab-zfs-replication.timer",
 ]
 
-NOTIFY_TEMPLATE_FILES = [
-    "homelab-notify-failure@.service",
-]
 
+@dataclass(frozen=True)
+class FileSpec:
+    build_name: str
+    remote_path: str
+    mode: str = "644"
+    feature: str | None = None
 
 
 @dataclass(frozen=True)
@@ -43,6 +45,48 @@ class HostArtifacts:
     wireguard_enabled: bool
     zfs_automation_enabled: bool
     notifications_enabled: bool
+    file_specs: tuple[FileSpec, ...]
+
+
+FILE_SPECS = (
+    FileSpec("sudoers", "/etc/sudoers.d/99-{deploy_user}-homelab", mode="440"),
+    FileSpec("10-network-names.rules", "/etc/udev/rules.d/10-network-names.rules"),
+    FileSpec("sshd-hardening.conf", "/etc/ssh/sshd_config.d/99-disable-password-auth.conf"),
+    FileSpec("zfs.conf", "/etc/modprobe.d/zfs.conf"),
+    FileSpec("99-inotify.conf", "/etc/sysctl.d/99-inotify.conf"),
+    FileSpec("zfs-scrub.service", "/etc/systemd/system/zfs-scrub.service"),
+    FileSpec("zfs-scrub.timer", "/etc/systemd/system/zfs-scrub.timer"),
+    FileSpec("rebuild.sh", "{zfs_mountpoint}/appdata/scripts/rebuild.sh", mode="755"),
+    FileSpec("docker-install.sh", "{zfs_mountpoint}/appdata/scripts/docker-install.sh", mode="755"),
+    FileSpec("pin-primary-nic.sh", "{zfs_mountpoint}/appdata/scripts/pin-primary-nic.sh", mode="755"),
+    FileSpec("notify-failure.sh", "/usr/local/bin/homelab-notify-failure", mode="755"),
+    FileSpec("homelab-notify-failure@.service", "/etc/systemd/system/homelab-notify-failure@.service"),
+    FileSpec("telegram.env", "/etc/homelab/telegram.env", mode="600", feature="notifications"),
+    FileSpec("99-wireguard.conf", "/etc/sysctl.d/99-wireguard.conf", feature="wireguard"),
+    FileSpec("sanoid.conf", "/etc/sanoid/sanoid.conf", feature="zfs_automation"),
+    FileSpec("sanoid.conf", "{zfs_mountpoint}/appdata/scripts/sanoid.conf", feature="zfs_automation"),
+    FileSpec(
+        "homelab-zfs-snapshots.service",
+        "/etc/systemd/system/homelab-zfs-snapshots.service",
+        feature="zfs_automation",
+    ),
+    FileSpec(
+        "homelab-zfs-snapshots.timer",
+        "/etc/systemd/system/homelab-zfs-snapshots.timer",
+        feature="zfs_automation",
+    ),
+    FileSpec(
+        "homelab-zfs-replication.service",
+        "/etc/systemd/system/homelab-zfs-replication.service",
+        feature="zfs_automation",
+    ),
+    FileSpec(
+        "homelab-zfs-replication.timer",
+        "/etc/systemd/system/homelab-zfs-replication.timer",
+        feature="zfs_automation",
+    ),
+    FileSpec("smb.conf", "/etc/samba/smb.conf", feature="samba"),
+)
 
 
 def deploy(
@@ -59,11 +103,7 @@ def deploy(
         print_action(f"Skipping ubuntu-setup (not applicable to {requested_host})")
         return 0
 
-    try:
-        validate(root, hosts)
-    except ValueError:
-        raise
-
+    validate(root, hosts)
     session.run(lambda host: deploy_host(root, host, dry_run=dry_run, force=force), hosts)
     return 0 if session.finish() else 1
 
@@ -93,12 +133,12 @@ def validate(root: Path, hosts: list[str]) -> None:
             raise ValueError(f"missing required file: {file_path}")
 
     for host in hosts:
-        samba_enabled = str(registry.get(host, "ubuntu-setup.samba", "false")).lower()
-        zfs_automation = registry.get(host, "ubuntu-setup.zfs_automation", {})
-        if samba_enabled == "true":
+        if str(registry.get(host, "ubuntu-setup.samba", "false")).lower() == "true":
             samba_config = config_dir / f"smb-{host}.conf"
             if not samba_config.is_file():
                 raise ValueError(f"missing samba config: {samba_config}")
+
+        zfs_automation = registry.get(host, "ubuntu-setup.zfs_automation", {})
         if isinstance(zfs_automation, dict) and zfs_automation:
             for file_name in ZFS_AUTOMATION_TEMPLATE_FILES:
                 file_path = templates_dir / file_name
@@ -117,11 +157,36 @@ def load_network_mac(root: Path, host: str) -> str:
         if not stripped or stripped.startswith("#") or "=" not in stripped:
             continue
         current_key, value = stripped.split("=", 1)
-        if current_key.strip() != key:
-            continue
-        return value.strip().strip('"').strip("'")
-
+        if current_key.strip() == key:
+            return value.strip().strip('"').strip("'")
     return ""
+
+
+def resolve_remote_path(spec: FileSpec, artifacts: HostArtifacts) -> str:
+    return spec.remote_path.format(
+        deploy_user=artifacts.deploy_user,
+        zfs_mountpoint=artifacts.zfs_mountpoint,
+    )
+
+
+def source_path_for_spec(module_dir: Path, artifacts: HostArtifacts, spec: FileSpec) -> Path:
+    if spec.build_name in {"docker-install.sh", "notify-failure.sh", "pin-primary-nic.sh"}:
+        return module_dir / "scripts" / spec.build_name
+    return artifacts.build_dir / spec.build_name
+
+
+def build_file_specs(artifacts: HostArtifacts) -> tuple[FileSpec, ...]:
+    enabled_features = {
+        "wireguard": artifacts.wireguard_enabled,
+        "zfs_automation": artifacts.zfs_automation_enabled,
+        "samba": artifacts.samba_enabled,
+        "notifications": artifacts.notifications_enabled,
+    }
+    return tuple(
+        spec
+        for spec in FILE_SPECS
+        if spec.feature is None or enabled_features.get(spec.feature, False)
+    )
 
 
 def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
@@ -139,63 +204,13 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
         return
 
     artifacts = build_host_artifacts(root, host)
-
     connection = HostConnection(host, user=ssh_user, hostname=ssh_hostname)
+
     print_sub("Comparing with remote configs...")
     diffs = [
-        (artifacts.build_dir / "sudoers", f"/etc/sudoers.d/99-{artifacts.deploy_user}-homelab"),
-        (artifacts.build_dir / "10-network-names.rules", "/etc/udev/rules.d/10-network-names.rules"),
-        (artifacts.build_dir / "sshd-hardening.conf", "/etc/ssh/sshd_config.d/99-disable-password-auth.conf"),
-        (artifacts.build_dir / "zfs.conf", "/etc/modprobe.d/zfs.conf"),
-        (artifacts.build_dir / "99-inotify.conf", "/etc/sysctl.d/99-inotify.conf"),
-        (artifacts.build_dir / "zfs-scrub.service", "/etc/systemd/system/zfs-scrub.service"),
-        (artifacts.build_dir / "zfs-scrub.timer", "/etc/systemd/system/zfs-scrub.timer"),
-        (artifacts.build_dir / "rebuild.sh", f"{artifacts.zfs_mountpoint}/appdata/scripts/rebuild.sh"),
-        (
-            module_dir / "scripts" / "docker-install.sh",
-            f"{artifacts.zfs_mountpoint}/appdata/scripts/docker-install.sh",
-        ),
-        (
-            module_dir / "scripts" / "pin-primary-nic.sh",
-            f"{artifacts.zfs_mountpoint}/appdata/scripts/pin-primary-nic.sh",
-        ),
-        (module_dir / "scripts" / "notify-failure.sh", NOTIFY_SCRIPT_DEST),
-        (
-            artifacts.build_dir / "homelab-notify-failure@.service",
-            "/etc/systemd/system/homelab-notify-failure@.service",
-        ),
+        (source_path_for_spec(module_dir, artifacts, spec), resolve_remote_path(spec, artifacts))
+        for spec in artifacts.file_specs
     ]
-    if artifacts.wireguard_enabled:
-        diffs.append((artifacts.build_dir / "99-wireguard.conf", "/etc/sysctl.d/99-wireguard.conf"))
-    if artifacts.zfs_automation_enabled:
-        diffs.extend(
-            [
-                (artifacts.build_dir / "sanoid.conf", "/etc/sanoid/sanoid.conf"),
-                (
-                    artifacts.build_dir / "sanoid.conf",
-                    f"{artifacts.zfs_mountpoint}/appdata/scripts/sanoid.conf",
-                ),
-                (
-                    artifacts.build_dir / "homelab-zfs-snapshots.service",
-                    "/etc/systemd/system/homelab-zfs-snapshots.service",
-                ),
-                (
-                    artifacts.build_dir / "homelab-zfs-snapshots.timer",
-                    "/etc/systemd/system/homelab-zfs-snapshots.timer",
-                ),
-                (
-                    artifacts.build_dir / "homelab-zfs-replication.service",
-                    "/etc/systemd/system/homelab-zfs-replication.service",
-                ),
-                (
-                    artifacts.build_dir / "homelab-zfs-replication.timer",
-                    "/etc/systemd/system/homelab-zfs-replication.timer",
-                ),
-            ]
-        )
-    if artifacts.samba_enabled:
-        diffs.append((artifacts.build_dir / "smb.conf", "/etc/samba/smb.conf"))
-
     for message in diff_many(connection, diffs):
         print_sub(message)
 
@@ -222,6 +237,14 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
     )
 
 
+def write_file_map(build_dir: Path, artifacts: HostArtifacts) -> None:
+    lines = [
+        f"{spec.build_name}|{resolve_remote_path(spec, artifacts)}|{spec.mode}"
+        for spec in artifacts.file_specs
+    ]
+    (build_dir / "file-map.conf").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
 def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
     registry = default_registry(root)
     module_dir = root / "ubuntu-setup"
@@ -231,29 +254,26 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
     user = str(registry.get(host, "ubuntu-setup.deploy_user", registry.get(host, "config.user")))
     system_hostname = host
     system_timezone = str(registry.get(host, "ubuntu-setup.timezone", "UTC"))
-    primary_interface_name = str(
-        registry.get(host, "ubuntu-setup.network.pin_interface.name", "nic0")
-    )
+    primary_interface_name = str(registry.get(host, "ubuntu-setup.network.pin_interface.name", "nic0"))
     primary_interface_mac = load_network_mac(root, host)
-    samba_enabled = str(registry.get(host, "ubuntu-setup.samba", "false")).lower()
-    wireguard_enabled = str(registry.get(host, "ubuntu-setup.wireguard", "false")).lower()
+    samba_enabled = str(registry.get(host, "ubuntu-setup.samba", "false")).lower() == "true"
+    wireguard_enabled = str(registry.get(host, "ubuntu-setup.wireguard", "false")).lower() == "true"
     zfs_pool = str(registry.get(host, "ubuntu-setup.zfs_pool", "cache"))
     zfs_mountpoint = str(registry.get(host, "ubuntu-setup.zfs_mountpoint", f"/mnt/{zfs_pool}"))
     zfs_arc_max = str(registry.get(host, "ubuntu-setup.zfs_arc_max", "8589934592"))
     zfs_automation = registry.get(host, "ubuntu-setup.zfs_automation", {})
     zfs_automation_enabled = isinstance(zfs_automation, dict) and bool(zfs_automation)
-    snapshot_schedule = str(
-        registry.get(host, "ubuntu-setup.zfs_automation.snapshot_schedule", "*-*-* 04:35:00")
-    )
-    replication_schedule = str(
-        registry.get(host, "ubuntu-setup.zfs_automation.replication_schedule", "*-*-* 02:30:00")
-    )
-    replication_post_hook = str(
-        registry.get(host, "ubuntu-setup.zfs_automation.replication_post_hook", "")
-    )
+    snapshot_schedule = str(registry.get(host, "ubuntu-setup.zfs_automation.snapshot_schedule", "*-*-* 04:35:00"))
+    replication_schedule = str(registry.get(host, "ubuntu-setup.zfs_automation.replication_schedule", "*-*-* 02:30:00"))
+    replication_post_hook = str(registry.get(host, "ubuntu-setup.zfs_automation.replication_post_hook", ""))
 
-    telegram_env_path = root / "secrets" / TELEGRAM_ENV
-    notifications_enabled = telegram_env_path.is_file()
+    notifications_enabled = False
+    telegram_path: Path | None = None
+    try:
+        telegram_path = telegram_env_path(root)
+        notifications_enabled = telegram_path.is_file()
+    except ValueError:
+        notifications_enabled = False
 
     build_dir = module_dir / "build" / host
     prepare_build_dir(build_dir)
@@ -261,11 +281,7 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
     copy_files(config_dir, build_dir, STATIC_CONFIG_FILES)
     render_file(templates_dir / "sudoers", build_dir / "sudoers", USER=user)
     render_file(templates_dir / "zfs.conf", build_dir / "zfs.conf", ZFS_ARC_MAX=zfs_arc_max)
-    render_file(
-        templates_dir / "zfs-scrub.service",
-        build_dir / "zfs-scrub.service",
-        ZFS_POOL=zfs_pool,
-    )
+    render_file(templates_dir / "zfs-scrub.service", build_dir / "zfs-scrub.service", ZFS_POOL=zfs_pool)
     render_file(
         templates_dir / "10-network-names.rules",
         build_dir / "10-network-names.rules",
@@ -282,7 +298,13 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
         ZFS_POOL=zfs_pool,
         ZFS_MOUNTPOINT=zfs_mountpoint,
     )
-    if wireguard_enabled == "true":
+    render_file(
+        templates_dir / "homelab-notify-failure@.service",
+        build_dir / "homelab-notify-failure@.service",
+        NOTIFY_SCRIPT="/usr/local/bin/homelab-notify-failure",
+    )
+
+    if wireguard_enabled:
         copy_file(config_dir / "99-wireguard.conf", build_dir / "99-wireguard.conf")
     if zfs_automation_enabled:
         render_file(templates_dir / "sanoid.conf", build_dir / "sanoid.conf", ZFS_POOL=zfs_pool)
@@ -308,17 +330,10 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
             build_dir / "homelab-zfs-replication.timer",
             REPLICATION_SCHEDULE=replication_schedule,
         )
-
-    if samba_enabled == "true":
+    if samba_enabled:
         copy_file(config_dir / f"smb-{host}.conf", build_dir / "smb.conf")
-
-    render_file(
-        templates_dir / "homelab-notify-failure@.service",
-        build_dir / "homelab-notify-failure@.service",
-        NOTIFY_SCRIPT=NOTIFY_SCRIPT_DEST,
-    )
-    if notifications_enabled:
-        copy_file(telegram_env_path, build_dir / "telegram.env")
+    if notifications_enabled and telegram_path is not None:
+        copy_file(telegram_path, build_dir / "telegram.env")
 
     write_env_file(
         build_dir / "env",
@@ -326,23 +341,41 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
             "DEPLOY_USER": user,
             "PRIMARY_INTERFACE_NAME": primary_interface_name,
             "PRIMARY_INTERFACE_MAC": primary_interface_mac,
-            "SAMBA_ENABLED": samba_enabled,
+            "SAMBA_ENABLED": "true" if samba_enabled else "false",
             "SYSTEM_HOSTNAME": system_hostname,
             "SYSTEM_TIMEZONE": system_timezone,
-            "WIREGUARD_ENABLED": wireguard_enabled,
+            "WIREGUARD_ENABLED": "true" if wireguard_enabled else "false",
             "ZFS_AUTOMATION_ENABLED": "true" if zfs_automation_enabled else "false",
             "NOTIFICATIONS_ENABLED": "true" if notifications_enabled else "false",
             "ZFS_ARC_MAX": zfs_arc_max,
             "ZFS_POOL": zfs_pool,
             "ZFS_MOUNTPOINT": zfs_mountpoint,
+            "NOTIFY_SCRIPT_DEST": "/usr/local/bin/homelab-notify-failure",
+            "TELEGRAM_ENV_DEST": "/etc/homelab/telegram.env",
+            "REBUILD_BUNDLE_ROOT": f"{zfs_mountpoint}/appdata/scripts/ubuntu-setup",
         },
     )
-    return HostArtifacts(
+
+    artifacts = HostArtifacts(
         build_dir=build_dir,
         zfs_mountpoint=zfs_mountpoint,
         deploy_user=user,
-        samba_enabled=samba_enabled == "true",
-        wireguard_enabled=wireguard_enabled == "true",
+        samba_enabled=samba_enabled,
+        wireguard_enabled=wireguard_enabled,
         zfs_automation_enabled=zfs_automation_enabled,
         notifications_enabled=notifications_enabled,
+        file_specs=(),
     )
+    file_specs = build_file_specs(artifacts)
+    artifacts = HostArtifacts(
+        build_dir=build_dir,
+        zfs_mountpoint=zfs_mountpoint,
+        deploy_user=user,
+        samba_enabled=samba_enabled,
+        wireguard_enabled=wireguard_enabled,
+        zfs_automation_enabled=zfs_automation_enabled,
+        notifications_enabled=notifications_enabled,
+        file_specs=file_specs,
+    )
+    write_file_map(build_dir, artifacts)
+    return artifacts
