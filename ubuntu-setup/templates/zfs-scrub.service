@@ -1,5 +1,6 @@
 [Unit]
 Description=Monthly ZFS scrub
+OnFailure=homelab-notify-failure@%n.service
 
 [Service]
 Type=oneshot

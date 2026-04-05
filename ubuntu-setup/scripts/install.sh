@@ -19,6 +19,7 @@ fi
 require_dir "$BUILD_DIR" "$BUILD_DIR" || exit 1
 require_file "$BUILD_DIR/env" "$BUILD_DIR/env" || exit 1
 require_file "$SCRIPT_DIR/scripts/docker-install.sh" "$SCRIPT_DIR/scripts/docker-install.sh" || exit 1
+require_file "$SCRIPT_DIR/scripts/notify-failure.sh" "$SCRIPT_DIR/scripts/notify-failure.sh" || exit 1
 require_file "$SCRIPT_DIR/scripts/pin-primary-nic.sh" "$SCRIPT_DIR/scripts/pin-primary-nic.sh" || exit 1
 
 # shellcheck source=/dev/null
@@ -306,6 +307,50 @@ if [[ "$SAMBA_ENABLED" == "true" ]]; then
         systemctl restart smbd
         print_ok "Samba restarted"
     fi
+fi
+
+print_action "Failure notifications"
+rc=0
+install_if_changed \
+    "$SCRIPT_DIR/scripts/notify-failure.sh" \
+    "/usr/local/bin/homelab-notify-failure" \
+    "755" \
+    "/usr/local/bin/homelab-notify-failure" || rc=$?
+[[ $rc -eq 0 || $rc -eq 1 ]] || exit "$rc"
+if [[ $rc -eq 0 ]]; then
+    print_ok "notify-failure.sh deployed"
+fi
+
+notify_unit_changed=false
+rc=0
+install_if_changed \
+    "$BUILD_DIR/homelab-notify-failure@.service" \
+    "/etc/systemd/system/homelab-notify-failure@.service" \
+    "644" \
+    "homelab-notify-failure@.service" || rc=$?
+[[ $rc -eq 0 || $rc -eq 1 ]] || exit "$rc"
+[[ $rc -eq 0 ]] && notify_unit_changed=true
+
+if [[ "$notify_unit_changed" == true ]]; then
+    systemctl daemon-reload
+    print_ok "homelab-notify-failure@.service deployed"
+fi
+
+if [[ "$NOTIFICATIONS_ENABLED" == "true" ]]; then
+    mkdir -p /etc/homelab
+    rc=0
+    install_if_changed \
+        "$BUILD_DIR/telegram.env" \
+        "/etc/homelab/telegram.env" \
+        "600" \
+        "/etc/homelab/telegram.env" || rc=$?
+    [[ $rc -eq 0 || $rc -eq 1 ]] || exit "$rc"
+    if [[ $rc -eq 0 ]]; then
+        print_ok "telegram.env deployed"
+    fi
+    print_sub "Notifications enabled"
+else
+    print_sub "No telegram.env in secrets; notifications disabled"
 fi
 
 print_action "Rebuild helpers"

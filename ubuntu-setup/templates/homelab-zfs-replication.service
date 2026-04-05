@@ -2,6 +2,7 @@
 Description=Homelab ZFS replication and docker update
 Wants=network-online.target docker.service
 After=network-online.target docker.service
+OnFailure=homelab-notify-failure@%n.service
 
 [Service]
 Type=oneshot

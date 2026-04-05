@@ -11,6 +11,8 @@ from ..ssh import HostConnection, build_files, diff_many
 
 REMOTE_ROOT = "/tmp/homelab-ubuntu-setup"
 NETWORK_MACS_ENV = "network-macs.env"
+TELEGRAM_ENV = "telegram.env"
+NOTIFY_SCRIPT_DEST = "/usr/local/bin/homelab-notify-failure"
 
 STATIC_CONFIG_FILES = [
     "99-inotify.conf",
@@ -26,6 +28,10 @@ ZFS_AUTOMATION_TEMPLATE_FILES = [
     "homelab-zfs-replication.timer",
 ]
 
+NOTIFY_TEMPLATE_FILES = [
+    "homelab-notify-failure@.service",
+]
+
 
 
 @dataclass(frozen=True)
@@ -36,6 +42,7 @@ class HostArtifacts:
     samba_enabled: bool
     wireguard_enabled: bool
     zfs_automation_enabled: bool
+    notifications_enabled: bool
 
 
 def deploy(
@@ -71,7 +78,9 @@ def validate(root: Path, hosts: list[str]) -> None:
     required_files = [
         scripts_dir / "install.sh",
         scripts_dir / "docker-install.sh",
+        scripts_dir / "notify-failure.sh",
         scripts_dir / "pin-primary-nic.sh",
+        templates_dir / "homelab-notify-failure@.service",
         templates_dir / "rebuild.sh",
         templates_dir / "10-network-names.rules",
         templates_dir / "sudoers",
@@ -149,6 +158,11 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
         (
             module_dir / "scripts" / "pin-primary-nic.sh",
             f"{artifacts.zfs_mountpoint}/appdata/scripts/pin-primary-nic.sh",
+        ),
+        (module_dir / "scripts" / "notify-failure.sh", NOTIFY_SCRIPT_DEST),
+        (
+            artifacts.build_dir / "homelab-notify-failure@.service",
+            "/etc/systemd/system/homelab-notify-failure@.service",
         ),
     ]
     if artifacts.wireguard_enabled:
@@ -238,6 +252,9 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
         registry.get(host, "ubuntu-setup.zfs_automation.replication_post_hook", "")
     )
 
+    telegram_env_path = root / "secrets" / TELEGRAM_ENV
+    notifications_enabled = telegram_env_path.is_file()
+
     build_dir = module_dir / "build" / host
     prepare_build_dir(build_dir)
 
@@ -295,6 +312,14 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
     if samba_enabled == "true":
         copy_file(config_dir / f"smb-{host}.conf", build_dir / "smb.conf")
 
+    render_file(
+        templates_dir / "homelab-notify-failure@.service",
+        build_dir / "homelab-notify-failure@.service",
+        NOTIFY_SCRIPT=NOTIFY_SCRIPT_DEST,
+    )
+    if notifications_enabled:
+        copy_file(telegram_env_path, build_dir / "telegram.env")
+
     write_env_file(
         build_dir / "env",
         {
@@ -306,6 +331,7 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
             "SYSTEM_TIMEZONE": system_timezone,
             "WIREGUARD_ENABLED": wireguard_enabled,
             "ZFS_AUTOMATION_ENABLED": "true" if zfs_automation_enabled else "false",
+            "NOTIFICATIONS_ENABLED": "true" if notifications_enabled else "false",
             "ZFS_ARC_MAX": zfs_arc_max,
             "ZFS_POOL": zfs_pool,
             "ZFS_MOUNTPOINT": zfs_mountpoint,
@@ -318,4 +344,5 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
         samba_enabled=samba_enabled == "true",
         wireguard_enabled=wireguard_enabled == "true",
         zfs_automation_enabled=zfs_automation_enabled,
+        notifications_enabled=notifications_enabled,
     )
