@@ -1,0 +1,9 @@
+[Unit]
+Description=Run homelab ZFS snapshots on schedule
+
+[Timer]
+OnCalendar={{ SNAPSHOT_SCHEDULE }}
+Persistent=true
+
+[Install]
+WantedBy=timers.target

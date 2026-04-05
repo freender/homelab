@@ -14,6 +14,9 @@ BUNDLE_ROOT="${SCRIPTS_DIR}/ubuntu-setup"
 BUNDLE_INSTALL_SH="${BUNDLE_ROOT}/scripts/install.sh"
 BUNDLE_BUILD_DIR="${BUNDLE_ROOT}/build/${SYSTEM_HOSTNAME}"
 BUNDLE_UTILS_SH="${BUNDLE_ROOT}/lib/utils.sh"
+ZFS_AUTOMATION_BUNDLE_ROOT="${SCRIPTS_DIR}/zfs-automation"
+ZFS_AUTOMATION_INSTALL_SH="${ZFS_AUTOMATION_BUNDLE_ROOT}/scripts/install.sh"
+ZFS_AUTOMATION_BUILD_DIR="${ZFS_AUTOMATION_BUNDLE_ROOT}/build/${SYSTEM_HOSTNAME}"
 
 info() { echo "==> $*"; }
 ok() { echo "    ✓ $*"; }
@@ -51,6 +54,13 @@ ok "Found persisted ubuntu-setup bundle at $BUNDLE_ROOT"
 
 info "Running bundled ubuntu-setup installer"
 bash "$BUNDLE_INSTALL_SH" "$SYSTEM_HOSTNAME"
+
+if [[ -f "$ZFS_AUTOMATION_INSTALL_SH" ]] && [[ -d "$ZFS_AUTOMATION_BUILD_DIR" ]]; then
+    info "Running bundled zfs-automation installer"
+    bash "$ZFS_AUTOMATION_INSTALL_SH" "$SYSTEM_HOSTNAME"
+else
+    warn "No persisted zfs-automation bundle found; skipping"
+fi
 
 echo ""
 echo "=== Rebuild complete ==="

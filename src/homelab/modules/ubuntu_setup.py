@@ -13,19 +13,7 @@ from ..ssh import HostConnection, build_files, diff_many
 REMOTE_ROOT = "/tmp/homelab-ubuntu-setup"
 NETWORK_MACS_ENV = "network-macs.env"
 
-STATIC_CONFIG_FILES = [
-    "99-inotify.conf",
-    "sshd-hardening.conf",
-    "zfs-scrub.timer",
-]
-
-ZFS_AUTOMATION_TEMPLATE_FILES = [
-    "sanoid.conf",
-    "homelab-zfs-snapshots.service",
-    "homelab-zfs-snapshots.timer",
-    "homelab-zfs-replication.service",
-    "homelab-zfs-replication.timer",
-]
+STATIC_CONFIG_FILES = ["99-inotify.conf", "sshd-hardening.conf", "zfs-scrub.timer"]
 
 
 @dataclass(frozen=True)
@@ -43,7 +31,6 @@ class HostArtifacts:
     deploy_user: str
     samba_enabled: bool
     wireguard_enabled: bool
-    zfs_automation_enabled: bool
     notifications_enabled: bool
     file_specs: tuple[FileSpec, ...]
 
@@ -63,28 +50,6 @@ FILE_SPECS = (
     FileSpec("homelab-notify-failure@.service", "/etc/systemd/system/homelab-notify-failure@.service"),
     FileSpec("telegram.env", "/etc/homelab/telegram.env", mode="600", feature="notifications"),
     FileSpec("99-wireguard.conf", "/etc/sysctl.d/99-wireguard.conf", feature="wireguard"),
-    FileSpec("sanoid.conf", "/etc/sanoid/sanoid.conf", feature="zfs_automation"),
-    FileSpec("sanoid.conf", "{zfs_mountpoint}/appdata/scripts/sanoid.conf", feature="zfs_automation"),
-    FileSpec(
-        "homelab-zfs-snapshots.service",
-        "/etc/systemd/system/homelab-zfs-snapshots.service",
-        feature="zfs_automation",
-    ),
-    FileSpec(
-        "homelab-zfs-snapshots.timer",
-        "/etc/systemd/system/homelab-zfs-snapshots.timer",
-        feature="zfs_automation",
-    ),
-    FileSpec(
-        "homelab-zfs-replication.service",
-        "/etc/systemd/system/homelab-zfs-replication.service",
-        feature="zfs_automation",
-    ),
-    FileSpec(
-        "homelab-zfs-replication.timer",
-        "/etc/systemd/system/homelab-zfs-replication.timer",
-        feature="zfs_automation",
-    ),
     FileSpec("smb.conf", "/etc/samba/smb.conf", feature="samba"),
 )
 
@@ -138,14 +103,6 @@ def validate(root: Path, hosts: list[str]) -> None:
             if not samba_config.is_file():
                 raise ValueError(f"missing samba config: {samba_config}")
 
-        zfs_automation = registry.get(host, "ubuntu-setup.zfs_automation", {})
-        if isinstance(zfs_automation, dict) and zfs_automation:
-            for file_name in ZFS_AUTOMATION_TEMPLATE_FILES:
-                file_path = templates_dir / file_name
-                if not file_path.is_file():
-                    raise ValueError(f"missing ZFS automation template: {file_path}")
-
-
 def load_network_mac(root: Path, host: str) -> str:
     env_path = root / "secrets" / NETWORK_MACS_ENV
     if not env_path.is_file():
@@ -178,7 +135,6 @@ def source_path_for_spec(module_dir: Path, artifacts: HostArtifacts, spec: FileS
 def build_file_specs(artifacts: HostArtifacts) -> tuple[FileSpec, ...]:
     enabled_features = {
         "wireguard": artifacts.wireguard_enabled,
-        "zfs_automation": artifacts.zfs_automation_enabled,
         "samba": artifacts.samba_enabled,
         "notifications": artifacts.notifications_enabled,
     }
@@ -261,12 +217,6 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
     zfs_pool = str(registry.get(host, "ubuntu-setup.zfs_pool", "cache"))
     zfs_mountpoint = str(registry.get(host, "ubuntu-setup.zfs_mountpoint", f"/mnt/{zfs_pool}"))
     zfs_arc_max = str(registry.get(host, "ubuntu-setup.zfs_arc_max", "8589934592"))
-    zfs_automation = registry.get(host, "ubuntu-setup.zfs_automation", {})
-    zfs_automation_enabled = isinstance(zfs_automation, dict) and bool(zfs_automation)
-    snapshot_schedule = str(registry.get(host, "ubuntu-setup.zfs_automation.snapshot_schedule", "*-*-* 04:35:00"))
-    replication_schedule = str(registry.get(host, "ubuntu-setup.zfs_automation.replication_schedule", "*-*-* 02:30:00"))
-    replication_post_hook = str(registry.get(host, "ubuntu-setup.zfs_automation.replication_post_hook", ""))
-
     notifications_enabled = False
     telegram_path: Path | None = None
     try:
@@ -306,30 +256,6 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
 
     if wireguard_enabled:
         copy_file(config_dir / "99-wireguard.conf", build_dir / "99-wireguard.conf")
-    if zfs_automation_enabled:
-        render_file(templates_dir / "sanoid.conf", build_dir / "sanoid.conf", ZFS_POOL=zfs_pool)
-        render_file(
-            templates_dir / "homelab-zfs-snapshots.service",
-            build_dir / "homelab-zfs-snapshots.service",
-            ZFS_MOUNTPOINT=zfs_mountpoint,
-        )
-        render_file(
-            templates_dir / "homelab-zfs-snapshots.timer",
-            build_dir / "homelab-zfs-snapshots.timer",
-            SNAPSHOT_SCHEDULE=snapshot_schedule,
-        )
-        render_file(
-            templates_dir / "homelab-zfs-replication.service",
-            build_dir / "homelab-zfs-replication.service",
-            ZFS_MOUNTPOINT=zfs_mountpoint,
-            ZFS_POOL=zfs_pool,
-            REPLICATION_POST_HOOK=replication_post_hook,
-        )
-        render_file(
-            templates_dir / "homelab-zfs-replication.timer",
-            build_dir / "homelab-zfs-replication.timer",
-            REPLICATION_SCHEDULE=replication_schedule,
-        )
     if samba_enabled:
         copy_file(config_dir / f"smb-{host}.conf", build_dir / "smb.conf")
     if notifications_enabled and telegram_path is not None:
@@ -345,7 +271,6 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
             "SYSTEM_HOSTNAME": system_hostname,
             "SYSTEM_TIMEZONE": system_timezone,
             "WIREGUARD_ENABLED": "true" if wireguard_enabled else "false",
-            "ZFS_AUTOMATION_ENABLED": "true" if zfs_automation_enabled else "false",
             "NOTIFICATIONS_ENABLED": "true" if notifications_enabled else "false",
             "ZFS_ARC_MAX": zfs_arc_max,
             "ZFS_POOL": zfs_pool,
@@ -362,7 +287,6 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
         deploy_user=user,
         samba_enabled=samba_enabled,
         wireguard_enabled=wireguard_enabled,
-        zfs_automation_enabled=zfs_automation_enabled,
         notifications_enabled=notifications_enabled,
         file_specs=(),
     )
@@ -373,7 +297,6 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
         deploy_user=user,
         samba_enabled=samba_enabled,
         wireguard_enabled=wireguard_enabled,
-        zfs_automation_enabled=zfs_automation_enabled,
         notifications_enabled=notifications_enabled,
         file_specs=file_specs,
     )
