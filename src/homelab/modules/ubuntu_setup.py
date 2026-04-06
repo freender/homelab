@@ -269,7 +269,6 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
             "WIREGUARD_ENABLED": "true" if wireguard_enabled else "false",
             "NOTIFICATIONS_ENABLED": "true" if notifications_enabled else "false",
             "ZFS_ARC_MAX": zfs_arc_max,
-            "ZFS_POOL": zfs_pool,
             "ZFS_MOUNTPOINT": zfs_mountpoint,
             "NOTIFY_SCRIPT_DEST": "/usr/local/bin/homelab-notify-failure",
             "TELEGRAM_ENV_DEST": "/etc/homelab/telegram.env",

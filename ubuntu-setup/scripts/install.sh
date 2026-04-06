@@ -237,21 +237,6 @@ if [[ "$WIREGUARD_ENABLED" == "true" ]]; then
     fi
 fi
 
-print_action "TRIM"
-if ! systemctl is-enabled --quiet fstrim.timer 2>/dev/null; then
-    systemctl enable --now fstrim.timer
-    print_ok "fstrim.timer enabled"
-else
-    print_sub "fstrim.timer already enabled"
-fi
-
-if [[ "$(zpool get -H -o value autotrim "$ZFS_POOL" 2>/dev/null)" != "on" ]]; then
-    zpool set autotrim=on "$ZFS_POOL"
-    print_ok "autotrim enabled on $ZFS_POOL"
-else
-    print_sub "autotrim already on for $ZFS_POOL"
-fi
-
 if [[ "$SAMBA_ENABLED" == "true" ]]; then
     print_action "Samba"
     require_file "$BUILD_DIR/smb.conf" "$BUILD_DIR/smb.conf" || exit 1

@@ -210,6 +210,7 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
         build_dir / "env",
         {
             "DEPLOY_USER": deploy_user,
+            "ZFS_POOL": zfs_pool,
             "ZFS_MOUNTPOINT": zfs_mountpoint,
             "REBUILD_BUNDLE_ROOT": f"{zfs_mountpoint}/appdata/scripts/zfs-automation",
         },

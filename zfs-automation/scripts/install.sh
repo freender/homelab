@@ -96,6 +96,21 @@ sync_rebuild_bundle() {
 
 print_header "ZFS Automation"
 
+print_action "TRIM"
+if ! systemctl is-enabled --quiet fstrim.timer 2>/dev/null; then
+    systemctl enable --now fstrim.timer
+    print_ok "fstrim.timer enabled"
+else
+    print_sub "fstrim.timer already enabled"
+fi
+
+if [[ "$(zpool get -H -o value autotrim "$ZFS_POOL" 2>/dev/null)" != "on" ]]; then
+    zpool set autotrim=on "$ZFS_POOL"
+    print_ok "autotrim enabled on $ZFS_POOL"
+else
+    print_sub "autotrim already on for $ZFS_POOL"
+fi
+
 print_action "Sanoid / Syncoid"
 if ! command -v sanoid >/dev/null 2>&1 || ! command -v syncoid >/dev/null 2>&1; then
     apt-get install -y -q sanoid
