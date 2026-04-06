@@ -10,13 +10,16 @@ from ..output import print_action, print_sub
 from ..ssh import HostConnection, build_files, diff_many
 
 REMOTE_ROOT = "/tmp/homelab-zfs-automation"
-STATIC_CONFIG_FILES: list[str] = []
+STATIC_CONFIG_FILES = ["zfs-scrub.timer"]
 TEMPLATE_FILES = [
     "sanoid.conf",
     "homelab-zfs-snapshots.service",
     "homelab-zfs-snapshots.timer",
     "homelab-zfs-replication.service",
     "homelab-zfs-replication.timer",
+    "zfs-scrub.service",
+    "homelab-zfs-health-check.service",
+    "homelab-zfs-health-check.timer",
 ]
 
 
@@ -41,6 +44,10 @@ FILE_SPECS = (
     FileSpec("homelab-zfs-snapshots.timer", "/etc/systemd/system/homelab-zfs-snapshots.timer"),
     FileSpec("homelab-zfs-replication.service", "/etc/systemd/system/homelab-zfs-replication.service"),
     FileSpec("homelab-zfs-replication.timer", "/etc/systemd/system/homelab-zfs-replication.timer"),
+    FileSpec("zfs-scrub.service", "/etc/systemd/system/zfs-scrub.service"),
+    FileSpec("zfs-scrub.timer", "/etc/systemd/system/zfs-scrub.timer"),
+    FileSpec("homelab-zfs-health-check.service", "/etc/systemd/system/homelab-zfs-health-check.service"),
+    FileSpec("homelab-zfs-health-check.timer", "/etc/systemd/system/homelab-zfs-health-check.timer"),
 )
 
 
@@ -152,6 +159,7 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
     zfs_mountpoint = str(registry.get(host, "zfs-automation.zfs_mountpoint", registry.get(host, "ubuntu-setup.zfs_mountpoint", f"/mnt/{zfs_pool}")))
     snapshot_schedule = str(registry.get(host, "zfs-automation.snapshot_schedule", "*-*-* 04:35:00"))
     replication_schedule = str(registry.get(host, "zfs-automation.replication_schedule", "*-*-* 02:30:00"))
+    health_check_schedule = str(registry.get(host, "zfs-automation.health_check_schedule", "hourly"))
     replication_source = str(registry.get(host, "zfs-automation.replication.source"))
     replication_target = str(registry.get(host, "zfs-automation.replication.target"))
     replication_post_hook = str(registry.get(host, "zfs-automation.replication_post_hook", ""))
@@ -181,6 +189,7 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
     )
     render_file(templates_dir / "homelab-zfs-snapshots.service", build_dir / "homelab-zfs-snapshots.service")
     render_file(templates_dir / "homelab-zfs-snapshots.timer", build_dir / "homelab-zfs-snapshots.timer", SNAPSHOT_SCHEDULE=snapshot_schedule)
+    render_file(templates_dir / "zfs-scrub.service", build_dir / "zfs-scrub.service", ZFS_POOL=zfs_pool)
     render_file(
         templates_dir / "homelab-zfs-replication.service",
         build_dir / "homelab-zfs-replication.service",
@@ -190,6 +199,12 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
         REPLICATION_POST_HOOK=replication_post_hook,
     )
     render_file(templates_dir / "homelab-zfs-replication.timer", build_dir / "homelab-zfs-replication.timer", REPLICATION_SCHEDULE=replication_schedule)
+    render_file(templates_dir / "homelab-zfs-health-check.service", build_dir / "homelab-zfs-health-check.service", ZFS_POOL=zfs_pool)
+    render_file(
+        templates_dir / "homelab-zfs-health-check.timer",
+        build_dir / "homelab-zfs-health-check.timer",
+        HEALTH_CHECK_SCHEDULE=health_check_schedule,
+    )
 
     write_env_file(
         build_dir / "env",

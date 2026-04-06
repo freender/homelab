@@ -1,0 +1,7 @@
+[Unit]
+Description=Monthly ZFS scrub
+OnFailure=homelab-notify-failure@%n.service
+
+[Service]
+Type=oneshot
+ExecStart=/sbin/zpool scrub {{ ZFS_POOL }}

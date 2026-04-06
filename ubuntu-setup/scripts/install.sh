@@ -252,32 +252,6 @@ else
     print_sub "autotrim already on for $ZFS_POOL"
 fi
 
-print_action "ZFS scrub timer"
-changed=false
-rc=0
-install_build_file "zfs-scrub.service" || rc=$?
-[[ $rc -eq 0 ]] && changed=true
-
-rc=0
-install_build_file "zfs-scrub.timer" || rc=$?
-[[ $rc -eq 0 ]] && changed=true
-
-if [[ "$changed" == true ]]; then
-    systemctl daemon-reload
-fi
-
-if ! systemctl is-enabled --quiet zfs-scrub.timer 2>/dev/null; then
-    systemctl enable --now zfs-scrub.timer
-    print_ok "zfs-scrub.timer enabled"
-else
-    if [[ "$changed" == true ]]; then
-        systemctl restart zfs-scrub.timer
-        print_ok "zfs-scrub.timer restarted"
-    else
-        print_sub "zfs-scrub.timer already enabled"
-    fi
-fi
-
 if [[ "$SAMBA_ENABLED" == "true" ]]; then
     print_action "Samba"
     require_file "$BUILD_DIR/smb.conf" "$BUILD_DIR/smb.conf" || exit 1

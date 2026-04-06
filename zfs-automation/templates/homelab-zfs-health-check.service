@@ -1,0 +1,9 @@
+[Unit]
+Description=Homelab ZFS pool health check
+OnFailure=homelab-notify-failure@%n.service
+
+[Service]
+Type=oneshot
+ExecStart=/sbin/zpool status -x {{ ZFS_POOL }}
+StandardOutput=journal
+StandardError=journal

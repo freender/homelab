@@ -13,7 +13,7 @@ from ..ssh import HostConnection, build_files, diff_many
 REMOTE_ROOT = "/tmp/homelab-ubuntu-setup"
 NETWORK_MACS_ENV = "network-macs.env"
 
-STATIC_CONFIG_FILES = ["99-inotify.conf", "sshd-hardening.conf", "zfs-scrub.timer"]
+STATIC_CONFIG_FILES = ["99-inotify.conf", "sshd-hardening.conf"]
 
 
 @dataclass(frozen=True)
@@ -41,8 +41,6 @@ FILE_SPECS = (
     FileSpec("sshd-hardening.conf", "/etc/ssh/sshd_config.d/99-disable-password-auth.conf"),
     FileSpec("zfs.conf", "/etc/modprobe.d/zfs.conf"),
     FileSpec("99-inotify.conf", "/etc/sysctl.d/99-inotify.conf"),
-    FileSpec("zfs-scrub.service", "/etc/systemd/system/zfs-scrub.service"),
-    FileSpec("zfs-scrub.timer", "/etc/systemd/system/zfs-scrub.timer"),
     FileSpec("rebuild.sh", "{zfs_mountpoint}/appdata/scripts/rebuild.sh", mode="755"),
     FileSpec("docker-install.sh", "{zfs_mountpoint}/appdata/scripts/docker-install.sh", mode="755"),
     FileSpec("pin-primary-nic.sh", "{zfs_mountpoint}/appdata/scripts/pin-primary-nic.sh", mode="755"),
@@ -90,7 +88,6 @@ def validate(root: Path, hosts: list[str]) -> None:
         templates_dir / "10-network-names.rules",
         templates_dir / "sudoers",
         templates_dir / "zfs.conf",
-        templates_dir / "zfs-scrub.service",
         *[config_dir / file_name for file_name in STATIC_CONFIG_FILES],
     ]
     for file_path in required_files:
@@ -231,7 +228,6 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
     copy_files(config_dir, build_dir, STATIC_CONFIG_FILES)
     render_file(templates_dir / "sudoers", build_dir / "sudoers", USER=user)
     render_file(templates_dir / "zfs.conf", build_dir / "zfs.conf", ZFS_ARC_MAX=zfs_arc_max)
-    render_file(templates_dir / "zfs-scrub.service", build_dir / "zfs-scrub.service", ZFS_POOL=zfs_pool)
     render_file(
         templates_dir / "10-network-names.rules",
         build_dir / "10-network-names.rules",

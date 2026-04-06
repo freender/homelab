@@ -1,0 +1,9 @@
+[Unit]
+Description=Run homelab ZFS health check on schedule
+
+[Timer]
+OnCalendar={{ HEALTH_CHECK_SCHEDULE }}
+Persistent=true
+
+[Install]
+WantedBy=timers.target

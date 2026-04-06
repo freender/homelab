@@ -112,14 +112,14 @@ if [[ $rc -eq 0 ]]; then
     print_ok "sanoid.conf updated"
 fi
 
-for helper in sanoid.conf homelab-zfs-snapshots.service homelab-zfs-snapshots.timer homelab-zfs-replication.service homelab-zfs-replication.timer; do
+for helper in sanoid.conf homelab-zfs-snapshots.service homelab-zfs-snapshots.timer homelab-zfs-replication.service homelab-zfs-replication.timer zfs-scrub.service zfs-scrub.timer homelab-zfs-health-check.service homelab-zfs-health-check.timer; do
     rc=0
     install_if_changed "$BUILD_DIR/$helper" "$APPDATA_SCRIPTS_DIR/$helper" "644" "$APPDATA_SCRIPTS_DIR/$helper" || rc=$?
     [[ $rc -eq 0 || $rc -eq 1 ]] || exit "$rc"
 done
 
 units_changed=false
-for unit in homelab-zfs-snapshots.service homelab-zfs-snapshots.timer homelab-zfs-replication.service homelab-zfs-replication.timer; do
+for unit in homelab-zfs-snapshots.service homelab-zfs-snapshots.timer homelab-zfs-replication.service homelab-zfs-replication.timer zfs-scrub.service zfs-scrub.timer homelab-zfs-health-check.service homelab-zfs-health-check.timer; do
     rc=0
     install_build_file "$unit" || rc=$?
     [[ $rc -eq 0 || $rc -eq 1 ]] || exit "$rc"
@@ -135,7 +135,7 @@ if [[ "$units_changed" == true ]]; then
     systemctl daemon-reload
 fi
 
-for timer in homelab-zfs-snapshots.timer homelab-zfs-replication.timer; do
+for timer in homelab-zfs-snapshots.timer homelab-zfs-replication.timer zfs-scrub.timer homelab-zfs-health-check.timer; do
     if ! systemctl is-enabled --quiet "$timer" 2>/dev/null; then
         systemctl enable --now "$timer"
         print_ok "$timer enabled"
