@@ -129,16 +129,23 @@ if [[ $rc -eq 0 ]]; then
     print_ok "sanoid.conf updated"
 fi
 
-for helper in sanoid.conf homelab-zfs-snapshots.service homelab-zfs-snapshots.timer homelab-zfs-replication.service homelab-zfs-replication.timer zfs-scrub.service zfs-scrub.timer homelab-zfs-health-check.service homelab-zfs-health-check.timer; do
-    rc=0
-    install_if_changed "$BUILD_DIR/$helper" "$MANAGED_DIR/$helper" "644" "$MANAGED_DIR/$helper" || rc=$?
-    [[ $rc -eq 0 || $rc -eq 1 ]] || exit "$rc"
-done
+    for helper in sanoid.conf homelab-zfs-snapshots.service homelab-zfs-snapshots.timer homelab-zfs-replication.service homelab-zfs-replication.timer homelab-zfs-scrub.sh zfs-scrub.service zfs-scrub.timer homelab-zfs-health-check.service homelab-zfs-health-check.timer; do
+        rc=0
+        helper_mode="644"
+        if [[ "$helper" == "homelab-zfs-scrub.sh" ]]; then
+            helper_mode="755"
+        fi
+        install_if_changed "$BUILD_DIR/$helper" "$MANAGED_DIR/$helper" "$helper_mode" "$MANAGED_DIR/$helper" || rc=$?
+        [[ $rc -eq 0 || $rc -eq 1 ]] || exit "$rc"
+    done
 
-units_changed=false
-for unit in homelab-zfs-snapshots.service homelab-zfs-snapshots.timer homelab-zfs-replication.service homelab-zfs-replication.timer zfs-scrub.service zfs-scrub.timer homelab-zfs-health-check.service homelab-zfs-health-check.timer; do
     rc=0
-    install_build_file "$unit" || rc=$?
+    install_build_file "homelab-zfs-scrub.sh" || rc=$?
+
+    units_changed=false
+    for unit in homelab-zfs-snapshots.service homelab-zfs-snapshots.timer homelab-zfs-replication.service homelab-zfs-replication.timer zfs-scrub.service zfs-scrub.timer homelab-zfs-health-check.service homelab-zfs-health-check.timer; do
+        rc=0
+        install_build_file "$unit" || rc=$?
     [[ $rc -eq 0 || $rc -eq 1 ]] || exit "$rc"
     [[ $rc -eq 0 ]] && units_changed=true
 done

@@ -17,6 +17,7 @@ TEMPLATE_FILES = [
     "homelab-zfs-snapshots.timer",
     "homelab-zfs-replication.service",
     "homelab-zfs-replication.timer",
+    "homelab-zfs-scrub.sh",
     "zfs-scrub.service",
     "homelab-zfs-health-check.service",
     "homelab-zfs-health-check.timer",
@@ -44,6 +45,7 @@ FILE_SPECS = (
     FileSpec("homelab-zfs-snapshots.timer", "/etc/systemd/system/homelab-zfs-snapshots.timer"),
     FileSpec("homelab-zfs-replication.service", "/etc/systemd/system/homelab-zfs-replication.service"),
     FileSpec("homelab-zfs-replication.timer", "/etc/systemd/system/homelab-zfs-replication.timer"),
+    FileSpec("homelab-zfs-scrub.sh", "/usr/local/bin/homelab-zfs-scrub", mode="755"),
     FileSpec("zfs-scrub.service", "/etc/systemd/system/zfs-scrub.service"),
     FileSpec("zfs-scrub.timer", "/etc/systemd/system/zfs-scrub.timer"),
     FileSpec("homelab-zfs-health-check.service", "/etc/systemd/system/homelab-zfs-health-check.service"),
@@ -198,6 +200,7 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
     )
     render_file(templates_dir / "homelab-zfs-snapshots.service", build_dir / "homelab-zfs-snapshots.service")
     render_file(templates_dir / "homelab-zfs-snapshots.timer", build_dir / "homelab-zfs-snapshots.timer", SNAPSHOT_SCHEDULE=snapshot_schedule)
+    render_file(templates_dir / "homelab-zfs-scrub.sh", build_dir / "homelab-zfs-scrub.sh", ZFS_POOL=zfs_pool)
     render_file(templates_dir / "zfs-scrub.service", build_dir / "zfs-scrub.service", ZFS_POOL=zfs_pool)
     render_file(
         templates_dir / "homelab-zfs-replication.service",

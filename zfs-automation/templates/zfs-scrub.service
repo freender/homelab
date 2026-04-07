@@ -4,4 +4,7 @@ OnFailure=homelab-notify-failure@%n.service
 
 [Service]
 Type=oneshot
-ExecStart=/sbin/zpool scrub {{ ZFS_POOL }}
+TimeoutStartSec=infinity
+ExecStart=/usr/local/bin/homelab-zfs-scrub
+StandardOutput=journal
+StandardError=journal
