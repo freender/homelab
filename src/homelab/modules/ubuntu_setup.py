@@ -212,8 +212,8 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
     primary_interface_mac = load_network_mac(root, host)
     samba_enabled = str(registry.get(host, "ubuntu-setup.samba", "false")).lower() == "true"
     wireguard_enabled = str(registry.get(host, "ubuntu-setup.wireguard", "false")).lower() == "true"
-    zfs_pool = str(registry.get(host, "ubuntu-setup.zfs_pool", "cache"))
-    zfs_mountpoint = str(registry.get(host, "ubuntu-setup.zfs_mountpoint", f"/mnt/{zfs_pool}"))
+    zfs_pool = str(registry.get(host, "config.zfs_pool", "cache"))
+    zfs_mountpoint = str(registry.get(host, "config.zfs_mountpoint", f"/mnt/{zfs_pool}"))
     zfs_arc_max = str(registry.get(host, "ubuntu-setup.zfs_arc_max", "8589934592"))
     notifications_enabled = False
     telegram_path: Path | None = None

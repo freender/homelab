@@ -155,8 +155,8 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
     templates_dir = module_dir / "templates"
 
     deploy_user = str(registry.get(host, "ubuntu-setup.deploy_user", registry.get(host, "config.user")))
-    zfs_pool = str(registry.get(host, "zfs-automation.zfs_pool", registry.get(host, "ubuntu-setup.zfs_pool", "cache")))
-    zfs_mountpoint = str(registry.get(host, "zfs-automation.zfs_mountpoint", registry.get(host, "ubuntu-setup.zfs_mountpoint", f"/mnt/{zfs_pool}")))
+    zfs_pool = str(registry.get(host, "config.zfs_pool", "cache"))
+    zfs_mountpoint = str(registry.get(host, "config.zfs_mountpoint", f"/mnt/{zfs_pool}"))
     snapshot_schedule = str(registry.get(host, "zfs-automation.snapshot_schedule", "*-*-* 04:35:00"))
     replication_schedule = str(registry.get(host, "zfs-automation.replication_schedule", "*-*-* 02:30:00"))
     health_check_schedule = str(registry.get(host, "zfs-automation.health_check_schedule", "hourly"))
