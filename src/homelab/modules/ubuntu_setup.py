@@ -42,9 +42,9 @@ FILE_SPECS = (
     FileSpec("zfs.conf", "/etc/modprobe.d/zfs.conf"),
     FileSpec("99-inotify.conf", "/etc/sysctl.d/99-inotify.conf"),
     FileSpec("rebuild.sh", "{zfs_mountpoint}/appdata/scripts/rebuild.sh", mode="755"),
-    FileSpec("docker-install.sh", "{zfs_mountpoint}/appdata/scripts/docker-install.sh", mode="755"),
-    FileSpec("fix_backup_permissions.sh", "{zfs_mountpoint}/appdata/scripts/fix_backup_permissions.sh", mode="755"),
-    FileSpec("pin-primary-nic.sh", "{zfs_mountpoint}/appdata/scripts/pin-primary-nic.sh", mode="755"),
+    FileSpec("docker-install.sh", "{zfs_mountpoint}/appdata/.homelab/ubuntu-setup/docker-install.sh", mode="755"),
+    FileSpec("fix_backup_permissions.sh", "{zfs_mountpoint}/appdata/.homelab/ubuntu-setup/fix_backup_permissions.sh", mode="755"),
+    FileSpec("pin-primary-nic.sh", "{zfs_mountpoint}/appdata/.homelab/ubuntu-setup/pin-primary-nic.sh", mode="755"),
     FileSpec("notify-failure.sh", "/usr/local/bin/homelab-notify-failure", mode="755"),
     FileSpec("homelab-notify-failure@.service", "/etc/systemd/system/homelab-notify-failure@.service"),
     FileSpec("telegram.env", "/etc/homelab/telegram.env", mode="600", feature="notifications"),
@@ -273,7 +273,7 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
             "ZFS_MOUNTPOINT": zfs_mountpoint,
             "NOTIFY_SCRIPT_DEST": "/usr/local/bin/homelab-notify-failure",
             "TELEGRAM_ENV_DEST": "/etc/homelab/telegram.env",
-            "REBUILD_BUNDLE_ROOT": f"{zfs_mountpoint}/appdata/scripts/ubuntu-setup",
+            "REBUILD_BUNDLE_ROOT": f"{zfs_mountpoint}/appdata/.homelab/ubuntu-setup",
         },
     )
 

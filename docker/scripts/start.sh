@@ -8,7 +8,9 @@ set -u
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 COMMON_SH=""
 
-if [[ -f "$SCRIPT_DIR/scripts/docker-common.sh" ]]; then
+if [[ -f "$SCRIPT_DIR/.homelab/docker/docker-common.sh" ]]; then
+    COMMON_SH="$SCRIPT_DIR/.homelab/docker/docker-common.sh"
+elif [[ -f "$SCRIPT_DIR/scripts/docker-common.sh" ]]; then
     COMMON_SH="$SCRIPT_DIR/scripts/docker-common.sh"
 elif [[ -f "$SCRIPT_DIR/docker-common.sh" ]]; then
     COMMON_SH="$SCRIPT_DIR/docker-common.sh"

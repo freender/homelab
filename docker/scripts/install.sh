@@ -25,9 +25,10 @@ source "$BUILD_DIR/env"
 APPDATA_DEST="/mnt/cache/appdata"
 APPDATA_SCRIPTS_DIR="${APPDATA_DEST}/scripts"
 APPDATA_LOGS_DIR="${APPDATA_SCRIPTS_DIR}/logs"
+HOMELAB_DOCKER_DIR="${APPDATA_DEST}/.homelab/docker"
 
 mkdir -p "$APPDATA_DEST"
-mkdir -p "$APPDATA_SCRIPTS_DIR"
+mkdir -p "$APPDATA_SCRIPTS_DIR" "$APPDATA_LOGS_DIR" "$HOMELAB_DOCKER_DIR"
 
 for script in start.sh rm.sh; do
     rc=0
@@ -37,14 +38,13 @@ for script in start.sh rm.sh; do
 done
 
 rc=0
-copy_if_changed "$SCRIPT_DIR/scripts/docker-common.sh" "$APPDATA_SCRIPTS_DIR/docker-common.sh" "docker-common.sh" || rc=$?
+copy_if_changed "$SCRIPT_DIR/scripts/docker-common.sh" "$HOMELAB_DOCKER_DIR/docker-common.sh" "docker-common.sh" || rc=$?
 [[ $rc -eq 1 ]] || [[ $rc -eq 0 ]] || exit "$rc"
-chmod +x "$APPDATA_SCRIPTS_DIR/docker-common.sh"
+chmod +x "$HOMELAB_DOCKER_DIR/docker-common.sh"
 
 if [[ "$DOCKER_BACKUP" == "true" ]]; then
-    mkdir -p "$APPDATA_LOGS_DIR"
     rc=0
-    copy_if_changed "$SCRIPT_DIR/scripts/backup.sh" "$APPDATA_SCRIPTS_DIR/backup.sh" "backup.sh" || rc=$?
+    copy_if_changed "$SCRIPT_DIR/scripts/backup.sh" "$HOMELAB_DOCKER_DIR/backup.sh" "backup.sh" || rc=$?
     [[ $rc -eq 1 ]] || [[ $rc -eq 0 ]] || exit "$rc"
-    chmod +x "$APPDATA_SCRIPTS_DIR/backup.sh"
+    chmod +x "$HOMELAB_DOCKER_DIR/backup.sh"
 fi

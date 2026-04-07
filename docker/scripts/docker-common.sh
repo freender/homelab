@@ -12,7 +12,9 @@ resolve_appdata_root() {
 
     script_dir="$(cd "$(dirname "$script_path")" && pwd)"
 
-    if [[ -f "$script_dir/scripts/docker-common.sh" ]]; then
+    if [[ -f "$script_dir/.homelab/docker/docker-common.sh" ]]; then
+        printf '%s\n' "$script_dir"
+    elif [[ -f "$script_dir/scripts/docker-common.sh" ]]; then
         printf '%s\n' "$script_dir"
     elif [[ -f "$script_dir/docker-common.sh" ]]; then
         if [[ "$(basename "$script_dir")" == "scripts" ]]; then
@@ -72,7 +74,7 @@ run_compose() {
 acquire_docker_lock() {
     local root="$1"
     local operation="$2"
-    local lock_file="$root/scripts/docker-stacks.lock"
+    local lock_file="$root/.homelab/docker/docker-stacks.lock"
 
     if [[ "${DOCKER_STACKS_LOCK_HELD:-0}" == "1" ]]; then
         return 0

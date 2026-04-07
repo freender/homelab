@@ -23,7 +23,9 @@ require_file "$BUILD_DIR/file-map.conf" "$BUILD_DIR/file-map.conf" || exit 1
 source "$BUILD_DIR/env"
 
 APPDATA_SCRIPTS_DIR="${ZFS_MOUNTPOINT}/appdata/scripts"
-REBUILD_BUNDLE_ROOT="${REBUILD_BUNDLE_ROOT:-${APPDATA_SCRIPTS_DIR}/zfs-automation}"
+HOMELAB_STATE_DIR="${ZFS_MOUNTPOINT}/appdata/.homelab"
+MANAGED_DIR="${HOMELAB_STATE_DIR}/zfs-automation-managed"
+REBUILD_BUNDLE_ROOT="${REBUILD_BUNDLE_ROOT:-${HOMELAB_STATE_DIR}/zfs-automation}"
 REBUILD_BUNDLE_BUILD_DIR="${REBUILD_BUNDLE_ROOT}/build/${HOST}"
 REBUILD_BUNDLE_SCRIPTS_DIR="${REBUILD_BUNDLE_ROOT}/scripts"
 REBUILD_BUNDLE_LIB_DIR="${REBUILD_BUNDLE_ROOT}/lib"
@@ -119,7 +121,7 @@ else
     print_sub "Sanoid already installed"
 fi
 
-mkdir -p /etc/sanoid "$APPDATA_SCRIPTS_DIR"
+mkdir -p /etc/sanoid "$APPDATA_SCRIPTS_DIR" "$MANAGED_DIR"
 
 rc=0
 install_build_file "sanoid.conf" || rc=$?
@@ -129,7 +131,7 @@ fi
 
 for helper in sanoid.conf homelab-zfs-snapshots.service homelab-zfs-snapshots.timer homelab-zfs-replication.service homelab-zfs-replication.timer zfs-scrub.service zfs-scrub.timer homelab-zfs-health-check.service homelab-zfs-health-check.timer; do
     rc=0
-    install_if_changed "$BUILD_DIR/$helper" "$APPDATA_SCRIPTS_DIR/$helper" "644" "$APPDATA_SCRIPTS_DIR/$helper" || rc=$?
+    install_if_changed "$BUILD_DIR/$helper" "$MANAGED_DIR/$helper" "644" "$MANAGED_DIR/$helper" || rc=$?
     [[ $rc -eq 0 || $rc -eq 1 ]] || exit "$rc"
 done
 

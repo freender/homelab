@@ -49,7 +49,7 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
         (root / "docker" / "scripts" / "rm.sh", "/mnt/cache/appdata/rm.sh"),
         (
             root / "docker" / "scripts" / "docker-common.sh",
-            "/mnt/cache/appdata/scripts/docker-common.sh",
+            "/mnt/cache/appdata/.homelab/docker/docker-common.sh",
         ),
     ]):
         print_sub(message)
@@ -57,7 +57,7 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
     if backup_enabled == "true":
         _, message = connection.remote_diff(
             root / "docker" / "scripts" / "backup.sh",
-            "/mnt/cache/appdata/scripts/backup.sh",
+            "/mnt/cache/appdata/.homelab/docker/backup.sh",
         )
         print_sub(message)
 
