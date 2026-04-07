@@ -43,6 +43,7 @@ FILE_SPECS = (
     FileSpec("99-inotify.conf", "/etc/sysctl.d/99-inotify.conf"),
     FileSpec("rebuild.sh", "{zfs_mountpoint}/appdata/scripts/rebuild.sh", mode="755"),
     FileSpec("docker-install.sh", "{zfs_mountpoint}/appdata/scripts/docker-install.sh", mode="755"),
+    FileSpec("fix_backup_permissions.sh", "{zfs_mountpoint}/appdata/scripts/fix_backup_permissions.sh", mode="755"),
     FileSpec("pin-primary-nic.sh", "{zfs_mountpoint}/appdata/scripts/pin-primary-nic.sh", mode="755"),
     FileSpec("notify-failure.sh", "/usr/local/bin/homelab-notify-failure", mode="755"),
     FileSpec("homelab-notify-failure@.service", "/etc/systemd/system/homelab-notify-failure@.service"),
@@ -124,7 +125,7 @@ def resolve_remote_path(spec: FileSpec, artifacts: HostArtifacts) -> str:
 
 
 def source_path_for_spec(module_dir: Path, artifacts: HostArtifacts, spec: FileSpec) -> Path:
-    if spec.build_name in {"docker-install.sh", "notify-failure.sh", "pin-primary-nic.sh"}:
+    if spec.build_name in {"docker-install.sh", "fix_backup_permissions.sh", "notify-failure.sh", "pin-primary-nic.sh"}:
         return module_dir / "scripts" / spec.build_name
     return artifacts.build_dir / spec.build_name
 

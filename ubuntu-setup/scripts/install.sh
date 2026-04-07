@@ -22,6 +22,7 @@ require_file "$BUILD_DIR/file-map.conf" "$BUILD_DIR/file-map.conf" || exit 1
 require_file "$SCRIPT_DIR/lib/utils.sh" "$SCRIPT_DIR/lib/utils.sh" || exit 1
 require_file "$SCRIPT_DIR/lib/print.sh" "$SCRIPT_DIR/lib/print.sh" || exit 1
 require_file "$SCRIPT_DIR/scripts/docker-install.sh" "$SCRIPT_DIR/scripts/docker-install.sh" || exit 1
+require_file "$SCRIPT_DIR/scripts/fix_backup_permissions.sh" "$SCRIPT_DIR/scripts/fix_backup_permissions.sh" || exit 1
 require_file "$SCRIPT_DIR/scripts/notify-failure.sh" "$SCRIPT_DIR/scripts/notify-failure.sh" || exit 1
 require_file "$SCRIPT_DIR/scripts/pin-primary-nic.sh" "$SCRIPT_DIR/scripts/pin-primary-nic.sh" || exit 1
 
@@ -106,7 +107,7 @@ sync_rebuild_bundle() {
     done
     shopt -u nullglob
 
-    for file_name in install.sh docker-install.sh notify-failure.sh pin-primary-nic.sh; do
+    for file_name in install.sh docker-install.sh fix_backup_permissions.sh notify-failure.sh pin-primary-nic.sh; do
         rc=0
         install_if_changed \
             "$SCRIPT_DIR/scripts/$file_name" \
@@ -184,6 +185,9 @@ ensure_docker_installed
 
 rc=0
 install_script_file "docker-install.sh" || rc=$?
+
+rc=0
+install_script_file "fix_backup_permissions.sh" || rc=$?
 
 if [[ -n "$DEPLOY_USER" ]]; then
     if ! id -nG "$DEPLOY_USER" | grep -qw docker; then
