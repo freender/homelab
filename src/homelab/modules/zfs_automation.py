@@ -166,6 +166,15 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
     excludes = registry.get(host, "zfs-automation.sanoid.exclude", [])
     if not isinstance(excludes, list):
         raise ValueError(f"zfs-automation.sanoid.exclude must be a list for {host}")
+    excludes = [str(item) for item in excludes]
+
+    # Auto-exclude replication source and target from sanoid — syncoid owns
+    # the snapshot lifecycle for both datasets and sanoid must not interfere.
+    pool_prefix = f"{zfs_pool}/"
+    for dataset in (replication_source, replication_target):
+        relative = dataset[len(pool_prefix):] if dataset.startswith(pool_prefix) else dataset
+        if relative not in excludes:
+            excludes.append(relative)
 
     hourly = str(registry.get(host, "zfs-automation.sanoid.hourly", 0))
     daily = str(registry.get(host, "zfs-automation.sanoid.daily", 7))
@@ -180,7 +189,7 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
         templates_dir / "sanoid.conf",
         build_dir / "sanoid.conf",
         ZFS_POOL=zfs_pool,
-        EXCLUDED_DATASETS=excluded_datasets_text(zfs_pool, [str(item) for item in excludes]),
+        EXCLUDED_DATASETS=excluded_datasets_text(zfs_pool, excludes),
         HOURLY=hourly,
         DAILY=daily,
         WEEKLY=weekly,
