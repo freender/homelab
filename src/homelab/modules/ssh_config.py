@@ -19,6 +19,40 @@ IDENTITY_FILES = {
 }
 
 
+def collect_ssh_entries(registry) -> list[dict[str, str]]:
+    entries: list[dict[str, str]] = []
+    for host in registry.list_hosts():
+        try:
+            hostname = str(registry.get(host, "config.hostname"))
+            default_user = str(registry.get(host, "config.user"))
+            default_sshkey = str(registry.get(host, "config.sshkey"))
+        except (HostLookupError, ValueError):
+            continue
+
+        user = str(registry.get(host, "config.ssh_config.user", default_user))
+        sshkey = str(registry.get(host, "config.ssh_config.sshkey", default_sshkey))
+        entries.append(
+            {
+                "name": host,
+                "hostname": hostname,
+                "user": user,
+                "sshkey": sshkey,
+            }
+        )
+
+        if user != default_user or sshkey != default_sshkey:
+            entries.append(
+                {
+                    "name": f"{host}-root",
+                    "hostname": hostname,
+                    "user": default_user,
+                    "sshkey": default_sshkey,
+                }
+            )
+
+    return entries
+
+
 def deploy(
     root: Path,
     requested_host: str,
@@ -51,13 +85,9 @@ def validate(root: Path, supported_hosts: list[str]) -> None:
         raise ValueError(f"common config not found: {common_config}")
 
     registry = default_registry(root)
-    for host in registry.list_hosts():
-        try:
-            registry.get(host, "config.sshkey")
-        except HostLookupError:
-            continue
-        registry.get(host, "config.hostname")
-        registry.get(host, "config.user")
+    for entry in collect_ssh_entries(registry):
+        if entry["sshkey"] not in IDENTITY_FILES:
+            raise ValueError(f"unknown ssh key '{entry['sshkey']}' for generated config")
 
 
 def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
@@ -90,29 +120,25 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
 def build_config(root: Path, deploy_host: str, output_path: Path, common_config: Path) -> None:
     registry = default_registry(root)
     content = common_config.read_text(encoding="utf-8").rstrip() + "\n\n"
-    host_config = render_host_config(registry)
+    ssh_entries = collect_ssh_entries(registry)
+    host_config = render_host_config(ssh_entries)
     if host_config:
         content += host_config + "\n\n"
-    identities_config = render_identities_config(registry, deploy_host)
+    identities_config = render_identities_config(registry, deploy_host, ssh_entries)
     if identities_config:
         content += identities_config + "\n"
     output_path.write_text(content, encoding="utf-8")
 
 
-def render_host_config(registry) -> str:
+def render_host_config(ssh_entries: list[dict[str, str]]) -> str:
     blocks: list[str] = []
-    for host in registry.list_hosts():
-        try:
-            hostname = str(registry.get(host, "config.hostname"))
-            user = str(registry.get(host, "config.user"))
-        except (HostLookupError, ValueError):
-            continue
+    for entry in ssh_entries:
         blocks.append(
             "\n".join(
                 [
-                    f"Host {host}",
-                    f"  HostName {hostname}",
-                    f"  User {user}",
+                    f"Host {entry['name']}",
+                    f"  HostName {entry['hostname']}",
+                    f"  User {entry['user']}",
                 ]
             )
         )
@@ -120,17 +146,13 @@ def render_host_config(registry) -> str:
     return "\n\n".join(blocks)
 
 
-def render_identities_config(registry, deploy_host: str) -> str:
+def render_identities_config(registry, deploy_host: str, ssh_entries: list[dict[str, str]]) -> str:
     agent = registry.get(deploy_host, "config.agent", "ssh-add")
     suffix = ".pub" if agent == "op" else ""
     grouped_hosts: dict[str, list[str]] = {}
 
-    for host in registry.list_hosts():
-        try:
-            key_name = str(registry.get(host, "config.sshkey"))
-        except (HostLookupError, ValueError):
-            continue
-        grouped_hosts.setdefault(key_name, []).append(host)
+    for entry in ssh_entries:
+        grouped_hosts.setdefault(entry["sshkey"], []).append(entry["name"])
 
     blocks: list[str] = []
     for key_name, hosts in grouped_hosts.items():

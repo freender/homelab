@@ -71,23 +71,45 @@ run_compose() {
     )
 }
 
+resolve_docker_lock_file() {
+    local root="$1"
+    local runtime_dir="${XDG_RUNTIME_DIR:-/tmp}"
+    local lock_dir="$runtime_dir/homelab/docker"
+    local root_hash
+
+    root_hash="$(cksum <<<"$root")"
+    root_hash="${root_hash%% *}"
+
+    mkdir -p "$lock_dir" || return 1
+    printf '%s\n' "$lock_dir/docker-stacks-${root_hash}.lock"
+}
+
 acquire_docker_lock() {
     local root="$1"
     local operation="$2"
-    local lock_file="$root/.homelab/docker/docker-stacks.lock"
+    local lock_file
+    local lock_fd
 
     if [[ "${DOCKER_STACKS_LOCK_HELD:-0}" == "1" ]]; then
         return 0
     fi
 
-    mkdir -p "$(dirname "$lock_file")"
-    exec {DOCKER_STACKS_LOCK_FD}> "$lock_file"
+    lock_file="$(resolve_docker_lock_file "$root")" || {
+        echo "!! Could not prepare Docker lock directory for $operation" >&2
+        return 1
+    }
 
-    if ! flock -n "$DOCKER_STACKS_LOCK_FD"; then
+    if ! exec {lock_fd}> "$lock_file"; then
+        echo "!! Could not open Docker lock file $lock_file for $operation" >&2
+        return 1
+    fi
+
+    if ! flock -n "$lock_fd"; then
         echo "!! Another Docker stack operation is already running; cannot start $operation"
         return 1
     fi
 
+    export DOCKER_STACKS_LOCK_FD="$lock_fd"
     export DOCKER_STACKS_LOCK_HELD=1
     return 0
 }

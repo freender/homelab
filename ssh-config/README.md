@@ -29,6 +29,12 @@ Per-host connection metadata lives in `hosts.conf` under `config`:
 - `config.sshkey`
 - `config.agent` (only where needed, like `exo`)
 
+Optional generated SSH overrides also live under `config`:
+- `config.ssh_config.user`
+- `config.ssh_config.sshkey`
+
+When those overrides differ from the canonical deploy connection, the generator keeps the base host name for the interactive default and also emits a `<host>-root` alias for the canonical deploy/root path.
+
 Hosts currently managed by this module:
 - `riven`
 - `exo`
