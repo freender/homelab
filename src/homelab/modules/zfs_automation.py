@@ -41,19 +41,37 @@ class HostArtifacts:
 
 FILE_SPECS = (
     FileSpec("sanoid.conf", "/etc/sanoid/sanoid.conf"),
-    FileSpec("homelab-zfs-snapshots.service", "/etc/systemd/system/homelab-zfs-snapshots.service"),
+    FileSpec(
+        "homelab-zfs-snapshots.service",
+        "/etc/systemd/system/homelab-zfs-snapshots.service",
+    ),
     FileSpec("homelab-zfs-snapshots.timer", "/etc/systemd/system/homelab-zfs-snapshots.timer"),
-    FileSpec("homelab-zfs-replication.service", "/etc/systemd/system/homelab-zfs-replication.service"),
+    FileSpec(
+        "homelab-zfs-replication.service",
+        "/etc/systemd/system/homelab-zfs-replication.service",
+    ),
     FileSpec("homelab-zfs-replication.timer", "/etc/systemd/system/homelab-zfs-replication.timer"),
     FileSpec("homelab-zfs-scrub.sh", "/usr/local/bin/homelab-zfs-scrub", mode="755"),
     FileSpec("zfs-scrub.service", "/etc/systemd/system/zfs-scrub.service"),
     FileSpec("zfs-scrub.timer", "/etc/systemd/system/zfs-scrub.timer"),
-    FileSpec("homelab-zfs-health-check.service", "/etc/systemd/system/homelab-zfs-health-check.service"),
-    FileSpec("homelab-zfs-health-check.timer", "/etc/systemd/system/homelab-zfs-health-check.timer"),
+    FileSpec(
+        "homelab-zfs-health-check.service",
+        "/etc/systemd/system/homelab-zfs-health-check.service",
+    ),
+    FileSpec(
+        "homelab-zfs-health-check.timer",
+        "/etc/systemd/system/homelab-zfs-health-check.timer",
+    ),
 )
 
 
-def deploy(root: Path, requested_host: str, dry_run: bool, force: bool, session: DeploySession) -> int:
+def deploy(
+    root: Path,
+    requested_host: str,
+    dry_run: bool,
+    force: bool,
+    session: DeploySession,
+) -> int:
     registry = default_registry(root)
     supported_hosts = registry.list_hosts(feature="zfs-automation")
     hosts = registry.filter_hosts(requested_host, supported_hosts)
@@ -107,7 +125,10 @@ def resolve_remote_path(spec: FileSpec, artifacts: HostArtifacts) -> str:
 
 
 def write_file_map(build_dir: Path, artifacts: HostArtifacts) -> None:
-    lines = [f"{spec.build_name}|{resolve_remote_path(spec, artifacts)}|{spec.mode}" for spec in artifacts.file_specs]
+    lines = [
+        f"{spec.build_name}|{resolve_remote_path(spec, artifacts)}|{spec.mode}"
+        for spec in artifacts.file_specs
+    ]
     (build_dir / "file-map.conf").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
@@ -124,9 +145,13 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
     connection = HostConnection(host, user=ssh_user, hostname=ssh_hostname)
 
     print_sub("Comparing with remote configs...")
+    diff_pairs = [
+        (artifacts.build_dir / spec.build_name, resolve_remote_path(spec, artifacts))
+        for spec in artifacts.file_specs
+    ]
     for message in diff_many(
         connection,
-        [(artifacts.build_dir / spec.build_name, resolve_remote_path(spec, artifacts)) for spec in artifacts.file_specs],
+        diff_pairs,
     ):
         print_sub(message)
 
@@ -141,7 +166,10 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
         root,
         connection,
         REMOTE_ROOT,
-        [(artifacts.build_dir, f"{REMOTE_ROOT}/build/{host}"), (module_dir / "scripts", f"{REMOTE_ROOT}/scripts")],
+        [
+            (artifacts.build_dir, f"{REMOTE_ROOT}/build/{host}"),
+            (module_dir / "scripts", f"{REMOTE_ROOT}/scripts"),
+        ],
         "scripts/install.sh",
         host,
         env=force_env(force),
@@ -156,12 +184,20 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
     config_dir = module_dir / "configs"
     templates_dir = module_dir / "templates"
 
-    deploy_user = str(registry.get(host, "ubuntu-setup.deploy_user", registry.get(host, "config.user")))
+    deploy_user = str(
+        registry.get(host, "ubuntu-setup.deploy_user", registry.get(host, "config.user"))
+    )
     zfs_pool = str(registry.get(host, "config.zfs_pool", "cache"))
     zfs_mountpoint = str(registry.get(host, "config.zfs_mountpoint", f"/mnt/{zfs_pool}"))
-    snapshot_schedule = str(registry.get(host, "zfs-automation.snapshot_schedule", "*-*-* 04:35:00"))
-    replication_schedule = str(registry.get(host, "zfs-automation.replication_schedule", "*-*-* 02:30:00"))
-    health_check_schedule = str(registry.get(host, "zfs-automation.health_check_schedule", "hourly"))
+    snapshot_schedule = str(
+        registry.get(host, "zfs-automation.snapshot_schedule", "*-*-* 04:35:00")
+    )
+    replication_schedule = str(
+        registry.get(host, "zfs-automation.replication_schedule", "*-*-* 02:30:00")
+    )
+    health_check_schedule = str(
+        registry.get(host, "zfs-automation.health_check_schedule", "hourly")
+    )
     replication_source = str(registry.get(host, "zfs-automation.replication.source"))
     replication_target = str(registry.get(host, "zfs-automation.replication.target"))
     replication_post_hook = str(registry.get(host, "zfs-automation.replication_post_hook", ""))
@@ -198,10 +234,25 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
         MONTHLY=monthly,
         YEARLY=yearly,
     )
-    render_file(templates_dir / "homelab-zfs-snapshots.service", build_dir / "homelab-zfs-snapshots.service")
-    render_file(templates_dir / "homelab-zfs-snapshots.timer", build_dir / "homelab-zfs-snapshots.timer", SNAPSHOT_SCHEDULE=snapshot_schedule)
-    render_file(templates_dir / "homelab-zfs-scrub.sh", build_dir / "homelab-zfs-scrub.sh", ZFS_POOL=zfs_pool)
-    render_file(templates_dir / "zfs-scrub.service", build_dir / "zfs-scrub.service", ZFS_POOL=zfs_pool)
+    render_file(
+        templates_dir / "homelab-zfs-snapshots.service",
+        build_dir / "homelab-zfs-snapshots.service",
+    )
+    render_file(
+        templates_dir / "homelab-zfs-snapshots.timer",
+        build_dir / "homelab-zfs-snapshots.timer",
+        SNAPSHOT_SCHEDULE=snapshot_schedule,
+    )
+    render_file(
+        templates_dir / "homelab-zfs-scrub.sh",
+        build_dir / "homelab-zfs-scrub.sh",
+        ZFS_POOL=zfs_pool,
+    )
+    render_file(
+        templates_dir / "zfs-scrub.service",
+        build_dir / "zfs-scrub.service",
+        ZFS_POOL=zfs_pool,
+    )
     render_file(
         templates_dir / "homelab-zfs-replication.service",
         build_dir / "homelab-zfs-replication.service",
@@ -210,8 +261,16 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
         REPLICATION_TARGET=replication_target,
         REPLICATION_POST_HOOK=replication_post_hook,
     )
-    render_file(templates_dir / "homelab-zfs-replication.timer", build_dir / "homelab-zfs-replication.timer", REPLICATION_SCHEDULE=replication_schedule)
-    render_file(templates_dir / "homelab-zfs-health-check.service", build_dir / "homelab-zfs-health-check.service", ZFS_POOL=zfs_pool)
+    render_file(
+        templates_dir / "homelab-zfs-replication.timer",
+        build_dir / "homelab-zfs-replication.timer",
+        REPLICATION_SCHEDULE=replication_schedule,
+    )
+    render_file(
+        templates_dir / "homelab-zfs-health-check.service",
+        build_dir / "homelab-zfs-health-check.service",
+        ZFS_POOL=zfs_pool,
+    )
     render_file(
         templates_dir / "homelab-zfs-health-check.timer",
         build_dir / "homelab-zfs-health-check.timer",
@@ -228,6 +287,11 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
         },
     )
 
-    artifacts = HostArtifacts(build_dir=build_dir, zfs_mountpoint=zfs_mountpoint, deploy_user=deploy_user, file_specs=FILE_SPECS)
+    artifacts = HostArtifacts(
+        build_dir=build_dir,
+        zfs_mountpoint=zfs_mountpoint,
+        deploy_user=deploy_user,
+        file_specs=FILE_SPECS,
+    )
     write_file_map(build_dir, artifacts)
     return artifacts

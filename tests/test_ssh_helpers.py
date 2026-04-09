@@ -31,8 +31,9 @@ def test_host_connection_remote_diff_short_circuits_in_offline_mode(
     local_file.write_text("value\n", encoding="utf-8")
 
     class DummyConnection:
-        def __init__(self, host: str) -> None:
+        def __init__(self, host: str, user: str | None = None) -> None:
             self.host = host
+            self.user = user
 
         def get(self, remote_path: str, destination: str) -> None:
             raise AssertionError("offline mode should skip remote fetch")

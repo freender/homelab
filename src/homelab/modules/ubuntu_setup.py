@@ -42,11 +42,26 @@ FILE_SPECS = (
     FileSpec("zfs.conf", "/etc/modprobe.d/zfs.conf"),
     FileSpec("99-inotify.conf", "/etc/sysctl.d/99-inotify.conf"),
     FileSpec("rebuild.sh", "{zfs_mountpoint}/appdata/scripts/rebuild.sh", mode="755"),
-    FileSpec("docker-install.sh", "{zfs_mountpoint}/appdata/.homelab/ubuntu-setup/docker-install.sh", mode="755"),
-    FileSpec("fix_backup_permissions.sh", "{zfs_mountpoint}/appdata/.homelab/ubuntu-setup/fix_backup_permissions.sh", mode="755"),
-    FileSpec("pin-primary-nic.sh", "{zfs_mountpoint}/appdata/.homelab/ubuntu-setup/pin-primary-nic.sh", mode="755"),
+    FileSpec(
+        "docker-install.sh",
+        "{zfs_mountpoint}/appdata/.homelab/ubuntu-setup/docker-install.sh",
+        mode="755",
+    ),
+    FileSpec(
+        "fix_backup_permissions.sh",
+        "{zfs_mountpoint}/appdata/.homelab/ubuntu-setup/fix_backup_permissions.sh",
+        mode="755",
+    ),
+    FileSpec(
+        "pin-primary-nic.sh",
+        "{zfs_mountpoint}/appdata/.homelab/ubuntu-setup/pin-primary-nic.sh",
+        mode="755",
+    ),
     FileSpec("notify-failure.sh", "/usr/local/bin/homelab-notify-failure", mode="755"),
-    FileSpec("homelab-notify-failure@.service", "/etc/systemd/system/homelab-notify-failure@.service"),
+    FileSpec(
+        "homelab-notify-failure@.service",
+        "/etc/systemd/system/homelab-notify-failure@.service",
+    ),
     FileSpec("telegram.env", "/etc/homelab/telegram.env", mode="600", feature="notifications"),
     FileSpec("99-wireguard.conf", "/etc/sysctl.d/99-wireguard.conf", feature="wireguard"),
     FileSpec("smb.conf", "/etc/samba/smb.conf", feature="samba"),
@@ -125,7 +140,13 @@ def resolve_remote_path(spec: FileSpec, artifacts: HostArtifacts) -> str:
 
 
 def source_path_for_spec(module_dir: Path, artifacts: HostArtifacts, spec: FileSpec) -> Path:
-    if spec.build_name in {"docker-install.sh", "fix_backup_permissions.sh", "notify-failure.sh", "pin-primary-nic.sh"}:
+    script_specs = {
+        "docker-install.sh",
+        "fix_backup_permissions.sh",
+        "notify-failure.sh",
+        "pin-primary-nic.sh",
+    }
+    if spec.build_name in script_specs:
         return module_dir / "scripts" / spec.build_name
     return artifacts.build_dir / spec.build_name
 
@@ -205,10 +226,14 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
     config_dir = module_dir / "configs"
     templates_dir = module_dir / "templates"
 
-    user = str(registry.get(host, "ubuntu-setup.deploy_user", registry.get(host, "config.user")))
+    user = str(
+        registry.get(host, "ubuntu-setup.deploy_user", registry.get(host, "config.user"))
+    )
     system_hostname = host
     system_timezone = str(registry.get(host, "ubuntu-setup.timezone", "UTC"))
-    primary_interface_name = str(registry.get(host, "ubuntu-setup.network.pin_interface.name", "nic0"))
+    primary_interface_name = str(
+        registry.get(host, "ubuntu-setup.network.pin_interface.name", "nic0")
+    )
     primary_interface_mac = load_network_mac(root, host)
     samba_enabled = str(registry.get(host, "ubuntu-setup.samba", "false")).lower() == "true"
     wireguard_enabled = str(registry.get(host, "ubuntu-setup.wireguard", "false")).lower() == "true"
