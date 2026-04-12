@@ -105,6 +105,7 @@ def validate(root: Path, hosts: list[str]) -> None:
                     )
 
 
+
 def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
     registry = default_registry(root)
     build_dir = root / "pve-lxc-mounts" / "build" / host
