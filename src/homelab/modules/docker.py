@@ -13,6 +13,10 @@ REMOTE_ROOT = "/tmp/homelab-docker"
 TEMPLATE_FILES = [
     "homelab-docker-start.service",
     "homelab-docker-start.timer",
+    "syncthing-unpause.service",
+    "syncthing-unpause.timer",
+    "syncthing-pause.service",
+    "syncthing-pause.timer",
 ]
 
 
@@ -50,6 +54,15 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
     backup_enabled = str(registry.get(host, "docker.backup", "false")).lower()
     start_schedule = str(registry.get(host, "docker.start_schedule", "")).strip()
     timer_enabled = "true" if start_schedule else "false"
+    syncthing_unpause_schedule = str(
+        registry.get(host, "docker.syncthing_unpause_schedule", "")
+    ).strip()
+    syncthing_pause_schedule = str(
+        registry.get(host, "docker.syncthing_pause_schedule", "")
+    ).strip()
+    syncthing_timer_enabled = (
+        "true" if syncthing_unpause_schedule and syncthing_pause_schedule else "false"
+    )
 
     templates_dir = root / "docker" / "templates"
     build_dir = root / "docker" / "build" / host
@@ -66,11 +79,32 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
             DOCKER_START_SCHEDULE=start_schedule,
         )
 
+    if syncthing_unpause_schedule and syncthing_pause_schedule:
+        render_file(
+            templates_dir / "syncthing-unpause.service",
+            build_dir / "syncthing-unpause.service",
+        )
+        render_file(
+            templates_dir / "syncthing-unpause.timer",
+            build_dir / "syncthing-unpause.timer",
+            SYNCTHING_UNPAUSE_SCHEDULE=syncthing_unpause_schedule,
+        )
+        render_file(
+            templates_dir / "syncthing-pause.service",
+            build_dir / "syncthing-pause.service",
+        )
+        render_file(
+            templates_dir / "syncthing-pause.timer",
+            build_dir / "syncthing-pause.timer",
+            SYNCTHING_PAUSE_SCHEDULE=syncthing_pause_schedule,
+        )
+
     write_env_file(
         build_dir / "env",
         {
             "DOCKER_BACKUP": backup_enabled,
             "ENABLE_DOCKER_START_TIMER": timer_enabled,
+            "ENABLE_SYNCTHING_TIMERS": syncthing_timer_enabled,
         },
     )
 
@@ -97,6 +131,26 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
         ]
     for message in diff_many(connection, diff_pairs):
         print_sub(message)
+
+    if syncthing_timer_enabled == "true":
+        diff_pairs += [
+            (
+                build_dir / "syncthing-unpause.service",
+                "/etc/systemd/system/syncthing-unpause.service",
+            ),
+            (
+                build_dir / "syncthing-unpause.timer",
+                "/etc/systemd/system/syncthing-unpause.timer",
+            ),
+            (
+                build_dir / "syncthing-pause.service",
+                "/etc/systemd/system/syncthing-pause.service",
+            ),
+            (
+                build_dir / "syncthing-pause.timer",
+                "/etc/systemd/system/syncthing-pause.timer",
+            ),
+        ]
 
     if backup_enabled == "true":
         _, message = connection.remote_diff(

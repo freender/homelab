@@ -62,8 +62,19 @@ if [[ "$ENABLE_DOCKER_START_TIMER" == "true" ]]; then
     done
 fi
 
+if [[ "$ENABLE_SYNCTHING_TIMERS" == "true" ]]; then
+    for unit in syncthing-unpause.service syncthing-unpause.timer syncthing-pause.service syncthing-pause.timer; do
+        rc=0
+        copy_if_changed "$BUILD_DIR/$unit" "/etc/systemd/system/$unit" "$unit" || rc=$?
+        [[ $rc -eq 1 ]] || [[ $rc -eq 0 ]] || exit "$rc"
+        [[ $rc -eq 0 ]] && units_changed=true
+    done
+fi
+
 if [[ "$units_changed" == "true" ]]; then
     systemctl daemon-reload
 fi
 
 ensure_timer_state "homelab-docker-start.timer" "$ENABLE_DOCKER_START_TIMER" "$units_changed"
+ensure_timer_state "syncthing-unpause.timer" "$ENABLE_SYNCTHING_TIMERS" "$units_changed"
+ensure_timer_state "syncthing-pause.timer" "$ENABLE_SYNCTHING_TIMERS" "$units_changed"

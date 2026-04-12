@@ -1,0 +1,9 @@
+[Unit]
+Description=Syncthing unpause Cottonwood and Cinci devices nightly
+
+[Timer]
+OnCalendar={{ SYNCTHING_UNPAUSE_SCHEDULE }}
+Persistent=true
+
+[Install]
+WantedBy=timers.target

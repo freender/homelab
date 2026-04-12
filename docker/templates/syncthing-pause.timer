@@ -1,0 +1,9 @@
+[Unit]
+Description=Syncthing pause Cottonwood and Cinci devices after sync window
+
+[Timer]
+OnCalendar={{ SYNCTHING_PAUSE_SCHEDULE }}
+Persistent=true
+
+[Install]
+WantedBy=timers.target
