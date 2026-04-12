@@ -169,10 +169,18 @@ def normalize_snapshot_plans(registry, host: str) -> list[SnapshotPlan]:
             if dataset in seen:
                 raise ValueError(f"duplicate snapshot plan dataset {dataset} for {host}")
             seen.add(dataset)
+            if "exclude" in plan and "excludes" in plan:
+                raise ValueError(
+                    f"snapshot plan at index {index} for {host} specifies both 'exclude' and"
+                    " 'excludes'; use only 'exclude'"
+                )
             excludes = normalize_string_list(
                 plan.get("exclude", plan.get("excludes", [])),
                 f"snapshot plan excludes must be a list for {host}",
             )
+            # auto_exclude_replication is not set for explicit plans — the caller is
+            # responsible for listing replication sources under 'exclude' if they
+            # should be omitted from sanoid snapshots.
             plans.append(
                 SnapshotPlan(
                     dataset=dataset,
@@ -438,7 +446,7 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
     manage_health_check = bool(registry.get(host, "zfs-automation.manage_health_check", True))
     pools = resolve_pools(registry, host)
     snapshot_plans = normalize_snapshot_plans(registry, host)
-    replication_plans, after_replication_commands, explicit_replication = normalize_replication_config(
+    replication_plans, after_replication_commands, _ = normalize_replication_config(
         registry,
         host,
     )
@@ -504,7 +512,6 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
             "ENABLE_ZFS_REPLICATION": "true" if replication_plans and manage_replication else "false",
             "ENABLE_ZFS_SCRUB": "true" if pools and manage_scrub else "false",
             "ENABLE_ZFS_HEALTH_CHECK": "true" if pools and manage_health_check else "false",
-            "EXPLICIT_REPLICATION_PLANS": "true" if explicit_replication else "false",
             "REBUILD_BUNDLE_ROOT": f"{zfs_mountpoint}/appdata/.homelab/zfs-automation",
         },
     )
