@@ -78,6 +78,10 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
 
     timezone = str(registry.get(host, "pve-postinstall.timezone", "UTC"))
     ceph_enabled = "true" if registry.has(host, "ceph") else "false"
+    import_pools_raw = registry.get(host, "pve-postinstall.import_pools", [])
+    if not isinstance(import_pools_raw, list):
+        raise ValueError(f"pve-postinstall.import_pools must be a list for {host}")
+    import_pools = " ".join(str(p) for p in import_pools_raw)
     if host_type != "pve":
         raise ValueError(f"Unsupported host type for {host}: {host_type}")
 
@@ -125,6 +129,7 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
         host_type,
         timezone,
         ceph_enabled,
+        import_pools,
         build_dir,
         connection,
         force=force,
@@ -173,6 +178,7 @@ def stage_and_install(
     host_type: str,
     timezone: str,
     ceph_enabled: str,
+    import_pools: str,
     build_dir: Path,
     connection: HostConnection,
     force: bool,
@@ -190,6 +196,7 @@ def stage_and_install(
         host_type,
         timezone,
         ceph_enabled,
+        import_pools,
         env=force_env(force),
         require_root=True,
         remote_subdirs=("build", "lib"),

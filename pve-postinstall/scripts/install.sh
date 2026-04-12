@@ -1,6 +1,6 @@
 #!/bin/bash
 # install.sh - Install PVE post-install configs
-# Usage: ./scripts/install.sh [hostname] [pve] [timezone] [ceph_enabled]
+# Usage: ./scripts/install.sh [hostname] [pve] [timezone] [ceph_enabled] [import_pools]
 
 set -e
 
@@ -8,6 +8,7 @@ HOST=${1:-$(hostname)}
 HOST_TYPE=${2:-}
 TIMEZONE=${3:-UTC}
 CEPH_ENABLED=${4:-false}
+IMPORT_POOLS=${5:-}
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD_DIR="$SCRIPT_DIR/build/$HOST"
 BACKUP_DIR="/var/backups/homelab/pve-postinstall"
@@ -119,6 +120,28 @@ backup_sources_list_dir() {
 
     mkdir -p "$BACKUP_DIR"
     cp -r "$src" "$BACKUP_DIR/sources.list.d.$ts"
+}
+
+import_zfs_pools() {
+    local pools="$1"
+    if [[ -z "$pools" ]]; then
+        print_sub "No ZFS pools configured for import; skipping"
+        return 0
+    fi
+
+    if ! command -v zpool >/dev/null 2>&1; then
+        print_warn "zpool not found; skipping pool import"
+        return 0
+    fi
+
+    for pool in $pools; do
+        if zpool list "$pool" >/dev/null 2>&1; then
+            print_sub "Pool $pool already imported; skipping"
+        else
+            print_sub "Importing ZFS pool: $pool"
+            zpool import -f "$pool" || print_warn "Failed to import pool $pool"
+        fi
+    done
 }
 
 ensure_local_zfs_storage() {
@@ -239,6 +262,9 @@ case "$HOST_TYPE" in
         else
             print_sub "Ceph feature disabled for host; skipping Ceph reconciliation"
         fi
+
+        print_sub "Importing ZFS pools..."
+        import_zfs_pools "$IMPORT_POOLS"
 
         print_sub "Reconciling local ZFS storage..."
         ensure_local_zfs_storage
