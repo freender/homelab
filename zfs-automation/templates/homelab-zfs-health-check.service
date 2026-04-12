@@ -4,6 +4,6 @@ OnFailure=homelab-notify-failure@%n.service
 
 [Service]
 Type=oneshot
-ExecStart=/sbin/zpool status -x {{ ZFS_POOL }}
+ExecStart=/usr/local/bin/homelab-zfs-health-check
 StandardOutput=journal
 StandardError=journal

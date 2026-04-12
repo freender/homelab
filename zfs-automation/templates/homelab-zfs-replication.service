@@ -1,16 +1,12 @@
 [Unit]
-Description=Homelab ZFS replication and docker update
-Wants=network-online.target docker.service
-After=network-online.target docker.service
+Description=Homelab ZFS replication
+Wants=network-online.target
+After=network-online.target
 OnFailure=homelab-notify-failure@%n.service
 
 [Service]
 Type=oneshot
 Environment=HOME=/root
-ExecStart=/usr/sbin/syncoid -r --delete-target-snapshots --force-delete {{ REPLICATION_SOURCE }} {{ REPLICATION_TARGET }}
-{% if REPLICATION_POST_HOOK %}
-ExecStartPost={{ REPLICATION_POST_HOOK }}
-{% endif %}
-ExecStartPost={{ ZFS_MOUNTPOINT }}/appdata/start.sh
+ExecStart=/usr/local/bin/homelab-zfs-replication
 StandardOutput=journal
 StandardError=journal

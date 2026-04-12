@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-ZFS_POOL="{{ ZFS_POOL }}"
+{{ ZFS_POOLS_BLOCK }}
 POLL_INTERVAL_SECONDS="${POLL_INTERVAL_SECONDS:-300}"
 MAX_WAIT_SECONDS="${MAX_WAIT_SECONDS:-0}"
 
@@ -65,52 +65,63 @@ scrub_result_is_clean() {
 require_positive_integer "$POLL_INTERVAL_SECONDS" "POLL_INTERVAL_SECONDS"
 require_positive_integer "$MAX_WAIT_SECONDS" "MAX_WAIT_SECONDS"
 
-log "Starting scrub monitor for pool $ZFS_POOL"
+scrub_pool() {
+    local zfs_pool="$1"
+    local start_output
+    local current_status
+    local current_scan_line
+    local elapsed_seconds=0
 
-if ! start_output="$(/sbin/zpool scrub "$ZFS_POOL" 2>&1)"; then
-    current_status="$(/sbin/zpool status "$ZFS_POOL")"
-    current_scan_line="$(extract_scan_line "$current_status")"
-    if scrub_in_progress "$current_scan_line"; then
-        log "Scrub already in progress; attaching to existing run"
+    log "Starting scrub monitor for pool $zfs_pool"
+
+    if ! start_output="$(/sbin/zpool scrub "$zfs_pool" 2>&1)"; then
+        current_status="$(/sbin/zpool status "$zfs_pool")"
+        current_scan_line="$(extract_scan_line "$current_status")"
+        if scrub_in_progress "$current_scan_line"; then
+            log "Scrub already in progress; attaching to existing run"
+        else
+            printf '%s\n' "$start_output" >&2
+            exit 1
+        fi
     else
-        printf '%s\n' "$start_output" >&2
+        log "Scrub started for pool $zfs_pool"
+    fi
+
+    while true; do
+        current_status="$(/sbin/zpool status "$zfs_pool")"
+        current_scan_line="$(extract_scan_line "$current_status")"
+
+        if [[ -z "$current_scan_line" ]]; then
+            printf '%s\n' "$current_status"
+            log "Missing scrub status line for pool $zfs_pool"
+            exit 1
+        fi
+
+        log "$current_scan_line"
+
+        if ! scrub_in_progress "$current_scan_line"; then
+            break
+        fi
+
+        if (( MAX_WAIT_SECONDS > 0 && elapsed_seconds >= MAX_WAIT_SECONDS )); then
+            printf '%s\n' "$current_status"
+            log "Timed out waiting for scrub to finish after ${elapsed_seconds}s"
+            exit 1
+        fi
+
+        sleep "$POLL_INTERVAL_SECONDS"
+        elapsed_seconds=$((elapsed_seconds + POLL_INTERVAL_SECONDS))
+    done
+
+    printf '%s\n' "$current_status"
+
+    if ! scrub_result_is_clean "$current_status" "$current_scan_line"; then
         exit 1
     fi
-else
-    log "Scrub started for pool $ZFS_POOL"
-fi
 
-elapsed_seconds=0
-while true; do
-    current_status="$(/sbin/zpool status "$ZFS_POOL")"
-    current_scan_line="$(extract_scan_line "$current_status")"
+    log "Scrub completed cleanly for pool $zfs_pool"
+}
 
-    if [[ -z "$current_scan_line" ]]; then
-        printf '%s\n' "$current_status"
-        log "Missing scrub status line for pool $ZFS_POOL"
-        exit 1
-    fi
-
-    log "$current_scan_line"
-
-    if ! scrub_in_progress "$current_scan_line"; then
-        break
-    fi
-
-    if (( MAX_WAIT_SECONDS > 0 && elapsed_seconds >= MAX_WAIT_SECONDS )); then
-        printf '%s\n' "$current_status"
-        log "Timed out waiting for scrub to finish after ${elapsed_seconds}s"
-        exit 1
-    fi
-
-    sleep "$POLL_INTERVAL_SECONDS"
-    elapsed_seconds=$((elapsed_seconds + POLL_INTERVAL_SECONDS))
+for zfs_pool in "${ZFS_POOLS[@]}"; do
+    scrub_pool "$zfs_pool"
 done
-
-printf '%s\n' "$current_status"
-
-if ! scrub_result_is_clean "$current_status" "$current_scan_line"; then
-    exit 1
-fi
-
-log "Scrub completed cleanly for pool $ZFS_POOL"

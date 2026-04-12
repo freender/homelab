@@ -2,17 +2,17 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from shlex import quote
 
 from ..build import copy_files, render_file, write_env_file
 from ..deploy import DeploySession, force_env, prepare_build_dir, stage_and_run_remote_installer
-from ..hosts import HostLookupError, default_registry
+from ..hosts import default_registry
 from ..output import print_action, print_sub
 from ..ssh import HostConnection, build_files, diff_many
 
 REMOTE_ROOT = "/tmp/homelab-zfs-automation"
 STATIC_CONFIG_FILES = ["zfs-scrub.timer"]
 TEMPLATE_FILES = [
-    "sanoid.conf",
     "homelab-zfs-snapshots.service",
     "homelab-zfs-snapshots.timer",
     "homelab-zfs-replication.service",
@@ -39,6 +39,25 @@ class HostArtifacts:
     file_specs: tuple[FileSpec, ...]
 
 
+@dataclass(frozen=True)
+class SnapshotPlan:
+    dataset: str
+    excludes: tuple[str, ...]
+    hourly: str
+    daily: str
+    weekly: str
+    monthly: str
+    yearly: str
+    auto_exclude_replication: bool = False
+
+
+@dataclass(frozen=True)
+class ReplicationPlan:
+    source: str
+    target: str
+    post_hook: str = ""
+
+
 FILE_SPECS = (
     FileSpec("sanoid.conf", "/etc/sanoid/sanoid.conf"),
     FileSpec(
@@ -51,6 +70,7 @@ FILE_SPECS = (
         "/etc/systemd/system/homelab-zfs-replication.service",
     ),
     FileSpec("homelab-zfs-replication.timer", "/etc/systemd/system/homelab-zfs-replication.timer"),
+    FileSpec("homelab-zfs-replication.sh", "/usr/local/bin/homelab-zfs-replication", mode="755"),
     FileSpec("homelab-zfs-scrub.sh", "/usr/local/bin/homelab-zfs-scrub", mode="755"),
     FileSpec("zfs-scrub.service", "/etc/systemd/system/zfs-scrub.service"),
     FileSpec("zfs-scrub.timer", "/etc/systemd/system/zfs-scrub.timer"),
@@ -62,6 +82,7 @@ FILE_SPECS = (
         "homelab-zfs-health-check.timer",
         "/etc/systemd/system/homelab-zfs-health-check.timer",
     ),
+    FileSpec("homelab-zfs-health-check.sh", "/usr/local/bin/homelab-zfs-health-check", mode="755"),
 )
 
 
@@ -100,24 +121,244 @@ def validate(root: Path, hosts: list[str]) -> None:
 
     registry = default_registry(root)
     for host in hosts:
-        replication = registry.get(host, "zfs-automation.replication", {})
-        if not isinstance(replication, dict):
-            raise ValueError(f"zfs-automation.replication must be a mapping for {host}")
-        for key in ("source", "target"):
-            try:
-                registry.get(host, f"zfs-automation.replication.{key}")
-            except HostLookupError as exc:
-                raise ValueError(f"zfs-automation.replication.{key} required for {host}") from exc
+        normalize_snapshot_plans(registry, host)
+        normalize_replication_config(registry, host)
+        pools = resolve_pools(registry, host)
+        if not pools:
+            raise ValueError(f"zfs-automation requires at least one managed pool for {host}")
 
 
-def excluded_datasets_text(zfs_pool: str, excludes: list[str]) -> str:
-    if not excludes:
-        return ""
-    blocks = []
-    for dataset in excludes:
-        full_dataset = dataset if dataset.startswith(f"{zfs_pool}/") else f"{zfs_pool}/{dataset}"
-        blocks.append(f"[{full_dataset}]\nautosnap = no\nautoprune = no\n")
-    return "\n".join(blocks) + "\n"
+def require_string(value: object, message: str) -> str:
+    text = str(value).strip()
+    if not text:
+        raise ValueError(message)
+    return text
+
+
+def normalize_string_list(value: object, message: str) -> list[str]:
+    if value in (None, ""):
+        return []
+    if isinstance(value, str):
+        return [value] if value.strip() else []
+    if not isinstance(value, list):
+        raise ValueError(message)
+    return [require_string(item, message) for item in value]
+
+
+def dataset_pool(dataset: str) -> str:
+    return dataset.split("/", 1)[0]
+
+
+def normalize_dataset_under_root(dataset: str, root_dataset: str) -> str:
+    if dataset == root_dataset or dataset.startswith(f"{root_dataset}/"):
+        return dataset
+    return f"{root_dataset}/{dataset}"
+
+
+def normalize_snapshot_plans(registry, host: str) -> list[SnapshotPlan]:
+    explicit = registry.get(host, "zfs-automation.snapshot_plans", None)
+    if explicit is not None:
+        if not isinstance(explicit, list) or not explicit:
+            raise ValueError(f"zfs-automation.snapshot_plans must be a non-empty list for {host}")
+        plans: list[SnapshotPlan] = []
+        seen: set[str] = set()
+        for index, plan in enumerate(explicit):
+            if not isinstance(plan, dict):
+                raise ValueError(f"invalid snapshot plan at index {index} for {host}")
+            dataset = require_string(plan.get("dataset", ""), f"snapshot plan dataset required for {host}")
+            if dataset in seen:
+                raise ValueError(f"duplicate snapshot plan dataset {dataset} for {host}")
+            seen.add(dataset)
+            excludes = normalize_string_list(
+                plan.get("exclude", plan.get("excludes", [])),
+                f"snapshot plan excludes must be a list for {host}",
+            )
+            plans.append(
+                SnapshotPlan(
+                    dataset=dataset,
+                    excludes=tuple(excludes),
+                    hourly=str(plan.get("hourly", 0)),
+                    daily=str(plan.get("daily", 7)),
+                    weekly=str(plan.get("weekly", 4)),
+                    monthly=str(plan.get("monthly", 3)),
+                    yearly=str(plan.get("yearly", 0)),
+                )
+            )
+        return plans
+
+    zfs_pool = str(registry.get(host, "config.zfs_pool", "cache"))
+    excludes = registry.get(host, "zfs-automation.sanoid.exclude", [])
+    if not isinstance(excludes, list):
+        raise ValueError(f"zfs-automation.sanoid.exclude must be a list for {host}")
+    return [
+        SnapshotPlan(
+            dataset=zfs_pool,
+            excludes=tuple(str(item) for item in excludes),
+            hourly=str(registry.get(host, "zfs-automation.sanoid.hourly", 0)),
+            daily=str(registry.get(host, "zfs-automation.sanoid.daily", 7)),
+            weekly=str(registry.get(host, "zfs-automation.sanoid.weekly", 4)),
+            monthly=str(registry.get(host, "zfs-automation.sanoid.monthly", 3)),
+            yearly=str(registry.get(host, "zfs-automation.sanoid.yearly", 0)),
+            auto_exclude_replication=True,
+        )
+    ]
+
+
+def normalize_replication_config(registry, host: str) -> tuple[list[ReplicationPlan], list[str], bool]:
+    explicit = registry.get(host, "zfs-automation.replication_plans", None)
+    if explicit is not None:
+        if not isinstance(explicit, list):
+            raise ValueError(f"zfs-automation.replication_plans must be a list for {host}")
+        plans: list[ReplicationPlan] = []
+        for index, plan in enumerate(explicit):
+            if not isinstance(plan, dict):
+                raise ValueError(f"invalid replication plan at index {index} for {host}")
+            plans.append(
+                ReplicationPlan(
+                    source=require_string(
+                        plan.get("source", ""),
+                        f"replication plan source required at index {index} for {host}",
+                    ),
+                    target=require_string(
+                        plan.get("target", ""),
+                        f"replication plan target required at index {index} for {host}",
+                    ),
+                    post_hook=str(plan.get("post_hook", "")).strip(),
+                )
+            )
+        after_commands = normalize_string_list(
+            registry.get(host, "zfs-automation.after_replication_commands", []),
+            f"zfs-automation.after_replication_commands must be a list for {host}",
+        )
+        return plans, after_commands, True
+
+    replication = registry.get(host, "zfs-automation.replication", None)
+    if replication is None:
+        return [], [], False
+    if not isinstance(replication, dict):
+        raise ValueError(f"zfs-automation.replication must be a mapping for {host}")
+
+    source = require_string(
+        registry.get(host, "zfs-automation.replication.source", ""),
+        f"zfs-automation.replication.source required for {host}",
+    )
+    target = require_string(
+        registry.get(host, "zfs-automation.replication.target", ""),
+        f"zfs-automation.replication.target required for {host}",
+    )
+    zfs_mountpoint = str(registry.get(host, "config.zfs_mountpoint", "/mnt/cache"))
+    docker_restart = str(
+        registry.get(host, "zfs-automation.docker_restart_command", f"{zfs_mountpoint}/appdata/start.sh")
+    ).strip()
+    after_commands = [docker_restart] if docker_restart else []
+    return [
+        ReplicationPlan(
+            source=source,
+            target=target,
+            post_hook=str(registry.get(host, "zfs-automation.replication_post_hook", "")).strip(),
+        )
+    ], after_commands, False
+
+
+def resolve_pools(registry, host: str) -> list[str]:
+    explicit = registry.get(host, "zfs-automation.pools", None)
+    if explicit is not None:
+        return normalize_string_list(explicit, f"zfs-automation.pools must be a list for {host}")
+
+    snapshot_plans = normalize_snapshot_plans(registry, host)
+    replication_plans, _, _ = normalize_replication_config(registry, host)
+    pools: list[str] = []
+    for dataset in [
+        *(plan.dataset for plan in snapshot_plans),
+        *(plan.source for plan in replication_plans),
+        *(plan.target for plan in replication_plans),
+    ]:
+        pool = dataset_pool(dataset)
+        if pool not in pools:
+            pools.append(pool)
+    if pools:
+        return pools
+    return [str(registry.get(host, "config.zfs_pool", "cache"))]
+
+
+def build_sanoid_config(
+    snapshot_plans: list[SnapshotPlan],
+    replication_plans: list[ReplicationPlan],
+) -> str:
+    lines: list[str] = []
+    replication_datasets = {plan.source for plan in replication_plans} | {plan.target for plan in replication_plans}
+    for plan in snapshot_plans:
+        lines.extend(
+            [
+                f"[{plan.dataset}]",
+                "recursive = yes",
+                "process_children_only = yes",
+                f"hourly = {plan.hourly}",
+                f"daily = {plan.daily}",
+                f"weekly = {plan.weekly}",
+                f"monthly = {plan.monthly}",
+                f"yearly = {plan.yearly}",
+                "autosnap = yes",
+                "autoprune = yes",
+                "",
+            ]
+        )
+
+        excluded = {normalize_dataset_under_root(dataset, plan.dataset) for dataset in plan.excludes}
+        if plan.auto_exclude_replication:
+            excluded.update(
+                dataset
+                for dataset in replication_datasets
+                if dataset == plan.dataset or dataset.startswith(f"{plan.dataset}/")
+            )
+
+        for dataset in sorted(excluded):
+            lines.extend([f"[{dataset}]", "autosnap = no", "autoprune = no", ""])
+
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def shell_array_block(name: str, values: list[str]) -> str:
+    lines = [f"{name}=("]
+    for value in values:
+        lines.append(f"  {quote(value)}")
+    lines.append(")")
+    return "\n".join(lines)
+
+
+def build_replication_script(replication_plans: list[ReplicationPlan], after_commands: list[str]) -> str:
+    lines = ["#!/bin/bash", "", "set -euo pipefail", ""]
+    if not replication_plans:
+        lines.extend(["echo 'No replication plans configured; nothing to do'", ""])
+    else:
+        for plan in replication_plans:
+            lines.append(
+                f"/usr/sbin/syncoid -r --delete-target-snapshots --force-delete {quote(plan.source)} {quote(plan.target)}"
+            )
+            if plan.post_hook:
+                lines.append(plan.post_hook)
+            lines.append("")
+
+    for command in after_commands:
+        lines.append(command)
+    lines.append("")
+    return "\n".join(lines)
+
+
+def build_health_check_script(pools: list[str]) -> str:
+    lines = [
+        "#!/bin/bash",
+        "",
+        "set -euo pipefail",
+        "",
+        shell_array_block("ZFS_POOLS", pools),
+        "",
+        "for pool in \"${ZFS_POOLS[@]}\"; do",
+        "  /sbin/zpool status -x \"$pool\"",
+        "done",
+        "",
+    ]
+    return "\n".join(lines)
 
 
 def resolve_remote_path(spec: FileSpec, artifacts: HostArtifacts) -> str:
@@ -134,11 +375,8 @@ def write_file_map(build_dir: Path, artifacts: HostArtifacts) -> None:
 
 def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
     registry = default_registry(root)
-    try:
-        ssh_hostname = str(registry.get(host, "config.hostname", host))
-        ssh_user = str(registry.get(host, "config.user"))
-    except HostLookupError as exc:
-        raise ValueError(str(exc)) from exc
+    ssh_hostname = str(registry.get(host, "config.hostname", host))
+    ssh_user = str(registry.get(host, "config.user"))
 
     module_dir = root / "zfs-automation"
     artifacts = build_host_artifacts(root, host)
@@ -149,10 +387,7 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
         (artifacts.build_dir / spec.build_name, resolve_remote_path(spec, artifacts))
         for spec in artifacts.file_specs
     ]
-    for message in diff_many(
-        connection,
-        diff_pairs,
-    ):
+    for message in diff_many(connection, diff_pairs):
         print_sub(message)
 
     if dry_run:
@@ -187,8 +422,7 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
     deploy_user = str(
         registry.get(host, "ubuntu-setup.deploy_user", registry.get(host, "config.user"))
     )
-    zfs_pool = str(registry.get(host, "config.zfs_pool", "cache"))
-    zfs_mountpoint = str(registry.get(host, "config.zfs_mountpoint", f"/mnt/{zfs_pool}"))
+    zfs_mountpoint = str(registry.get(host, "config.zfs_mountpoint", "/mnt/cache"))
     snapshot_schedule = str(
         registry.get(host, "zfs-automation.snapshot_schedule", "*-*-* 04:35:00")
     )
@@ -198,41 +432,23 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
     health_check_schedule = str(
         registry.get(host, "zfs-automation.health_check_schedule", "hourly")
     )
-    replication_source = str(registry.get(host, "zfs-automation.replication.source"))
-    replication_target = str(registry.get(host, "zfs-automation.replication.target"))
-    replication_post_hook = str(registry.get(host, "zfs-automation.replication_post_hook", ""))
-    excludes = registry.get(host, "zfs-automation.sanoid.exclude", [])
-    if not isinstance(excludes, list):
-        raise ValueError(f"zfs-automation.sanoid.exclude must be a list for {host}")
-    excludes = [str(item) for item in excludes]
-
-    # Auto-exclude replication source and target from sanoid — syncoid owns
-    # the snapshot lifecycle for both datasets and sanoid must not interfere.
-    pool_prefix = f"{zfs_pool}/"
-    for dataset in (replication_source, replication_target):
-        relative = dataset[len(pool_prefix):] if dataset.startswith(pool_prefix) else dataset
-        if relative not in excludes:
-            excludes.append(relative)
-
-    hourly = str(registry.get(host, "zfs-automation.sanoid.hourly", 0))
-    daily = str(registry.get(host, "zfs-automation.sanoid.daily", 7))
-    weekly = str(registry.get(host, "zfs-automation.sanoid.weekly", 4))
-    monthly = str(registry.get(host, "zfs-automation.sanoid.monthly", 3))
-    yearly = str(registry.get(host, "zfs-automation.sanoid.yearly", 0))
+    manage_snapshots = bool(registry.get(host, "zfs-automation.manage_snapshots", True))
+    manage_replication = bool(registry.get(host, "zfs-automation.manage_replication", True))
+    manage_scrub = bool(registry.get(host, "zfs-automation.manage_scrub", True))
+    manage_health_check = bool(registry.get(host, "zfs-automation.manage_health_check", True))
+    pools = resolve_pools(registry, host)
+    snapshot_plans = normalize_snapshot_plans(registry, host)
+    replication_plans, after_replication_commands, explicit_replication = normalize_replication_config(
+        registry,
+        host,
+    )
 
     build_dir = module_dir / "build" / host
     prepare_build_dir(build_dir)
     copy_files(config_dir, build_dir, STATIC_CONFIG_FILES)
-    render_file(
-        templates_dir / "sanoid.conf",
-        build_dir / "sanoid.conf",
-        ZFS_POOL=zfs_pool,
-        EXCLUDED_DATASETS=excluded_datasets_text(zfs_pool, excludes),
-        HOURLY=hourly,
-        DAILY=daily,
-        WEEKLY=weekly,
-        MONTHLY=monthly,
-        YEARLY=yearly,
+    (build_dir / "sanoid.conf").write_text(
+        build_sanoid_config(snapshot_plans, replication_plans),
+        encoding="utf-8",
     )
     render_file(
         templates_dir / "homelab-zfs-snapshots.service",
@@ -244,45 +460,51 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
         SNAPSHOT_SCHEDULE=snapshot_schedule,
     )
     render_file(
-        templates_dir / "homelab-zfs-scrub.sh",
-        build_dir / "homelab-zfs-scrub.sh",
-        ZFS_POOL=zfs_pool,
-    )
-    render_file(
-        templates_dir / "zfs-scrub.service",
-        build_dir / "zfs-scrub.service",
-        ZFS_POOL=zfs_pool,
-    )
-    render_file(
         templates_dir / "homelab-zfs-replication.service",
         build_dir / "homelab-zfs-replication.service",
-        ZFS_MOUNTPOINT=zfs_mountpoint,
-        REPLICATION_SOURCE=replication_source,
-        REPLICATION_TARGET=replication_target,
-        REPLICATION_POST_HOOK=replication_post_hook,
     )
     render_file(
         templates_dir / "homelab-zfs-replication.timer",
         build_dir / "homelab-zfs-replication.timer",
         REPLICATION_SCHEDULE=replication_schedule,
     )
+    (build_dir / "homelab-zfs-replication.sh").write_text(
+        build_replication_script(replication_plans, after_replication_commands),
+        encoding="utf-8",
+    )
+    render_file(
+        templates_dir / "homelab-zfs-scrub.sh",
+        build_dir / "homelab-zfs-scrub.sh",
+        ZFS_POOLS_BLOCK=shell_array_block("ZFS_POOLS", pools),
+    )
+    render_file(
+        templates_dir / "zfs-scrub.service",
+        build_dir / "zfs-scrub.service",
+    )
     render_file(
         templates_dir / "homelab-zfs-health-check.service",
         build_dir / "homelab-zfs-health-check.service",
-        ZFS_POOL=zfs_pool,
     )
     render_file(
         templates_dir / "homelab-zfs-health-check.timer",
         build_dir / "homelab-zfs-health-check.timer",
         HEALTH_CHECK_SCHEDULE=health_check_schedule,
     )
+    (build_dir / "homelab-zfs-health-check.sh").write_text(
+        build_health_check_script(pools),
+        encoding="utf-8",
+    )
 
     write_env_file(
         build_dir / "env",
         {
             "DEPLOY_USER": deploy_user,
-            "ZFS_POOL": zfs_pool,
             "ZFS_MOUNTPOINT": zfs_mountpoint,
+            "ENABLE_ZFS_SNAPSHOTS": "true" if snapshot_plans and manage_snapshots else "false",
+            "ENABLE_ZFS_REPLICATION": "true" if replication_plans and manage_replication else "false",
+            "ENABLE_ZFS_SCRUB": "true" if pools and manage_scrub else "false",
+            "ENABLE_ZFS_HEALTH_CHECK": "true" if pools and manage_health_check else "false",
+            "EXPLICIT_REPLICATION_PLANS": "true" if explicit_replication else "false",
             "REBUILD_BUNDLE_ROOT": f"{zfs_mountpoint}/appdata/.homelab/zfs-automation",
         },
     )

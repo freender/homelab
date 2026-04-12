@@ -48,12 +48,11 @@ mapped_mode() { printf '%s\n' "${FILE_MAP_MODE[$1]:-644}"; }
 install_build_file() {
     local name="$1"
     local rc=0
+
     install_if_changed "$BUILD_DIR/$name" "$(mapped_dest "$name")" "$(mapped_mode "$name")" "$(mapped_dest "$name")" || rc=$?
     [[ $rc -eq 0 || $rc -eq 1 ]] || exit "$rc"
     return "$rc"
 }
-
-load_file_map
 
 sync_rebuild_bundle() {
     local changed=false
@@ -96,6 +95,34 @@ sync_rebuild_bundle() {
     fi
 }
 
+ensure_timer_state() {
+    local timer="$1"
+    local enabled_flag="$2"
+    local units_changed="$3"
+
+    if [[ "$enabled_flag" != "true" ]]; then
+        if systemctl is-enabled --quiet "$timer" 2>/dev/null; then
+            systemctl disable --now "$timer"
+            print_ok "$timer disabled"
+        else
+            print_sub "$timer disabled by config"
+        fi
+        return
+    fi
+
+    if ! systemctl is-enabled --quiet "$timer" 2>/dev/null; then
+        systemctl enable --now "$timer"
+        print_ok "$timer enabled"
+    elif [[ "$units_changed" == "true" ]]; then
+        systemctl restart "$timer"
+        print_ok "$timer restarted"
+    else
+        print_sub "$timer already enabled"
+    fi
+}
+
+load_file_map
+
 print_header "ZFS Automation"
 
 print_action "TRIM"
@@ -104,13 +131,6 @@ if ! systemctl is-enabled --quiet fstrim.timer 2>/dev/null; then
     print_ok "fstrim.timer enabled"
 else
     print_sub "fstrim.timer already enabled"
-fi
-
-if [[ "$(zpool get -H -o value autotrim "$ZFS_POOL" 2>/dev/null)" != "on" ]]; then
-    zpool set autotrim=on "$ZFS_POOL"
-    print_ok "autotrim enabled on $ZFS_POOL"
-else
-    print_sub "autotrim already on for $ZFS_POOL"
 fi
 
 print_action "Sanoid / Syncoid"
@@ -129,23 +149,45 @@ if [[ $rc -eq 0 ]]; then
     print_ok "sanoid.conf updated"
 fi
 
-    for helper in sanoid.conf homelab-zfs-snapshots.service homelab-zfs-snapshots.timer homelab-zfs-replication.service homelab-zfs-replication.timer homelab-zfs-scrub.sh zfs-scrub.service zfs-scrub.timer homelab-zfs-health-check.service homelab-zfs-health-check.timer; do
-        rc=0
-        helper_mode="644"
-        if [[ "$helper" == "homelab-zfs-scrub.sh" ]]; then
-            helper_mode="755"
-        fi
-        install_if_changed "$BUILD_DIR/$helper" "$MANAGED_DIR/$helper" "$helper_mode" "$MANAGED_DIR/$helper" || rc=$?
-        [[ $rc -eq 0 || $rc -eq 1 ]] || exit "$rc"
-    done
-
+for helper in \
+    sanoid.conf \
+    homelab-zfs-snapshots.service \
+    homelab-zfs-snapshots.timer \
+    homelab-zfs-replication.service \
+    homelab-zfs-replication.timer \
+    homelab-zfs-replication.sh \
+    homelab-zfs-scrub.sh \
+    zfs-scrub.service \
+    zfs-scrub.timer \
+    homelab-zfs-health-check.service \
+    homelab-zfs-health-check.timer \
+    homelab-zfs-health-check.sh; do
     rc=0
-    install_build_file "homelab-zfs-scrub.sh" || rc=$?
+    helper_mode="644"
+    case "$helper" in
+        homelab-zfs-replication.sh|homelab-zfs-scrub.sh|homelab-zfs-health-check.sh)
+            helper_mode="755"
+            ;;
+    esac
+    install_if_changed "$BUILD_DIR/$helper" "$MANAGED_DIR/$helper" "$helper_mode" "$MANAGED_DIR/$helper" || rc=$?
+    [[ $rc -eq 0 || $rc -eq 1 ]] || exit "$rc"
+done
 
-    units_changed=false
-    for unit in homelab-zfs-snapshots.service homelab-zfs-snapshots.timer homelab-zfs-replication.service homelab-zfs-replication.timer zfs-scrub.service zfs-scrub.timer homelab-zfs-health-check.service homelab-zfs-health-check.timer; do
-        rc=0
-        install_build_file "$unit" || rc=$?
+units_changed=false
+for unit in \
+    homelab-zfs-snapshots.service \
+    homelab-zfs-snapshots.timer \
+    homelab-zfs-replication.service \
+    homelab-zfs-replication.timer \
+    homelab-zfs-replication.sh \
+    homelab-zfs-scrub.sh \
+    zfs-scrub.service \
+    zfs-scrub.timer \
+    homelab-zfs-health-check.service \
+    homelab-zfs-health-check.timer \
+    homelab-zfs-health-check.sh; do
+    rc=0
+    install_build_file "$unit" || rc=$?
     [[ $rc -eq 0 || $rc -eq 1 ]] || exit "$rc"
     [[ $rc -eq 0 ]] && units_changed=true
 done
@@ -155,21 +197,14 @@ if systemctl is-enabled --quiet sanoid.timer 2>/dev/null; then
     print_ok "Disabled packaged sanoid.timer"
 fi
 
-if [[ "$units_changed" == true ]]; then
+if [[ "$units_changed" == "true" ]]; then
     systemctl daemon-reload
 fi
 
-for timer in homelab-zfs-snapshots.timer homelab-zfs-replication.timer zfs-scrub.timer homelab-zfs-health-check.timer; do
-    if ! systemctl is-enabled --quiet "$timer" 2>/dev/null; then
-        systemctl enable --now "$timer"
-        print_ok "$timer enabled"
-    elif [[ "$units_changed" == true ]]; then
-        systemctl restart "$timer"
-        print_ok "$timer restarted"
-    else
-        print_sub "$timer already enabled"
-    fi
-done
+ensure_timer_state homelab-zfs-snapshots.timer "$ENABLE_ZFS_SNAPSHOTS" "$units_changed"
+ensure_timer_state homelab-zfs-replication.timer "$ENABLE_ZFS_REPLICATION" "$units_changed"
+ensure_timer_state zfs-scrub.timer "$ENABLE_ZFS_SCRUB" "$units_changed"
+ensure_timer_state homelab-zfs-health-check.timer "$ENABLE_ZFS_HEALTH_CHECK" "$units_changed"
 
 print_action "Rebuild bundle"
 sync_rebuild_bundle

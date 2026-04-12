@@ -11,6 +11,7 @@ from .docker import deploy as deploy_docker
 from .pve_backup import deploy as deploy_pve_backup
 from .pve_exporters import deploy as deploy_pve_exporters
 from .pve_gpu_passthrough import deploy as deploy_pve_gpu_passthrough
+from .pve_lxc_mounts import deploy as deploy_pve_lxc_mounts
 from .pve_postinstall import deploy as deploy_pve_postinstall
 from .ssh_config import deploy as deploy_ssh_config
 from .ubuntu_setup import deploy as deploy_ubuntu_setup
@@ -52,6 +53,10 @@ MODULES: dict[str, ModuleDefinition] = {
         name="GPU Passthrough Configs",
         deploy=deploy_pve_gpu_passthrough,
     ),
+    "pve-lxc-mounts": ModuleDefinition(
+        name="PVE LXC Mount Configs",
+        deploy=deploy_pve_lxc_mounts,
+    ),
     "ssh-config": ModuleDefinition(name="SSH Config", deploy=deploy_ssh_config),
     "ubuntu-setup": ModuleDefinition(name="Ubuntu OS Setup", deploy=deploy_ubuntu_setup),
     "zfs-automation": ModuleDefinition(name="ZFS Automation", deploy=deploy_zfs_automation),
@@ -63,6 +68,7 @@ MODULE_ORDER = [
     "apcupsd",
     "pve-exporters",
     "pve-gpu-passthrough",
+    "pve-lxc-mounts",
     "ssh-config",
     "ubuntu-setup",
     "zfs-automation",
