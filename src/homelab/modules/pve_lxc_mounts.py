@@ -5,7 +5,7 @@ from pathlib import Path
 from invoke.exceptions import UnexpectedExit
 
 from ..deploy import DeploySession, force_env, prepare_build_dir, stage_and_run_remote_installer
-from ..hosts import HostLookupError, default_registry
+from ..hosts import default_registry
 from ..output import print_action, print_error, print_sub
 from ..ssh import HostConnection, build_files, offline_mode
 
@@ -27,7 +27,7 @@ def deploy(
         return 0
 
     try:
-        validate(root, supported_hosts)
+        validate(root, hosts)
     except ValueError as exc:
         print_error(str(exc))
         return 1
@@ -44,7 +44,9 @@ def validate(root: Path, hosts: list[str]) -> None:
     registry = default_registry(root)
     for host in hosts:
         if str(registry.get(host, "config.type")) != "pve":
-            raise ValueError(f"Unsupported host type for {host}: {registry.get(host, 'config.type')}")
+            raise ValueError(
+                f"Unsupported host type for {host}: {registry.get(host, 'config.type')}"
+            )
 
         containers = registry.get(host, "pve-lxc-mounts.containers", [])
         if not isinstance(containers, list) or not containers:
@@ -70,27 +72,37 @@ def validate(root: Path, hosts: list[str]) -> None:
                 try:
                     slot = int(mount.get("slot"))
                 except (TypeError, ValueError) as exc:
-                    raise ValueError(f"{host}: {ctid} invalid slot for root mount {mount_index}") from exc
+                    raise ValueError(
+                        f"{host}: {ctid} invalid slot for root mount {mount_index}"
+                    ) from exc
 
                 source = str(mount.get("source", "")).strip()
                 target = str(mount.get("target", "")).strip()
                 backup = str(mount.get("backup", "")).strip()
                 if not source.startswith("/"):
-                    raise ValueError(f"{host}: {ctid} source must be absolute for root mount {mount_index}")
+                    raise ValueError(
+                        f"{host}: {ctid} source must be absolute for root mount {mount_index}"
+                    )
                 if not target.startswith("/mnt/"):
-                    raise ValueError(f"{host}: {ctid} target must live under /mnt for root mount {mount_index}")
+                    raise ValueError(
+                        f"{host}: {ctid} target must live under /mnt for root mount {mount_index}"
+                    )
                 if backup not in {"0", "1"}:
-                    raise ValueError(f"{host}: {ctid} backup must be 0 or 1 for root mount {mount_index}")
+                    raise ValueError(
+                        f"{host}: {ctid} backup must be 0 or 1 for root mount {mount_index}"
+                    )
                 if slot in seen_slots:
                     raise ValueError(f"{host}: {ctid} duplicate root mount slot {slot}")
                 seen_slots.add(slot)
 
             idmapped_roots = container.get("idmapped_roots", [])
-            if not isinstance(idmapped_roots, list) or not idmapped_roots:
-                raise ValueError(f"{host}: {ctid} idmapped_roots must be a non-empty list")
+            if not isinstance(idmapped_roots, list):
+                raise ValueError(f"{host}: {ctid} idmapped_roots must be a list")
             for root_path in idmapped_roots:
                 if not str(root_path).startswith("/"):
-                    raise ValueError(f"{host}: {ctid} idmapped root must be absolute: {root_path}")
+                    raise ValueError(
+                        f"{host}: {ctid} idmapped root must be absolute: {root_path}"
+                    )
 
 
 def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
@@ -101,6 +113,13 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
     containers = registry.get(host, "pve-lxc-mounts.containers", [])
     connection = HostConnection(host)
     print_sub("Rendering desired LXC config from live ZFS datasets...")
+
+    if dry_run and offline_mode():
+        print_sub(
+            "[DRY-RUN] Offline mode: skipping live config rendering (requires remote access)"
+        )
+        print_sub(f"[DRY-RUN] Would deploy to {host}:{REMOTE_ROOT}/")
+        return
 
     container_ids: list[str] = []
     for container in containers:
@@ -123,8 +142,6 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
     (build_dir / "containers.conf").write_text("\n".join(container_ids) + "\n", encoding="utf-8")
 
     if dry_run:
-        if offline_mode():
-            print_sub("[DRY-RUN] Offline mode enabled; live config rendering requires remote access")
         print_sub(f"[DRY-RUN] Would deploy to {host}:{REMOTE_ROOT}/")
         print_sub("Build files:")
         for file_name in build_files(build_dir):
@@ -177,7 +194,9 @@ def query_leaf_mounts(connection: HostConnection, roots: list[str]) -> list[str]
         raise ValueError("offline mode cannot query remote ZFS datasets")
 
     result = connection.connection.run("zfs list -H -o mountpoint", hide=True)
-    mountpoints = [line.strip() for line in result.stdout.splitlines() if line.strip().startswith("/")]
+    mountpoints = [
+        line.strip() for line in result.stdout.splitlines() if line.strip().startswith("/")
+    ]
     relevant = sorted(
         {
             mountpoint
@@ -205,7 +224,8 @@ def render_config(
         for mount in root_mounts
     ]
     idmapped_lines = [
-        f"lxc.mount.entry: {mountpoint} mnt/{mountpoint.lstrip('/')} none bind,create=dir,idmap=container 0 0"
+        f"lxc.mount.entry: {mountpoint} mnt/{mountpoint.lstrip('/')}"
+        " none bind,create=dir,idmap=container 0 0"
         for mountpoint in leaf_mounts
     ]
 
