@@ -2,13 +2,18 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ..build import write_env_file
+from ..build import render_file, write_env_file
 from ..deploy import DeploySession, force_env, prepare_build_dir, stage_and_run_remote_installer
 from ..hosts import default_registry
 from ..output import print_action, print_sub
 from ..ssh import HostConnection, build_files, diff_many
 
 REMOTE_ROOT = "/tmp/homelab-docker"
+
+TEMPLATE_FILES = [
+    "homelab-docker-start.service",
+    "homelab-docker-start.timer",
+]
 
 
 def deploy(
@@ -25,33 +30,72 @@ def deploy(
         print_action(f"Skipping docker (not applicable to {requested_host})")
         return 0
 
+    validate(root, hosts)
     session.run(lambda host: deploy_host(root, host, dry_run=dry_run, force=force), hosts)
     return 0 if session.finish() else 1
 
 
+def validate(root: Path, hosts: list[str]) -> None:
+    templates_dir = root / "docker" / "templates"
+    for file_name in TEMPLATE_FILES:
+        file_path = templates_dir / file_name
+        if not file_path.is_file():
+            raise ValueError(f"missing required template: {file_path}")
+
+
 def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
     registry = default_registry(root)
+    ssh_user = str(registry.get(host, "config.user"))
+    ssh_hostname = str(registry.get(host, "config.hostname", host))
     backup_enabled = str(registry.get(host, "docker.backup", "false")).lower()
+    start_schedule = str(registry.get(host, "docker.start_schedule", "")).strip()
+    timer_enabled = "true" if start_schedule else "false"
 
+    templates_dir = root / "docker" / "templates"
     build_dir = root / "docker" / "build" / host
     prepare_build_dir(build_dir)
+
+    render_file(
+        templates_dir / "homelab-docker-start.service",
+        build_dir / "homelab-docker-start.service",
+    )
+    if start_schedule:
+        render_file(
+            templates_dir / "homelab-docker-start.timer",
+            build_dir / "homelab-docker-start.timer",
+            DOCKER_START_SCHEDULE=start_schedule,
+        )
+
     write_env_file(
         build_dir / "env",
         {
             "DOCKER_BACKUP": backup_enabled,
+            "ENABLE_DOCKER_START_TIMER": timer_enabled,
         },
     )
 
-    connection = HostConnection(host)
+    connection = HostConnection(host, user=ssh_user, hostname=ssh_hostname)
     print_sub("Comparing with remote scripts...")
-    for message in diff_many(connection, [
+    diff_pairs = [
         (root / "docker" / "scripts" / "start.sh", "/mnt/cache/appdata/start.sh"),
         (root / "docker" / "scripts" / "rm.sh", "/mnt/cache/appdata/rm.sh"),
         (
             root / "docker" / "scripts" / "docker-common.sh",
             "/mnt/cache/appdata/.homelab/docker/docker-common.sh",
         ),
-    ]):
+    ]
+    if timer_enabled == "true":
+        diff_pairs += [
+            (
+                build_dir / "homelab-docker-start.service",
+                "/etc/systemd/system/homelab-docker-start.service",
+            ),
+            (
+                build_dir / "homelab-docker-start.timer",
+                "/etc/systemd/system/homelab-docker-start.timer",
+            ),
+        ]
+    for message in diff_many(connection, diff_pairs):
         print_sub(message)
 
     if backup_enabled == "true":
@@ -79,6 +123,7 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
         "scripts/install.sh",
         host,
         env=force_env(force),
+        require_root=True,
         interpreter="bash",
         remote_subdirs=("build", "lib"),
     )

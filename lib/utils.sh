@@ -261,3 +261,31 @@ sync_dir_if_changed() {
 
     return "$changed"
 }
+
+# Enable or disable a systemd timer based on a flag, restarting it if units changed.
+# Usage: ensure_timer_state <timer> <"true"|"false"> <units_changed>
+ensure_timer_state() {
+    local timer="$1"
+    local enabled_flag="$2"
+    local units_changed="${3:-false}"
+
+    if [[ "$enabled_flag" != "true" ]]; then
+        if systemctl is-enabled --quiet "$timer" 2>/dev/null; then
+            systemctl disable --now "$timer"
+            print_ok "$timer disabled"
+        else
+            print_sub "$timer disabled by config"
+        fi
+        return
+    fi
+
+    if ! systemctl is-enabled --quiet "$timer" 2>/dev/null; then
+        systemctl enable --now "$timer"
+        print_ok "$timer enabled"
+    elif [[ "$units_changed" == "true" ]]; then
+        systemctl restart "$timer"
+        print_ok "$timer restarted"
+    else
+        print_sub "$timer already enabled"
+    fi
+}

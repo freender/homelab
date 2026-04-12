@@ -1,0 +1,9 @@
+[Unit]
+Description=Run homelab Docker container startup on schedule
+
+[Timer]
+OnCalendar={{ DOCKER_START_SCHEDULE }}
+Persistent=true
+
+[Install]
+WantedBy=timers.target

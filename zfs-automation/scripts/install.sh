@@ -95,32 +95,6 @@ sync_rebuild_bundle() {
     fi
 }
 
-ensure_timer_state() {
-    local timer="$1"
-    local enabled_flag="$2"
-    local units_changed="$3"
-
-    if [[ "$enabled_flag" != "true" ]]; then
-        if systemctl is-enabled --quiet "$timer" 2>/dev/null; then
-            systemctl disable --now "$timer"
-            print_ok "$timer disabled"
-        else
-            print_sub "$timer disabled by config"
-        fi
-        return
-    fi
-
-    if ! systemctl is-enabled --quiet "$timer" 2>/dev/null; then
-        systemctl enable --now "$timer"
-        print_ok "$timer enabled"
-    elif [[ "$units_changed" == "true" ]]; then
-        systemctl restart "$timer"
-        print_ok "$timer restarted"
-    else
-        print_sub "$timer already enabled"
-    fi
-}
-
 load_file_map
 
 print_header "ZFS Automation"

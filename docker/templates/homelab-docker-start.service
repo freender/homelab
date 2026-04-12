@@ -1,0 +1,11 @@
+[Unit]
+Description=Homelab Docker container startup
+After=docker.service
+Requires=docker.service
+OnFailure=homelab-notify-failure@%n.service
+
+[Service]
+Type=oneshot
+ExecStart=/mnt/cache/appdata/start.sh
+StandardOutput=journal
+StandardError=journal
