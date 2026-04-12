@@ -165,7 +165,10 @@ def normalize_snapshot_plans(registry, host: str) -> list[SnapshotPlan]:
         for index, plan in enumerate(explicit):
             if not isinstance(plan, dict):
                 raise ValueError(f"invalid snapshot plan at index {index} for {host}")
-            dataset = require_string(plan.get("dataset", ""), f"snapshot plan dataset required for {host}")
+            dataset = require_string(
+                plan.get("dataset", ""),
+                f"snapshot plan dataset required for {host}",
+            )
             if dataset in seen:
                 raise ValueError(f"duplicate snapshot plan dataset {dataset} for {host}")
             seen.add(dataset)
@@ -212,7 +215,9 @@ def normalize_snapshot_plans(registry, host: str) -> list[SnapshotPlan]:
     ]
 
 
-def normalize_replication_config(registry, host: str) -> tuple[list[ReplicationPlan], list[str], bool]:
+def normalize_replication_config(
+    registry, host: str
+) -> tuple[list[ReplicationPlan], list[str], bool]:
     explicit = registry.get(host, "zfs-automation.replication_plans", None)
     if explicit is not None:
         if not isinstance(explicit, list):
@@ -256,7 +261,11 @@ def normalize_replication_config(registry, host: str) -> tuple[list[ReplicationP
     )
     zfs_mountpoint = str(registry.get(host, "config.zfs_mountpoint", "/mnt/cache"))
     docker_restart = str(
-        registry.get(host, "zfs-automation.docker_restart_command", f"{zfs_mountpoint}/appdata/start.sh")
+        registry.get(
+            host,
+            "zfs-automation.docker_restart_command",
+            f"{zfs_mountpoint}/appdata/start.sh",
+        )
     ).strip()
     after_commands = [docker_restart] if docker_restart else []
     return [
@@ -294,7 +303,10 @@ def build_sanoid_config(
     replication_plans: list[ReplicationPlan],
 ) -> str:
     lines: list[str] = []
-    replication_datasets = {plan.source for plan in replication_plans} | {plan.target for plan in replication_plans}
+    replication_datasets = (
+        {plan.source for plan in replication_plans}
+        | {plan.target for plan in replication_plans}
+    )
     for plan in snapshot_plans:
         lines.extend(
             [
@@ -312,7 +324,9 @@ def build_sanoid_config(
             ]
         )
 
-        excluded = {normalize_dataset_under_root(dataset, plan.dataset) for dataset in plan.excludes}
+        excluded = {
+            normalize_dataset_under_root(dataset, plan.dataset) for dataset in plan.excludes
+        }
         if plan.auto_exclude_replication:
             excluded.update(
                 dataset
@@ -334,14 +348,17 @@ def shell_array_block(name: str, values: list[str]) -> str:
     return "\n".join(lines)
 
 
-def build_replication_script(replication_plans: list[ReplicationPlan], after_commands: list[str]) -> str:
+def build_replication_script(
+    replication_plans: list[ReplicationPlan], after_commands: list[str]
+) -> str:
     lines = ["#!/bin/bash", "", "set -euo pipefail", ""]
     if not replication_plans:
         lines.extend(["echo 'No replication plans configured; nothing to do'", ""])
     else:
         for plan in replication_plans:
             lines.append(
-                f"/usr/sbin/syncoid -r --delete-target-snapshots --force-delete {quote(plan.source)} {quote(plan.target)}"
+                f"/usr/sbin/syncoid -r --delete-target-snapshots --force-delete"
+                f" {quote(plan.source)} {quote(plan.target)}"
             )
             if plan.post_hook:
                 lines.append(plan.post_hook)
@@ -509,7 +526,9 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
             "DEPLOY_USER": deploy_user,
             "ZFS_MOUNTPOINT": zfs_mountpoint,
             "ENABLE_ZFS_SNAPSHOTS": "true" if snapshot_plans and manage_snapshots else "false",
-            "ENABLE_ZFS_REPLICATION": "true" if replication_plans and manage_replication else "false",
+            "ENABLE_ZFS_REPLICATION": (
+                "true" if replication_plans and manage_replication else "false"
+            ),
             "ENABLE_ZFS_SCRUB": "true" if pools and manage_scrub else "false",
             "ENABLE_ZFS_HEALTH_CHECK": "true" if pools and manage_health_check else "false",
             "REBUILD_BUNDLE_ROOT": f"{zfs_mountpoint}/appdata/.homelab/zfs-automation",
