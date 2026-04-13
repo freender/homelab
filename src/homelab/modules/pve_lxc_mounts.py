@@ -133,7 +133,8 @@ def validate(root: Path, hosts: list[str]) -> None:
                     )
                 if not target.startswith("/mnt/"):
                     raise ValueError(
-                        f"{host}: {ctid} target must live under /mnt for idmapped mount {mount_index}"
+                        f"{host}: {ctid} target must live under /mnt "
+                        f"for idmapped mount {mount_index}"
                     )
 
 def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
@@ -283,7 +284,9 @@ def render_config(
     managed_root_sources = {mount["source"] for mount in root_mounts}
     feature_line = None
     if features:
-        feature_line = "features: " + ",".join(f"{name}={value}" for name, value in features.items())
+        feature_line = "features: " + ",".join(
+            f"{name}={value}" for name, value in features.items()
+        )
     explicit_idmapped_sources = {mount["source"] for mount in idmapped_mounts}
     root_mount_lines = [
         f"mp{mount['slot']}: {mount['source']},mp={mount['target']},backup={mount['backup']}"
@@ -321,7 +324,10 @@ def render_config(
             source = stripped.split()[1]
             if source in managed_root_sources:
                 continue
-            if any(source == root or source.startswith(f"{root}/") for root in managed_idmapped_sources):
+            if any(
+                source == root or source.startswith(f"{root}/")
+                for root in managed_idmapped_sources
+            ):
                 if not idmapped_inserted:
                     rendered_lines.extend(idmapped_lines)
                     idmapped_inserted = True
@@ -332,7 +338,9 @@ def render_config(
         rendered_lines.extend(root_mount_lines)
     if not idmapped_inserted:
         rendered_lines.extend(idmapped_lines)
-    if feature_line is not None and not any(line.startswith("features: ") for line in rendered_lines):
+    if feature_line is not None and not any(
+        line.startswith("features: ") for line in rendered_lines
+    ):
         rendered_lines.append(feature_line)
 
     while rendered_lines and not rendered_lines[-1].strip():

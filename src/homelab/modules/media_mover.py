@@ -134,7 +134,10 @@ def normalize_config(registry, host: str) -> MediaMoverConfig:
         raise ValueError(f"media-mover.managed_roots must be a non-empty list for {host}")
     managed_roots = []
     for item in managed_roots_raw:
-        root_name = require_text(item, f"media-mover.managed_roots entries must be non-empty for {host}")
+        root_name = require_text(
+            item,
+            f"media-mover.managed_roots entries must be non-empty for {host}",
+        )
         if "/" in root_name:
             raise ValueError(
                 f"media-mover.managed_roots entries must be simple relative names for {host}"
@@ -154,7 +157,11 @@ def normalize_config(registry, host: str) -> MediaMoverConfig:
         f"media-mover.tautulli_url is required for {host}",
     )
     tautulli_config_path = require_text(
-        registry.get(host, "media-mover.tautulli_config_path", "/mnt/cache/appdata/tautulli/config.ini"),
+        registry.get(
+            host,
+            "media-mover.tautulli_config_path",
+            "/mnt/cache/appdata/tautulli/config.ini",
+        ),
         f"media-mover.tautulli_config_path is required for {host}",
     )
 
@@ -162,7 +169,9 @@ def normalize_config(registry, host: str) -> MediaMoverConfig:
     try:
         tautulli_lookback_days = int(lookback_days_raw)
     except (TypeError, ValueError) as exc:
-        raise ValueError(f"media-mover.tautulli_lookback_days must be an integer for {host}") from exc
+        raise ValueError(
+            f"media-mover.tautulli_lookback_days must be an integer for {host}"
+        ) from exc
     if tautulli_lookback_days < 1:
         raise ValueError(f"media-mover.tautulli_lookback_days must be at least 1 for {host}")
 
@@ -193,7 +202,10 @@ def normalize_config(registry, host: str) -> MediaMoverConfig:
     else:
         ignore_paths = []
         for item in ignore_paths_raw:
-            path = require_text(item, f"media-mover.ignore_paths entries must be non-empty for {host}")
+            path = require_text(
+                item,
+                f"media-mover.ignore_paths entries must be non-empty for {host}",
+            )
             if not path.startswith("/"):
                 raise ValueError(f"media-mover.ignore_paths entries must be absolute for {host}")
             ignore_paths.append(path)
