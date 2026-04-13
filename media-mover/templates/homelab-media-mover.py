@@ -44,6 +44,8 @@ class UnitStats:
     relative_dir: Path
     size_on_cache: int
     size_on_tank: int
+    oldest_cache_mtime: float | None
+    oldest_tank_mtime: float | None
 
     @property
     def total_size(self) -> int:
@@ -368,8 +370,8 @@ def unit_relative_dir_from_plex_path(config: Config, plex_path: str, root_name: 
     return None
 
 
-def collect_units(root: Path, config: Config) -> dict[Path, int]:
-    units: dict[Path, int] = {}
+def collect_units(root: Path, config: Config) -> dict[Path, tuple[int, float | None]]:
+    units: dict[Path, tuple[int, float | None]] = {}
     for managed_root in config.managed_roots:
         managed_path = root / managed_root
         if not managed_path.exists():
@@ -384,7 +386,10 @@ def collect_units(root: Path, config: Config) -> dict[Path, int]:
             unit = unit_relative_dir_from_relative_path(relative)
             if unit is None:
                 continue
-            units[unit] = units.get(unit, 0) + path.stat().st_size
+            stat_result = path.stat()
+            current_size, current_oldest = units.get(unit, (0, None))
+            oldest_mtime = stat_result.st_mtime if current_oldest is None else min(current_oldest, stat_result.st_mtime)
+            units[unit] = (current_size + stat_result.st_size, oldest_mtime)
     return units
 
 
@@ -409,12 +414,25 @@ def collect_all_unit_stats(config: Config) -> dict[Path, UnitStats]:
     all_units = set(cache_units) | set(tank_units)
     stats: dict[Path, UnitStats] = {}
     for unit in all_units:
+        cache_size, cache_oldest = cache_units.get(unit, (0, None))
+        tank_size, tank_oldest = tank_units.get(unit, (0, None))
         stats[unit] = UnitStats(
             relative_dir=unit,
-            size_on_cache=cache_units.get(unit, 0),
-            size_on_tank=tank_units.get(unit, 0),
+            size_on_cache=cache_size,
+            size_on_tank=tank_size,
+            oldest_cache_mtime=cache_oldest,
+            oldest_tank_mtime=tank_oldest,
         )
     return stats
+
+
+def unit_age_key(relative_dir: Path, stats: UnitStats | None, state: dict[str, dict[str, float]]) -> tuple[float, str]:
+    if stats is not None and stats.oldest_cache_mtime is not None:
+        return (stats.oldest_cache_mtime, str(relative_dir))
+    return (
+        float(state.get("units", {}).get(str(relative_dir), {}).get("first_seen", 0.0)),
+        str(relative_dir),
+    )
 
 
 def select_desired_frequent_units(
@@ -599,10 +617,7 @@ def main() -> int:
                 for unit, stats in unit_stats.items()
                 if stats.size_on_cache > 0 and unit not in desired_frequent
             ),
-            key=lambda unit: (
-                float(state.get("units", {}).get(str(unit), {}).get("first_seen", 0.0)),
-                str(unit),
-            ),
+            key=lambda unit: unit_age_key(unit, unit_stats.get(unit), state),
         )
         for relative_dir in recent_candidates:
             if available_bytes >= config.cache_target_free_space_bytes:
@@ -626,7 +641,10 @@ def main() -> int:
                     for unit in desired_frequent
                     if unit_stats.get(unit) is not None and unit_stats[unit].size_on_cache > 0
                 ),
-                key=lambda unit: (hot_scores.get(unit, 0), str(unit)),
+                key=lambda unit: (
+                    hot_scores.get(unit, 0),
+                    *unit_age_key(unit, unit_stats.get(unit), state),
+                ),
             )
             for relative_dir in frequent_candidates:
                 if available_bytes >= config.cache_target_free_space_bytes:
