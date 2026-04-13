@@ -34,9 +34,18 @@ class HostArtifacts:
 class MediaMoverConfig:
     source_dir: str
     target_dir: str
-    age_days: int
     schedule: str
     ignore_paths: tuple[str, ...]
+    managed_roots: tuple[str, ...]
+    merged_root: str
+    plex_mount_root: str
+    tautulli_url: str
+    tautulli_config_path: str
+    tautulli_lookback_days: int
+    frequent_budget: str
+    cache_min_free_space: str
+    cache_target_free_space: str
+    state_file: str
 
 
 FILE_SPECS = (
@@ -115,17 +124,65 @@ def normalize_config(registry, host: str) -> MediaMoverConfig:
     if source_dir == target_dir:
         raise ValueError(f"media-mover source_dir and target_dir must differ for {host}")
 
-    age_days_raw = registry.get(host, "media-mover.age_days", 14)
-    try:
-        age_days = int(age_days_raw)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(f"media-mover.age_days must be an integer for {host}") from exc
-    if age_days < 1:
-        raise ValueError(f"media-mover.age_days must be at least 1 for {host}")
-
     schedule = require_text(
         registry.get(host, "media-mover.schedule", "daily"),
         f"media-mover.schedule is required for {host}",
+    )
+
+    managed_roots_raw = registry.get(host, "media-mover.managed_roots", ["movies", "tv"])
+    if not isinstance(managed_roots_raw, list) or not managed_roots_raw:
+        raise ValueError(f"media-mover.managed_roots must be a non-empty list for {host}")
+    managed_roots = []
+    for item in managed_roots_raw:
+        root_name = require_text(item, f"media-mover.managed_roots entries must be non-empty for {host}")
+        if "/" in root_name:
+            raise ValueError(
+                f"media-mover.managed_roots entries must be simple relative names for {host}"
+            )
+        managed_roots.append(root_name)
+
+    merged_root = require_text(
+        registry.get(host, "media-mover.merged_root", "/mnt/user/media"),
+        f"media-mover.merged_root is required for {host}",
+    )
+    plex_mount_root = require_text(
+        registry.get(host, "media-mover.plex_mount_root", "/data"),
+        f"media-mover.plex_mount_root is required for {host}",
+    )
+    tautulli_url = require_text(
+        registry.get(host, "media-mover.tautulli_url", "https://tautulli.freender.net"),
+        f"media-mover.tautulli_url is required for {host}",
+    )
+    tautulli_config_path = require_text(
+        registry.get(host, "media-mover.tautulli_config_path", "/mnt/cache/appdata/tautulli/config.ini"),
+        f"media-mover.tautulli_config_path is required for {host}",
+    )
+
+    lookback_days_raw = registry.get(host, "media-mover.tautulli_lookback_days", 90)
+    try:
+        tautulli_lookback_days = int(lookback_days_raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"media-mover.tautulli_lookback_days must be an integer for {host}") from exc
+    if tautulli_lookback_days < 1:
+        raise ValueError(f"media-mover.tautulli_lookback_days must be at least 1 for {host}")
+
+    frequent_budget = require_text(
+        registry.get(host, "media-mover.frequent_budget", "500G"),
+        f"media-mover.frequent_budget is required for {host}",
+    )
+
+    cache_min_free_space = require_text(
+        registry.get(host, "media-mover.cache_min_free_space", "500G"),
+        f"media-mover.cache_min_free_space is required for {host}",
+    )
+    cache_target_free_space = require_text(
+        registry.get(host, "media-mover.cache_target_free_space", "700G"),
+        f"media-mover.cache_target_free_space is required for {host}",
+    )
+
+    state_file = require_text(
+        registry.get(host, "media-mover.state_file", "/var/lib/homelab-media-mover/state.json"),
+        f"media-mover.state_file is required for {host}",
     )
 
     ignore_paths_raw = registry.get(host, "media-mover.ignore_paths", [])
@@ -144,9 +201,18 @@ def normalize_config(registry, host: str) -> MediaMoverConfig:
     return MediaMoverConfig(
         source_dir=source_dir,
         target_dir=target_dir,
-        age_days=age_days,
         schedule=schedule,
         ignore_paths=tuple(ignore_paths),
+        managed_roots=tuple(managed_roots),
+        merged_root=merged_root,
+        plex_mount_root=plex_mount_root,
+        tautulli_url=tautulli_url,
+        tautulli_config_path=tautulli_config_path,
+        tautulli_lookback_days=tautulli_lookback_days,
+        frequent_budget=frequent_budget,
+        cache_min_free_space=cache_min_free_space,
+        cache_target_free_space=cache_target_free_space,
+        state_file=state_file,
     )
 
 
@@ -180,8 +246,17 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
         {
             "SOURCE_DIR": config.source_dir,
             "TARGET_DIR": config.target_dir,
-            "AGE_DAYS": str(config.age_days),
             "IGNORE_PATHS": ":".join(config.ignore_paths),
+            "MANAGED_ROOTS": ":".join(config.managed_roots),
+            "MERGED_ROOT": config.merged_root,
+            "PLEX_MOUNT_ROOT": config.plex_mount_root,
+            "TAUTULLI_URL": config.tautulli_url,
+            "TAUTULLI_CONFIG_PATH": config.tautulli_config_path,
+            "TAUTULLI_LOOKBACK_DAYS": str(config.tautulli_lookback_days),
+            "FREQUENT_BUDGET": config.frequent_budget,
+            "CACHE_MIN_FREE_SPACE": config.cache_min_free_space,
+            "CACHE_TARGET_FREE_SPACE": config.cache_target_free_space,
+            "STATE_FILE": config.state_file,
         },
     )
     write_file_map(build_dir)
