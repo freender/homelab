@@ -284,6 +284,7 @@ def render_config(
     feature_line = None
     if features:
         feature_line = "features: " + ",".join(f"{name}={value}" for name, value in features.items())
+    explicit_idmapped_sources = {mount["source"] for mount in idmapped_mounts}
     root_mount_lines = [
         f"mp{mount['slot']}: {mount['source']},mp={mount['target']},backup={mount['backup']}"
         for mount in root_mounts
@@ -292,6 +293,7 @@ def render_config(
         f"lxc.mount.entry: {mountpoint} mnt/{mountpoint.lstrip('/')}"
         " none bind,create=dir,idmap=container 0 0"
         for mountpoint in leaf_mounts
+        if mountpoint not in explicit_idmapped_sources
     ] + [
         f"lxc.mount.entry: {mount['source']} {mount['target'].lstrip('/')}"
         " none bind,create=dir,idmap=container 0 0"
