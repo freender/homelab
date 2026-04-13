@@ -1,0 +1,18 @@
+[Unit]
+Description=Homelab Tiered Media MergerFS Mount
+After=local-fs.target zfs-mount.service
+Wants=local-fs.target zfs-mount.service
+RequiresMountsFor={{ REQUIRES_MOUNTS_FOR }}
+{{ ORDERING_LINES }}
+
+[Service]
+Type=simple
+ExecStartPre=/usr/bin/mkdir -p {{ BRANCH_DIRS }} {{ MOUNTPOINT }}
+ExecStart=/usr/bin/mergerfs -f -o {{ MERGERFS_OPTIONS }} {{ BRANCHES }} {{ MOUNTPOINT }}
+ExecStop=/bin/sh -c 'if mountpoint -q "{{ MOUNTPOINT }}"; then if command -v fusermount3 >/dev/null 2>&1; then exec fusermount3 -u "{{ MOUNTPOINT }}"; else exec fusermount -u "{{ MOUNTPOINT }}"; fi; fi'
+Restart=on-failure
+RestartSec=5
+KillMode=process
+
+[Install]
+WantedBy=multi-user.target

@@ -14,6 +14,7 @@ from .pve_gpu_passthrough import deploy as deploy_pve_gpu_passthrough
 from .pve_lxc_mounts import deploy as deploy_pve_lxc_mounts
 from .pve_postinstall import deploy as deploy_pve_postinstall
 from .ssh_config import deploy as deploy_ssh_config
+from .tiered_media import deploy as deploy_tiered_media
 from .ubuntu_setup import deploy as deploy_ubuntu_setup
 from .zfs_automation import deploy as deploy_zfs_automation
 
@@ -58,6 +59,7 @@ MODULES: dict[str, ModuleDefinition] = {
         deploy=deploy_pve_lxc_mounts,
     ),
     "ssh-config": ModuleDefinition(name="SSH Config", deploy=deploy_ssh_config),
+    "tiered-media": ModuleDefinition(name="Tiered Media", deploy=deploy_tiered_media),
     "ubuntu-setup": ModuleDefinition(name="Ubuntu OS Setup", deploy=deploy_ubuntu_setup),
     "zfs-automation": ModuleDefinition(name="ZFS Automation", deploy=deploy_zfs_automation),
 }
@@ -68,6 +70,7 @@ MODULE_ORDER = [
     "apcupsd",
     "pve-exporters",
     "pve-gpu-passthrough",
+    "tiered-media",
     "pve-lxc-mounts",
     "ssh-config",
     "ubuntu-setup",
