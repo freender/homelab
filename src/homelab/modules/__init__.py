@@ -8,6 +8,7 @@ from ..deploy import DeploySession
 from .apcupsd import deploy as deploy_apcupsd
 from .apt_upgrade import deploy as deploy_apt_upgrade
 from .docker import deploy as deploy_docker
+from .media_mover import deploy as deploy_media_mover
 from .pve_backup import deploy as deploy_pve_backup
 from .pve_exporters import deploy as deploy_pve_exporters
 from .pve_gpu_passthrough import deploy as deploy_pve_gpu_passthrough
@@ -37,6 +38,10 @@ MODULES: dict[str, ModuleDefinition] = {
     "docker": ModuleDefinition(
         name="Docker Management Scripts",
         deploy=deploy_docker,
+    ),
+    "media-mover": ModuleDefinition(
+        name="Media Mover",
+        deploy=deploy_media_mover,
     ),
     "pve-backup": ModuleDefinition(
         name="PVE Backup",
@@ -70,6 +75,7 @@ MODULE_ORDER = [
     "apcupsd",
     "pve-exporters",
     "pve-gpu-passthrough",
+    "media-mover",
     "tiered-media",
     "pve-lxc-mounts",
     "ssh-config",

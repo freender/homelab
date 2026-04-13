@@ -1,0 +1,9 @@
+[Unit]
+Description=Run homelab media mover on schedule
+
+[Timer]
+OnCalendar={{ MEDIA_MOVER_SCHEDULE }}
+Persistent=true
+
+[Install]
+WantedBy=timers.target

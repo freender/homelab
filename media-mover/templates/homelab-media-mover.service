@@ -1,0 +1,9 @@
+[Unit]
+Description=Homelab media mover
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/default/homelab-media-mover
+ExecStart=/usr/local/bin/homelab-media-mover
+StandardOutput=journal
+StandardError=journal
