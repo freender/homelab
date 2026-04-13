@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from ..build import render_file, write_env_file
+from ..build import copy_file, render_file, write_env_file
 from ..deploy import DeploySession, force_env, prepare_build_dir, stage_and_run_remote_installer
 from ..hosts import HostLookupError, default_registry
 from ..output import print_action, print_error, print_sub
@@ -39,7 +39,6 @@ class MediaMoverConfig:
     managed_roots: tuple[str, ...]
     merged_root: str
     plex_mount_root: str
-    tautulli_url: str
     tautulli_config_path: str
     tautulli_lookback_days: int
     frequent_budget: str
@@ -53,6 +52,11 @@ FILE_SPECS = (
     FileSpec("homelab-media-mover.timer", "/etc/systemd/system/homelab-media-mover.timer"),
     FileSpec("homelab-media-mover.py", "/usr/local/bin/homelab-media-mover", mode="755"),
     FileSpec("media-mover.env", "/etc/default/homelab-media-mover", mode="600"),
+)
+LOCAL_ENV_SPEC = FileSpec(
+    "media-mover.local.env",
+    "/etc/default/homelab-media-mover.local",
+    mode="600",
 )
 
 
@@ -152,10 +156,6 @@ def normalize_config(registry, host: str) -> MediaMoverConfig:
         registry.get(host, "media-mover.plex_mount_root", "/data"),
         f"media-mover.plex_mount_root is required for {host}",
     )
-    tautulli_url = require_text(
-        registry.get(host, "media-mover.tautulli_url", "https://tautulli.freender.net"),
-        f"media-mover.tautulli_url is required for {host}",
-    )
     tautulli_config_path = require_text(
         registry.get(
             host,
@@ -218,7 +218,6 @@ def normalize_config(registry, host: str) -> MediaMoverConfig:
         managed_roots=tuple(managed_roots),
         merged_root=merged_root,
         plex_mount_root=plex_mount_root,
-        tautulli_url=tautulli_url,
         tautulli_config_path=tautulli_config_path,
         tautulli_lookback_days=tautulli_lookback_days,
         frequent_budget=frequent_budget,
@@ -228,8 +227,8 @@ def normalize_config(registry, host: str) -> MediaMoverConfig:
     )
 
 
-def write_file_map(build_dir: Path) -> None:
-    lines = [f"{spec.build_name}|{spec.remote_path}|{spec.mode}" for spec in FILE_SPECS]
+def write_file_map(build_dir: Path, file_specs: tuple[FileSpec, ...]) -> None:
+    lines = [f"{spec.build_name}|{spec.remote_path}|{spec.mode}" for spec in file_specs]
     (build_dir / "file-map.conf").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
@@ -262,7 +261,6 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
             "MANAGED_ROOTS": ":".join(config.managed_roots),
             "MERGED_ROOT": config.merged_root,
             "PLEX_MOUNT_ROOT": config.plex_mount_root,
-            "TAUTULLI_URL": config.tautulli_url,
             "TAUTULLI_CONFIG_PATH": config.tautulli_config_path,
             "TAUTULLI_LOOKBACK_DAYS": str(config.tautulli_lookback_days),
             "FREQUENT_BUDGET": config.frequent_budget,
@@ -271,8 +269,13 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
             "STATE_FILE": config.state_file,
         },
     )
-    write_file_map(build_dir)
-    return HostArtifacts(build_dir=build_dir, file_specs=FILE_SPECS)
+    file_specs = list(FILE_SPECS)
+    local_env_path = module_dir / ".env"
+    if local_env_path.is_file():
+        copy_file(local_env_path, build_dir / LOCAL_ENV_SPEC.build_name)
+        file_specs.append(LOCAL_ENV_SPEC)
+    write_file_map(build_dir, tuple(file_specs))
+    return HostArtifacts(build_dir=build_dir, file_specs=tuple(file_specs))
 
 
 def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
