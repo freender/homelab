@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import configparser
 import hashlib
 import json
 import os
@@ -31,7 +30,6 @@ class Config:
     managed_roots: tuple[str, ...]
     tautulli_url: str
     tautulli_api_key: str
-    tautulli_config_path: Path
     tautulli_lookback_days: int
     frequent_budget_bytes: int
     cache_min_free_space_bytes: int
@@ -114,8 +112,7 @@ def load_config() -> Config:
     ignore_paths = parse_ignore_paths(source_root, os.environ.get("IGNORE_PATHS", ""))
     managed_roots = parse_managed_roots(require_env("MANAGED_ROOTS"))
     tautulli_url = require_env("TAUTULLI_URL").rstrip("/")
-    tautulli_api_key = os.environ.get("TAUTULLI_API_KEY", "").strip().strip('"')
-    tautulli_config_path = Path(require_env("TAUTULLI_CONFIG_PATH"))
+    tautulli_api_key = require_env("TAUTULLI_API_KEY").strip().strip('"')
     tautulli_lookback_days = int(require_env("TAUTULLI_LOOKBACK_DAYS"))
     frequent_budget_bytes = parse_size(require_env("FREQUENT_BUDGET"))
     cache_min_free_space_bytes = parse_size(require_env("CACHE_MIN_FREE_SPACE"))
@@ -147,7 +144,6 @@ def load_config() -> Config:
         managed_roots=managed_roots,
         tautulli_url=tautulli_url,
         tautulli_api_key=tautulli_api_key,
-        tautulli_config_path=tautulli_config_path,
         tautulli_lookback_days=tautulli_lookback_days,
         frequent_budget_bytes=frequent_budget_bytes,
         cache_min_free_space_bytes=cache_min_free_space_bytes,
@@ -215,22 +211,6 @@ def write_state(path: Path, state: dict[str, dict[str, float]]) -> None:
     path.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
-def read_tautulli_api_key(config_path: Path) -> str:
-    parser = configparser.ConfigParser()
-    if not parser.read(config_path, encoding="utf-8"):
-        raise SystemExit(f"failed to read Tautulli config: {config_path}")
-    api_key = parser.get("General", "api_key", fallback="").strip().strip('"')
-    if not api_key:
-        raise SystemExit(f"missing api_key in Tautulli config: {config_path}")
-    return api_key
-
-
-def resolve_tautulli_api_key(config: Config) -> str:
-    if config.tautulli_api_key:
-        return config.tautulli_api_key
-    return read_tautulli_api_key(config.tautulli_config_path)
-
-
 def tautulli_get(base_url: str, api_key: str, cmd: str, **params: object) -> dict[str, object]:
     query = {"apikey": api_key, "cmd": cmd}
     for key, value in params.items():
@@ -291,7 +271,7 @@ def score_row(row: dict[str, object]) -> int:
 
 
 def build_hot_scores(config: Config) -> dict[Path, int]:
-    api_key = resolve_tautulli_api_key(config)
+    api_key = config.tautulli_api_key
     after_date = time.strftime(
         "%Y-%m-%d",
         time.localtime(time.time() - (config.tautulli_lookback_days * 86400)),

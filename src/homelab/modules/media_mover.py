@@ -39,7 +39,6 @@ class MediaMoverConfig:
     managed_roots: tuple[str, ...]
     merged_root: str
     plex_mount_root: str
-    tautulli_config_path: str
     tautulli_lookback_days: int
     frequent_budget: str
     cache_min_free_space: str
@@ -156,15 +155,6 @@ def normalize_config(registry, host: str) -> MediaMoverConfig:
         registry.get(host, "media-mover.plex_mount_root", "/data"),
         f"media-mover.plex_mount_root is required for {host}",
     )
-    tautulli_config_path = require_text(
-        registry.get(
-            host,
-            "media-mover.tautulli_config_path",
-            "/mnt/cache/appdata/tautulli/config.ini",
-        ),
-        f"media-mover.tautulli_config_path is required for {host}",
-    )
-
     lookback_days_raw = registry.get(host, "media-mover.tautulli_lookback_days", 90)
     try:
         tautulli_lookback_days = int(lookback_days_raw)
@@ -218,7 +208,6 @@ def normalize_config(registry, host: str) -> MediaMoverConfig:
         managed_roots=tuple(managed_roots),
         merged_root=merged_root,
         plex_mount_root=plex_mount_root,
-        tautulli_config_path=tautulli_config_path,
         tautulli_lookback_days=tautulli_lookback_days,
         frequent_budget=frequent_budget,
         cache_min_free_space=cache_min_free_space,
@@ -261,7 +250,6 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
             "MANAGED_ROOTS": ":".join(config.managed_roots),
             "MERGED_ROOT": config.merged_root,
             "PLEX_MOUNT_ROOT": config.plex_mount_root,
-            "TAUTULLI_CONFIG_PATH": config.tautulli_config_path,
             "TAUTULLI_LOOKBACK_DAYS": str(config.tautulli_lookback_days),
             "FREQUENT_BUDGET": config.frequent_budget,
             "CACHE_MIN_FREE_SPACE": config.cache_min_free_space,
