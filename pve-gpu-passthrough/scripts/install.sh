@@ -7,6 +7,10 @@ set -e
 HOST=${1:-$(hostname)}
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD_DIR="$SCRIPT_DIR/build/$HOST"
+GPU_BLACKLIST_PATH="/etc/modprobe.d/homelab-gpu-blacklist.conf"
+LEGACY_BLACKLIST_PATH="/etc/modprobe.d/blacklist.conf"
+VFIO_CONF_PATH="/etc/modprobe.d/vfio.conf"
+VFIO_MODULES_PATH="/etc/modules-load.d/vfio.conf"
 
 if [[ -f "$SCRIPT_DIR/lib/utils.sh" ]]; then
     # shellcheck source=/dev/null
@@ -16,10 +20,7 @@ else
     exit 1
 fi
 
-require_file "$BUILD_DIR/blacklist.conf" "$BUILD_DIR/blacklist.conf" || exit 1
 require_file "$BUILD_DIR/cmdline" "$BUILD_DIR/cmdline" || exit 1
-require_file "$BUILD_DIR/vfio.conf" "$BUILD_DIR/vfio.conf" || exit 1
-require_file "$BUILD_DIR/modules" "$BUILD_DIR/modules" || exit 1
 
 if [[ ! -f /etc/kernel/cmdline ]]; then
     echo "Error: /etc/kernel/cmdline not found (systemd-boot required)"
@@ -56,18 +57,47 @@ if [[ "$current_cmdline" != "$cmdline" ]]; then
 fi
 
 print_sub "Deploying modprobe configs..."
-if [[ ! -f /etc/modprobe.d/blacklist.conf ]] || ! cmp -s "$BUILD_DIR/blacklist.conf" /etc/modprobe.d/blacklist.conf; then
-    cp "$BUILD_DIR/blacklist.conf" /etc/modprobe.d/blacklist.conf
+if [[ -f "$LEGACY_BLACKLIST_PATH" ]] && grep -qE '^blacklist (i915|nvidia|nouveau)' "$LEGACY_BLACKLIST_PATH"; then
+    backup_config "$LEGACY_BLACKLIST_PATH"
+    sed -i \
+        -e 's/^blacklist i915/# &  # Migrated by pve-gpu-passthrough/' \
+        -e 's/^blacklist nvidia/# &  # Migrated by pve-gpu-passthrough/' \
+        -e 's/^blacklist nouveau/# &  # Migrated by pve-gpu-passthrough/' \
+        "$LEGACY_BLACKLIST_PATH"
     initramfs_needs_update=true
 fi
-if [[ ! -f /etc/modprobe.d/vfio.conf ]] || ! cmp -s "$BUILD_DIR/vfio.conf" /etc/modprobe.d/vfio.conf; then
-    cp "$BUILD_DIR/vfio.conf" /etc/modprobe.d/vfio.conf
+
+if [[ -f "$BUILD_DIR/blacklist.conf" ]]; then
+    if [[ ! -f "$GPU_BLACKLIST_PATH" ]] || ! cmp -s "$BUILD_DIR/blacklist.conf" "$GPU_BLACKLIST_PATH"; then
+        cp "$BUILD_DIR/blacklist.conf" "$GPU_BLACKLIST_PATH"
+        initramfs_needs_update=true
+    fi
+elif [[ -f "$GPU_BLACKLIST_PATH" ]]; then
+    backup_config "$GPU_BLACKLIST_PATH"
+    rm -f "$GPU_BLACKLIST_PATH"
+    initramfs_needs_update=true
+fi
+
+if [[ -f "$BUILD_DIR/vfio.conf" ]]; then
+    if [[ ! -f "$VFIO_CONF_PATH" ]] || ! cmp -s "$BUILD_DIR/vfio.conf" "$VFIO_CONF_PATH"; then
+        cp "$BUILD_DIR/vfio.conf" "$VFIO_CONF_PATH"
+        initramfs_needs_update=true
+    fi
+elif [[ -f "$VFIO_CONF_PATH" ]]; then
+    backup_config "$VFIO_CONF_PATH"
+    rm -f "$VFIO_CONF_PATH"
     initramfs_needs_update=true
 fi
 
 print_sub "Deploying VFIO modules..."
-if [[ ! -f /etc/modules-load.d/vfio.conf ]] || ! cmp -s "$BUILD_DIR/modules" /etc/modules-load.d/vfio.conf; then
-    cp "$BUILD_DIR/modules" /etc/modules-load.d/vfio.conf
+if [[ -f "$BUILD_DIR/modules" ]]; then
+    if [[ ! -f "$VFIO_MODULES_PATH" ]] || ! cmp -s "$BUILD_DIR/modules" "$VFIO_MODULES_PATH"; then
+        cp "$BUILD_DIR/modules" "$VFIO_MODULES_PATH"
+        initramfs_needs_update=true
+    fi
+elif [[ -f "$VFIO_MODULES_PATH" ]]; then
+    backup_config "$VFIO_MODULES_PATH"
+    rm -f "$VFIO_MODULES_PATH"
     initramfs_needs_update=true
 fi
 

@@ -94,9 +94,9 @@ if [[ "$SKIP_CONFIRM" == "false" && "$DRY_RUN" == "false" ]]; then
     print_header "GPU Passthrough Removal Plan"
     printf 'Hosts: %s\n\n' "${HOSTS[*]}"
     printf 'Actions per host:\n'
-    printf '  - Remove video=efifb:off from kernel cmdline\n'
-    printf '  - Comment out GPU driver blacklists\n'
-    printf '  - Comment out VFIO device bindings\n'
+    printf '  - Restore baseline kernel cmdline\n'
+    printf '  - Remove managed GPU blacklist file\n'
+    printf '  - Remove VFIO device bindings\n'
     printf '  - Remove VFIO module config\n'
     printf '  - Update initramfs and bootloader\n\n'
     read -r -p 'Proceed with removal? [y/N]: ' reply

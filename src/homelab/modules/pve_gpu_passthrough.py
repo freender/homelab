@@ -6,12 +6,15 @@ from invoke.exceptions import UnexpectedExit
 
 from ..build import copy_files, render_file
 from ..deploy import DeploySession, prepare_build_dir, stage_and_run_remote_installer
-from ..hosts import HostLookupError, default_registry
+from ..hosts import default_registry
 from ..output import print_action, print_error, print_sub
 from ..ssh import HostConnection, build_files, offline_mode
 
 REMOTE_ROOT = "/tmp/homelab-pve-gpu-passthrough"
 REQUIRED_ROOT_TOKEN = "root=ZFS=rpool/ROOT/pve-1"
+GPU_BLACKLIST_REMOTE_PATH = "/etc/modprobe.d/homelab-gpu-blacklist.conf"
+VFIO_REMOTE_PATH = "/etc/modprobe.d/vfio.conf"
+VFIO_MODULES_REMOTE_PATH = "/etc/modules-load.d/vfio.conf"
 
 
 def deploy(
@@ -42,9 +45,9 @@ def deploy(
 def validate(root: Path) -> None:
     configs_dir = root / "pve-gpu-passthrough" / "configs"
     required_files = [
-        configs_dir / "modules",
         configs_dir / "blacklist.conf",
         configs_dir / "cmdline",
+        configs_dir / "modules",
         configs_dir / "vfio.conf.tpl",
     ]
     for file_path in required_files:
@@ -65,11 +68,8 @@ def deploy_host(root: Path, host: str, dry_run: bool) -> None:
     configs_dir = module_dir / "configs"
     build_dir = module_dir / "build" / host
     root_dataset = REQUIRED_ROOT_TOKEN.removeprefix("root=ZFS=")
-
-    try:
-        pci_ids = registry.get(host, "pve-gpu-passthrough.pci_ids")
-    except HostLookupError as exc:
-        raise ValueError(str(exc)) from exc
+    isolate_host_gpu = bool(registry.get(host, "pve-gpu-passthrough.isolate_host_gpu", False))
+    pci_ids = str(registry.get(host, "pve-gpu-passthrough.pci_ids", "")).strip()
 
     connection = HostConnection(host)
     if not dry_run and not dataset_exists(connection, root_dataset):
@@ -80,11 +80,21 @@ def deploy_host(root: Path, host: str, dry_run: bool) -> None:
         raise ValueError(f"Required ZFS dataset not found on {host}: {root_dataset}")
 
     prepare_build_dir(build_dir)
-    copy_files(configs_dir, build_dir, ["blacklist.conf", "cmdline", "modules"])
-    render_file(configs_dir / "vfio.conf.tpl", build_dir / "vfio.conf", PCI_IDS=pci_ids)
+    cmdline_value = build_cmdline(configs_dir / "cmdline", isolate_host_gpu)
+    (build_dir / "cmdline").write_text(f"{cmdline_value}\n", encoding="utf-8")
+    if isolate_host_gpu:
+        copy_files(configs_dir, build_dir, ["blacklist.conf"])
+    if pci_ids:
+        copy_files(configs_dir, build_dir, ["modules"])
+        render_file(configs_dir / "vfio.conf.tpl", build_dir / "vfio.conf", PCI_IDS=pci_ids)
 
     print_sub("Comparing with remote configs...")
-    diff_remote_files(connection, build_dir)
+    diff_remote_files(
+        connection,
+        build_dir,
+        manage_blacklist=isolate_host_gpu,
+        manage_vfio=bool(pci_ids),
+    )
 
     if dry_run:
         print_sub(f"[DRY-RUN] Would deploy to {host}:{REMOTE_ROOT}/")
@@ -107,15 +117,34 @@ def dataset_exists(connection: HostConnection, dataset: str) -> bool:
     return True
 
 
-def diff_remote_files(connection: HostConnection, build_dir: Path) -> None:
-    remote_map = {
-        "blacklist.conf": "/etc/modprobe.d/blacklist.conf",
-        "vfio.conf": "/etc/modprobe.d/vfio.conf",
-        "modules": "/etc/modules-load.d/vfio.conf",
-        "cmdline": "/etc/kernel/cmdline",
-    }
-    for local_name, remote_path in remote_map.items():
-        _, message = connection.remote_diff(build_dir / local_name, remote_path)
+def build_cmdline(cmdline_path: Path, isolate_host_gpu: bool) -> str:
+    base_cmdline = cmdline_path.read_text(encoding="utf-8").splitlines()[0].strip()
+    if isolate_host_gpu:
+        return f"{base_cmdline} video=efifb:off"
+    return base_cmdline
+
+
+def diff_remote_files(
+    connection: HostConnection,
+    build_dir: Path,
+    *,
+    manage_blacklist: bool,
+    manage_vfio: bool,
+) -> None:
+    remote_map = [(build_dir / "cmdline", "/etc/kernel/cmdline")]
+    if manage_blacklist:
+        remote_map.append((build_dir / "blacklist.conf", GPU_BLACKLIST_REMOTE_PATH))
+    else:
+        print_sub(f"[-] {GPU_BLACKLIST_REMOTE_PATH} (will be removed if present)")
+    if manage_vfio:
+        remote_map.append((build_dir / "vfio.conf", VFIO_REMOTE_PATH))
+        remote_map.append((build_dir / "modules", VFIO_MODULES_REMOTE_PATH))
+    else:
+        print_sub(f"[-] {VFIO_REMOTE_PATH} (will be removed if present)")
+        print_sub(f"[-] {VFIO_MODULES_REMOTE_PATH} (will be removed if present)")
+
+    for local_path, remote_path in remote_map:
+        _, message = connection.remote_diff(local_path, remote_path)
         print_sub(message)
 
 

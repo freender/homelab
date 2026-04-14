@@ -13,6 +13,11 @@ set -e
 VERSION="2.0.0"
 TIMESTAMP=$(date +%Y%m%d%H%M%S)
 DRY_RUN=false
+BASELINE_CMDLINE="root=ZFS=rpool/ROOT/pve-1 boot=zfs quiet intel_iommu=on iommu=pt pcie_acs_override=downstream"
+GPU_BLACKLIST_PATH="/etc/modprobe.d/homelab-gpu-blacklist.conf"
+LEGACY_BLACKLIST_PATH="/etc/modprobe.d/blacklist.conf"
+VFIO_CONF_PATH="/etc/modprobe.d/vfio.conf"
+VFIO_MODULES_PATH="/etc/modules-load.d/vfio.conf"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [[ -f "$SCRIPT_DIR/lib/utils.sh" ]]; then
@@ -80,10 +85,10 @@ if [[ ! -f /etc/kernel/cmdline ]]; then
 fi
 
 CURRENT_CMDLINE=$(cat /etc/kernel/cmdline)
-NEW_CMDLINE=$(echo "$CURRENT_CMDLINE" | sed 's/ video=efifb:off//g' | sed 's/video=efifb:off //g')
+NEW_CMDLINE="$BASELINE_CMDLINE"
 
 if [[ "$CURRENT_CMDLINE" == "$NEW_CMDLINE" ]]; then
-    echo "    No changes needed (video=efifb:off not present)"
+    echo "    No changes needed (cmdline already matches baseline)"
 else
     echo "    Old: $CURRENT_CMDLINE"
     echo "    New: $NEW_CMDLINE"
@@ -97,33 +102,47 @@ else
 fi
 echo ""
 
-echo "==> Updating /etc/modprobe.d/blacklist.conf..."
-if [[ -f /etc/modprobe.d/blacklist.conf ]]; then
+echo "==> Removing $GPU_BLACKLIST_PATH..."
+if [[ -f "$GPU_BLACKLIST_PATH" ]]; then
+    if [[ "$DRY_RUN" == "false" ]]; then
+        backup_config "$GPU_BLACKLIST_PATH"
+        rm -f "$GPU_BLACKLIST_PATH"
+        echo "    Removed"
+    else
+        echo "    [DRY RUN] Would remove"
+    fi
+else
+    echo "    File not found (already removed or never deployed)"
+fi
+echo ""
+
+echo "==> Updating legacy $LEGACY_BLACKLIST_PATH..."
+if [[ -f "$LEGACY_BLACKLIST_PATH" ]]; then
     BLACKLIST_CHANGED=false
 
-    if grep -q "^blacklist i915" /etc/modprobe.d/blacklist.conf 2>/dev/null; then
+    if grep -q "^blacklist i915" "$LEGACY_BLACKLIST_PATH" 2>/dev/null; then
         echo "    Found: blacklist i915"
         BLACKLIST_CHANGED=true
     fi
 
-    if grep -q "^blacklist nvidia" /etc/modprobe.d/blacklist.conf 2>/dev/null; then
+    if grep -q "^blacklist nvidia" "$LEGACY_BLACKLIST_PATH" 2>/dev/null; then
         echo "    Found: blacklist nvidia"
         BLACKLIST_CHANGED=true
     fi
 
-    if grep -q "^blacklist nouveau" /etc/modprobe.d/blacklist.conf 2>/dev/null; then
+    if grep -q "^blacklist nouveau" "$LEGACY_BLACKLIST_PATH" 2>/dev/null; then
         echo "    Found: blacklist nouveau"
         BLACKLIST_CHANGED=true
     fi
 
     if [[ "$BLACKLIST_CHANGED" == "true" ]]; then
         if [[ "$DRY_RUN" == "false" ]]; then
-            backup_config /etc/modprobe.d/blacklist.conf
+            backup_config "$LEGACY_BLACKLIST_PATH"
             sed -i \
                 -e "s/^blacklist i915.*/# &  # Removed by remove-local.sh on $TIMESTAMP/" \
                 -e "s/^blacklist nvidia.*/# &  # Removed by remove-local.sh on $TIMESTAMP/" \
                 -e "s/^blacklist nouveau.*/# &  # Removed by remove-local.sh on $TIMESTAMP/" \
-                /etc/modprobe.d/blacklist.conf
+                "$LEGACY_BLACKLIST_PATH"
             echo "    Commented out GPU driver blacklists"
         else
             echo "    [DRY RUN] Would comment out blacklists"
@@ -136,33 +155,25 @@ else
 fi
 echo ""
 
-echo "==> Updating /etc/modprobe.d/vfio.conf..."
-if [[ -f /etc/modprobe.d/vfio.conf ]]; then
-    if grep -q "^options vfio-pci" /etc/modprobe.d/vfio.conf 2>/dev/null; then
-        VFIO_LINE=$(grep "^options vfio-pci" /etc/modprobe.d/vfio.conf)
-        echo "    Found: $VFIO_LINE"
-
-        if [[ "$DRY_RUN" == "false" ]]; then
-            backup_config /etc/modprobe.d/vfio.conf
-            sed -i \
-                "s/^options vfio-pci/# options vfio-pci/; s/$/ # Removed by remove-local.sh on $TIMESTAMP/" \
-                /etc/modprobe.d/vfio.conf
-            echo "    Commented out VFIO device binding"
-        else
-            echo "    [DRY RUN] Would comment out VFIO binding"
-        fi
+echo "==> Removing $VFIO_CONF_PATH..."
+if [[ -f "$VFIO_CONF_PATH" ]]; then
+    if [[ "$DRY_RUN" == "false" ]]; then
+        backup_config "$VFIO_CONF_PATH"
+        rm -f "$VFIO_CONF_PATH"
+        echo "    Removed"
     else
-        echo "    No active VFIO binding found"
+        echo "    [DRY RUN] Would remove"
     fi
 else
     echo "    File not found (skipping)"
 fi
 echo ""
 
-echo "==> Removing /etc/modules-load.d/vfio.conf..."
-if [[ -f /etc/modules-load.d/vfio.conf ]]; then
+echo "==> Removing $VFIO_MODULES_PATH..."
+if [[ -f "$VFIO_MODULES_PATH" ]]; then
     if [[ "$DRY_RUN" == "false" ]]; then
-        rm -f /etc/modules-load.d/vfio.conf
+        backup_config "$VFIO_MODULES_PATH"
+        rm -f "$VFIO_MODULES_PATH"
         echo "    Removed"
     else
         echo "    [DRY RUN] Would remove"
