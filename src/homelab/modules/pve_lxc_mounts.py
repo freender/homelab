@@ -160,9 +160,10 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
         idmapped_roots = [str(path) for path in container["idmapped_roots"]]
         idmapped_mounts = normalize_idmapped_mounts(container.get("idmapped_mounts", []))
         features = normalize_features(container.get("features", {}))
+        leaf_roots = idmapped_roots or [mount["source"] for mount in root_mounts]
 
         current_config = read_remote_text(connection, f"/etc/pve/lxc/{ctid}.conf")
-        leaf_mounts = query_leaf_mounts(connection, idmapped_roots)
+        leaf_mounts = query_leaf_mounts(connection, leaf_roots)
         desired_config = render_config(
             current_config,
             root_mounts,
@@ -294,12 +295,14 @@ def render_config(
     ]
     idmapped_lines = [
         f"lxc.mount.entry: {mountpoint} mnt/{mountpoint.lstrip('/')}"
-        " none bind,create=dir,idmap=container 0 0"
+        " none bind,create=dir"
+        + (",idmap=container 0 0" if idmapped_roots else "")
         for mountpoint in leaf_mounts
         if mountpoint not in explicit_idmapped_sources
     ] + [
         f"lxc.mount.entry: {mount['source']} {mount['target'].lstrip('/')}"
-        " none bind,create=dir,idmap=container 0 0"
+        " none bind,create=dir"
+        + (",idmap=container 0 0" if idmapped_roots else "")
         for mount in idmapped_mounts
     ]
     managed_idmapped_sources = {
