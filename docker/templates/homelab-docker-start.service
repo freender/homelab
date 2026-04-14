@@ -9,3 +9,6 @@ Type=oneshot
 ExecStart=/mnt/cache/appdata/start.sh
 StandardOutput=journal
 StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -52,6 +52,7 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
     ssh_user = str(registry.get(host, "config.user"))
     ssh_hostname = str(registry.get(host, "config.hostname", host))
     backup_enabled = str(registry.get(host, "docker.backup", "false")).lower()
+    run_on_boot = str(registry.get(host, "docker.run_on_boot", "false")).lower()
     start_schedule = str(registry.get(host, "docker.start_schedule", "")).strip()
     timer_enabled = "true" if start_schedule else "false"
     syncthing_unpause_schedule = str(
@@ -103,6 +104,7 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
         build_dir / "env",
         {
             "DOCKER_BACKUP": backup_enabled,
+            "RUN_DOCKER_START_ON_BOOT": run_on_boot,
             "ENABLE_DOCKER_START_TIMER": timer_enabled,
             "ENABLE_SYNCTHING_TIMERS": syncthing_timer_enabled,
         },

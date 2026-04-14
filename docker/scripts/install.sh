@@ -75,6 +75,25 @@ if [[ "$units_changed" == "true" ]]; then
     systemctl daemon-reload
 fi
 
+if [[ "$RUN_DOCKER_START_ON_BOOT" == "true" ]]; then
+    if ! systemctl is-enabled --quiet homelab-docker-start.service 2>/dev/null; then
+        systemctl enable homelab-docker-start.service
+        print_ok "homelab-docker-start.service enabled"
+    elif [[ "$units_changed" == "true" ]]; then
+        systemctl reenable homelab-docker-start.service
+        print_ok "homelab-docker-start.service reenabled"
+    else
+        print_sub "homelab-docker-start.service already enabled"
+    fi
+else
+    if systemctl is-enabled --quiet homelab-docker-start.service 2>/dev/null; then
+        systemctl disable homelab-docker-start.service
+        print_ok "homelab-docker-start.service disabled"
+    else
+        print_sub "homelab-docker-start.service disabled by config"
+    fi
+fi
+
 ensure_timer_state "homelab-docker-start.timer" "$ENABLE_DOCKER_START_TIMER" "$units_changed"
 ensure_timer_state "syncthing-unpause.timer" "$ENABLE_SYNCTHING_TIMERS" "$units_changed"
 ensure_timer_state "syncthing-pause.timer" "$ENABLE_SYNCTHING_TIMERS" "$units_changed"
