@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import shutil
+import stat
 import subprocess
 import sys
 import time
@@ -475,7 +476,7 @@ def select_desired_frequent_units(
 def move_file(source: Path, source_root: Path, target_root: Path) -> int:
     relative_path = source.relative_to(source_root)
     target = target_root / relative_path
-    target.parent.mkdir(parents=True, exist_ok=True)
+    ensure_target_parent_dirs(source, source_root, target_root)
 
     if target.exists():
         if source.samefile(target):
@@ -502,6 +503,21 @@ def move_file(source: Path, source_root: Path, target_root: Path) -> int:
     source.unlink()
     print(f"moved: {source} -> {target}")
     return size
+
+
+def ensure_target_parent_dirs(source: Path, source_root: Path, target_root: Path) -> None:
+    relative_parent = source.relative_to(source_root).parent
+    current_source = source_root
+    current_target = target_root
+    for part in relative_parent.parts:
+        current_source = current_source / part
+        current_target = current_target / part
+        if current_target.exists():
+            continue
+        current_target.mkdir()
+        source_stat = current_source.stat()
+        os.chown(current_target, source_stat.st_uid, source_stat.st_gid)
+        os.chmod(current_target, stat.S_IMODE(source_stat.st_mode))
 
 
 def file_hash(path: Path) -> str:
