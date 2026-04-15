@@ -1,0 +1,10 @@
+[Unit]
+Description=Run SnapRAID sync and scrub daily
+
+[Timer]
+OnCalendar={{ SYNC_SCHEDULE }}
+RandomizedDelaySec=1h
+Persistent=true
+
+[Install]
+WantedBy=timers.target

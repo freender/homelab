@@ -77,11 +77,21 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
         raise ValueError(str(exc)) from exc
 
     timezone = str(registry.get(host, "pve-postinstall.timezone", "UTC"))
-    ceph_enabled = "true" if registry.has(host, "ceph") else "false"
     import_pools_raw = registry.get(host, "pve-postinstall.import_pools", [])
     if not isinstance(import_pools_raw, list):
         raise ValueError(f"pve-postinstall.import_pools must be a list for {host}")
     import_pools = " ".join(str(p) for p in import_pools_raw)
+
+    mounts_raw = registry.get(host, "pve-postinstall.mounts", [])
+    if not isinstance(mounts_raw, list):
+        raise ValueError(f"pve-postinstall.mounts must be a list for {host}")
+    mounts: list[str] = []
+    for m in mounts_raw:
+        if not isinstance(m, dict) or "label" not in m or "path" not in m:
+            raise ValueError(f"pve-postinstall.mounts entry must have label and path for {host}")
+        mounts.append(f"{m['label']}:{m['path']}")
+    mounts_str = " ".join(mounts)
+
     if host_type != "pve":
         raise ValueError(f"Unsupported host type for {host}: {host_type}")
 
@@ -128,12 +138,13 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
         host,
         host_type,
         timezone,
-        ceph_enabled,
         import_pools,
+        mounts_str,
         build_dir,
         connection,
         force=force,
     )
+
 
 
 def write_file_map(build_dir: Path) -> None:
@@ -177,8 +188,8 @@ def stage_and_install(
     host: str,
     host_type: str,
     timezone: str,
-    ceph_enabled: str,
     import_pools: str,
+    mounts: str,
     build_dir: Path,
     connection: HostConnection,
     force: bool,
@@ -195,9 +206,10 @@ def stage_and_install(
         host,
         host_type,
         timezone,
-        ceph_enabled,
         import_pools,
+        mounts,
         env=force_env(force),
         require_root=True,
         remote_subdirs=("build", "lib"),
     )
+

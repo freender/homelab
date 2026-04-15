@@ -45,6 +45,30 @@ load_file_map() {
 mapped_dest() { printf '%s\n' "${FILE_MAP_DEST[$1]}"; }
 mapped_mode() { printf '%s\n' "${FILE_MAP_MODE[$1]:-644}"; }
 
+cleanup_legacy_replication_units() {
+    local path
+    local unit_name
+
+    LEGACY_REPLICATION_CLEANED=false
+
+    for path in \
+        /etc/systemd/system/homelab-zfs-replication.service \
+        /etc/systemd/system/homelab-zfs-replication.timer \
+        /usr/local/bin/homelab-zfs-replication \
+        "$MANAGED_DIR/homelab-zfs-replication.service" \
+        "$MANAGED_DIR/homelab-zfs-replication.timer" \
+        "$MANAGED_DIR/homelab-zfs-replication.sh"; do
+        [[ -e "$path" ]] || continue
+        unit_name="$(basename "$path")"
+        if [[ "$unit_name" == "homelab-zfs-replication.timer" ]] && systemctl is-enabled --quiet "$unit_name" 2>/dev/null; then
+            systemctl disable --now "$unit_name"
+        fi
+        rm -f "$path"
+        LEGACY_REPLICATION_CLEANED=true
+        print_ok "Removed legacy $unit_name"
+    done
+}
+
 install_build_file() {
     local name="$1"
     local rc=0
@@ -117,49 +141,25 @@ fi
 
 mkdir -p /etc/sanoid "$APPDATA_SCRIPTS_DIR" "$MANAGED_DIR"
 
+cleanup_legacy_replication_units
+
 rc=0
 install_build_file "sanoid.conf" || rc=$?
 if [[ $rc -eq 0 ]]; then
     print_ok "sanoid.conf updated"
 fi
 
-for helper in \
-    sanoid.conf \
-    homelab-zfs-snapshots.service \
-    homelab-zfs-snapshots.timer \
-    homelab-zfs-replication.service \
-    homelab-zfs-replication.timer \
-    homelab-zfs-replication.sh \
-    homelab-zfs-scrub.sh \
-    zfs-scrub.service \
-    zfs-scrub.timer \
-    homelab-zfs-health-check.service \
-    homelab-zfs-health-check.timer \
-    homelab-zfs-health-check.sh; do
+for helper in "${!FILE_MAP_DEST[@]}"; do
     rc=0
-    helper_mode="644"
-    case "$helper" in
-        homelab-zfs-replication.sh|homelab-zfs-scrub.sh|homelab-zfs-health-check.sh)
-            helper_mode="755"
-            ;;
-    esac
-    install_if_changed "$BUILD_DIR/$helper" "$MANAGED_DIR/$helper" "$helper_mode" "$MANAGED_DIR/$helper" || rc=$?
+    install_if_changed "$BUILD_DIR/$helper" "$MANAGED_DIR/$helper" "$(mapped_mode "$helper")" "$MANAGED_DIR/$helper" || rc=$?
     [[ $rc -eq 0 || $rc -eq 1 ]] || exit "$rc"
 done
 
-units_changed=false
-for unit in \
-    homelab-zfs-snapshots.service \
-    homelab-zfs-snapshots.timer \
-    homelab-zfs-replication.service \
-    homelab-zfs-replication.timer \
-    homelab-zfs-replication.sh \
-    homelab-zfs-scrub.sh \
-    zfs-scrub.service \
-    zfs-scrub.timer \
-    homelab-zfs-health-check.service \
-    homelab-zfs-health-check.timer \
-    homelab-zfs-health-check.sh; do
+units_changed="$LEGACY_REPLICATION_CLEANED"
+for unit in "${!FILE_MAP_DEST[@]}"; do
+    if [[ "$unit" == "sanoid.conf" ]]; then
+        continue
+    fi
     rc=0
     install_build_file "$unit" || rc=$?
     [[ $rc -eq 0 || $rc -eq 1 ]] || exit "$rc"
@@ -176,7 +176,13 @@ if [[ "$units_changed" == "true" ]]; then
 fi
 
 ensure_timer_state homelab-zfs-snapshots.timer "$ENABLE_ZFS_SNAPSHOTS" "$units_changed"
-ensure_timer_state homelab-zfs-replication.timer "$ENABLE_ZFS_REPLICATION" "$units_changed"
+
+for unit in "${!FILE_MAP_DEST[@]}"; do
+    if [[ "$unit" == homelab-zfs-replication-*.timer ]]; then
+        ensure_timer_state "$unit" "$ENABLE_ZFS_REPLICATION" "$units_changed"
+    fi
+done
+
 ensure_timer_state zfs-scrub.timer "$ENABLE_ZFS_SCRUB" "$units_changed"
 ensure_timer_state homelab-zfs-health-check.timer "$ENABLE_ZFS_HEALTH_CHECK" "$units_changed"
 

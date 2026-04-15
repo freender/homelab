@@ -1,14 +1,14 @@
 #!/bin/bash
 # install.sh - Install PVE post-install configs
-# Usage: ./scripts/install.sh [hostname] [pve] [timezone] [ceph_enabled] [import_pools]
+# Usage: ./scripts/install.sh [hostname] [pve] [timezone] [import_pools] [mounts]
 
 set -e
 
 HOST=${1:-$(hostname)}
 HOST_TYPE=${2:-}
 TIMEZONE=${3:-UTC}
-CEPH_ENABLED=${4:-false}
-IMPORT_POOLS=${5:-}
+IMPORT_POOLS=${4:-}
+MOUNTS=${5:-}
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD_DIR="$SCRIPT_DIR/build/$HOST"
 BACKUP_DIR="/var/backups/homelab/pve-postinstall"
@@ -169,6 +169,26 @@ ensure_local_zfs_storage() {
     pvesm add zfspool local-zfs --pool rpool --content images,rootdir --sparse 0 || print_warn "failed to create local-zfs storage"
 }
 
+ensure_required_packages() {
+    local missing_pkgs=()
+    local package
+
+    for package in mbuffer vim mc; do
+        if ! dpkg -s "$package" >/dev/null 2>&1; then
+            missing_pkgs+=("$package")
+        fi
+    done
+
+    if [[ ${#missing_pkgs[@]} -eq 0 ]]; then
+        print_sub "Required packages already installed"
+        return 0
+    fi
+
+    print_sub "Installing required packages: ${missing_pkgs[*]}"
+    apt-get update -qq
+    apt-get install -y -q "${missing_pkgs[@]}"
+}
+
 install_other_subfeatures() {
     if [[ -f "$BUILD_DIR/interfaces" ]]; then
         print_sub "Configuring network interfaces..."
@@ -256,12 +276,8 @@ case "$HOST_TYPE" in
             exit 1
         fi
 
-        if [[ "$CEPH_ENABLED" == "true" ]]; then
-            print_sub "Running Ceph daemon reconciliation..."
-            bash "$SCRIPT_DIR/scripts/pve-ceph-reconcile.sh" || print_warn "ceph daemon reconciliation skipped"
-        else
-            print_sub "Ceph feature disabled for host; skipping Ceph reconciliation"
-        fi
+        print_sub "Installing required packages..."
+        ensure_required_packages || exit 1
 
         print_sub "Importing ZFS pools..."
         import_zfs_pools "$IMPORT_POOLS"
@@ -271,6 +287,9 @@ case "$HOST_TYPE" in
 
         print_sub "Applying additional subfeatures..."
         install_other_subfeatures || exit 1
+
+        print_sub "Configuring disk mounts..."
+        bash "$SCRIPT_DIR/scripts/install-mounts.sh" "$MOUNTS" || exit 1
         ;;
     *)
         print_warn "Unsupported host type: $HOST_TYPE"

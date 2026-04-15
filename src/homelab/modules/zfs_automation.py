@@ -58,19 +58,21 @@ class ReplicationPlan:
     post_hook: str = ""
 
 
-FILE_SPECS = (
+@dataclass(frozen=True)
+class ReplicationJob:
+    name: str
+    schedule: str
+    plans: tuple[ReplicationPlan, ...]
+    after_commands: tuple[str, ...]
+
+
+BASE_FILE_SPECS = (
     FileSpec("sanoid.conf", "/etc/sanoid/sanoid.conf"),
     FileSpec(
         "homelab-zfs-snapshots.service",
         "/etc/systemd/system/homelab-zfs-snapshots.service",
     ),
     FileSpec("homelab-zfs-snapshots.timer", "/etc/systemd/system/homelab-zfs-snapshots.timer"),
-    FileSpec(
-        "homelab-zfs-replication.service",
-        "/etc/systemd/system/homelab-zfs-replication.service",
-    ),
-    FileSpec("homelab-zfs-replication.timer", "/etc/systemd/system/homelab-zfs-replication.timer"),
-    FileSpec("homelab-zfs-replication.sh", "/usr/local/bin/homelab-zfs-replication", mode="755"),
     FileSpec("homelab-zfs-scrub.sh", "/usr/local/bin/homelab-zfs-scrub", mode="755"),
     FileSpec("zfs-scrub.service", "/etc/systemd/system/zfs-scrub.service"),
     FileSpec("zfs-scrub.timer", "/etc/systemd/system/zfs-scrub.timer"),
@@ -146,7 +148,8 @@ def normalize_string_list(value: object, message: str) -> list[str]:
 
 
 def dataset_pool(dataset: str) -> str:
-    return dataset.split("/", 1)[0]
+    dataset_name = dataset.split(":", 1)[1] if ":" in dataset else dataset
+    return dataset_name.split("/", 1)[0]
 
 
 def normalize_dataset_under_root(dataset: str, root_dataset: str) -> str:
@@ -217,7 +220,56 @@ def normalize_snapshot_plans(registry, host: str) -> list[SnapshotPlan]:
 
 def normalize_replication_config(
     registry, host: str
-) -> tuple[list[ReplicationPlan], list[str], bool]:
+) -> list[ReplicationJob]:
+    jobs = registry.get(host, "zfs-automation.replication_jobs", None)
+    if jobs is not None:
+        if not isinstance(jobs, dict):
+            raise ValueError(f"zfs-automation.replication_jobs must be a dict for {host}")
+        
+        parsed_jobs: list[ReplicationJob] = []
+        for job_name, job_config in jobs.items():
+            if not isinstance(job_config, dict):
+                raise ValueError(f"invalid replication job '{job_name}' for {host}")
+            
+            schedule = str(job_config.get("schedule", "*-*-* 02:30:00"))
+            plans: list[ReplicationPlan] = []
+            explicit_plans = job_config.get("plans", [])
+            if not isinstance(explicit_plans, list):
+                raise ValueError(f"plans for replication job '{job_name}' must be a list for {host}")
+                
+            for index, plan in enumerate(explicit_plans):
+                if not isinstance(plan, dict):
+                    raise ValueError(f"invalid plan at index {index} in job '{job_name}' for {host}")
+                plans.append(
+                    ReplicationPlan(
+                        source=require_string(
+                            plan.get("source", ""),
+                            f"plan source required at index {index} in job '{job_name}' for {host}",
+                        ),
+                        target=require_string(
+                            plan.get("target", ""),
+                            f"plan target required at index {index} in job '{job_name}' for {host}",
+                        ),
+                        post_hook=str(plan.get("post_hook", "")).strip(),
+                    )
+                )
+                
+            after_commands = normalize_string_list(
+                job_config.get("after_replication_commands", []),
+                f"after_replication_commands for job '{job_name}' must be a list for {host}",
+            )
+            
+            parsed_jobs.append(
+                ReplicationJob(
+                    name=job_name,
+                    schedule=schedule,
+                    plans=tuple(plans),
+                    after_commands=tuple(after_commands),
+                )
+            )
+        return parsed_jobs
+
+    # Fallback to old format
     explicit = registry.get(host, "zfs-automation.replication_plans", None)
     if explicit is not None:
         if not isinstance(explicit, list):
@@ -243,11 +295,12 @@ def normalize_replication_config(
             registry.get(host, "zfs-automation.after_replication_commands", []),
             f"zfs-automation.after_replication_commands must be a list for {host}",
         )
-        return plans, after_commands, True
+        schedule = str(registry.get(host, "zfs-automation.replication_schedule", "*-*-* 02:30:00"))
+        return [ReplicationJob(name="default", schedule=schedule, plans=tuple(plans), after_commands=tuple(after_commands))]
 
     replication = registry.get(host, "zfs-automation.replication", None)
     if replication is None:
-        return [], [], False
+        return []
     if not isinstance(replication, dict):
         raise ValueError(f"zfs-automation.replication must be a mapping for {host}")
 
@@ -268,13 +321,21 @@ def normalize_replication_config(
         )
     ).strip()
     after_commands = [docker_restart] if docker_restart else []
+    schedule = str(registry.get(host, "zfs-automation.replication_schedule", "*-*-* 02:30:00"))
     return [
-        ReplicationPlan(
-            source=source,
-            target=target,
-            post_hook=str(registry.get(host, "zfs-automation.replication_post_hook", "")).strip(),
+        ReplicationJob(
+            name="default",
+            schedule=schedule,
+            plans=(
+                ReplicationPlan(
+                    source=source,
+                    target=target,
+                    post_hook=str(registry.get(host, "zfs-automation.replication_post_hook", "")).strip(),
+                ),
+            ),
+            after_commands=tuple(after_commands),
         )
-    ], after_commands, False
+    ]
 
 
 def resolve_pools(registry, host: str) -> list[str]:
@@ -283,12 +344,12 @@ def resolve_pools(registry, host: str) -> list[str]:
         return normalize_string_list(explicit, f"zfs-automation.pools must be a list for {host}")
 
     snapshot_plans = normalize_snapshot_plans(registry, host)
-    replication_plans, _, _ = normalize_replication_config(registry, host)
+    replication_jobs = normalize_replication_config(registry, host)
     pools: list[str] = []
     for dataset in [
         *(plan.dataset for plan in snapshot_plans),
-        *(plan.source for plan in replication_plans),
-        *(plan.target for plan in replication_plans),
+        *(plan.source for job in replication_jobs for plan in job.plans),
+        *(plan.target for job in replication_jobs for plan in job.plans),
     ]:
         pool = dataset_pool(dataset)
         if pool not in pools:
@@ -300,12 +361,12 @@ def resolve_pools(registry, host: str) -> list[str]:
 
 def build_sanoid_config(
     snapshot_plans: list[SnapshotPlan],
-    replication_plans: list[ReplicationPlan],
+    replication_jobs: list[ReplicationJob],
 ) -> str:
     lines: list[str] = []
     replication_datasets = (
-        {plan.source for plan in replication_plans}
-        | {plan.target for plan in replication_plans}
+        {plan.source for job in replication_jobs for plan in job.plans}
+        | {plan.target for job in replication_jobs for plan in job.plans}
     )
     for plan in snapshot_plans:
         lines.extend(
@@ -451,9 +512,6 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
     snapshot_schedule = str(
         registry.get(host, "zfs-automation.snapshot_schedule", "*-*-* 04:35:00")
     )
-    replication_schedule = str(
-        registry.get(host, "zfs-automation.replication_schedule", "*-*-* 02:30:00")
-    )
     health_check_schedule = str(
         registry.get(host, "zfs-automation.health_check_schedule", "hourly")
     )
@@ -463,7 +521,7 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
     manage_health_check = bool(registry.get(host, "zfs-automation.manage_health_check", True))
     pools = resolve_pools(registry, host)
     snapshot_plans = normalize_snapshot_plans(registry, host)
-    replication_plans, after_replication_commands, _ = normalize_replication_config(
+    replication_jobs = normalize_replication_config(
         registry,
         host,
     )
@@ -472,7 +530,7 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
     prepare_build_dir(build_dir)
     copy_files(config_dir, build_dir, STATIC_CONFIG_FILES)
     (build_dir / "sanoid.conf").write_text(
-        build_sanoid_config(snapshot_plans, replication_plans),
+        build_sanoid_config(snapshot_plans, replication_jobs),
         encoding="utf-8",
     )
     render_file(
@@ -484,19 +542,39 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
         build_dir / "homelab-zfs-snapshots.timer",
         SNAPSHOT_SCHEDULE=snapshot_schedule,
     )
-    render_file(
-        templates_dir / "homelab-zfs-replication.service",
-        build_dir / "homelab-zfs-replication.service",
-    )
-    render_file(
-        templates_dir / "homelab-zfs-replication.timer",
-        build_dir / "homelab-zfs-replication.timer",
-        REPLICATION_SCHEDULE=replication_schedule,
-    )
-    (build_dir / "homelab-zfs-replication.sh").write_text(
-        build_replication_script(replication_plans, after_replication_commands),
-        encoding="utf-8",
-    )
+
+    file_specs = list(BASE_FILE_SPECS)
+    for job in replication_jobs:
+        script_name = f"homelab-zfs-replication-{job.name}.sh"
+        service_name = f"homelab-zfs-replication-{job.name}.service"
+        timer_name = f"homelab-zfs-replication-{job.name}.timer"
+        
+        render_file(
+            templates_dir / "homelab-zfs-replication.service",
+            build_dir / service_name,
+            SCRIPT_PATH=f"/usr/local/bin/homelab-zfs-replication-{job.name}",
+        )
+        render_file(
+            templates_dir / "homelab-zfs-replication.timer",
+            build_dir / timer_name,
+            REPLICATION_SCHEDULE=job.schedule,
+        )
+        (build_dir / script_name).write_text(
+            build_replication_script(list(job.plans), list(job.after_commands)),
+            encoding="utf-8",
+        )
+        file_specs.extend([
+            FileSpec(
+                service_name,
+                f"/etc/systemd/system/{service_name}",
+            ),
+            FileSpec(
+                timer_name,
+                f"/etc/systemd/system/{timer_name}",
+            ),
+            FileSpec(script_name, f"/usr/local/bin/homelab-zfs-replication-{job.name}", mode="755"),
+        ])
+
     render_file(
         templates_dir / "homelab-zfs-scrub.sh",
         build_dir / "homelab-zfs-scrub.sh",
@@ -527,7 +605,7 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
             "ZFS_MOUNTPOINT": zfs_mountpoint,
             "ENABLE_ZFS_SNAPSHOTS": "true" if snapshot_plans and manage_snapshots else "false",
             "ENABLE_ZFS_REPLICATION": (
-                "true" if replication_plans and manage_replication else "false"
+                "true" if replication_jobs and manage_replication else "false"
             ),
             "ENABLE_ZFS_SCRUB": "true" if pools and manage_scrub else "false",
             "ENABLE_ZFS_HEALTH_CHECK": "true" if pools and manage_health_check else "false",
@@ -539,7 +617,7 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
         build_dir=build_dir,
         zfs_mountpoint=zfs_mountpoint,
         deploy_user=deploy_user,
-        file_specs=FILE_SPECS,
+        file_specs=tuple(file_specs),
     )
     write_file_map(build_dir, artifacts)
     return artifacts
