@@ -58,19 +58,26 @@ else
     print_sub "mergerfs already installed"
 fi
 
-units_changed=false
+primary_units_changed=false
+hdd_units_changed=false
 rc=0
 install_build_file "homelab-tiered-media.service" || rc=$?
-[[ $rc -eq 0 ]] && units_changed=true
+[[ $rc -eq 0 ]] && primary_units_changed=true
 
-if [[ "$units_changed" == "true" ]]; then
+if [[ -f "$BUILD_DIR/homelab-tiered-media-hdd.service" ]]; then
+    rc=0
+    install_build_file "homelab-tiered-media-hdd.service" || rc=$?
+    [[ $rc -eq 0 ]] && hdd_units_changed=true
+fi
+
+if [[ "$primary_units_changed" == "true" || "$hdd_units_changed" == "true" ]]; then
     systemctl daemon-reload
 fi
 
 if ! systemctl is-enabled --quiet homelab-tiered-media.service 2>/dev/null; then
     systemctl enable --now homelab-tiered-media.service
     print_ok "homelab-tiered-media.service enabled"
-elif [[ "$units_changed" == "true" ]]; then
+elif [[ "$primary_units_changed" == "true" ]]; then
     systemctl restart homelab-tiered-media.service
     print_ok "homelab-tiered-media.service restarted"
 elif ! systemctl is-active --quiet homelab-tiered-media.service 2>/dev/null; then
@@ -78,6 +85,21 @@ elif ! systemctl is-active --quiet homelab-tiered-media.service 2>/dev/null; the
     print_ok "homelab-tiered-media.service started"
 else
     print_sub "homelab-tiered-media.service already enabled"
+fi
+
+if [[ -f "$BUILD_DIR/homelab-tiered-media-hdd.service" ]]; then
+    if ! systemctl is-enabled --quiet homelab-tiered-media-hdd.service 2>/dev/null; then
+        systemctl enable --now homelab-tiered-media-hdd.service
+        print_ok "homelab-tiered-media-hdd.service enabled"
+    elif [[ "$hdd_units_changed" == "true" ]]; then
+        systemctl restart homelab-tiered-media-hdd.service
+        print_ok "homelab-tiered-media-hdd.service restarted"
+    elif ! systemctl is-active --quiet homelab-tiered-media-hdd.service 2>/dev/null; then
+        systemctl start homelab-tiered-media-hdd.service
+        print_ok "homelab-tiered-media-hdd.service started"
+    else
+        print_sub "homelab-tiered-media-hdd.service already enabled"
+    fi
 fi
 
 print_header "Tiered Media Complete"

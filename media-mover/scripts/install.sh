@@ -66,8 +66,18 @@ install_build_file "homelab-media-mover.py" || rc=$?
 [[ $rc -eq 0 || $rc -eq 1 ]]
 
 rc=0
+install_build_file "homelab-media-mover-now" || rc=$?
+[[ $rc -eq 0 || $rc -eq 1 ]]
+
+rc=0
 install_build_file "media-mover.env" || rc=$?
 [[ $rc -eq 0 || $rc -eq 1 ]]
+
+if [[ -f "$BUILD_DIR/media-mover.local.env" ]]; then
+    rc=0
+    install_build_file "media-mover.local.env" || rc=$?
+    [[ $rc -eq 0 || $rc -eq 1 ]]
+fi
 
 if [[ "$units_changed" == "true" ]]; then
     systemctl daemon-reload

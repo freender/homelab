@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
 import os
@@ -104,7 +105,23 @@ def parse_size(value: str) -> int:
         raise SystemExit(f"invalid size value: {value}") from exc
 
 
-def load_config() -> Config:
+def parse_args(argv: list[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Move media between cache and archive tiers.")
+    parser.add_argument(
+        "--demote-non-frequent",
+        action="store_true",
+        help="demote non-frequent cached media even when cache free space is above the minimum",
+    )
+    parser.add_argument(
+        "--cache-target-free-space",
+        metavar="SIZE",
+        help="override CACHE_TARGET_FREE_SPACE for this run",
+    )
+    return parser.parse_args(argv)
+
+
+def load_config(*, cache_target_free_space_override: str | None = None) -> Config:
+    override_active = cache_target_free_space_override is not None
     source_root = Path(require_env("SOURCE_DIR"))
     target_root = Path(require_env("TARGET_DIR"))
     merged_root = Path(require_env("MERGED_ROOT"))
@@ -116,7 +133,11 @@ def load_config() -> Config:
     tautulli_lookback_days = int(require_env("TAUTULLI_LOOKBACK_DAYS"))
     frequent_budget_bytes = parse_size(require_env("FREQUENT_BUDGET"))
     cache_min_free_space_bytes = parse_size(require_env("CACHE_MIN_FREE_SPACE"))
-    cache_target_free_space_bytes = parse_size(require_env("CACHE_TARGET_FREE_SPACE"))
+    cache_target_free_space_bytes = parse_size(
+        cache_target_free_space_override
+        if cache_target_free_space_override is not None
+        else require_env("CACHE_TARGET_FREE_SPACE")
+    )
     state_file = Path(require_env("STATE_FILE"))
     dry_run = os.environ.get("DRY_RUN", "").lower() in {"1", "true", "yes"}
 
@@ -132,7 +153,11 @@ def load_config() -> Config:
         raise SystemExit("FREQUENT_BUDGET must be positive")
     if cache_min_free_space_bytes < 1:
         raise SystemExit("CACHE_MIN_FREE_SPACE must be positive")
-    if cache_target_free_space_bytes <= cache_min_free_space_bytes:
+    if override_active and cache_target_free_space_bytes < cache_min_free_space_bytes:
+        raise SystemExit(
+            "--cache-target-free-space must be at least CACHE_MIN_FREE_SPACE"
+        )
+    if not override_active and cache_target_free_space_bytes <= cache_min_free_space_bytes:
         raise SystemExit("CACHE_TARGET_FREE_SPACE must be greater than CACHE_MIN_FREE_SPACE")
 
     return Config(
@@ -451,6 +476,8 @@ def move_file(source: Path, source_root: Path, target_root: Path) -> int:
     target.parent.mkdir(parents=True, exist_ok=True)
 
     if target.exists():
+        if source.samefile(target):
+            raise RuntimeError(f"target resolves to the source file itself: {target}")
         source_stat = source.stat()
         target_stat = target.stat()
         if (
@@ -560,7 +587,8 @@ def format_bytes(value: int) -> str:
 
 
 def main() -> int:
-    config = load_config()
+    args = parse_args(sys.argv[1:])
+    config = load_config(cache_target_free_space_override=args.cache_target_free_space)
     state = read_state(config.state_file)
 
     hot_scores = build_hot_scores(config)
@@ -594,12 +622,15 @@ def main() -> int:
         update_state(state, cache_units, desired_frequent)
 
     _total_bytes, used_bytes, available_bytes = filesystem_usage(config.source_root)
+    should_demote_recent = args.demote_non_frequent or available_bytes < config.cache_min_free_space_bytes
 
     demoted_recent_units = 0
     demoted_recent_bytes = 0
     demoted_frequent_units = 0
     demoted_frequent_bytes = 0
-    if available_bytes < config.cache_min_free_space_bytes:
+    if args.demote_non_frequent:
+        print("manual mode: demoting non-frequent cached media regardless of free-space threshold")
+    if should_demote_recent:
         recent_candidates = sorted(
             (
                 unit
@@ -609,7 +640,7 @@ def main() -> int:
             key=lambda unit: unit_age_key(unit, unit_stats.get(unit), state),
         )
         for relative_dir in recent_candidates:
-            if available_bytes >= config.cache_target_free_space_bytes:
+            if not args.demote_non_frequent and available_bytes >= config.cache_target_free_space_bytes:
                 break
             result = (
                 dry_run_move_unit(relative_dir, config.source_root, config.target_root, config.ignore_paths)

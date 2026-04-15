@@ -30,16 +30,19 @@ class HostArtifacts:
 class TieredMediaConfig:
     branches: tuple[str, ...]
     mountpoint: str
+    hdd_only_mountpoint: str | None
     create_policy: str
     min_free_space: str
     consumer_units: tuple[str, ...]
 
 
-FILE_SPECS = (
-    FileSpec(
-        "homelab-tiered-media.service",
-        "/etc/systemd/system/homelab-tiered-media.service",
-    ),
+PRIMARY_SERVICE_SPEC = FileSpec(
+    "homelab-tiered-media.service",
+    "/etc/systemd/system/homelab-tiered-media.service",
+)
+HDD_SERVICE_SPEC = FileSpec(
+    "homelab-tiered-media-hdd.service",
+    "/etc/systemd/system/homelab-tiered-media-hdd.service",
 )
 
 
@@ -111,6 +114,23 @@ def normalize_config(registry, host: str) -> TieredMediaConfig:
     if mountpoint in branches:
         raise ValueError(f"tiered-media.mountpoint must differ from branch paths for {host}")
 
+    hdd_only_mountpoint_raw = str(registry.get(host, "tiered-media.hdd_only_mountpoint", "")).strip()
+    hdd_only_mountpoint: str | None = None
+    if hdd_only_mountpoint_raw:
+        if not hdd_only_mountpoint_raw.startswith("/"):
+            raise ValueError(
+                f"tiered-media.hdd_only_mountpoint must be an absolute path for {host}"
+            )
+        if hdd_only_mountpoint_raw in branches:
+            raise ValueError(
+                f"tiered-media.hdd_only_mountpoint must differ from branch paths for {host}"
+            )
+        if hdd_only_mountpoint_raw == mountpoint:
+            raise ValueError(
+                f"tiered-media.hdd_only_mountpoint must differ from tiered-media.mountpoint for {host}"
+            )
+        hdd_only_mountpoint = hdd_only_mountpoint_raw
+
     create_policy = str(registry.get(host, "tiered-media.create_policy", "ff")).strip()
     if not create_policy:
         raise ValueError(f"tiered-media.create_policy must be non-empty for {host}")
@@ -135,13 +155,14 @@ def normalize_config(registry, host: str) -> TieredMediaConfig:
     return TieredMediaConfig(
         branches=tuple(branches),
         mountpoint=mountpoint,
+        hdd_only_mountpoint=hdd_only_mountpoint,
         create_policy=create_policy,
         min_free_space=min_free_space,
         consumer_units=tuple(consumer_units),
     )
 
 
-def mergerfs_options(config: TieredMediaConfig) -> str:
+def mergerfs_options(config: TieredMediaConfig, *, fsname: str) -> str:
     return ",".join(
         [
             "allow_other",
@@ -151,7 +172,7 @@ def mergerfs_options(config: TieredMediaConfig) -> str:
             f"category.create={config.create_policy}",
             f"minfreespace={config.min_free_space}",
             "moveonenospc=true",
-            "fsname=homelab-tiered-media",
+            f"fsname={fsname}",
         ]
     )
 
@@ -163,24 +184,41 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
     build_dir = module_dir / "build" / host
     prepare_build_dir(build_dir)
 
+    file_specs = [PRIMARY_SERVICE_SPEC]
     ordering_lines = "\n".join(f"Before={unit}" for unit in config.consumer_units)
     render_file(
         module_dir / "templates" / "homelab-tiered-media.service",
         build_dir / "homelab-tiered-media.service",
+        DESCRIPTION="Homelab Tiered Media MergerFS Mount",
         BRANCH_DIRS=" ".join(config.branches),
         BRANCHES=":".join(config.branches),
         MOUNTPOINT=config.mountpoint,
-        MERGERFS_OPTIONS=mergerfs_options(config),
+        MERGERFS_OPTIONS=mergerfs_options(config, fsname="homelab-tiered-media"),
         ORDERING_LINES=ordering_lines,
         REQUIRES_MOUNTS_FOR=" ".join(config.branches),
     )
 
-    write_file_map(build_dir)
-    return HostArtifacts(build_dir=build_dir, file_specs=FILE_SPECS)
+    if config.hdd_only_mountpoint:
+        archive_branches = config.branches[1:]
+        render_file(
+            module_dir / "templates" / "homelab-tiered-media.service",
+            build_dir / "homelab-tiered-media-hdd.service",
+            DESCRIPTION="Homelab HDD-Only Media MergerFS Mount",
+            BRANCH_DIRS=" ".join(archive_branches),
+            BRANCHES=":".join(archive_branches),
+            MOUNTPOINT=config.hdd_only_mountpoint,
+            MERGERFS_OPTIONS=mergerfs_options(config, fsname="homelab-tiered-media-hdd"),
+            ORDERING_LINES="",
+            REQUIRES_MOUNTS_FOR=" ".join(archive_branches),
+        )
+        file_specs.append(HDD_SERVICE_SPEC)
+
+    write_file_map(build_dir, tuple(file_specs))
+    return HostArtifacts(build_dir=build_dir, file_specs=tuple(file_specs))
 
 
-def write_file_map(build_dir: Path) -> None:
-    lines = [f"{spec.build_name}|{spec.remote_path}|{spec.mode}" for spec in FILE_SPECS]
+def write_file_map(build_dir: Path, file_specs: tuple[FileSpec, ...]) -> None:
+    lines = [f"{spec.build_name}|{spec.remote_path}|{spec.mode}" for spec in file_specs]
     (build_dir / "file-map.conf").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
@@ -188,7 +226,7 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
     registry = default_registry(root)
     artifacts = build_host_artifacts(root, host)
     ssh_hostname = str(registry.get(host, "config.hostname", host))
-    ssh_user = str(registry.get(host, "config.ssh_config.user", registry.get(host, "config.user")))
+    ssh_user = str(registry.get(host, "config.user"))
     connection = HostConnection(host, user=ssh_user, hostname=ssh_hostname)
 
     print_sub("Comparing with remote configs...")

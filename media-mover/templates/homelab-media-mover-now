@@ -1,0 +1,53 @@
+#!/bin/bash
+
+set -euo pipefail
+
+usage() {
+    cat <<'EOF'
+Usage: homelab-media-mover-now [--dry-run] [CACHE_TARGET_FREE_SPACE]
+
+Runs the media mover in manual cleanup mode:
+- always demotes non-frequent cached media
+- optionally overrides CACHE_TARGET_FREE_SPACE for this run
+EOF
+}
+
+dry_run=false
+target_override=""
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -n|--dry-run)
+            dry_run=true
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        *)
+            if [[ -n "$target_override" ]]; then
+                usage >&2
+                exit 1
+            fi
+            target_override="$1"
+            ;;
+    esac
+    shift
+done
+
+set -a
+source /etc/default/homelab-media-mover
+if [[ -f /etc/default/homelab-media-mover.local ]]; then
+    source /etc/default/homelab-media-mover.local
+fi
+set +a
+
+args=(--demote-non-frequent)
+if [[ -n "$target_override" ]]; then
+    args+=(--cache-target-free-space "$target_override")
+fi
+if [[ "$dry_run" == "true" ]]; then
+    export DRY_RUN=1
+fi
+
+exec /usr/local/bin/homelab-media-mover "${args[@]}"

@@ -1,5 +1,5 @@
 [Unit]
-Description=Homelab Tiered Media MergerFS Mount
+Description={{ DESCRIPTION }}
 After=local-fs.target zfs-mount.service
 Wants=local-fs.target zfs-mount.service
 RequiresMountsFor={{ REQUIRES_MOUNTS_FOR }}
