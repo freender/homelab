@@ -211,6 +211,8 @@ def prune_empty_dirs(root: Path) -> None:
     directories = [path for path in root.rglob("*") if path.is_dir()]
     directories.sort(key=lambda path: (len(path.relative_to(root).parts), str(path)), reverse=True)
     for directory in directories:
+        if len(directory.relative_to(root).parts) <= 1:
+            continue
         try:
             directory.rmdir()
             print(f"removed empty directory: {directory}")
