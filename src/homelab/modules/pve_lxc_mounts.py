@@ -73,8 +73,8 @@ def validate(root: Path, hosts: list[str]) -> None:
                         )
 
             root_mounts = container.get("root_mounts", [])
-            if not isinstance(root_mounts, list) or not root_mounts:
-                raise ValueError(f"{host}: {ctid} root_mounts must be a non-empty list")
+            if not isinstance(root_mounts, list):
+                raise ValueError(f"{host}: {ctid} root_mounts must be a list")
 
             seen_slots: set[int] = set()
             for mount_index, mount in enumerate(root_mounts):
@@ -119,6 +119,10 @@ def validate(root: Path, hosts: list[str]) -> None:
             idmapped_mounts = container.get("idmapped_mounts", [])
             if not isinstance(idmapped_mounts, list):
                 raise ValueError(f"{host}: {ctid} idmapped_mounts must be a list")
+            if not root_mounts and not idmapped_mounts:
+                raise ValueError(
+                    f"{host}: {ctid} must define at least one root_mount or idmapped_mount"
+                )
             for mount_index, mount in enumerate(idmapped_mounts):
                 if not isinstance(mount, dict):
                     raise ValueError(
@@ -157,10 +161,10 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
     for container in containers:
         ctid = str(container["ctid"])
         root_mounts = normalize_root_mounts(container["root_mounts"])
-        idmapped_roots = [str(path) for path in container["idmapped_roots"]]
+        idmapped_roots = [str(path) for path in container.get("idmapped_roots", [])]
         idmapped_mounts = normalize_idmapped_mounts(container.get("idmapped_mounts", []))
         features = normalize_features(container.get("features", {}))
-        leaf_roots = idmapped_roots or [mount["source"] for mount in root_mounts]
+        leaf_roots = idmapped_roots
 
         current_config = read_remote_text(connection, f"/etc/pve/lxc/{ctid}.conf")
         leaf_mounts = query_leaf_mounts(connection, leaf_roots)
@@ -283,26 +287,29 @@ def render_config(
 ) -> str:
     managed_slots = {f"mp{mount['slot']}:" for mount in root_mounts}
     managed_root_sources = {mount["source"] for mount in root_mounts}
+    managed_root_targets = {mount["target"] for mount in root_mounts}
     feature_line = None
     if features:
         feature_line = "features: " + ",".join(
             f"{name}={value}" for name, value in features.items()
         )
     explicit_idmapped_sources = {mount["source"] for mount in idmapped_mounts}
+    explicit_idmapped_targets = {mount["target"] for mount in idmapped_mounts}
     root_mount_lines = [
         f"mp{mount['slot']}: {mount['source']},mp={mount['target']},backup={mount['backup']}"
         for mount in root_mounts
     ]
+    idmap_enabled = bool(idmapped_roots or idmapped_mounts)
     idmapped_lines = [
         f"lxc.mount.entry: {mountpoint} mnt/{mountpoint.lstrip('/')}"
         " none bind,create=dir"
-        + (",idmap=container 0 0" if idmapped_roots else "")
+        + (",idmap=container 0 0" if idmap_enabled else "")
         for mountpoint in leaf_mounts
         if mountpoint not in explicit_idmapped_sources
     ] + [
         f"lxc.mount.entry: {mount['source']} {mount['target'].lstrip('/')}"
         " none bind,create=dir"
-        + (",idmap=container 0 0" if idmapped_roots else "")
+        + (",idmap=container 0 0" if idmap_enabled else "")
         for mount in idmapped_mounts
     ]
     managed_idmapped_sources = {
@@ -318,14 +325,28 @@ def render_config(
         if stripped.startswith("features: ") and feature_line is not None:
             rendered_lines.append(feature_line)
             continue
+        if stripped.startswith("mp") and ": " in stripped and ",mp=" in stripped:
+            target = stripped.split(",mp=", 1)[1].split(",", 1)[0].strip()
+            if target in managed_root_targets or target in explicit_idmapped_targets:
+                if not root_mounts_inserted and root_mount_lines:
+                    rendered_lines.extend(root_mount_lines)
+                    root_mounts_inserted = True
+                continue
         if any(stripped.startswith(slot) for slot in managed_slots):
             if not root_mounts_inserted:
                 rendered_lines.extend(root_mount_lines)
                 root_mounts_inserted = True
             continue
         if stripped.startswith("lxc.mount.entry: "):
-            source = stripped.split()[1]
+            parts = stripped.split()
+            source = parts[1]
+            target = "/" + parts[2].lstrip("/") if len(parts) > 2 else ""
             if source in managed_root_sources:
+                continue
+            if target in explicit_idmapped_targets:
+                if not idmapped_inserted:
+                    rendered_lines.extend(idmapped_lines)
+                    idmapped_inserted = True
                 continue
             if any(
                 source == root or source.startswith(f"{root}/")
