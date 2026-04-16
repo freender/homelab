@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import fcntl
 import hashlib
 import json
 import os
@@ -618,88 +619,81 @@ def format_bytes(value: int) -> str:
     return f"{size:.1f}EiB"
 
 
+def try_acquire_lock(path: Path):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    handle = path.open("a+", encoding="utf-8")
+    try:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        handle.close()
+        return None
+    handle.seek(0)
+    handle.truncate()
+    handle.write(f"pid={os.getpid()}\n")
+    handle.flush()
+    return handle
+
+
 def main() -> int:
     args = parse_args(sys.argv[1:])
     config = load_config(cache_target_free_space_override=args.cache_target_free_space)
+    lock_handle = try_acquire_lock(config.state_file.parent / "run.lock")
+    if lock_handle is None:
+        print("skipped: another homelab media mover instance is already running")
+        return 0
+
     state = read_state(config.state_file)
-
-    hot_scores = build_hot_scores(config)
-    unit_stats = collect_all_unit_stats(config)
-    desired_frequent = select_desired_frequent_units(
-        unit_stats,
-        hot_scores,
-        config.frequent_budget_bytes,
-    )
-
-    promoted_units = 0
-    promoted_bytes = 0
-    conflict_count = 0
-    for relative_dir in sorted(desired_frequent, key=str):
-        stats = unit_stats.get(relative_dir)
-        if stats is None or stats.size_on_tank < 1:
-            continue
-        result = (
-            dry_run_move_unit(relative_dir, config.target_root, config.source_root, ())
-            if config.dry_run
-            else move_unit(relative_dir, config.target_root, config.source_root, ())
-        )
-        conflict_count += result.conflicts
-        if result.moved_bytes > 0:
-            promoted_units += 1
-            promoted_bytes += result.moved_bytes
-
-    if not config.dry_run:
+    try:
+        hot_scores = build_hot_scores(config)
         unit_stats = collect_all_unit_stats(config)
-        cache_units = {unit: stats.size_on_cache for unit, stats in unit_stats.items() if stats.size_on_cache > 0}
-        update_state(state, cache_units, desired_frequent)
-
-    _total_bytes, used_bytes, available_bytes = filesystem_usage(config.source_root)
-    should_demote_recent = args.demote_non_frequent or available_bytes < config.cache_min_free_space_bytes
-
-    demoted_recent_units = 0
-    demoted_recent_bytes = 0
-    demoted_frequent_units = 0
-    demoted_frequent_bytes = 0
-    if args.demote_non_frequent:
-        print("manual mode: demoting non-frequent cached media regardless of free-space threshold")
-    if should_demote_recent:
-        recent_candidates = sorted(
-            (
-                unit
-                for unit, stats in unit_stats.items()
-                if stats.size_on_cache > 0 and unit not in desired_frequent
-            ),
-            key=lambda unit: unit_age_key(unit, unit_stats.get(unit), state),
+        desired_frequent = select_desired_frequent_units(
+            unit_stats,
+            hot_scores,
+            config.frequent_budget_bytes,
         )
-        for relative_dir in recent_candidates:
-            if not args.demote_non_frequent and available_bytes >= config.cache_target_free_space_bytes:
-                break
+
+        promoted_units = 0
+        promoted_bytes = 0
+        conflict_count = 0
+        for relative_dir in sorted(desired_frequent, key=str):
+            stats = unit_stats.get(relative_dir)
+            if stats is None or stats.size_on_tank < 1:
+                continue
             result = (
-                dry_run_move_unit(relative_dir, config.source_root, config.target_root, config.ignore_paths)
+                dry_run_move_unit(relative_dir, config.target_root, config.source_root, ())
                 if config.dry_run
-                else move_unit(relative_dir, config.source_root, config.target_root, config.ignore_paths)
+                else move_unit(relative_dir, config.target_root, config.source_root, ())
             )
             conflict_count += result.conflicts
             if result.moved_bytes > 0:
-                demoted_recent_units += 1
-                demoted_recent_bytes += result.moved_bytes
-                used_bytes -= result.moved_bytes
-                available_bytes += result.moved_bytes
+                promoted_units += 1
+                promoted_bytes += result.moved_bytes
 
-        if available_bytes < config.cache_target_free_space_bytes:
-            frequent_candidates = sorted(
+        if not config.dry_run:
+            unit_stats = collect_all_unit_stats(config)
+            cache_units = {unit: stats.size_on_cache for unit, stats in unit_stats.items() if stats.size_on_cache > 0}
+            update_state(state, cache_units, desired_frequent)
+
+        _total_bytes, used_bytes, available_bytes = filesystem_usage(config.source_root)
+        should_demote_recent = args.demote_non_frequent or available_bytes < config.cache_min_free_space_bytes
+
+        demoted_recent_units = 0
+        demoted_recent_bytes = 0
+        demoted_frequent_units = 0
+        demoted_frequent_bytes = 0
+        if args.demote_non_frequent:
+            print("manual mode: demoting non-frequent cached media regardless of free-space threshold")
+        if should_demote_recent:
+            recent_candidates = sorted(
                 (
                     unit
-                    for unit in desired_frequent
-                    if unit_stats.get(unit) is not None and unit_stats[unit].size_on_cache > 0
+                    for unit, stats in unit_stats.items()
+                    if stats.size_on_cache > 0 and unit not in desired_frequent
                 ),
-                key=lambda unit: (
-                    hot_scores.get(unit, 0),
-                    *unit_age_key(unit, unit_stats.get(unit), state),
-                ),
+                key=lambda unit: unit_age_key(unit, unit_stats.get(unit), state),
             )
-            for relative_dir in frequent_candidates:
-                if available_bytes >= config.cache_target_free_space_bytes:
+            for relative_dir in recent_candidates:
+                if not args.demote_non_frequent and available_bytes >= config.cache_target_free_space_bytes:
                     break
                 result = (
                     dry_run_move_unit(relative_dir, config.source_root, config.target_root, config.ignore_paths)
@@ -708,29 +702,58 @@ def main() -> int:
                 )
                 conflict_count += result.conflicts
                 if result.moved_bytes > 0:
-                    demoted_frequent_units += 1
-                    demoted_frequent_bytes += result.moved_bytes
+                    demoted_recent_units += 1
+                    demoted_recent_bytes += result.moved_bytes
                     used_bytes -= result.moved_bytes
                     available_bytes += result.moved_bytes
 
-    if not config.dry_run:
-        unit_stats = collect_all_unit_stats(config)
-        cache_units = {unit: stats.size_on_cache for unit, stats in unit_stats.items() if stats.size_on_cache > 0}
-        update_state(state, cache_units, desired_frequent)
-        write_state(config.state_file, state)
-        prune_empty_dirs(config.source_root)
-        total_bytes, used_bytes, available_bytes = filesystem_usage(config.source_root)
-    print(
-        f"{'dry-run: ' if config.dry_run else 'complete: '}"
-        f"promoted_units={promoted_units} promoted_bytes={format_bytes(promoted_bytes)} "
-        f"demoted_recent_units={demoted_recent_units} "
-        f"demoted_recent_bytes={format_bytes(demoted_recent_bytes)} "
-        f"demoted_frequent_units={demoted_frequent_units} "
-        f"demoted_frequent_bytes={format_bytes(demoted_frequent_bytes)} "
-        f"conflicts={conflict_count} "
-        f"cache_used={format_bytes(used_bytes)} cache_avail={format_bytes(available_bytes)}"
-    )
-    return 0
+            if available_bytes < config.cache_target_free_space_bytes:
+                frequent_candidates = sorted(
+                    (
+                        unit
+                        for unit in desired_frequent
+                        if unit_stats.get(unit) is not None and unit_stats[unit].size_on_cache > 0
+                    ),
+                    key=lambda unit: (
+                        hot_scores.get(unit, 0),
+                        *unit_age_key(unit, unit_stats.get(unit), state),
+                    ),
+                )
+                for relative_dir in frequent_candidates:
+                    if available_bytes >= config.cache_target_free_space_bytes:
+                        break
+                    result = (
+                        dry_run_move_unit(relative_dir, config.source_root, config.target_root, config.ignore_paths)
+                        if config.dry_run
+                        else move_unit(relative_dir, config.source_root, config.target_root, config.ignore_paths)
+                    )
+                    conflict_count += result.conflicts
+                    if result.moved_bytes > 0:
+                        demoted_frequent_units += 1
+                        demoted_frequent_bytes += result.moved_bytes
+                        used_bytes -= result.moved_bytes
+                        available_bytes += result.moved_bytes
+
+        if not config.dry_run:
+            unit_stats = collect_all_unit_stats(config)
+            cache_units = {unit: stats.size_on_cache for unit, stats in unit_stats.items() if stats.size_on_cache > 0}
+            update_state(state, cache_units, desired_frequent)
+            write_state(config.state_file, state)
+            prune_empty_dirs(config.source_root)
+            total_bytes, used_bytes, available_bytes = filesystem_usage(config.source_root)
+        print(
+            f"{'dry-run: ' if config.dry_run else 'complete: '}"
+            f"promoted_units={promoted_units} promoted_bytes={format_bytes(promoted_bytes)} "
+            f"demoted_recent_units={demoted_recent_units} "
+            f"demoted_recent_bytes={format_bytes(demoted_recent_bytes)} "
+            f"demoted_frequent_units={demoted_frequent_units} "
+            f"demoted_frequent_bytes={format_bytes(demoted_frequent_bytes)} "
+            f"conflicts={conflict_count} "
+            f"cache_used={format_bytes(used_bytes)} cache_avail={format_bytes(available_bytes)}"
+        )
+        return 0
+    finally:
+        lock_handle.close()
 
 
 if __name__ == "__main__":
