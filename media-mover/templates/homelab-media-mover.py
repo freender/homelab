@@ -497,9 +497,23 @@ def move_file(source: Path, source_root: Path, target_root: Path) -> int:
         raise RuntimeError(f"target already exists with different content: {target}")
 
     size = source.stat().st_size
-    shutil.copy2(source, target)
-    stat_result = source.stat()
-    os.chown(target, stat_result.st_uid, stat_result.st_gid)
+    temp_target = target.with_name(f".{target.name}.homelab-media-mover.tmp")
+    if temp_target.exists():
+        temp_target.unlink()
+
+    try:
+        shutil.copy2(source, temp_target)
+        stat_result = source.stat()
+        os.chown(temp_target, stat_result.st_uid, stat_result.st_gid)
+        os.replace(temp_target, target)
+    except Exception:
+        try:
+            if temp_target.exists():
+                temp_target.unlink()
+        except OSError:
+            pass
+        raise
+
     source.unlink()
     print(f"moved: {source} -> {target}")
     return size
