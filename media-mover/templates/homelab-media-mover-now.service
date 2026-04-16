@@ -8,5 +8,7 @@ EnvironmentFile=-/etc/default/homelab-media-mover.local
 Environment=PYTHONUNBUFFERED=1
 StateDirectory=homelab-media-mover
 ExecStart=/usr/local/bin/homelab-media-mover --demote-non-frequent
+Restart=always
+RestartSec=60
 StandardOutput=journal
 StandardError=journal
