@@ -1,0 +1,11 @@
+[Unit]
+Description=Homelab media mover manual cleanup
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/default/homelab-media-mover
+EnvironmentFile=-/etc/default/homelab-media-mover.local
+StateDirectory=homelab-media-mover
+ExecStart=/usr/local/bin/homelab-media-mover --demote-non-frequent
+StandardOutput=journal
+StandardError=journal

@@ -58,15 +58,15 @@ install_build_file "homelab-media-mover.service" || rc=$?
 [[ $rc -eq 0 ]] && units_changed=true
 
 rc=0
+install_build_file "homelab-media-mover-now.service" || rc=$?
+[[ $rc -eq 0 ]] && units_changed=true
+
+rc=0
 install_build_file "homelab-media-mover.timer" || rc=$?
 [[ $rc -eq 0 ]] && timer_changed=true && units_changed=true
 
 rc=0
 install_build_file "homelab-media-mover.py" || rc=$?
-[[ $rc -eq 0 || $rc -eq 1 ]]
-
-rc=0
-install_build_file "homelab-media-mover-now" || rc=$?
 [[ $rc -eq 0 || $rc -eq 1 ]]
 
 rc=0
@@ -77,6 +77,11 @@ if [[ -f "$BUILD_DIR/media-mover.local.env" ]]; then
     rc=0
     install_build_file "media-mover.local.env" || rc=$?
     [[ $rc -eq 0 || $rc -eq 1 ]]
+fi
+
+if [[ -f "/usr/local/bin/homelab-media-mover-now" ]]; then
+    rm -f "/usr/local/bin/homelab-media-mover-now"
+    print_sub "Removed /usr/local/bin/homelab-media-mover-now"
 fi
 
 if [[ "$units_changed" == "true" ]]; then

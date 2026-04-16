@@ -12,9 +12,9 @@ from ..ssh import HostConnection, build_files, diff_many
 REMOTE_ROOT = "/tmp/homelab-media-mover"
 TEMPLATE_FILES = [
     "homelab-media-mover.service",
+    "homelab-media-mover-now.service",
     "homelab-media-mover.timer",
     "homelab-media-mover.py",
-    "homelab-media-mover-now",
 ]
 
 
@@ -49,9 +49,9 @@ class MediaMoverConfig:
 
 FILE_SPECS = (
     FileSpec("homelab-media-mover.service", "/etc/systemd/system/homelab-media-mover.service"),
+    FileSpec("homelab-media-mover-now.service", "/etc/systemd/system/homelab-media-mover-now.service"),
     FileSpec("homelab-media-mover.timer", "/etc/systemd/system/homelab-media-mover.timer"),
     FileSpec("homelab-media-mover.py", "/usr/local/bin/homelab-media-mover", mode="755"),
-    FileSpec("homelab-media-mover-now", "/usr/local/bin/homelab-media-mover-now", mode="755"),
     FileSpec("media-mover.env", "/etc/default/homelab-media-mover", mode="600"),
 )
 LOCAL_ENV_SPEC = FileSpec(
@@ -239,6 +239,10 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
         build_dir / "homelab-media-mover.service",
     )
     render_file(
+        module_dir / "templates" / "homelab-media-mover-now.service",
+        build_dir / "homelab-media-mover-now.service",
+    )
+    render_file(
         module_dir / "templates" / "homelab-media-mover.timer",
         build_dir / "homelab-media-mover.timer",
         MEDIA_MOVER_SCHEDULE=config.schedule,
@@ -246,10 +250,6 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
     render_file(
         module_dir / "templates" / "homelab-media-mover.py",
         build_dir / "homelab-media-mover.py",
-    )
-    render_file(
-        module_dir / "templates" / "homelab-media-mover-now",
-        build_dir / "homelab-media-mover-now",
     )
     write_env_file(
         build_dir / "media-mover.env",
