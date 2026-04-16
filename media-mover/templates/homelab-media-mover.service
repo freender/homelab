@@ -1,5 +1,6 @@
 [Unit]
 Description=Homelab media mover
+{{ SERVICE_DEPENDENCY_LINES }}
 
 [Service]
 Type=oneshot

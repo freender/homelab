@@ -44,7 +44,9 @@ class MediaMoverConfig:
     frequent_budget: str
     cache_min_free_space: str
     cache_target_free_space: str
+    min_file_age: str
     state_file: str
+    dependency_units: tuple[str, ...]
 
 
 FILE_SPECS = (
@@ -137,7 +139,7 @@ def normalize_config(registry, host: str) -> MediaMoverConfig:
         f"media-mover.schedule is required for {host}",
     )
 
-    managed_roots_raw = registry.get(host, "media-mover.managed_roots", ["movies", "tv"])
+    managed_roots_raw = registry.get(host, "media-mover.managed_roots", ["movies", "movies4k", "tv", "tv4k"])
     if not isinstance(managed_roots_raw, list) or not managed_roots_raw:
         raise ValueError(f"media-mover.managed_roots must be a non-empty list for {host}")
     managed_roots = []
@@ -188,11 +190,26 @@ def normalize_config(registry, host: str) -> MediaMoverConfig:
         registry.get(host, "media-mover.cache_target_free_space", "700G"),
         f"media-mover.cache_target_free_space is required for {host}",
     )
+    min_file_age = require_text(
+        registry.get(host, "media-mover.min_file_age", "5m"),
+        f"media-mover.min_file_age is required for {host}",
+    )
 
     state_file = require_text(
         registry.get(host, "media-mover.state_file", "/var/lib/homelab-media-mover/state.json"),
         f"media-mover.state_file is required for {host}",
     )
+
+    dependency_units: list[str] = []
+    tiered_media_mountpoint = str(registry.get(host, "tiered-media.mountpoint", "")).strip()
+    if tiered_media_mountpoint and merged_root == tiered_media_mountpoint:
+        dependency_units.append("homelab-tiered-media.service")
+
+    tiered_media_hdd_mountpoint = str(
+        registry.get(host, "tiered-media.hdd_only_mountpoint", "")
+    ).strip()
+    if tiered_media_hdd_mountpoint and target_dir == tiered_media_hdd_mountpoint:
+        dependency_units.append("homelab-tiered-media-hdd.service")
 
     ignore_paths_raw = registry.get(host, "media-mover.ignore_paths", [])
     if ignore_paths_raw in (None, ""):
@@ -222,7 +239,9 @@ def normalize_config(registry, host: str) -> MediaMoverConfig:
         frequent_budget=frequent_budget,
         cache_min_free_space=cache_min_free_space,
         cache_target_free_space=cache_target_free_space,
+        min_file_age=min_file_age,
         state_file=state_file,
+        dependency_units=tuple(dependency_units),
     )
 
 
@@ -241,10 +260,12 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
     render_file(
         module_dir / "templates" / "homelab-media-mover.service",
         build_dir / "homelab-media-mover.service",
+        SERVICE_DEPENDENCY_LINES=service_dependency_lines(config.dependency_units),
     )
     render_file(
         module_dir / "templates" / "homelab-media-mover-now.service",
         build_dir / "homelab-media-mover-now.service",
+        SERVICE_DEPENDENCY_LINES=service_dependency_lines(config.dependency_units),
     )
     render_file(
         module_dir / "templates" / "homelab-media-mover.timer",
@@ -268,6 +289,7 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
             "FREQUENT_BUDGET": config.frequent_budget,
             "CACHE_MIN_FREE_SPACE": config.cache_min_free_space,
             "CACHE_TARGET_FREE_SPACE": config.cache_target_free_space,
+            "MIN_FILE_AGE": config.min_file_age,
             "STATE_FILE": config.state_file,
         },
     )
@@ -278,6 +300,13 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
         file_specs.append(LOCAL_ENV_SPEC)
     write_file_map(build_dir, tuple(file_specs))
     return HostArtifacts(build_dir=build_dir, file_specs=tuple(file_specs))
+
+
+def service_dependency_lines(units: tuple[str, ...]) -> str:
+    if not units:
+        return ""
+    joined_units = " ".join(units)
+    return f"Wants={joined_units}\nAfter={joined_units}"
 
 
 def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:

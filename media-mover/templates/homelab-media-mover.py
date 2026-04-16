@@ -7,20 +7,25 @@ import fcntl
 import hashlib
 import json
 import os
+import re
 import shutil
 import stat
 import subprocess
 import sys
 import time
 import urllib.parse
+import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path, PurePath
 
 IGNORED_PREFIX = "."
 IGNORED_SUFFIXES = (".part", ".tmp", ".partial", ".!qB")
-MOVIE_ROOT = "movies"
-TV_ROOT = "tv"
+TEMP_SUFFIX = ".homelab-media-mover.tmp"
+MOVIE_ROOTS = {"movies", "movies4k"}
+TV_ROOTS = {"tv", "tv4k"}
+MOVIE_FOLDER_RE = re.compile(r"^.+ \((?P<year>\d{4})\) \{tmdb-(?P<tmdb>\d+)\}$")
+EPISODE_RE = re.compile(r"^(?P<title>.+?) - S(?P<season>\d{2})E(?P<first>\d{2})(?:(?:E|-)(?P<second>\d{2}))?$")
 
 
 @dataclass(frozen=True)
@@ -37,6 +42,8 @@ class Config:
     frequent_budget_bytes: int
     cache_min_free_space_bytes: int
     cache_target_free_space_bytes: int
+    min_file_age_seconds: int
+    loop_interval_seconds: int
     state_file: Path
     dry_run: bool
 
@@ -60,11 +67,32 @@ class MoveResult:
     conflicts: int = 0
 
 
+@dataclass(frozen=True)
+class SyncResult:
+    synced_bytes: int = 0
+    synced_units: int = 0
+    replaced_units: int = 0
+    skipped_units: int = 0
+    conflicts: int = 0
+
+
+@dataclass(frozen=True)
+class EvictResult:
+    evicted_units: int = 0
+    evicted_bytes: int = 0
+    conflicts: int = 0
+
+
 def require_env(name: str) -> str:
     value = os.environ.get(name, "").strip()
     if not value:
         raise SystemExit(f"missing required environment variable: {name}")
     return value
+
+
+def require_mountpoint(path: Path, name: str) -> None:
+    if not path.is_mount():
+        raise SystemExit(f"{name} must be a mountpoint: {path}")
 
 
 def parse_ignore_paths(source_root: Path, value: str) -> tuple[Path, ...]:
@@ -95,7 +123,7 @@ def parse_managed_roots(value: str) -> tuple[str, ...]:
 def parse_size(value: str) -> int:
     text = value.strip().upper()
     if not text:
-        raise SystemExit("FREQUENT_BUDGET must not be empty")
+        raise SystemExit("size value must not be empty")
     suffixes = {"K": 1024, "M": 1024**2, "G": 1024**3, "T": 1024**4}
     multiplier = 1
     if text[-1] in suffixes:
@@ -107,23 +135,35 @@ def parse_size(value: str) -> int:
         raise SystemExit(f"invalid size value: {value}") from exc
 
 
+def parse_duration(value: str) -> int:
+    text = value.strip().lower()
+    if not text:
+        raise SystemExit("duration value must not be empty")
+    units = {"s": 1, "m": 60, "h": 3600}
+    multiplier = 1
+    if text[-1] in units:
+        multiplier = units[text[-1]]
+        text = text[:-1]
+    try:
+        return int(float(text) * multiplier)
+    except ValueError as exc:
+        raise SystemExit(f"invalid duration value: {value}") from exc
+
+
 def parse_args(argv: list[str]) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Move media between cache and archive tiers.")
-    parser.add_argument(
-        "--demote-non-frequent",
-        action="store_true",
-        help="demote non-frequent cached media even when cache free space is above the minimum",
-    )
-    parser.add_argument(
-        "--cache-target-free-space",
-        metavar="SIZE",
-        help="override CACHE_TARGET_FREE_SPACE for this run",
-    )
+    parser = argparse.ArgumentParser(description="Manage archive sync, hot copies, and cache eviction.")
+    parser.add_argument("--demote-non-frequent", action="store_true")
+    parser.add_argument("--cache-target-free-space", metavar="SIZE")
+    parser.add_argument("--sync-only", action="store_true")
+    parser.add_argument("--promote-only", action="store_true")
+    parser.add_argument("--evict-only", action="store_true")
+    parser.add_argument("--loop", action="store_true")
+    parser.add_argument("--loop-interval", metavar="DURATION")
     return parser.parse_args(argv)
 
 
-def load_config(*, cache_target_free_space_override: str | None = None) -> Config:
-    override_active = cache_target_free_space_override is not None
+def load_config(args: argparse.Namespace) -> Config:
+    override_active = args.cache_target_free_space is not None
     source_root = Path(require_env("SOURCE_DIR"))
     target_root = Path(require_env("TARGET_DIR"))
     merged_root = Path(require_env("MERGED_ROOT"))
@@ -136,10 +176,10 @@ def load_config(*, cache_target_free_space_override: str | None = None) -> Confi
     frequent_budget_bytes = parse_size(require_env("FREQUENT_BUDGET"))
     cache_min_free_space_bytes = parse_size(require_env("CACHE_MIN_FREE_SPACE"))
     cache_target_free_space_bytes = parse_size(
-        cache_target_free_space_override
-        if cache_target_free_space_override is not None
-        else require_env("CACHE_TARGET_FREE_SPACE")
+        args.cache_target_free_space or require_env("CACHE_TARGET_FREE_SPACE")
     )
+    min_file_age_seconds = parse_duration(os.environ.get("MIN_FILE_AGE", "5m"))
+    loop_interval_seconds = parse_duration(args.loop_interval or os.environ.get("LOOP_INTERVAL", "5m"))
     state_file = Path(require_env("STATE_FILE"))
     dry_run = os.environ.get("DRY_RUN", "").lower() in {"1", "true", "yes"}
 
@@ -149,16 +189,20 @@ def load_config(*, cache_target_free_space_override: str | None = None) -> Confi
         raise SystemExit(f"target directory does not exist: {target_root}")
     if not merged_root.is_dir():
         raise SystemExit(f"merged directory does not exist: {merged_root}")
+    require_mountpoint(target_root, "TARGET_DIR")
+    require_mountpoint(merged_root, "MERGED_ROOT")
     if tautulli_lookback_days < 1:
         raise SystemExit("TAUTULLI_LOOKBACK_DAYS must be at least 1")
     if frequent_budget_bytes < 1:
         raise SystemExit("FREQUENT_BUDGET must be positive")
     if cache_min_free_space_bytes < 1:
         raise SystemExit("CACHE_MIN_FREE_SPACE must be positive")
+    if min_file_age_seconds < 0:
+        raise SystemExit("MIN_FILE_AGE must not be negative")
+    if loop_interval_seconds < 1:
+        raise SystemExit("loop interval must be positive")
     if override_active and cache_target_free_space_bytes < cache_min_free_space_bytes:
-        raise SystemExit(
-            "--cache-target-free-space must be at least CACHE_MIN_FREE_SPACE"
-        )
+        raise SystemExit("--cache-target-free-space must be at least CACHE_MIN_FREE_SPACE")
     if not override_active and cache_target_free_space_bytes <= cache_min_free_space_bytes:
         raise SystemExit("CACHE_TARGET_FREE_SPACE must be greater than CACHE_MIN_FREE_SPACE")
 
@@ -175,6 +219,8 @@ def load_config(*, cache_target_free_space_override: str | None = None) -> Confi
         frequent_budget_bytes=frequent_budget_bytes,
         cache_min_free_space_bytes=cache_min_free_space_bytes,
         cache_target_free_space_bytes=cache_target_free_space_bytes,
+        min_file_age_seconds=min_file_age_seconds,
+        loop_interval_seconds=loop_interval_seconds,
         state_file=state_file,
         dry_run=dry_run,
     )
@@ -197,16 +243,26 @@ def is_ignored(path: Path, ignore_paths: tuple[Path, ...]) -> bool:
     return any(path == ignore_path or ignore_path in path.parents for ignore_path in ignore_paths)
 
 
-def should_skip(path: Path, ignore_paths: tuple[Path, ...]) -> bool:
+def is_temp_name(name: str) -> bool:
+    return name.endswith(IGNORED_SUFFIXES) or name.endswith(TEMP_SUFFIX)
+
+
+def should_skip_scan(path: Path, ignore_paths: tuple[Path, ...]) -> bool:
     if path.is_symlink() or not path.is_file():
         return True
     if is_ignored(path, ignore_paths):
         return True
     if any(part.startswith(IGNORED_PREFIX) for part in path.parts):
         return True
-    if path.name.endswith(IGNORED_SUFFIXES):
-        return True
-    return file_is_open(path)
+    return is_temp_name(path.name)
+
+
+def is_file_stable(path: Path, config: Config) -> bool:
+    if should_skip_scan(path, config.ignore_paths):
+        return False
+    if file_is_open(path):
+        return False
+    return time.time() - path.stat().st_mtime >= config.min_file_age_seconds
 
 
 def prune_empty_dirs(root: Path) -> None:
@@ -218,6 +274,17 @@ def prune_empty_dirs(root: Path) -> None:
         try:
             directory.rmdir()
             print(f"removed empty directory: {directory}")
+        except OSError:
+            continue
+
+
+def cleanup_stale_temp_files(root: Path) -> None:
+    for path in root.rglob(f"*{TEMP_SUFFIX}"):
+        if time.time() - path.stat().st_mtime < 86400:
+            continue
+        try:
+            path.unlink()
+            print(f"removed stale temp file: {path}")
         except OSError:
             continue
 
@@ -243,9 +310,8 @@ def write_state(path: Path, state: dict[str, dict[str, float]]) -> None:
 def tautulli_get(base_url: str, api_key: str, cmd: str, **params: object) -> dict[str, object]:
     query = {"apikey": api_key, "cmd": cmd}
     for key, value in params.items():
-        if value is None:
-            continue
-        query[key] = str(value)
+        if value is not None:
+            query[key] = str(value)
     url = f"{base_url}/api/v2?{urllib.parse.urlencode(query)}"
     with urllib.request.urlopen(url, timeout=30) as response:
         payload = json.load(response)
@@ -284,57 +350,15 @@ def history_rows(base_url: str, api_key: str, after_date: str, media_type: str) 
 def score_row(row: dict[str, object]) -> int:
     for key in ("play_duration", "duration"):
         value = row.get(key)
-        if value in (None, ""):
-            continue
-        try:
-            return max(int(value), 1)
-        except (TypeError, ValueError):
-            continue
-    started = row.get("started")
-    stopped = row.get("stopped")
-    paused_counter = row.get("paused_counter", 0)
+        if value not in (None, ""):
+            try:
+                return max(int(value), 1)
+            except (TypeError, ValueError):
+                pass
     try:
-        return max(int(stopped) - int(started) - int(paused_counter), 1)
+        return max(int(row.get("stopped")) - int(row.get("started")) - int(row.get("paused_counter", 0)), 1)
     except (TypeError, ValueError):
         return 1
-
-
-def build_hot_scores(config: Config) -> dict[Path, int]:
-    api_key = config.tautulli_api_key
-    after_date = time.strftime(
-        "%Y-%m-%d",
-        time.localtime(time.time() - (config.tautulli_lookback_days * 86400)),
-    )
-    scores: dict[Path, int] = {}
-    sample_rating_keys: dict[Path, int] = {}
-
-    for row in history_rows(config.tautulli_url, api_key, after_date, "movie"):
-        rating_key = parse_int(row.get("rating_key"))
-        if rating_key is None:
-            continue
-        sample = resolve_unit_from_rating_key(config, api_key, rating_key, MOVIE_ROOT)
-        if sample is None:
-            continue
-        scores[sample] = scores.get(sample, 0) + score_row(row)
-        sample_rating_keys.setdefault(sample, rating_key)
-
-    season_samples: dict[int, int] = {}
-    season_scores: dict[int, int] = {}
-    for row in history_rows(config.tautulli_url, api_key, after_date, "episode"):
-        parent_rating_key = parse_int(row.get("parent_rating_key"))
-        rating_key = parse_int(row.get("rating_key"))
-        if parent_rating_key is None or rating_key is None:
-            continue
-        season_scores[parent_rating_key] = season_scores.get(parent_rating_key, 0) + score_row(row)
-        season_samples.setdefault(parent_rating_key, rating_key)
-
-    for season_key, rating_key in season_samples.items():
-        sample = resolve_unit_from_rating_key(config, api_key, rating_key, TV_ROOT)
-        if sample is None:
-            continue
-        scores[sample] = scores.get(sample, 0) + season_scores.get(season_key, 0)
-
-    return scores
 
 
 def parse_int(value: object) -> int | None:
@@ -344,12 +368,7 @@ def parse_int(value: object) -> int | None:
         return None
 
 
-def resolve_unit_from_rating_key(
-    config: Config,
-    api_key: str,
-    rating_key: int,
-    root_name: str,
-) -> Path | None:
+def resolve_unit_from_rating_key(config: Config, api_key: str, rating_key: int, root_name: str) -> Path | None:
     metadata = tautulli_get(config.tautulli_url, api_key, "get_metadata", rating_key=rating_key)
     media_info = metadata.get("media_info", [])
     if not isinstance(media_info, list):
@@ -369,6 +388,53 @@ def resolve_unit_from_rating_key(
     return None
 
 
+def build_hot_scores(config: Config) -> dict[Path, int]:
+    after_date = time.strftime(
+        "%Y-%m-%d",
+        time.localtime(time.time() - (config.tautulli_lookback_days * 86400)),
+    )
+    scores: dict[Path, int] = {}
+    season_samples: dict[int, int] = {}
+    season_scores: dict[int, int] = {}
+
+    for row in history_rows(config.tautulli_url, config.tautulli_api_key, after_date, "movie"):
+        rating_key = parse_int(row.get("rating_key"))
+        if rating_key is None:
+            continue
+        sample = resolve_unit_from_rating_key(config, config.tautulli_api_key, rating_key, "movies")
+        if sample is None:
+            sample = resolve_unit_from_rating_key(config, config.tautulli_api_key, rating_key, "movies4k")
+        if sample is None:
+            continue
+        scores[sample] = scores.get(sample, 0) + score_row(row)
+
+    for row in history_rows(config.tautulli_url, config.tautulli_api_key, after_date, "episode"):
+        parent_rating_key = parse_int(row.get("parent_rating_key"))
+        rating_key = parse_int(row.get("rating_key"))
+        if parent_rating_key is None or rating_key is None:
+            continue
+        season_scores[parent_rating_key] = season_scores.get(parent_rating_key, 0) + score_row(row)
+        season_samples.setdefault(parent_rating_key, rating_key)
+
+    for season_key, rating_key in season_samples.items():
+        sample = resolve_unit_from_rating_key(config, config.tautulli_api_key, rating_key, "tv")
+        if sample is None:
+            sample = resolve_unit_from_rating_key(config, config.tautulli_api_key, rating_key, "tv4k")
+        if sample is None:
+            continue
+        scores[sample] = scores.get(sample, 0) + season_scores.get(season_key, 0)
+
+    return scores
+
+
+def try_build_hot_scores(config: Config) -> tuple[dict[Path, int], bool]:
+    try:
+        return build_hot_scores(config), True
+    except (OSError, RuntimeError, ValueError, json.JSONDecodeError, urllib.error.URLError) as exc:
+        print(f"warning: Tautulli unavailable, skipping hot-cache actions: {exc}")
+        return {}, False
+
+
 def unit_relative_dir_from_plex_path(config: Config, plex_path: str, root_name: str) -> Path | None:
     raw_path = PurePath(plex_path)
     try:
@@ -377,14 +443,21 @@ def unit_relative_dir_from_plex_path(config: Config, plex_path: str, root_name: 
         return None
     if not plex_relative.parts or plex_relative.parts[0] != root_name:
         return None
-    if root_name == MOVIE_ROOT:
-        if len(plex_relative.parts) < 2:
-            return None
+    if root_name in MOVIE_ROOTS and len(plex_relative.parts) >= 2:
         return Path(*plex_relative.parts[:2])
-    if root_name == TV_ROOT:
-        if len(plex_relative.parts) < 3:
-            return None
+    if root_name in TV_ROOTS and len(plex_relative.parts) >= 3:
         return Path(*plex_relative.parts[:3])
+    return None
+
+
+def unit_relative_dir_from_relative_path(relative: Path) -> Path | None:
+    parts = relative.parts
+    if not parts:
+        return None
+    if parts[0] in MOVIE_ROOTS and len(parts) >= 2:
+        return Path(parts[0]) / parts[1]
+    if parts[0] in TV_ROOTS and len(parts) >= 3:
+        return Path(parts[0]) / parts[1] / parts[2]
     return None
 
 
@@ -395,73 +468,40 @@ def collect_units(root: Path, config: Config) -> dict[Path, tuple[int, float | N
         if not managed_path.exists():
             continue
         for path in managed_path.rglob("*"):
-            if should_skip(path, config.ignore_paths):
+            if should_skip_scan(path, config.ignore_paths):
                 continue
-            try:
-                relative = path.relative_to(root)
-            except ValueError:
-                continue
+            relative = path.relative_to(root)
             unit = unit_relative_dir_from_relative_path(relative)
             if unit is None:
                 continue
             stat_result = path.stat()
             current_size, current_oldest = units.get(unit, (0, None))
-            oldest_mtime = stat_result.st_mtime if current_oldest is None else min(current_oldest, stat_result.st_mtime)
-            units[unit] = (current_size + stat_result.st_size, oldest_mtime)
+            oldest = stat_result.st_mtime if current_oldest is None else min(current_oldest, stat_result.st_mtime)
+            units[unit] = (current_size + stat_result.st_size, oldest)
     return units
-
-
-def unit_relative_dir_from_relative_path(relative: Path) -> Path | None:
-    parts = relative.parts
-    if not parts:
-        return None
-    if parts[0] == MOVIE_ROOT:
-        if len(parts) < 2:
-            return None
-        return Path(parts[0]) / parts[1]
-    if parts[0] == TV_ROOT:
-        if len(parts) < 3:
-            return None
-        return Path(parts[0]) / parts[1] / parts[2]
-    return None
 
 
 def collect_all_unit_stats(config: Config) -> dict[Path, UnitStats]:
     cache_units = collect_units(config.source_root, config)
-    tank_units = collect_units(config.target_root, config)
-    all_units = set(cache_units) | set(tank_units)
+    target_units = collect_units(config.target_root, config)
     stats: dict[Path, UnitStats] = {}
-    for unit in all_units:
+    for unit in set(cache_units) | set(target_units):
         cache_size, cache_oldest = cache_units.get(unit, (0, None))
-        tank_size, tank_oldest = tank_units.get(unit, (0, None))
-        stats[unit] = UnitStats(
-            relative_dir=unit,
-            size_on_cache=cache_size,
-            size_on_tank=tank_size,
-            oldest_cache_mtime=cache_oldest,
-            oldest_tank_mtime=tank_oldest,
-        )
+        target_size, target_oldest = target_units.get(unit, (0, None))
+        stats[unit] = UnitStats(unit, cache_size, target_size, cache_oldest, target_oldest)
     return stats
 
 
 def unit_age_key(relative_dir: Path, stats: UnitStats | None, state: dict[str, dict[str, float]]) -> tuple[float, str]:
     if stats is not None and stats.oldest_cache_mtime is not None:
         return (stats.oldest_cache_mtime, str(relative_dir))
-    return (
-        float(state.get("units", {}).get(str(relative_dir), {}).get("first_seen", 0.0)),
-        str(relative_dir),
-    )
+    return (float(state.get("units", {}).get(str(relative_dir), {}).get("first_seen", 0.0)), str(relative_dir))
 
 
-def select_desired_frequent_units(
-    unit_stats: dict[Path, UnitStats],
-    hot_scores: dict[Path, int],
-    budget_bytes: int,
-) -> set[Path]:
+def select_desired_frequent_units(unit_stats: dict[Path, UnitStats], hot_scores: dict[Path, int], budget_bytes: int) -> set[Path]:
     desired: set[Path] = set()
     used = 0
-    ranked_units = sorted(hot_scores.items(), key=lambda item: (-item[1], str(item[0])))
-    for relative_dir, _score in ranked_units:
+    for relative_dir, _score in sorted(hot_scores.items(), key=lambda item: (-item[1], str(item[0]))):
         stats = unit_stats.get(relative_dir)
         if stats is None or stats.total_size < 1:
             continue
@@ -474,50 +514,18 @@ def select_desired_frequent_units(
     return desired
 
 
-def move_file(source: Path, source_root: Path, target_root: Path) -> int:
-    relative_path = source.relative_to(source_root)
-    target = target_root / relative_path
-    ensure_target_parent_dirs(source, source_root, target_root)
-
-    if target.exists():
-        if source.samefile(target):
-            raise RuntimeError(f"target resolves to the source file itself: {target}")
-        source_stat = source.stat()
-        target_stat = target.stat()
-        if (
-            source_stat.st_size == target_stat.st_size
-            and int(source_stat.st_mtime) == int(target_stat.st_mtime)
-        ):
-            source.unlink()
-            print(f"removed duplicate source file: {source}")
-            return 0
-        if source_stat.st_size == target_stat.st_size and file_hash(source) == file_hash(target):
-            source.unlink()
-            print(f"removed duplicate source file after hash check: {source}")
-            return 0
-        raise RuntimeError(f"target already exists with different content: {target}")
-
-    size = source.stat().st_size
-    temp_target = target.with_name(f".{target.name}.homelab-media-mover.tmp")
-    if temp_target.exists():
-        temp_target.unlink()
-
-    try:
-        shutil.copy2(source, temp_target)
-        stat_result = source.stat()
-        os.chown(temp_target, stat_result.st_uid, stat_result.st_gid)
-        os.replace(temp_target, target)
-    except Exception:
-        try:
-            if temp_target.exists():
-                temp_target.unlink()
-        except OSError:
-            pass
-        raise
-
-    source.unlink()
-    print(f"moved: {source} -> {target}")
-    return size
+def relative_file_map(root: Path, relative_dir: Path, config: Config, stable_only: bool) -> dict[Path, Path]:
+    base = root / relative_dir
+    if not base.exists():
+        return {}
+    files: dict[Path, Path] = {}
+    for path in sorted(base.rglob("*")):
+        if should_skip_scan(path, config.ignore_paths):
+            continue
+        if stable_only and not is_file_stable(path, config):
+            continue
+        files[path.relative_to(base)] = path
+    return files
 
 
 def ensure_target_parent_dirs(source: Path, source_root: Path, target_root: Path) -> None:
@@ -535,6 +543,32 @@ def ensure_target_parent_dirs(source: Path, source_root: Path, target_root: Path
         os.chmod(current_target, stat.S_IMODE(source_stat.st_mode))
 
 
+def copy_file(source: Path, source_root: Path, target_root: Path) -> int:
+    relative_path = source.relative_to(source_root)
+    target = target_root / relative_path
+    ensure_target_parent_dirs(source, source_root, target_root)
+    source_stat = source.stat()
+
+    if target.exists():
+        if source.samefile(target):
+            return 0
+        target_stat = target.stat()
+        if source_stat.st_size == target_stat.st_size and int(source_stat.st_mtime) == int(target_stat.st_mtime):
+            return 0
+        if source_stat.st_size == target_stat.st_size and file_hash(source) == file_hash(target):
+            os.utime(target, (source_stat.st_atime, source_stat.st_mtime))
+            return 0
+
+    temp_target = target.with_name(f".{target.name}{TEMP_SUFFIX}")
+    if temp_target.exists():
+        temp_target.unlink()
+    shutil.copy2(source, temp_target)
+    os.chown(temp_target, source_stat.st_uid, source_stat.st_gid)
+    os.replace(temp_target, target)
+    print(f"copied: {source} -> {target}")
+    return source_stat.st_size
+
+
 def file_hash(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -543,48 +577,164 @@ def file_hash(path: Path) -> str:
     return digest.hexdigest()
 
 
-def dry_run_move_unit(
-    relative_dir: Path,
-    source_root: Path,
-    target_root: Path,
-    ignore_paths: tuple[Path, ...],
-) -> MoveResult:
-    source_dir = source_root / relative_dir
-    if not source_dir.exists():
+def sync_directory(relative_dir: Path, config: Config) -> MoveResult:
+    source_dir = config.source_root / relative_dir
+    target_dir = config.target_root / relative_dir
+    stable_source_files = relative_file_map(config.source_root, relative_dir, config, stable_only=True)
+    if not stable_source_files:
         return MoveResult()
+    ensure_target_parent_dirs(source_dir / next(iter(stable_source_files)), config.source_root, config.target_root)
     moved_bytes = 0
-    target_dir = target_root / relative_dir
-    for path in sorted(source_dir.rglob("*")):
-        if should_skip(path, ignore_paths):
+    for relative_file, source_path in stable_source_files.items():
+        moved_bytes += copy_file(source_path, config.source_root, config.target_root)
+    target_files = relative_file_map(config.target_root, relative_dir, config, stable_only=False)
+    stale_files = [target_dir / relative_file for relative_file in target_files if relative_file not in stable_source_files]
+    for stale_path in stale_files:
+        if stale_path.exists():
+            stale_path.unlink()
+            print(f"removed stale archive file: {stale_path}")
+    prune_empty_dirs(target_dir)
+    replaced = 1 if stale_files else 0
+    return MoveResult(moved_bytes=moved_bytes, conflicts=replaced)
+
+
+def file_group_key(relative_dir: Path, file_name: str) -> str | None:
+    stem = file_name.split(".", 1)[0]
+    if relative_dir.parts[0] in MOVIE_ROOTS:
+        return relative_dir.parts[1]
+    match = EPISODE_RE.match(stem)
+    if match is None:
+        return None
+    season = match.group("season")
+    first = int(match.group("first"))
+    second_text = match.group("second")
+    episodes = [first]
+    if second_text is not None:
+        second = int(second_text)
+        if second >= first:
+            episodes.extend(range(first + 1, second + 1))
+        else:
+            episodes.append(second)
+    return f"{relative_dir.parts[1]}|S{season}|{'-'.join(f'{episode:02d}' for episode in episodes)}"
+
+
+def group_relative_files(relative_dir: Path, files: dict[Path, Path]) -> dict[str, dict[Path, Path]]:
+    groups: dict[str, dict[Path, Path]] = {}
+    for relative_file, full_path in files.items():
+        key = file_group_key(relative_dir, relative_file.name)
+        if key is None:
             continue
-        moved_bytes += path.stat().st_size
-        print(f"would move: {path} -> {target_dir / path.relative_to(source_dir)}")
+        groups.setdefault(key, {})[relative_file] = full_path
+    return groups
+
+
+def sync_tv_unit(relative_dir: Path, config: Config) -> MoveResult:
+    source_files = relative_file_map(config.source_root, relative_dir, config, stable_only=True)
+    if not source_files:
+        return MoveResult()
+    target_dir = config.target_root / relative_dir
+    source_groups = group_relative_files(relative_dir, source_files)
+    target_groups = group_relative_files(relative_dir, relative_file_map(config.target_root, relative_dir, config, stable_only=False))
+    moved_bytes = 0
+    replaced_groups = 0
+    for key, files in source_groups.items():
+        existing = target_groups.get(key, {})
+        stale_paths = [target_dir / rel for rel in existing if rel not in files]
+        if stale_paths:
+            replaced_groups += 1
+        for stale_path in stale_paths:
+            if stale_path.exists():
+                stale_path.unlink()
+                print(f"removed stale archive file: {stale_path}")
+        for relative_file, source_path in files.items():
+            moved_bytes += copy_file(source_path, config.source_root, config.target_root)
+    prune_empty_dirs(target_dir)
+    return MoveResult(moved_bytes=moved_bytes, conflicts=replaced_groups)
+
+
+def sync_archive(config: Config) -> SyncResult:
+    synced_bytes = 0
+    synced_units = 0
+    replaced_units = 0
+    skipped_units = 0
+    conflicts = 0
+    unit_stats = collect_all_unit_stats(config)
+    for relative_dir, stats in sorted(unit_stats.items(), key=lambda item: str(item[0])):
+        if stats.size_on_cache < 1:
+            continue
+        source_dir = config.source_root / relative_dir
+        if not source_dir.exists():
+            continue
+        if relative_dir.parts[0] in MOVIE_ROOTS:
+            source_files = relative_file_map(config.source_root, relative_dir, config, stable_only=False)
+            if not source_files or any(not is_file_stable(path, config) for path in source_files.values()):
+                skipped_units += 1
+                continue
+            result = sync_directory(relative_dir, config)
+        else:
+            all_files = relative_file_map(config.source_root, relative_dir, config, stable_only=False)
+            if not all_files:
+                continue
+            stable_files = relative_file_map(config.source_root, relative_dir, config, stable_only=True)
+            if not stable_files:
+                skipped_units += 1
+                continue
+            result = sync_tv_unit(relative_dir, config)
+        if result.moved_bytes > 0 or result.conflicts > 0:
+            synced_units += 1
+            synced_bytes += result.moved_bytes
+            replaced_units += result.conflicts
+    return SyncResult(synced_bytes, synced_units, replaced_units, skipped_units, conflicts)
+
+
+def remove_cache_file(path: Path, source_root: Path) -> int:
+    size = path.stat().st_size
+    path.unlink()
+    print(f"evicted cache file: {path}")
+    prune_empty_dirs(path.parent)
+    return size
+
+
+def archive_current_for_unit(relative_dir: Path, config: Config) -> bool:
+    source_files = relative_file_map(config.source_root, relative_dir, config, stable_only=False)
+    target_files = relative_file_map(config.target_root, relative_dir, config, stable_only=False)
+    if not source_files:
+        return True
+    if relative_dir.parts[0] in MOVIE_ROOTS:
+        return set(source_files) == set(target_files)
+    source_groups = group_relative_files(relative_dir, source_files)
+    target_groups = group_relative_files(relative_dir, target_files)
+    return set(source_groups) <= set(target_groups)
+
+
+def evict_unit(relative_dir: Path, config: Config) -> MoveResult:
+    source_dir = config.source_root / relative_dir
+    if not source_dir.exists() or not archive_current_for_unit(relative_dir, config):
+        return MoveResult(conflicts=1)
+    moved_bytes = 0
+    for path in sorted(source_dir.rglob("*")):
+        if should_skip_scan(path, config.ignore_paths):
+            continue
+        if not is_file_stable(path, config):
+            continue
+        moved_bytes += remove_cache_file(path, config.source_root)
+    prune_empty_dirs(source_dir)
     return MoveResult(moved_bytes=moved_bytes)
 
 
-def move_unit(relative_dir: Path, source_root: Path, target_root: Path, ignore_paths: tuple[Path, ...]) -> MoveResult:
-    source_dir = source_root / relative_dir
-    if not source_dir.exists():
+def promote_unit(relative_dir: Path, config: Config) -> MoveResult:
+    target_dir = config.target_root / relative_dir
+    if not target_dir.exists():
         return MoveResult()
     moved_bytes = 0
-    conflicts = 0
-    for path in sorted(source_dir.rglob("*")):
-        if should_skip(path, ignore_paths):
+    for path in sorted(target_dir.rglob("*")):
+        if should_skip_scan(path, ()):
             continue
-        try:
-            moved_bytes += move_file(path, source_root, target_root)
-        except RuntimeError as exc:
-            conflicts += 1
-            print(f"skipped conflict: {exc}")
-    prune_empty_dirs(source_dir)
-    return MoveResult(moved_bytes=moved_bytes, conflicts=conflicts)
+        moved_bytes += copy_file(path, config.target_root, config.source_root)
+    return MoveResult(moved_bytes=moved_bytes)
 
 
-def update_state(
-    state: dict[str, dict[str, float]],
-    cache_units: dict[Path, int],
-    desired_frequent: set[Path],
-) -> None:
+def update_state(state: dict[str, dict[str, float]], cache_units: dict[Path, int], desired_frequent: set[Path]) -> None:
     now = time.time()
     unit_state = state.setdefault("units", {})
     active_keys = {str(unit) for unit, size in cache_units.items() if size > 0 and unit not in desired_frequent}
@@ -592,10 +742,9 @@ def update_state(
         entry = unit_state.get(key)
         if not isinstance(entry, dict):
             unit_state[key] = {"first_seen": now}
-            continue
-        entry.setdefault("first_seen", now)
-    stale_keys = [key for key in unit_state if key not in active_keys]
-    for key in stale_keys:
+        else:
+            entry.setdefault("first_seen", now)
+    for key in [key for key in unit_state if key not in active_keys]:
         unit_state.pop(key, None)
 
 
@@ -603,8 +752,7 @@ def filesystem_usage(path: Path) -> tuple[int, int, int]:
     statvfs = os.statvfs(path)
     total = statvfs.f_frsize * statvfs.f_blocks
     available = statvfs.f_frsize * statvfs.f_bavail
-    used = total - available
-    return total, used, available
+    return total, total - available, available
 
 
 def format_bytes(value: int) -> str:
@@ -634,124 +782,125 @@ def try_acquire_lock(path: Path):
     return handle
 
 
+def run_once(config: Config, args: argparse.Namespace) -> int:
+    state = read_state(config.state_file)
+    cleanup_stale_temp_files(config.source_root)
+    cleanup_stale_temp_files(config.target_root)
+
+    sync_result = SyncResult()
+    promote_result = MoveResult()
+    evict_recent = EvictResult()
+    evict_frequent = EvictResult()
+    conflict_count = 0
+
+    unit_stats = collect_all_unit_stats(config)
+    hot_scores, tautulli_available = try_build_hot_scores(config)
+    desired_frequent = select_desired_frequent_units(unit_stats, hot_scores, config.frequent_budget_bytes)
+
+    do_sync = not args.promote_only and not args.evict_only
+    do_promote = not args.sync_only and not args.evict_only
+    do_evict = args.demote_non_frequent or (not args.sync_only and not args.promote_only)
+
+    if not tautulli_available:
+        if do_promote:
+            print("warning: skipping promotion because Tautulli is unavailable")
+        if do_evict:
+            print("warning: skipping eviction because Tautulli is unavailable")
+        do_promote = False
+        do_evict = False
+
+    if do_sync:
+        sync_result = sync_archive(config)
+        conflict_count += sync_result.conflicts
+        unit_stats = collect_all_unit_stats(config)
+
+    if do_promote:
+        for relative_dir in sorted(desired_frequent, key=str):
+            stats = unit_stats.get(relative_dir)
+            if stats is None or stats.size_on_tank < 1 or stats.size_on_cache > 0:
+                continue
+            result = promote_unit(relative_dir, config) if not config.dry_run else MoveResult(moved_bytes=stats.size_on_tank)
+            conflict_count += result.conflicts
+            if result.moved_bytes > 0:
+                promote_result = MoveResult(promote_result.moved_bytes + result.moved_bytes, promote_result.conflicts)
+        if not config.dry_run:
+            unit_stats = collect_all_unit_stats(config)
+
+    _total_bytes, used_bytes, available_bytes = filesystem_usage(config.source_root)
+    should_evict = do_evict and (args.demote_non_frequent or available_bytes < config.cache_min_free_space_bytes)
+
+    if args.demote_non_frequent:
+        print("manual mode: demoting non-frequent cached media regardless of free-space threshold")
+    if should_evict:
+        recent_candidates = sorted(
+            (unit for unit, stats in unit_stats.items() if stats.size_on_cache > 0 and unit not in desired_frequent),
+            key=lambda unit: unit_age_key(unit, unit_stats.get(unit), state),
+        )
+        for relative_dir in recent_candidates:
+            if not args.demote_non_frequent and available_bytes >= config.cache_target_free_space_bytes:
+                break
+            result = evict_unit(relative_dir, config) if not config.dry_run else MoveResult(moved_bytes=unit_stats[relative_dir].size_on_cache)
+            conflict_count += result.conflicts
+            if result.moved_bytes > 0:
+                evict_recent = EvictResult(evict_recent.evicted_units + 1, evict_recent.evicted_bytes + result.moved_bytes, evict_recent.conflicts)
+                available_bytes += result.moved_bytes
+                used_bytes -= result.moved_bytes
+
+        if available_bytes < config.cache_target_free_space_bytes:
+            frequent_candidates = sorted(
+                (unit for unit in desired_frequent if unit_stats.get(unit) is not None and unit_stats[unit].size_on_cache > 0),
+                key=lambda unit: (hot_scores.get(unit, 0), *unit_age_key(unit, unit_stats.get(unit), state)),
+            )
+            for relative_dir in frequent_candidates:
+                if available_bytes >= config.cache_target_free_space_bytes:
+                    break
+                result = evict_unit(relative_dir, config) if not config.dry_run else MoveResult(moved_bytes=unit_stats[relative_dir].size_on_cache)
+                conflict_count += result.conflicts
+                if result.moved_bytes > 0:
+                    evict_frequent = EvictResult(evict_frequent.evicted_units + 1, evict_frequent.evicted_bytes + result.moved_bytes, evict_frequent.conflicts)
+                    available_bytes += result.moved_bytes
+                    used_bytes -= result.moved_bytes
+
+    if not config.dry_run:
+        unit_stats = collect_all_unit_stats(config)
+        cache_units = {unit: stats.size_on_cache for unit, stats in unit_stats.items() if stats.size_on_cache > 0}
+        update_state(state, cache_units, desired_frequent)
+        write_state(config.state_file, state)
+        prune_empty_dirs(config.source_root)
+        _total_bytes, used_bytes, available_bytes = filesystem_usage(config.source_root)
+
+    print(
+        f"{'dry-run: ' if config.dry_run else 'complete: '}"
+        f"synced_units={sync_result.synced_units} synced_bytes={format_bytes(sync_result.synced_bytes)} "
+        f"replaced_archive_units={sync_result.replaced_units} "
+        f"skipped_unstable_units={sync_result.skipped_units} "
+        f"promoted_units={1 if promote_result.moved_bytes > 0 else 0 if promote_result.moved_bytes == 0 else 0} "
+        f"promoted_bytes={format_bytes(promote_result.moved_bytes)} "
+        f"evicted_non_frequent_units={evict_recent.evicted_units} "
+        f"evicted_non_frequent_bytes={format_bytes(evict_recent.evicted_bytes)} "
+        f"evicted_frequent_units={evict_frequent.evicted_units} "
+        f"evicted_frequent_bytes={format_bytes(evict_frequent.evicted_bytes)} "
+        f"conflicts={conflict_count} "
+        f"cache_used={format_bytes(used_bytes)} cache_avail={format_bytes(available_bytes)}"
+    )
+    return 0
+
+
 def main() -> int:
     args = parse_args(sys.argv[1:])
-    config = load_config(cache_target_free_space_override=args.cache_target_free_space)
+    config = load_config(args)
     lock_handle = try_acquire_lock(config.state_file.parent / "run.lock")
     if lock_handle is None:
         print("skipped: another homelab media mover instance is already running")
         return 0
-
-    state = read_state(config.state_file)
     try:
-        hot_scores = build_hot_scores(config)
-        unit_stats = collect_all_unit_stats(config)
-        desired_frequent = select_desired_frequent_units(
-            unit_stats,
-            hot_scores,
-            config.frequent_budget_bytes,
-        )
-
-        promoted_units = 0
-        promoted_bytes = 0
-        conflict_count = 0
-        for relative_dir in sorted(desired_frequent, key=str):
-            stats = unit_stats.get(relative_dir)
-            if stats is None or stats.size_on_tank < 1:
-                continue
-            result = (
-                dry_run_move_unit(relative_dir, config.target_root, config.source_root, ())
-                if config.dry_run
-                else move_unit(relative_dir, config.target_root, config.source_root, ())
-            )
-            conflict_count += result.conflicts
-            if result.moved_bytes > 0:
-                promoted_units += 1
-                promoted_bytes += result.moved_bytes
-
-        if not config.dry_run:
-            unit_stats = collect_all_unit_stats(config)
-            cache_units = {unit: stats.size_on_cache for unit, stats in unit_stats.items() if stats.size_on_cache > 0}
-            update_state(state, cache_units, desired_frequent)
-
-        _total_bytes, used_bytes, available_bytes = filesystem_usage(config.source_root)
-        should_demote_recent = args.demote_non_frequent or available_bytes < config.cache_min_free_space_bytes
-
-        demoted_recent_units = 0
-        demoted_recent_bytes = 0
-        demoted_frequent_units = 0
-        demoted_frequent_bytes = 0
-        if args.demote_non_frequent:
-            print("manual mode: demoting non-frequent cached media regardless of free-space threshold")
-        if should_demote_recent:
-            recent_candidates = sorted(
-                (
-                    unit
-                    for unit, stats in unit_stats.items()
-                    if stats.size_on_cache > 0 and unit not in desired_frequent
-                ),
-                key=lambda unit: unit_age_key(unit, unit_stats.get(unit), state),
-            )
-            for relative_dir in recent_candidates:
-                if not args.demote_non_frequent and available_bytes >= config.cache_target_free_space_bytes:
-                    break
-                result = (
-                    dry_run_move_unit(relative_dir, config.source_root, config.target_root, config.ignore_paths)
-                    if config.dry_run
-                    else move_unit(relative_dir, config.source_root, config.target_root, config.ignore_paths)
-                )
-                conflict_count += result.conflicts
-                if result.moved_bytes > 0:
-                    demoted_recent_units += 1
-                    demoted_recent_bytes += result.moved_bytes
-                    used_bytes -= result.moved_bytes
-                    available_bytes += result.moved_bytes
-
-            if available_bytes < config.cache_target_free_space_bytes:
-                frequent_candidates = sorted(
-                    (
-                        unit
-                        for unit in desired_frequent
-                        if unit_stats.get(unit) is not None and unit_stats[unit].size_on_cache > 0
-                    ),
-                    key=lambda unit: (
-                        hot_scores.get(unit, 0),
-                        *unit_age_key(unit, unit_stats.get(unit), state),
-                    ),
-                )
-                for relative_dir in frequent_candidates:
-                    if available_bytes >= config.cache_target_free_space_bytes:
-                        break
-                    result = (
-                        dry_run_move_unit(relative_dir, config.source_root, config.target_root, config.ignore_paths)
-                        if config.dry_run
-                        else move_unit(relative_dir, config.source_root, config.target_root, config.ignore_paths)
-                    )
-                    conflict_count += result.conflicts
-                    if result.moved_bytes > 0:
-                        demoted_frequent_units += 1
-                        demoted_frequent_bytes += result.moved_bytes
-                        used_bytes -= result.moved_bytes
-                        available_bytes += result.moved_bytes
-
-        if not config.dry_run:
-            unit_stats = collect_all_unit_stats(config)
-            cache_units = {unit: stats.size_on_cache for unit, stats in unit_stats.items() if stats.size_on_cache > 0}
-            update_state(state, cache_units, desired_frequent)
-            write_state(config.state_file, state)
-            prune_empty_dirs(config.source_root)
-            total_bytes, used_bytes, available_bytes = filesystem_usage(config.source_root)
-        print(
-            f"{'dry-run: ' if config.dry_run else 'complete: '}"
-            f"promoted_units={promoted_units} promoted_bytes={format_bytes(promoted_bytes)} "
-            f"demoted_recent_units={demoted_recent_units} "
-            f"demoted_recent_bytes={format_bytes(demoted_recent_bytes)} "
-            f"demoted_frequent_units={demoted_frequent_units} "
-            f"demoted_frequent_bytes={format_bytes(demoted_frequent_bytes)} "
-            f"conflicts={conflict_count} "
-            f"cache_used={format_bytes(used_bytes)} cache_avail={format_bytes(available_bytes)}"
-        )
-        return 0
+        if not args.loop:
+            return run_once(config, args)
+        while True:
+            exit_code = run_once(config, args)
+            if exit_code != 0:
+                return exit_code
+            time.sleep(config.loop_interval_seconds)
     finally:
         lock_handle.close()
 
