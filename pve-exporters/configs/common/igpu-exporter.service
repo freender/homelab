@@ -1,0 +1,15 @@
+[Unit]
+Description=Intel GPU Prometheus exporter
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/default/igpu-exporter
+ExecStart=/usr/local/bin/igpu-exporter
+Restart=always
+RestartSec=5s
+User=root
+
+[Install]
+WantedBy=multi-user.target

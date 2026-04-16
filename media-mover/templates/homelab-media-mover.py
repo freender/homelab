@@ -26,6 +26,7 @@ MOVIE_ROOTS = {"movies", "movies4k"}
 TV_ROOTS = {"tv", "tv4k"}
 MOVIE_FOLDER_RE = re.compile(r"^.+ \((?P<year>\d{4})\) \{tmdb-(?P<tmdb>\d+)\}$")
 EPISODE_RE = re.compile(r"^(?P<title>.+?) - S(?P<season>\d{2})E(?P<first>\d{2})(?:(?:E|-)(?P<second>\d{2}))?$")
+OPERATIONS_LOCK = Path("/var/lib/homelab-media/operations.lock")
 
 
 @dataclass(frozen=True)
@@ -889,8 +890,13 @@ def run_once(config: Config, args: argparse.Namespace) -> int:
 def main() -> int:
     args = parse_args(sys.argv[1:])
     config = load_config(args)
+    operations_lock_handle = try_acquire_lock(OPERATIONS_LOCK)
+    if operations_lock_handle is None:
+        print("skipped: shared media operations lock is held")
+        return 0
     lock_handle = try_acquire_lock(config.state_file.parent / "run.lock")
     if lock_handle is None:
+        operations_lock_handle.close()
         print("skipped: another homelab media mover instance is already running")
         return 0
     try:
@@ -903,6 +909,7 @@ def main() -> int:
             time.sleep(config.loop_interval_seconds)
     finally:
         lock_handle.close()
+        operations_lock_handle.close()
 
 
 if __name__ == "__main__":

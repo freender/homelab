@@ -12,11 +12,13 @@ Prometheus-native host metrics exporters for Proxmox nodes.
 - Host metrics via node_exporter (CPU, memory, load, uptime, disk, network, hwmon, ZFS)
 - SMART metrics via smartctl_exporter
 - UPS metrics via apcupsd exporter on `master` / `master-standalone` UPS hosts
+- Intel GPU metrics via `igpu-exporter` on selected PVE hosts
 
 ## Ports
 - node_exporter: `:9100`
 - smartctl_exporter: `:9633`
 - apcupsd exporter: `:9162`
+- igpu-exporter: `:9400` on `ace`
 
 ## Configuration Files
 
@@ -27,6 +29,9 @@ Prometheus-native host metrics exporters for Proxmox nodes.
 - `/usr/local/bin/apcupsd-exporter`
 - `/etc/systemd/system/apcupsd-exporter.service`
 - `/etc/default/apcupsd-exporter`
+- `/usr/local/bin/igpu-exporter`
+- `/etc/systemd/system/igpu-exporter.service`
+- `/etc/default/igpu-exporter`
 
 **In this repo:**
 - `configs/common/node-exporter.defaults`
@@ -37,7 +42,7 @@ Prometheus-native host metrics exporters for Proxmox nodes.
 - `configs/common/apcupsd-exporter.env`
 - `../deploy`
 
-`prometheus-node-exporter`, `smartmontools`, and `python3` are installed via `apt`. `smartctl_exporter` is still fetched from the upstream GitHub release because Proxmox/Debian does not provide the exporter package in the default repos.
+`prometheus-node-exporter`, `smartmontools`, `python3`, `intel-gpu-tools`, and `golang-go` are installed via `apt` as needed. `smartctl_exporter` is fetched from the upstream GitHub release. `igpu-exporter` is built from the pinned upstream source revision because no release artifacts are published.
 
 ## Deployment
 

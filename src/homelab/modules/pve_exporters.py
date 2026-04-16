@@ -15,6 +15,8 @@ REQUIRED = [
     "smartctl-exporter.service",
     "apcupsd-exporter.service",
     "apcupsd-exporter.py",
+    "igpu-exporter.defaults",
+    "igpu-exporter.service",
 ]
 
 
@@ -51,6 +53,12 @@ def has_apcupsd_exporter(root: Path, host: str) -> bool:
     registry = default_registry(root)
     role = str(registry.get(host, "apcupsd.role", "none"))
     return role in {"master", "master-standalone"}
+
+
+def has_igpu_exporter(root: Path, host: str) -> bool:
+    registry = default_registry(root)
+    exporter_config = registry.get(host, "pve-exporters.intel_gpu_exporter", None)
+    return isinstance(exporter_config, dict)
 
 
 def apcupsd_exporter_env_template(root: Path) -> Path:
@@ -106,6 +114,30 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
                 "/etc/systemd/system/apcupsd-exporter.service",
             ),
             (configs_dir / "apcupsd-exporter.env", "/etc/default/apcupsd-exporter"),
+        ]):
+            print_sub(message)
+
+    if has_igpu_exporter(root, host):
+        port = int(registry.get(host, "pve-exporters.intel_gpu_exporter.port", 9400))
+        refresh_period_ms = int(
+            registry.get(host, "pve-exporters.intel_gpu_exporter.refresh_period_ms", 1000)
+        )
+        device = str(registry.get(host, "pve-exporters.intel_gpu_exporter.device", "")).strip()
+        render_file(
+            common_dir / "igpu-exporter.defaults",
+            configs_dir / "igpu-exporter.defaults",
+            IGPU_EXPORTER_PORT=str(port),
+            IGPU_EXPORTER_REFRESH_PERIOD_MS=str(refresh_period_ms),
+            IGPU_EXPORTER_DEVICE=device,
+            IGPU_EXPORTER_VERSION="db2dace1a895c2b950f6d3ba1a2e46729251d124",
+        )
+        copy_files(common_dir, configs_dir, ["igpu-exporter.service"])
+        for message in diff_many(connection, [
+            (configs_dir / "igpu-exporter.defaults", "/etc/default/igpu-exporter"),
+            (
+                configs_dir / "igpu-exporter.service",
+                "/etc/systemd/system/igpu-exporter.service",
+            ),
         ]):
             print_sub(message)
 
