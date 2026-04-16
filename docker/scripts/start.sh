@@ -2,8 +2,27 @@
 # Runs `docker compose up -d` in each subdirectory beside this script.
 # Place this file in /mnt/cache/appdata and execute it.
 # Supports custom startup order for dependencies.
+# Pulls images by default; use `--no-pull` for fast restart-only runs.
 
 set -u
+
+PULL_IMAGES=true
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --pull)
+            PULL_IMAGES=true
+            ;;
+        --no-pull)
+            PULL_IMAGES=false
+            ;;
+        *)
+            echo "Usage: $0 [--pull|--no-pull]" >&2
+            exit 1
+            ;;
+    esac
+    shift
+done
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 COMMON_SH=""
@@ -34,12 +53,14 @@ start_stack() {
     local stack_name="$2"
     local code
 
-    run_compose "$stack_dir" pull
-    code=$?
-    if [[ $code -ne 0 ]]; then
-        echo "!! failed in $stack_dir during pull (exit $code)"
-        failed_stacks+=("$stack_name")
-        return 1
+    if [[ "$PULL_IMAGES" == "true" ]]; then
+        run_compose "$stack_dir" pull
+        code=$?
+        if [[ $code -ne 0 ]]; then
+            echo "!! failed in $stack_dir during pull (exit $code)"
+            failed_stacks+=("$stack_name")
+            return 1
+        fi
     fi
 
     run_compose "$stack_dir" up -d
@@ -63,6 +84,11 @@ failed_stacks=()
 prune_failed=false
 
 echo "=== Starting Docker stacks with custom order ==="
+if [[ "$PULL_IMAGES" == "true" ]]; then
+    echo "Mode: pull images before startup"
+else
+    echo "Mode: skip image pulls"
+fi
 echo ""
 
 # Start ordered stacks first

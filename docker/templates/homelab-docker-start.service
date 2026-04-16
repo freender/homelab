@@ -6,7 +6,7 @@ OnFailure=homelab-notify-failure@%n.service
 
 [Service]
 Type=oneshot
-ExecStart=/mnt/cache/appdata/start.sh
+ExecStart=/mnt/cache/appdata/start.sh --no-pull
 StandardOutput=journal
 StandardError=journal
 

@@ -55,6 +55,7 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
     run_on_boot = str(registry.get(host, "docker.run_on_boot", "false")).lower()
     start_schedule = str(registry.get(host, "docker.start_schedule", "")).strip()
     timer_enabled = "true" if start_schedule else "false"
+    docker_start_service_enabled = run_on_boot == "true" or timer_enabled == "true"
     syncthing_unpause_schedule = str(
         registry.get(host, "docker.syncthing_unpause_schedule", "")
     ).strip()
@@ -120,12 +121,15 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
             "/mnt/cache/appdata/.homelab/docker/docker-common.sh",
         ),
     ]
-    if timer_enabled == "true":
-        diff_pairs += [
+    if docker_start_service_enabled:
+        diff_pairs.append(
             (
                 build_dir / "homelab-docker-start.service",
                 "/etc/systemd/system/homelab-docker-start.service",
-            ),
+            )
+        )
+    if timer_enabled == "true":
+        diff_pairs += [
             (
                 build_dir / "homelab-docker-start.timer",
                 "/etc/systemd/system/homelab-docker-start.timer",
