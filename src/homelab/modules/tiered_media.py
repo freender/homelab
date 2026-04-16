@@ -114,7 +114,9 @@ def normalize_config(registry, host: str) -> TieredMediaConfig:
     if mountpoint in branches:
         raise ValueError(f"tiered-media.mountpoint must differ from branch paths for {host}")
 
-    hdd_only_mountpoint_raw = str(registry.get(host, "tiered-media.hdd_only_mountpoint", "")).strip()
+    hdd_only_mountpoint_raw = str(
+        registry.get(host, "tiered-media.hdd_only_mountpoint", "")
+    ).strip()
     hdd_only_mountpoint: str | None = None
     if hdd_only_mountpoint_raw:
         if not hdd_only_mountpoint_raw.startswith("/"):
@@ -127,7 +129,8 @@ def normalize_config(registry, host: str) -> TieredMediaConfig:
             )
         if hdd_only_mountpoint_raw == mountpoint:
             raise ValueError(
-                f"tiered-media.hdd_only_mountpoint must differ from tiered-media.mountpoint for {host}"
+                "tiered-media.hdd_only_mountpoint must differ from "
+                f"tiered-media.mountpoint for {host}"
             )
         hdd_only_mountpoint = hdd_only_mountpoint_raw
 

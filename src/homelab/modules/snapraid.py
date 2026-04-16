@@ -5,7 +5,7 @@ from pathlib import Path
 
 from ..build import render_file
 from ..deploy import DeploySession, force_env, prepare_build_dir, stage_and_run_remote_installer
-from ..hosts import HostLookupError, default_registry
+from ..hosts import default_registry
 from ..output import print_action, print_error, print_sub
 from ..ssh import HostConnection, build_files, diff_many
 
@@ -113,8 +113,14 @@ def normalize_config(registry, host: str) -> SnapRaidConfig:
     for item in parity_disks_raw:
         if not isinstance(item, dict) or "name" not in item or "path" not in item:
             raise ValueError(f"snapraid.parity_disks entry must have name and path for {host}")
-        name = require_text(item["name"], f"snapraid.parity_disks name must be non-empty for {host}")
-        path = require_text(item["path"], f"snapraid.parity_disks path must be non-empty for {host}")
+        name = require_text(
+            item["name"],
+            f"snapraid.parity_disks name must be non-empty for {host}",
+        )
+        path = require_text(
+            item["path"],
+            f"snapraid.parity_disks path must be non-empty for {host}",
+        )
         if not path.startswith("/"):
             raise ValueError(f"snapraid.parity_disks path must be absolute for {host}")
         parity_disks.append(SnapRaidDisk(name=name, path=path))

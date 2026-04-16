@@ -235,11 +235,15 @@ def normalize_replication_config(
             plans: list[ReplicationPlan] = []
             explicit_plans = job_config.get("plans", [])
             if not isinstance(explicit_plans, list):
-                raise ValueError(f"plans for replication job '{job_name}' must be a list for {host}")
-                
+                raise ValueError(
+                    f"plans for replication job '{job_name}' must be a list for {host}"
+                )
+
             for index, plan in enumerate(explicit_plans):
                 if not isinstance(plan, dict):
-                    raise ValueError(f"invalid plan at index {index} in job '{job_name}' for {host}")
+                    raise ValueError(
+                        f"invalid plan at index {index} in job '{job_name}' for {host}"
+                    )
                 plans.append(
                     ReplicationPlan(
                         source=require_string(
@@ -253,12 +257,12 @@ def normalize_replication_config(
                         post_hook=str(plan.get("post_hook", "")).strip(),
                     )
                 )
-                
+
             after_commands = normalize_string_list(
                 job_config.get("after_replication_commands", []),
                 f"after_replication_commands for job '{job_name}' must be a list for {host}",
             )
-            
+
             parsed_jobs.append(
                 ReplicationJob(
                     name=job_name,
@@ -296,7 +300,14 @@ def normalize_replication_config(
             f"zfs-automation.after_replication_commands must be a list for {host}",
         )
         schedule = str(registry.get(host, "zfs-automation.replication_schedule", "*-*-* 02:30:00"))
-        return [ReplicationJob(name="default", schedule=schedule, plans=tuple(plans), after_commands=tuple(after_commands))]
+        return [
+            ReplicationJob(
+                name="default",
+                schedule=schedule,
+                plans=tuple(plans),
+                after_commands=tuple(after_commands),
+            )
+        ]
 
     replication = registry.get(host, "zfs-automation.replication", None)
     if replication is None:
@@ -330,7 +341,9 @@ def normalize_replication_config(
                 ReplicationPlan(
                     source=source,
                     target=target,
-                    post_hook=str(registry.get(host, "zfs-automation.replication_post_hook", "")).strip(),
+                    post_hook=str(
+                        registry.get(host, "zfs-automation.replication_post_hook", "")
+                    ).strip(),
                 ),
             ),
             after_commands=tuple(after_commands),

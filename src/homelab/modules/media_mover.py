@@ -49,7 +49,10 @@ class MediaMoverConfig:
 
 FILE_SPECS = (
     FileSpec("homelab-media-mover.service", "/etc/systemd/system/homelab-media-mover.service"),
-    FileSpec("homelab-media-mover-now.service", "/etc/systemd/system/homelab-media-mover-now.service"),
+    FileSpec(
+        "homelab-media-mover-now.service",
+        "/etc/systemd/system/homelab-media-mover-now.service",
+    ),
     FileSpec("homelab-media-mover.timer", "/etc/systemd/system/homelab-media-mover.timer"),
     FileSpec("homelab-media-mover.py", "/usr/local/bin/homelab-media-mover", mode="755"),
     FileSpec("media-mover.env", "/etc/default/homelab-media-mover", mode="600"),
@@ -155,7 +158,8 @@ def normalize_config(registry, host: str) -> MediaMoverConfig:
     )
     if target_dir == merged_root:
         raise ValueError(
-            f"media-mover.target_dir must not use the merged media path for {host}; use an HDD-only path"
+            "media-mover.target_dir must not use the merged media path "
+            f"for {host}; use an HDD-only path"
         )
     plex_mount_root = require_text(
         registry.get(host, "media-mover.plex_mount_root", "/data"),
