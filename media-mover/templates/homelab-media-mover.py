@@ -653,12 +653,15 @@ def sync_tv_unit(relative_dir: Path, config: Config) -> MoveResult:
     return MoveResult(moved_bytes=moved_bytes, conflicts=replaced_groups)
 
 
-def sync_archive(config: Config) -> SyncResult:
+def sync_archive(config: Config, inline_evict_non_frequent: set[Path] | None = None) -> tuple[SyncResult, EvictResult]:
     synced_bytes = 0
     synced_units = 0
     replaced_units = 0
     skipped_units = 0
     conflicts = 0
+    evicted_units = 0
+    evicted_bytes = 0
+    evict_conflicts = 0
     unit_stats = collect_all_unit_stats(config)
     for relative_dir, stats in sorted(unit_stats.items(), key=lambda item: str(item[0])):
         if stats.size_on_cache < 1:
@@ -685,7 +688,17 @@ def sync_archive(config: Config) -> SyncResult:
             synced_units += 1
             synced_bytes += result.moved_bytes
             replaced_units += result.conflicts
-    return SyncResult(synced_bytes, synced_units, replaced_units, skipped_units, conflicts)
+            if inline_evict_non_frequent is not None and relative_dir not in inline_evict_non_frequent:
+                continue
+            evict_result = evict_unit(relative_dir, config) if not config.dry_run else MoveResult(moved_bytes=stats.size_on_cache)
+            evict_conflicts += evict_result.conflicts
+            if evict_result.moved_bytes > 0:
+                evicted_units += 1
+                evicted_bytes += evict_result.moved_bytes
+    return (
+        SyncResult(synced_bytes, synced_units, replaced_units, skipped_units, conflicts),
+        EvictResult(evicted_units, evicted_bytes, evict_conflicts),
+    )
 
 
 def remove_cache_file(path: Path, source_root: Path) -> int:
@@ -783,6 +796,32 @@ def try_acquire_lock(path: Path):
     return handle
 
 
+def evict_units(
+    candidates: list[Path],
+    unit_stats: dict[Path, UnitStats],
+    config: Config,
+    available_bytes: int,
+    stop_at_target: bool,
+) -> tuple[EvictResult, int, int, int]:
+    result_total = EvictResult()
+    used_delta = 0
+    conflict_count = 0
+    for relative_dir in candidates:
+        if stop_at_target and available_bytes >= config.cache_target_free_space_bytes:
+            break
+        result = evict_unit(relative_dir, config) if not config.dry_run else MoveResult(moved_bytes=unit_stats[relative_dir].size_on_cache)
+        conflict_count += result.conflicts
+        if result.moved_bytes > 0:
+            result_total = EvictResult(
+                result_total.evicted_units + 1,
+                result_total.evicted_bytes + result.moved_bytes,
+                result_total.conflicts,
+            )
+            available_bytes += result.moved_bytes
+            used_delta += result.moved_bytes
+    return result_total, available_bytes, used_delta, conflict_count
+
+
 def run_once(config: Config, args: argparse.Namespace) -> int:
     state = read_state(config.state_file)
     cleanup_stale_temp_files(config.source_root)
@@ -810,9 +849,62 @@ def run_once(config: Config, args: argparse.Namespace) -> int:
         do_promote = False
         do_evict = False
 
+    _total_bytes, used_bytes, available_bytes = filesystem_usage(config.source_root)
+
+    if args.demote_non_frequent and do_evict:
+        print("manual mode: demoting non-frequent cached media regardless of free-space threshold")
+        recent_candidates = sorted(
+            (unit for unit, stats in unit_stats.items() if stats.size_on_cache > 0 and unit not in desired_frequent),
+            key=lambda unit: unit_age_key(unit, unit_stats.get(unit), state),
+        )
+        pre_sync_recent, available_bytes, used_delta, pre_sync_conflicts = evict_units(
+            recent_candidates,
+            unit_stats,
+            config,
+            available_bytes,
+            stop_at_target=False,
+        )
+        evict_recent = EvictResult(
+            evict_recent.evicted_units + pre_sync_recent.evicted_units,
+            evict_recent.evicted_bytes + pre_sync_recent.evicted_bytes,
+            evict_recent.conflicts,
+        )
+        used_bytes -= used_delta
+        conflict_count += pre_sync_conflicts
+        if pre_sync_recent.evicted_units > 0 and not config.dry_run:
+            unit_stats = collect_all_unit_stats(config)
+    elif do_evict and available_bytes < config.cache_min_free_space_bytes:
+        recent_candidates = sorted(
+            (unit for unit, stats in unit_stats.items() if stats.size_on_cache > 0 and unit not in desired_frequent),
+            key=lambda unit: unit_age_key(unit, unit_stats.get(unit), state),
+        )
+        pre_sync_recent, available_bytes, used_delta, pre_sync_conflicts = evict_units(
+            recent_candidates,
+            unit_stats,
+            config,
+            available_bytes,
+            stop_at_target=True,
+        )
+        evict_recent = EvictResult(
+            evict_recent.evicted_units + pre_sync_recent.evicted_units,
+            evict_recent.evicted_bytes + pre_sync_recent.evicted_bytes,
+            evict_recent.conflicts,
+        )
+        used_bytes -= used_delta
+        conflict_count += pre_sync_conflicts
+        if pre_sync_recent.evicted_units > 0 and not config.dry_run:
+            unit_stats = collect_all_unit_stats(config)
+
     if do_sync:
-        sync_result = sync_archive(config)
+        inline_evict_non_frequent = {unit for unit, stats in unit_stats.items() if stats.size_on_cache > 0 and unit not in desired_frequent} if args.demote_non_frequent and do_evict else None
+        sync_result, inline_evict_recent = sync_archive(config, inline_evict_non_frequent)
         conflict_count += sync_result.conflicts
+        conflict_count += inline_evict_recent.conflicts
+        evict_recent = EvictResult(
+            evict_recent.evicted_units + inline_evict_recent.evicted_units,
+            evict_recent.evicted_bytes + inline_evict_recent.evicted_bytes,
+            evict_recent.conflicts,
+        )
         unit_stats = collect_all_unit_stats(config)
 
     if do_promote:
@@ -828,39 +920,48 @@ def run_once(config: Config, args: argparse.Namespace) -> int:
             unit_stats = collect_all_unit_stats(config)
 
     _total_bytes, used_bytes, available_bytes = filesystem_usage(config.source_root)
+
     should_evict = do_evict and (args.demote_non_frequent or available_bytes < config.cache_min_free_space_bytes)
 
-    if args.demote_non_frequent:
-        print("manual mode: demoting non-frequent cached media regardless of free-space threshold")
     if should_evict:
         recent_candidates = sorted(
             (unit for unit, stats in unit_stats.items() if stats.size_on_cache > 0 and unit not in desired_frequent),
             key=lambda unit: unit_age_key(unit, unit_stats.get(unit), state),
         )
-        for relative_dir in recent_candidates:
-            if not args.demote_non_frequent and available_bytes >= config.cache_target_free_space_bytes:
-                break
-            result = evict_unit(relative_dir, config) if not config.dry_run else MoveResult(moved_bytes=unit_stats[relative_dir].size_on_cache)
-            conflict_count += result.conflicts
-            if result.moved_bytes > 0:
-                evict_recent = EvictResult(evict_recent.evicted_units + 1, evict_recent.evicted_bytes + result.moved_bytes, evict_recent.conflicts)
-                available_bytes += result.moved_bytes
-                used_bytes -= result.moved_bytes
+        recent_result, available_bytes, used_delta, recent_conflicts = evict_units(
+            recent_candidates,
+            unit_stats,
+            config,
+            available_bytes,
+            stop_at_target=not args.demote_non_frequent,
+        )
+        evict_recent = EvictResult(
+            evict_recent.evicted_units + recent_result.evicted_units,
+            evict_recent.evicted_bytes + recent_result.evicted_bytes,
+            evict_recent.conflicts,
+        )
+        used_bytes -= used_delta
+        conflict_count += recent_conflicts
 
         if available_bytes < config.cache_target_free_space_bytes:
             frequent_candidates = sorted(
                 (unit for unit in desired_frequent if unit_stats.get(unit) is not None and unit_stats[unit].size_on_cache > 0),
                 key=lambda unit: (hot_scores.get(unit, 0), *unit_age_key(unit, unit_stats.get(unit), state)),
             )
-            for relative_dir in frequent_candidates:
-                if available_bytes >= config.cache_target_free_space_bytes:
-                    break
-                result = evict_unit(relative_dir, config) if not config.dry_run else MoveResult(moved_bytes=unit_stats[relative_dir].size_on_cache)
-                conflict_count += result.conflicts
-                if result.moved_bytes > 0:
-                    evict_frequent = EvictResult(evict_frequent.evicted_units + 1, evict_frequent.evicted_bytes + result.moved_bytes, evict_frequent.conflicts)
-                    available_bytes += result.moved_bytes
-                    used_bytes -= result.moved_bytes
+            frequent_result, available_bytes, used_delta, frequent_conflicts = evict_units(
+                frequent_candidates,
+                unit_stats,
+                config,
+                available_bytes,
+                stop_at_target=True,
+            )
+            evict_frequent = EvictResult(
+                evict_frequent.evicted_units + frequent_result.evicted_units,
+                evict_frequent.evicted_bytes + frequent_result.evicted_bytes,
+                evict_frequent.conflicts,
+            )
+            used_bytes -= used_delta
+            conflict_count += frequent_conflicts
 
     if not config.dry_run:
         unit_stats = collect_all_unit_stats(config)
