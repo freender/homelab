@@ -26,6 +26,7 @@ APPDATA_DEST="/mnt/cache/appdata"
 APPDATA_SCRIPTS_DIR="${APPDATA_DEST}/scripts"
 APPDATA_LOGS_DIR="${APPDATA_SCRIPTS_DIR}/logs"
 HOMELAB_DOCKER_DIR="${APPDATA_DEST}/.homelab/docker"
+SYNCTHING_SCHEDULE_SCRIPT="${APPDATA_SCRIPTS_DIR}/syncthing-schedule.sh"
 
 mkdir -p "$APPDATA_DEST"
 mkdir -p "$APPDATA_SCRIPTS_DIR" "$APPDATA_LOGS_DIR" "$HOMELAB_DOCKER_DIR"
@@ -70,6 +71,12 @@ if [[ "$ENABLE_DOCKER_START_TIMER" == "true" ]]; then
 fi
 
 if [[ "$ENABLE_SYNCTHING_TIMERS" == "true" ]]; then
+    if [[ -f "$SYNCTHING_SCHEDULE_SCRIPT" ]]; then
+        chmod +x "$SYNCTHING_SCHEDULE_SCRIPT"
+    else
+        print_warn "Missing $SYNCTHING_SCHEDULE_SCRIPT; Syncthing timers will fail until it is restored"
+    fi
+
     for unit in syncthing-unpause.service syncthing-unpause.timer syncthing-pause.service syncthing-pause.timer; do
         rc=0
         copy_if_changed "$BUILD_DIR/$unit" "/etc/systemd/system/$unit" "$unit" || rc=$?
