@@ -5,6 +5,7 @@ from pathlib import Path
 from ..build import copy_files, render_file
 from ..deploy import DeploySession, force_env, prepare_build_dir, stage_and_run_remote_installer
 from ..hosts import HostLookupError, default_registry
+from ..media_storage import load_media_storage
 from ..output import print_action, print_error, print_sub
 from ..ssh import HostConnection, build_files, diff_many
 
@@ -82,10 +83,18 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
         raise ValueError(f"pve-postinstall.import_pools must be a list for {host}")
     import_pools = " ".join(str(p) for p in import_pools_raw)
 
-    mounts_raw = registry.get(host, "pve-postinstall.mounts", [])
+    mounts: list[str] = []
+    mounts_raw = registry.get(host, "pve-postinstall.mounts", None)
+    media_storage = load_media_storage(registry, host)
+    if mounts_raw is None and media_storage is not None:
+        mounts_raw = [
+            {"label": label, "path": path}
+            for label, path in media_storage.raw_mounts()
+        ]
+    elif mounts_raw is None:
+        mounts_raw = []
     if not isinstance(mounts_raw, list):
         raise ValueError(f"pve-postinstall.mounts must be a list for {host}")
-    mounts: list[str] = []
     for m in mounts_raw:
         if not isinstance(m, dict) or "label" not in m or "path" not in m:
             raise ValueError(f"pve-postinstall.mounts entry must have label and path for {host}")
@@ -212,4 +221,3 @@ def stage_and_install(
         require_root=True,
         remote_subdirs=("build", "lib"),
     )
-

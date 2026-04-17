@@ -6,6 +6,7 @@ from pathlib import Path
 from ..build import render_file
 from ..deploy import DeploySession, force_env, prepare_build_dir, stage_and_run_remote_installer
 from ..hosts import default_registry
+from ..media_storage import load_media_storage
 from ..output import print_action, print_error, print_sub
 from ..ssh import HostConnection, build_files, diff_many
 
@@ -91,7 +92,15 @@ def require_text(value: object, message: str) -> str:
 
 
 def normalize_config(registry, host: str) -> SnapRaidConfig:
-    data_disks_raw = registry.get(host, "snapraid.data_disks", [])
+    media_storage = load_media_storage(registry, host)
+    data_disks_raw = registry.get(host, "snapraid.data_disks", None)
+    if data_disks_raw is None and media_storage is not None:
+        data_disks_raw = [
+            {"name": name, "path": path}
+            for name, path in media_storage.raw_data_disks()
+        ]
+    elif data_disks_raw is None:
+        data_disks_raw = []
     if not isinstance(data_disks_raw, list) or not data_disks_raw:
         raise ValueError(f"snapraid.data_disks must be a non-empty list for {host}")
 
@@ -105,7 +114,14 @@ def normalize_config(registry, host: str) -> SnapRaidConfig:
             raise ValueError(f"snapraid.data_disks path must be absolute for {host}")
         data_disks.append(SnapRaidDisk(name=name, path=path))
 
-    parity_disks_raw = registry.get(host, "snapraid.parity_disks", [])
+    parity_disks_raw = registry.get(host, "snapraid.parity_disks", None)
+    if parity_disks_raw is None and media_storage is not None:
+        parity_disks_raw = [
+            {"name": name, "path": path}
+            for name, path in media_storage.raw_parity_disks()
+        ]
+    elif parity_disks_raw is None:
+        parity_disks_raw = []
     if not isinstance(parity_disks_raw, list) or not parity_disks_raw:
         raise ValueError(f"snapraid.parity_disks must be a non-empty list for {host}")
 
@@ -125,7 +141,11 @@ def normalize_config(registry, host: str) -> SnapRaidConfig:
             raise ValueError(f"snapraid.parity_disks path must be absolute for {host}")
         parity_disks.append(SnapRaidDisk(name=name, path=path))
 
-    content_files_raw = registry.get(host, "snapraid.content_files", [])
+    content_files_raw = registry.get(host, "snapraid.content_files", None)
+    if content_files_raw is None and media_storage is not None:
+        content_files_raw = list(media_storage.raw_content_files())
+    elif content_files_raw is None:
+        content_files_raw = []
     if not isinstance(content_files_raw, list) or not content_files_raw:
         raise ValueError(f"snapraid.content_files must be a non-empty list for {host}")
     content_files = []
@@ -147,10 +167,10 @@ def normalize_config(registry, host: str) -> SnapRaidConfig:
         for item in exclude_patterns_raw
     )
 
-    pool_path = require_text(
-        registry.get(host, "snapraid.pool_path", ""),
-        f"snapraid.pool_path is required for {host}",
-    )
+    pool_path_value = registry.get(host, "snapraid.pool_path", "")
+    if not str(pool_path_value).strip() and media_storage is not None:
+        pool_path_value = media_storage.pool_root_path or ""
+    pool_path = require_text(pool_path_value, f"snapraid.pool_path is required for {host}")
     if not pool_path.startswith("/"):
         raise ValueError(f"snapraid.pool_path must be an absolute path for {host}")
 

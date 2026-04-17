@@ -6,6 +6,7 @@ from pathlib import Path
 from ..build import copy_file, render_file, write_env_file
 from ..deploy import DeploySession, force_env, prepare_build_dir, stage_and_run_remote_installer
 from ..hosts import HostLookupError, default_registry
+from ..media_storage import load_media_storage
 from ..output import print_action, print_error, print_sub
 from ..ssh import HostConnection, build_files, diff_many
 
@@ -121,14 +122,25 @@ def normalize_config(registry, host: str) -> MediaMoverConfig:
     if host_type not in {"pve", "ubuntu"}:
         raise ValueError(f"media-mover supports PVE and Ubuntu hosts only: {host}")
 
-    source_dir = require_text(
-        registry.get(host, "media-mover.source_dir", ""),
-        f"media-mover.source_dir is required for {host}",
-    )
-    target_dir = require_text(
-        registry.get(host, "media-mover.target_dir", ""),
-        f"media-mover.target_dir is required for {host}",
-    )
+    media_storage = load_media_storage(registry, host)
+
+    source_dir_value = registry.get(host, "media-mover.source_dir", "")
+    if not str(source_dir_value).strip() and media_storage is not None:
+        source_dir_value = (
+            media_storage.pool_cache_media_path
+            or media_storage.export_cache_media_path
+            or ""
+        )
+    source_dir = require_text(source_dir_value, f"media-mover.source_dir is required for {host}")
+
+    target_dir_value = registry.get(host, "media-mover.target_dir", "")
+    if not str(target_dir_value).strip() and media_storage is not None:
+        target_dir_value = (
+            media_storage.pool_hdd_only_media_path
+            or media_storage.export_hdd_only_media_path
+            or ""
+        )
+    target_dir = require_text(target_dir_value, f"media-mover.target_dir is required for {host}")
     if not source_dir.startswith("/") or not target_dir.startswith("/"):
         raise ValueError(f"media-mover paths must be absolute for {host}")
     if source_dir == target_dir:
@@ -154,10 +166,14 @@ def normalize_config(registry, host: str) -> MediaMoverConfig:
             )
         managed_roots.append(root_name)
 
-    merged_root = require_text(
-        registry.get(host, "media-mover.merged_root", "/mnt/user/media"),
-        f"media-mover.merged_root is required for {host}",
-    )
+    merged_root_value = registry.get(host, "media-mover.merged_root", "")
+    if not str(merged_root_value).strip() and media_storage is not None:
+        merged_root_value = (
+            media_storage.pool_merged_media_path
+            or media_storage.export_merged_media_path
+            or ""
+        )
+    merged_root = require_text(merged_root_value, f"media-mover.merged_root is required for {host}")
     if target_dir == merged_root:
         raise ValueError(
             "media-mover.target_dir must not use the merged media path "
@@ -202,30 +218,26 @@ def normalize_config(registry, host: str) -> MediaMoverConfig:
 
     dependency_units: list[str] = []
     tiered_media_mountpoint = str(registry.get(host, "tiered-media.mountpoint", "")).strip()
+    if not tiered_media_mountpoint and media_storage is not None:
+        tiered_media_mountpoint = (
+            media_storage.pool_merged_media_path
+            or media_storage.export_merged_media_path
+            or ""
+        )
     if tiered_media_mountpoint and merged_root == tiered_media_mountpoint:
         dependency_units.append("homelab-tiered-media.service")
 
-    tiered_media_hdd_mountpoint = str(
-        registry.get(host, "tiered-media.hdd_only_mountpoint", "")
-    ).strip()
+    tiered_media_hdd_mountpoint = str(registry.get(host, "tiered-media.hdd_only_mountpoint", "")).strip()
+    if not tiered_media_hdd_mountpoint and media_storage is not None:
+        tiered_media_hdd_mountpoint = (
+            media_storage.pool_hdd_only_media_path
+            or media_storage.export_hdd_only_media_path
+            or ""
+        )
     if tiered_media_hdd_mountpoint and target_dir == tiered_media_hdd_mountpoint:
         dependency_units.append("homelab-tiered-media-hdd.service")
 
-    ignore_paths_raw = registry.get(host, "media-mover.ignore_paths", [])
-    if ignore_paths_raw in (None, ""):
-        ignore_paths = []
-    elif not isinstance(ignore_paths_raw, list):
-        raise ValueError(f"media-mover.ignore_paths must be a list for {host}")
-    else:
-        ignore_paths = []
-        for item in ignore_paths_raw:
-            path = require_text(
-                item,
-                f"media-mover.ignore_paths entries must be non-empty for {host}",
-            )
-            if not path.startswith("/"):
-                raise ValueError(f"media-mover.ignore_paths entries must be absolute for {host}")
-            ignore_paths.append(path)
+    ignore_paths = normalize_ignore_paths(registry, host, source_dir)
 
     return MediaMoverConfig(
         source_dir=source_dir,
@@ -243,6 +255,57 @@ def normalize_config(registry, host: str) -> MediaMoverConfig:
         state_file=state_file,
         dependency_units=tuple(dependency_units),
     )
+
+
+def normalize_ignore_paths(registry, host: str, source_dir: str) -> tuple[str, ...]:
+    source_root = Path(source_dir)
+    ignore_relative_paths_raw = registry.get(host, "media-mover.ignore_relative_paths", None)
+    ignore_paths_raw = registry.get(host, "media-mover.ignore_paths", None)
+
+    if ignore_relative_paths_raw not in (None, ""):
+        if not isinstance(ignore_relative_paths_raw, list):
+            raise ValueError(f"media-mover.ignore_relative_paths must be a list for {host}")
+        ignore_paths: list[str] = []
+        for item in ignore_relative_paths_raw:
+            relative_text = require_text(
+                item,
+                f"media-mover.ignore_relative_paths entries must be non-empty for {host}",
+            )
+            relative_path = Path(relative_text)
+            if relative_path.is_absolute():
+                raise ValueError(
+                    f"media-mover.ignore_relative_paths entries must be relative for {host}"
+                )
+            if any(part == ".." for part in relative_path.parts):
+                raise ValueError(
+                    "media-mover.ignore_relative_paths entries must stay under the source dir "
+                    f"for {host}"
+                )
+            ignore_paths.append(str(source_root / relative_path))
+        return tuple(ignore_paths)
+
+    if ignore_paths_raw in (None, ""):
+        return ()
+    if not isinstance(ignore_paths_raw, list):
+        raise ValueError(f"media-mover.ignore_paths must be a list for {host}")
+
+    ignore_paths = []
+    for item in ignore_paths_raw:
+        path_text = require_text(
+            item,
+            f"media-mover.ignore_paths entries must be non-empty for {host}",
+        )
+        path = Path(path_text)
+        if not path.is_absolute():
+            raise ValueError(f"media-mover.ignore_paths entries must be absolute for {host}")
+        try:
+            path.relative_to(source_root)
+        except ValueError as exc:
+            raise ValueError(
+                f"media-mover.ignore_paths entries must stay under media-mover.source_dir for {host}"
+            ) from exc
+        ignore_paths.append(path_text)
+    return tuple(ignore_paths)
 
 
 def write_file_map(build_dir: Path, file_specs: tuple[FileSpec, ...]) -> None:

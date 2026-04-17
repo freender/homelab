@@ -6,6 +6,7 @@ from invoke.exceptions import UnexpectedExit
 
 from ..deploy import DeploySession, force_env, prepare_build_dir, stage_and_run_remote_installer
 from ..hosts import default_registry
+from ..media_storage import load_media_storage
 from ..output import print_action, print_error, print_sub
 from ..ssh import HostConnection, build_files, offline_mode
 
@@ -117,6 +118,15 @@ def validate(root: Path, hosts: list[str]) -> None:
                     )
 
             idmapped_mounts = container.get("idmapped_mounts", [])
+            if not idmapped_mounts and str(container.get("export_media_storage", "")).lower() in {
+                "1",
+                "true",
+            }:
+                media_storage = load_media_storage(registry, host)
+                idmapped_mounts = [
+                    {"source": source, "target": target}
+                    for source, target in (() if media_storage is None else media_storage.export_idmapped_mounts())
+                ]
             if not isinstance(idmapped_mounts, list):
                 raise ValueError(f"{host}: {ctid} idmapped_mounts must be a list")
             if not root_mounts and not idmapped_mounts:
@@ -162,7 +172,17 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
         ctid = str(container["ctid"])
         root_mounts = normalize_root_mounts(container["root_mounts"])
         idmapped_roots = [str(path) for path in container.get("idmapped_roots", [])]
-        idmapped_mounts = normalize_idmapped_mounts(container.get("idmapped_mounts", []))
+        idmapped_mounts_raw = container.get("idmapped_mounts", [])
+        if not idmapped_mounts_raw and str(container.get("export_media_storage", "")).lower() in {
+            "1",
+            "true",
+        }:
+            media_storage = load_media_storage(registry, host)
+            idmapped_mounts_raw = [
+                {"source": source, "target": target}
+                for source, target in (() if media_storage is None else media_storage.export_idmapped_mounts())
+            ]
+        idmapped_mounts = normalize_idmapped_mounts(idmapped_mounts_raw)
         features = normalize_features(container.get("features", {}))
         leaf_roots = idmapped_roots
 

@@ -6,6 +6,7 @@ from pathlib import Path
 from ..build import render_file
 from ..deploy import DeploySession, force_env, prepare_build_dir, stage_and_run_remote_installer
 from ..hosts import HostLookupError, default_registry
+from ..media_storage import load_media_storage
 from ..output import print_action, print_error, print_sub
 from ..ssh import HostConnection, build_files, diff_many
 
@@ -95,7 +96,17 @@ def normalize_config(registry, host: str) -> TieredMediaConfig:
     if host_type not in {"pve", "ubuntu"}:
         raise ValueError(f"tiered-media supports PVE and Ubuntu hosts only: {host}")
 
-    branches_raw = registry.get(host, "tiered-media.branches", [])
+    media_storage = load_media_storage(registry, host)
+    branches_raw = registry.get(host, "tiered-media.branches", None)
+    if branches_raw is None and media_storage is not None:
+        if media_storage.pool_cache_media_path is not None and media_storage.raw_media_branches():
+            branches_raw = [media_storage.pool_cache_media_path, *media_storage.raw_media_branches()]
+        elif media_storage.export_cache_media_path is not None and media_storage.export_media_branches():
+            branches_raw = [media_storage.export_cache_media_path, *media_storage.export_media_branches()]
+        else:
+            branches_raw = []
+    elif branches_raw is None:
+        branches_raw = []
     if not isinstance(branches_raw, list) or len(branches_raw) < 2:
         raise ValueError(f"tiered-media.branches must be a list of at least two paths for {host}")
 
@@ -109,14 +120,20 @@ def normalize_config(registry, host: str) -> TieredMediaConfig:
         branches.append(branch_path)
 
     mountpoint = str(registry.get(host, "tiered-media.mountpoint", "")).strip()
+    if not mountpoint and media_storage is not None:
+        mountpoint = media_storage.pool_merged_media_path or media_storage.export_merged_media_path or ""
     if not mountpoint.startswith("/"):
         raise ValueError(f"tiered-media.mountpoint must be an absolute path for {host}")
     if mountpoint in branches:
         raise ValueError(f"tiered-media.mountpoint must differ from branch paths for {host}")
 
-    hdd_only_mountpoint_raw = str(
-        registry.get(host, "tiered-media.hdd_only_mountpoint", "")
-    ).strip()
+    hdd_only_mountpoint_raw = str(registry.get(host, "tiered-media.hdd_only_mountpoint", "")).strip()
+    if not hdd_only_mountpoint_raw and media_storage is not None:
+        hdd_only_mountpoint_raw = (
+            media_storage.pool_hdd_only_media_path
+            or media_storage.export_hdd_only_media_path
+            or ""
+        )
     hdd_only_mountpoint: str | None = None
     if hdd_only_mountpoint_raw:
         if not hdd_only_mountpoint_raw.startswith("/"):
