@@ -11,7 +11,13 @@ from ..output import print_action, print_error, print_sub
 from ..ssh import HostConnection, build_files, diff_many
 
 REMOTE_ROOT = "/tmp/homelab-snapraid"
-TEMPLATE_FILES = ["snapraid.conf", "snapraid-sync.service", "snapraid-sync.timer"]
+TEMPLATE_FILES = [
+    "snapraid.conf",
+    "homelab-snapraid-sync.service",
+    "homelab-snapraid-sync.timer",
+    "homelab-snapraid-scrub.service",
+    "homelab-snapraid-scrub.timer",
+]
 
 
 @dataclass(frozen=True)
@@ -35,12 +41,16 @@ class SnapRaidConfig:
     exclude_patterns: tuple[str, ...]
     pool_path: str
     sync_schedule: str
+    scrub_schedule: str
+    orchestrate_media_mover: bool
 
 
 FILE_SPECS = (
     FileSpec("snapraid.conf", "/etc/snapraid.conf"),
-    FileSpec("snapraid-sync.service", "/etc/systemd/system/snapraid-sync.service"),
-    FileSpec("snapraid-sync.timer", "/etc/systemd/system/snapraid-sync.timer"),
+    FileSpec("homelab-snapraid-sync.service", "/etc/systemd/system/homelab-snapraid-sync.service"),
+    FileSpec("homelab-snapraid-sync.timer", "/etc/systemd/system/homelab-snapraid-sync.timer"),
+    FileSpec("homelab-snapraid-scrub.service", "/etc/systemd/system/homelab-snapraid-scrub.service"),
+    FileSpec("homelab-snapraid-scrub.timer", "/etc/systemd/system/homelab-snapraid-scrub.timer"),
 )
 
 
@@ -178,6 +188,23 @@ def normalize_config(registry, host: str) -> SnapRaidConfig:
         registry.get(host, "snapraid.sync_schedule", "daily"),
         f"snapraid.sync_schedule is required for {host}",
     )
+    scrub_schedule = require_text(
+        registry.get(host, "snapraid.scrub_schedule", "Sun *-*-* 09:00:00"),
+        f"snapraid.scrub_schedule is required for {host}",
+    )
+    has_media_mover = host in registry.list_hosts(feature="media-mover")
+    orchestrate_media_mover = (
+        str(
+            registry.get(
+                host,
+                "snapraid.orchestrate_media_mover",
+                "true" if has_media_mover else "false",
+            )
+        ).lower()
+        == "true"
+    )
+    if orchestrate_media_mover and not has_media_mover:
+        raise ValueError(f"snapraid.orchestrate_media_mover requires media-mover on {host}")
 
     return SnapRaidConfig(
         data_disks=tuple(data_disks),
@@ -186,6 +213,8 @@ def normalize_config(registry, host: str) -> SnapRaidConfig:
         exclude_patterns=exclude_patterns,
         pool_path=pool_path,
         sync_schedule=sync_schedule,
+        scrub_schedule=scrub_schedule,
+        orchestrate_media_mover=orchestrate_media_mover,
     )
 
 
@@ -208,8 +237,19 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
 
     # Use render_file for simple copies if no vars needed, or use a simple copy if preferred
     # But these templates might have vars later (e.g. schedule)
-    for tmpl in ["snapraid-sync.service", "snapraid-sync.timer"]:
-        context = {"SYNC_SCHEDULE": config.sync_schedule} if tmpl == "snapraid-sync.timer" else {}
+    for tmpl in [
+        "homelab-snapraid-sync.service",
+        "homelab-snapraid-sync.timer",
+        "homelab-snapraid-scrub.service",
+        "homelab-snapraid-scrub.timer",
+    ]:
+        context = {}
+        if tmpl == "homelab-snapraid-sync.timer":
+            context["SYNC_SCHEDULE"] = config.sync_schedule
+        elif tmpl == "homelab-snapraid-scrub.timer":
+            context["SCRUB_SCHEDULE"] = config.scrub_schedule
+        else:
+            context["ORCHESTRATE_MEDIA_MOVER"] = config.orchestrate_media_mover
         render_file(module_dir / "templates" / tmpl, build_dir / tmpl, **context)
 
     write_file_map(build_dir)

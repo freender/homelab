@@ -62,13 +62,39 @@ fi
 units_changed=false
 timer_changed=false
 
-for unit in snapraid.conf snapraid-sync.service snapraid-sync.timer; do
+for unit in \
+    snapraid.conf \
+    homelab-snapraid-sync.service \
+    homelab-snapraid-sync.timer \
+    homelab-snapraid-scrub.service \
+    homelab-snapraid-scrub.timer; do
     rc=0
     install_build_file "$unit" || rc=$?
     if [[ $rc -eq 0 ]]; then
-        if [[ "$unit" == "snapraid-sync.timer" ]]; then
+        if [[ "$unit" == "homelab-snapraid-sync.timer" || "$unit" == "homelab-snapraid-scrub.timer" ]]; then
             timer_changed=true
         fi
+        units_changed=true
+    fi
+done
+
+for retired_unit in \
+    snapraid-sync.service \
+    snapraid-sync.timer \
+    snapraid-scrub.service \
+    snapraid-scrub.timer; do
+    systemctl unmask "$retired_unit" >/dev/null 2>&1 || true
+    rm -f "/run/systemd/system/$retired_unit"
+    if systemctl is-enabled --quiet "$retired_unit" 2>/dev/null; then
+        systemctl disable --now "$retired_unit"
+        print_ok "$retired_unit disabled"
+    elif systemctl is-active --quiet "$retired_unit" 2>/dev/null; then
+        systemctl stop "$retired_unit"
+        print_ok "$retired_unit stopped"
+    fi
+    if [[ -f "/etc/systemd/system/$retired_unit" ]]; then
+        rm -f "/etc/systemd/system/$retired_unit"
+        print_ok "$retired_unit removed"
         units_changed=true
     fi
 done
@@ -77,15 +103,28 @@ if [[ "$units_changed" == "true" ]]; then
     systemctl daemon-reload
 fi
 
-if ! systemctl is-enabled --quiet snapraid-sync.timer 2>/dev/null; then
-    systemctl enable --now snapraid-sync.timer
-    print_ok "snapraid-sync.timer enabled"
+if ! systemctl is-enabled --quiet homelab-snapraid-sync.timer 2>/dev/null; then
+    systemctl enable --now homelab-snapraid-sync.timer
+    print_ok "homelab-snapraid-sync.timer enabled"
 elif [[ "$timer_changed" == "true" ]]; then
-    systemctl restart snapraid-sync.timer
-    print_ok "snapraid-sync.timer restarted"
-elif ! systemctl is-active --quiet snapraid-sync.timer 2>/dev/null; then
-    systemctl start snapraid-sync.timer
-    print_ok "snapraid-sync.timer started"
+    systemctl restart homelab-snapraid-sync.timer
+    print_ok "homelab-snapraid-sync.timer restarted"
+elif ! systemctl is-active --quiet homelab-snapraid-sync.timer 2>/dev/null; then
+    systemctl start homelab-snapraid-sync.timer
+    print_ok "homelab-snapraid-sync.timer started"
 else
-    print_sub "snapraid-sync.timer already enabled"
+    print_sub "homelab-snapraid-sync.timer already enabled"
+fi
+
+if ! systemctl is-enabled --quiet homelab-snapraid-scrub.timer 2>/dev/null; then
+    systemctl enable --now homelab-snapraid-scrub.timer
+    print_ok "homelab-snapraid-scrub.timer enabled"
+elif [[ "$timer_changed" == "true" ]]; then
+    systemctl restart homelab-snapraid-scrub.timer
+    print_ok "homelab-snapraid-scrub.timer restarted"
+elif ! systemctl is-active --quiet homelab-snapraid-scrub.timer 2>/dev/null; then
+    systemctl start homelab-snapraid-scrub.timer
+    print_ok "homelab-snapraid-scrub.timer started"
+else
+    print_sub "homelab-snapraid-scrub.timer already enabled"
 fi

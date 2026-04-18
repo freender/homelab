@@ -1,0 +1,9 @@
+[Unit]
+Description=Run homelab SnapRAID scrub maintenance on schedule
+
+[Timer]
+OnCalendar={{ SCRUB_SCHEDULE }}
+Persistent=true
+
+[Install]
+WantedBy=timers.target

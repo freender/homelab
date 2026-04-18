@@ -43,7 +43,7 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
         return
 
     autoupgrade = str(registry.get(host, "apt-upgrade.autoupgrade", "false")).lower()
-    schedule = str(registry.get(host, "apt-upgrade.schedule", "09:00"))
+    schedule = str(registry.get(host, "apt-upgrade.schedule", "*-*-* 09:00:00"))
 
     build_dir = root / "apt-upgrade" / "build" / host
     prepare_build_dir(build_dir)
@@ -69,7 +69,7 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
     if dry_run:
         if autoupgrade == "true":
             print_sub(
-                f"[DRY-RUN] Would install daily apt dist-upgrade timer on {host} at {schedule}"
+                f"[DRY-RUN] Would install apt dist-upgrade timer on {host} at {schedule}"
             )
         else:
             print_sub(f"[DRY-RUN] Would run apt dist-upgrade on {host} (on-demand only)")
@@ -110,7 +110,7 @@ def write_timer(build_dir: Path, schedule: str) -> None:
             "Description=Run homelab daily apt update and dist-upgrade",
             "",
             "[Timer]",
-            f"OnCalendar=*-*-* {schedule}:00",
+            f"OnCalendar={schedule}",
             "Persistent=true",
             "",
             "[Install]",

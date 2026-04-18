@@ -24,7 +24,7 @@ require_dir "$BUILD_DIR" "$BUILD_DIR" || exit 1
 
 # Source env to get AUTOUPGRADE and SCHEDULE
 AUTOUPGRADE="false"
-SCHEDULE="09:00"
+SCHEDULE="*-*-* 09:00:00"
 if [[ -f "$BUILD_DIR/env" ]]; then
     # shellcheck source=/dev/null
     source "$BUILD_DIR/env"

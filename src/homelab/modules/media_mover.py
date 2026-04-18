@@ -48,6 +48,7 @@ class MediaMoverConfig:
     min_file_age: str
     state_file: str
     dependency_units: tuple[str, ...]
+    manage_timer: bool
 
 
 FILE_SPECS = (
@@ -203,19 +204,20 @@ def normalize_config(registry, host: str) -> MediaMoverConfig:
         registry.get(host, "media-mover.state_file", "/var/lib/homelab-media-mover/state.json"),
         f"media-mover.state_file is required for {host}",
     )
+    manage_timer = str(registry.get(host, "media-mover.manage_timer", "true")).lower() == "true"
 
     dependency_units: list[str] = []
     tiered_media_mountpoint = str(registry.get(host, "media-pool.mountpoint", "")).strip()
     if not tiered_media_mountpoint and media_storage is not None:
         tiered_media_mountpoint = media_storage.preferred_merged_media_path(host_type) or ""
     if tiered_media_mountpoint and merged_root == tiered_media_mountpoint:
-        dependency_units.append("homelab-tiered-media.service")
+        dependency_units.append("homelab-media-pool.service")
 
     tiered_media_hdd_mountpoint = str(registry.get(host, "media-pool.hdd_only_mountpoint", "")).strip()
     if not tiered_media_hdd_mountpoint and media_storage is not None:
         tiered_media_hdd_mountpoint = media_storage.preferred_hdd_only_media_path(host_type) or ""
     if tiered_media_hdd_mountpoint and target_dir == tiered_media_hdd_mountpoint:
-        dependency_units.append("homelab-tiered-media-hdd.service")
+        dependency_units.append("homelab-media-pool-hdd-only.service")
 
     ignore_paths = normalize_ignore_paths(registry, host, source_dir)
 
@@ -234,6 +236,7 @@ def normalize_config(registry, host: str) -> MediaMoverConfig:
         min_file_age=min_file_age,
         state_file=state_file,
         dependency_units=tuple(dependency_units),
+        manage_timer=manage_timer,
     )
 
 
@@ -334,6 +337,7 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
             "CACHE_TARGET_FREE_SPACE": config.cache_target_free_space,
             "MIN_FILE_AGE": config.min_file_age,
             "STATE_FILE": config.state_file,
+            "ENABLE_MEDIA_MOVER_TIMER": "true" if config.manage_timer else "false",
         },
     )
     file_specs = list(FILE_SPECS)

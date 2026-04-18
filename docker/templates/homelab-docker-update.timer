@@ -1,0 +1,9 @@
+[Unit]
+Description=Run homelab Docker update on schedule
+
+[Timer]
+OnCalendar={{ DOCKER_UPDATE_SCHEDULE }}
+Persistent=true
+
+[Install]
+WantedBy=timers.target

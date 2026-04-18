@@ -13,6 +13,10 @@ REMOTE_ROOT = "/tmp/homelab-docker"
 TEMPLATE_FILES = [
     "homelab-docker-start.service",
     "homelab-docker-start.timer",
+    "homelab-docker-backup.service",
+    "homelab-docker-backup.timer",
+    "homelab-docker-update.service",
+    "homelab-docker-update.timer",
     "syncthing-unpause.service",
     "syncthing-unpause.timer",
     "syncthing-pause.service",
@@ -52,6 +56,10 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
     ssh_user = str(registry.get(host, "config.user"))
     ssh_hostname = str(registry.get(host, "config.hostname", host))
     backup_enabled = str(registry.get(host, "docker.backup", "false")).lower()
+    backup_schedule = str(registry.get(host, "docker.backup_schedule", "")).strip()
+    backup_timer_enabled = "true" if backup_enabled == "true" and backup_schedule else "false"
+    update_schedule = str(registry.get(host, "docker.update_schedule", "")).strip()
+    update_timer_enabled = "true" if update_schedule else "false"
     run_on_boot = str(registry.get(host, "docker.run_on_boot", "false")).lower()
     start_schedule = str(registry.get(host, "docker.start_schedule", "")).strip()
     timer_enabled = "true" if start_schedule else "false"
@@ -80,6 +88,26 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
             build_dir / "homelab-docker-start.timer",
             DOCKER_START_SCHEDULE=start_schedule,
         )
+    if backup_timer_enabled == "true":
+        render_file(
+            templates_dir / "homelab-docker-backup.service",
+            build_dir / "homelab-docker-backup.service",
+        )
+        render_file(
+            templates_dir / "homelab-docker-backup.timer",
+            build_dir / "homelab-docker-backup.timer",
+            DOCKER_BACKUP_SCHEDULE=backup_schedule,
+        )
+    if update_timer_enabled == "true":
+        render_file(
+            templates_dir / "homelab-docker-update.service",
+            build_dir / "homelab-docker-update.service",
+        )
+        render_file(
+            templates_dir / "homelab-docker-update.timer",
+            build_dir / "homelab-docker-update.timer",
+            DOCKER_UPDATE_SCHEDULE=update_schedule,
+        )
 
     if syncthing_unpause_schedule and syncthing_pause_schedule:
         render_file(
@@ -105,6 +133,8 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
         build_dir / "env",
         {
             "DOCKER_BACKUP": backup_enabled,
+            "ENABLE_DOCKER_BACKUP_TIMER": backup_timer_enabled,
+            "ENABLE_DOCKER_UPDATE_TIMER": update_timer_enabled,
             "RUN_DOCKER_START_ON_BOOT": run_on_boot,
             "ENABLE_DOCKER_START_TIMER": timer_enabled,
             "ENABLE_SYNCTHING_TIMERS": syncthing_timer_enabled,
@@ -135,6 +165,28 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
                 "/etc/systemd/system/homelab-docker-start.timer",
             ),
         ]
+    if backup_timer_enabled == "true":
+        diff_pairs += [
+            (
+                build_dir / "homelab-docker-backup.service",
+                "/etc/systemd/system/homelab-docker-backup.service",
+            ),
+            (
+                build_dir / "homelab-docker-backup.timer",
+                "/etc/systemd/system/homelab-docker-backup.timer",
+            ),
+        ]
+    if update_timer_enabled == "true":
+        diff_pairs += [
+            (
+                build_dir / "homelab-docker-update.service",
+                "/etc/systemd/system/homelab-docker-update.service",
+            ),
+            (
+                build_dir / "homelab-docker-update.timer",
+                "/etc/systemd/system/homelab-docker-update.timer",
+            ),
+        ]
     for message in diff_many(connection, diff_pairs):
         print_sub(message)
 
@@ -161,7 +213,7 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
     if backup_enabled == "true":
         _, message = connection.remote_diff(
             root / "docker" / "scripts" / "backup.sh",
-            "/mnt/cache/appdata/.homelab/docker/backup.sh",
+            "/mnt/cache/appdata/scripts/backup.sh",
         )
         print_sub(message)
 

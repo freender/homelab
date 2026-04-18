@@ -159,6 +159,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--promote-only", action="store_true")
     parser.add_argument("--evict-only", action="store_true")
     parser.add_argument("--loop", action="store_true")
+    parser.add_argument("--wait-for-lock", action="store_true")
     parser.add_argument("--loop-interval", metavar="DURATION")
     return parser.parse_args(argv)
 
@@ -810,11 +811,12 @@ def format_bytes(value: int) -> str:
     return f"{size:.1f}EiB"
 
 
-def try_acquire_lock(path: Path):
+def try_acquire_lock(path: Path, *, wait: bool = False):
     path.parent.mkdir(parents=True, exist_ok=True)
     handle = path.open("a+", encoding="utf-8")
     try:
-        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        lock_mode = fcntl.LOCK_EX if wait else fcntl.LOCK_EX | fcntl.LOCK_NB
+        fcntl.flock(handle.fileno(), lock_mode)
     except BlockingIOError:
         handle.close()
         return None
@@ -1020,11 +1022,11 @@ def run_once(config: Config, args: argparse.Namespace) -> int:
 def main() -> int:
     args = parse_args(sys.argv[1:])
     config = load_config(args)
-    operations_lock_handle = try_acquire_lock(OPERATIONS_LOCK)
+    operations_lock_handle = try_acquire_lock(OPERATIONS_LOCK, wait=args.wait_for_lock)
     if operations_lock_handle is None:
         print("skipped: shared media operations lock is held")
         return 0
-    lock_handle = try_acquire_lock(config.state_file.parent / "run.lock")
+    lock_handle = try_acquire_lock(config.state_file.parent / "run.lock", wait=args.wait_for_lock)
     if lock_handle is None:
         operations_lock_handle.close()
         print("skipped: another homelab media mover instance is already running")

@@ -1,10 +1,7 @@
 #!/bin/bash
 
-# Enhanced backup script with never-stop container protection
-# Add this script to cron:
-# crontab -e
-# 5 9 * * * /mnt/cache/appdata/scripts/backup.sh >> /mnt/cache/appdata/scripts/logs/backup.log 2>&1
-# PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin
+# Enhanced backup script with never-stop container protection.
+# The preferred schedule is the repo-managed homelab-docker-backup.timer.
 
 set -e
 
@@ -123,11 +120,6 @@ if [ -n "$CONTAINERS_TO_STOP" ]; then
   echo "Restarting stopped containers..."
   docker start $CONTAINERS_TO_STOP
 fi
-
-# Update docker containers
-echo ""
-echo "Running start.sh to update containers..."
-"$ROOT/start.sh"
 
 # Sleep 10 seconds to allow docker containers to start
 echo ""

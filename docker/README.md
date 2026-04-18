@@ -29,6 +29,10 @@ Per-host settings live in `docker/hosts.conf` using `docker.*` keys.
 **Hosts with backup enabled** (`/mnt/cache/appdata/scripts/`):
 - `backup.sh` - Backup appdata with smart container orchestration
 
+**Hosts with backup schedule configured** (`/etc/systemd/system/`):
+- `homelab-docker-backup.service`
+- `homelab-docker-backup.timer`
+
 ### Directory Structure
 
 ```
@@ -42,17 +46,22 @@ Hosts with backup enabled:
   /mnt/cache/appdata/scripts/logs/
     - backup.log          # Backup output
 
+Hosts with backup schedule configured:
+  /etc/systemd/system/
+    - homelab-docker-backup.service
+    - homelab-docker-backup.timer
+
 tower:
   /mnt/cache/appdata/scripts/  # Managed by User Scripts plugin
 ```
 
-### Cron Schedules
+### Backup Schedule
 
 **helm:**
-- 9:05 AM daily: Backup appdata (also updates containers via start.sh)
+- `homelab-docker-backup.timer` runs daily at 02:00 local time
 
 **tower:**
-- Scheduling handled by User Scripts plugin
+- No repo-managed backup timer configured
 
 ## Traefik Sync
 
@@ -99,3 +108,5 @@ Smart backup with container orchestration (helm only):
 - Rsyncs appdata to backup location
 - Restarts containers and updates images
 - Verifies container health
+
+`homelab-docker-backup.timer` is rendered from `hosts.conf` via `docker.backup_schedule`.

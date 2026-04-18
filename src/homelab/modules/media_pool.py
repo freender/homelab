@@ -10,8 +10,8 @@ from ..media_storage import load_media_storage
 from ..output import print_action, print_error, print_sub
 from ..ssh import HostConnection, build_files, diff_many
 
-REMOTE_ROOT = "/tmp/homelab-tiered-media"
-TEMPLATE_FILES = ["homelab-tiered-media.service"]
+REMOTE_ROOT = "/tmp/homelab-media-pool"
+TEMPLATE_FILES = ["homelab-media-pool.service"]
 
 
 @dataclass(frozen=True)
@@ -28,7 +28,7 @@ class HostArtifacts:
 
 
 @dataclass(frozen=True)
-class TieredMediaConfig:
+class MediaPoolConfig:
     branches: tuple[str, ...]
     mountpoint: str
     hdd_only_mountpoint: str | None
@@ -37,13 +37,10 @@ class TieredMediaConfig:
     consumer_units: tuple[str, ...]
 
 
-PRIMARY_SERVICE_SPEC = FileSpec(
-    "homelab-tiered-media.service",
-    "/etc/systemd/system/homelab-tiered-media.service",
-)
+PRIMARY_SERVICE_SPEC = FileSpec("homelab-media-pool.service", "/etc/systemd/system/homelab-media-pool.service")
 HDD_SERVICE_SPEC = FileSpec(
-    "homelab-tiered-media-hdd.service",
-    "/etc/systemd/system/homelab-tiered-media-hdd.service",
+    "homelab-media-pool-hdd-only.service",
+    "/etc/systemd/system/homelab-media-pool-hdd-only.service",
 )
 
 
@@ -58,7 +55,7 @@ def deploy(
     supported_hosts = registry.list_hosts(feature="media-pool")
     hosts = registry.filter_hosts(requested_host, supported_hosts)
     if not hosts:
-        print_action(f"Skipping tiered-media (not applicable to {requested_host})")
+        print_action(f"Skipping media-pool (not applicable to {requested_host})")
         return 0
 
     try:
@@ -72,8 +69,8 @@ def deploy(
 
 
 def validate(root: Path, hosts: list[str]) -> None:
-    templates_dir = root / "tiered-media" / "templates"
-    installer = root / "tiered-media" / "scripts" / "install.sh"
+    templates_dir = root / "media-pool" / "templates"
+    installer = root / "media-pool" / "scripts" / "install.sh"
 
     if not installer.is_file():
         raise ValueError(f"missing installer: {installer}")
@@ -87,14 +84,14 @@ def validate(root: Path, hosts: list[str]) -> None:
         normalize_config(registry, host)
 
 
-def normalize_config(registry, host: str) -> TieredMediaConfig:
+def normalize_config(registry, host: str) -> MediaPoolConfig:
     try:
         host_type = str(registry.get(host, "config.type"))
     except HostLookupError as exc:
         raise ValueError(str(exc)) from exc
 
     if host_type not in {"pve", "ubuntu"}:
-        raise ValueError(f"tiered-media supports PVE and Ubuntu hosts only: {host}")
+        raise ValueError(f"media-pool supports PVE and Ubuntu hosts only: {host}")
 
     media_storage = load_media_storage(registry, host)
     branches_raw = registry.get(host, "media-pool.branches", None)
@@ -168,7 +165,7 @@ def normalize_config(registry, host: str) -> TieredMediaConfig:
                 raise ValueError(f"media-pool.consumer_ctids entries must be numeric for {host}")
             consumer_units.append(f"pve-container@{ctid_text}.service")
 
-    return TieredMediaConfig(
+    return MediaPoolConfig(
         branches=tuple(branches),
         mountpoint=mountpoint,
         hdd_only_mountpoint=hdd_only_mountpoint,
@@ -178,7 +175,7 @@ def normalize_config(registry, host: str) -> TieredMediaConfig:
     )
 
 
-def mergerfs_options(config: TieredMediaConfig, *, fsname: str) -> str:
+def mergerfs_options(config: MediaPoolConfig, *, fsname: str) -> str:
     return ",".join(
         [
             "allow_other",
@@ -196,20 +193,20 @@ def mergerfs_options(config: TieredMediaConfig, *, fsname: str) -> str:
 def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
     registry = default_registry(root)
     config = normalize_config(registry, host)
-    module_dir = root / "tiered-media"
+    module_dir = root / "media-pool"
     build_dir = module_dir / "build" / host
     prepare_build_dir(build_dir)
 
     file_specs = [PRIMARY_SERVICE_SPEC]
     ordering_lines = "\n".join(f"Before={unit}" for unit in config.consumer_units)
     render_file(
-        module_dir / "templates" / "homelab-tiered-media.service",
-        build_dir / "homelab-tiered-media.service",
-        DESCRIPTION="Homelab Tiered Media MergerFS Mount",
+        module_dir / "templates" / "homelab-media-pool.service",
+        build_dir / "homelab-media-pool.service",
+        DESCRIPTION="Homelab media pool MergerFS mount",
         BRANCH_DIRS=" ".join(config.branches),
         BRANCHES=":".join(config.branches),
         MOUNTPOINT=config.mountpoint,
-        MERGERFS_OPTIONS=mergerfs_options(config, fsname="homelab-tiered-media"),
+        MERGERFS_OPTIONS=mergerfs_options(config, fsname="homelab-media-pool"),
         ORDERING_LINES=ordering_lines,
         REQUIRES_MOUNTS_FOR=" ".join(config.branches),
     )
@@ -217,13 +214,13 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
     if config.hdd_only_mountpoint:
         archive_branches = config.branches[1:]
         render_file(
-            module_dir / "templates" / "homelab-tiered-media.service",
-            build_dir / "homelab-tiered-media-hdd.service",
-            DESCRIPTION="Homelab HDD-Only Media MergerFS Mount",
+            module_dir / "templates" / "homelab-media-pool.service",
+            build_dir / "homelab-media-pool-hdd-only.service",
+            DESCRIPTION="Homelab media pool HDD-only MergerFS mount",
             BRANCH_DIRS=" ".join(archive_branches),
             BRANCHES=":".join(archive_branches),
             MOUNTPOINT=config.hdd_only_mountpoint,
-            MERGERFS_OPTIONS=mergerfs_options(config, fsname="homelab-tiered-media-hdd"),
+            MERGERFS_OPTIONS=mergerfs_options(config, fsname="homelab-media-pool-hdd-only"),
             ORDERING_LINES="",
             REQUIRES_MOUNTS_FOR=" ".join(archive_branches),
         )
@@ -266,7 +263,7 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
         REMOTE_ROOT,
         [
             (artifacts.build_dir, f"{REMOTE_ROOT}/build/{host}"),
-            (root / "tiered-media" / "scripts", f"{REMOTE_ROOT}/scripts"),
+            (root / "media-pool" / "scripts", f"{REMOTE_ROOT}/scripts"),
         ],
         "scripts/install.sh",
         host,

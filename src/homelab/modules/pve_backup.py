@@ -36,7 +36,7 @@ def validate(root: Path, hosts: list[str]) -> None:
     for name in ["pve-config-backup.sh.tpl", "pbs-tokens.env.example"]:
         if not (config_dir / name).is_file():
             raise ValueError(f"missing config file: {config_dir / name}")
-    for name in ["pve-config-backup.service", "pve-config-backup.timer"]:
+    for name in ["homelab-pve-config-backup.service", "homelab-pve-config-backup.timer"]:
         if not (template_dir / name).is_file():
             raise ValueError(f"missing template: {template_dir / name}")
     registry = default_registry(root)
@@ -80,8 +80,8 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
     print_sub("Comparing with remote configs...")
     for local_name, remote_path in [
         ("pve-config-backup.sh", "/root/pve-config-backup.sh"),
-        ("pve-config-backup.service", "/etc/systemd/system/pve-config-backup.service"),
-        ("pve-config-backup.timer", "/etc/systemd/system/pve-config-backup.timer"),
+        ("homelab-pve-config-backup.service", "/etc/systemd/system/homelab-pve-config-backup.service"),
+        ("homelab-pve-config-backup.timer", "/etc/systemd/system/homelab-pve-config-backup.timer"),
         ("pbs.env", "/etc/homelab/pve-config-backup.env"),
     ]:
         local_path = build_dir / local_name
@@ -102,7 +102,7 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
         )
         print_sub(
             "Cluster config backup subfeature: enabled"
-            if (build_dir / "pve-config-backup.timer").is_file()
+            if (build_dir / "homelab-pve-config-backup.timer").is_file()
             else "Cluster config backup subfeature: disabled"
         )
         return
@@ -210,7 +210,7 @@ def build_cluster_config_backup_bundle(root: Path, host: str, build_dir: Path) -
     if not repository:
         return
     schedule = str(
-        registry.get(host, "pve-backup.proxmox_backup_client.schedule", "00:30")
+        registry.get(host, "pve-backup.proxmox_backup_client.schedule", "*-*-* 00:30:00")
     )
     backup_id = str(
         registry.get(host, "pve-backup.proxmox_backup_client.backup_id", "pve-config")
@@ -238,15 +238,15 @@ def build_cluster_config_backup_bundle(root: Path, host: str, build_dir: Path) -
         CEPH_ENABLED=ceph_enabled,
     )
     (build_dir / "pve-config-backup.sh").chmod(0o700)
-    (build_dir / "pve-config-backup.service").write_text(
-        (root / "pve-backup" / "templates" / "pve-config-backup.service").read_text(
+    (build_dir / "homelab-pve-config-backup.service").write_text(
+        (root / "pve-backup" / "templates" / "homelab-pve-config-backup.service").read_text(
             encoding="utf-8"
         ),
         encoding="utf-8",
     )
     render_template(
-        root / "pve-backup" / "templates" / "pve-config-backup.timer",
-        build_dir / "pve-config-backup.timer",
+        root / "pve-backup" / "templates" / "homelab-pve-config-backup.timer",
+        build_dir / "homelab-pve-config-backup.timer",
         SCHEDULE=schedule,
     )
     (build_dir / "pbs.env").write_text(

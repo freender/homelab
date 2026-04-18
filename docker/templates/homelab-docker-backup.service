@@ -1,0 +1,10 @@
+[Unit]
+Description=Homelab docker backup
+Wants=network-online.target
+After=network-online.target docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/mnt/cache/appdata/scripts/backup.sh
+StandardOutput=journal
+StandardError=journal

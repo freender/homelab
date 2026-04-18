@@ -1,0 +1,10 @@
+[Unit]
+Description=Homelab docker update
+Wants=network-online.target
+After=network-online.target docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/mnt/cache/appdata/start.sh
+StandardOutput=journal
+StandardError=journal

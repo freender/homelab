@@ -16,6 +16,10 @@ fi
 
 require_dir "$BUILD_DIR" "$BUILD_DIR" || exit 1
 require_file "$BUILD_DIR/file-map.conf" "$BUILD_DIR/file-map.conf" || exit 1
+require_file "$BUILD_DIR/media-mover.env" "$BUILD_DIR/media-mover.env" || exit 1
+
+# shellcheck source=/dev/null
+source "$BUILD_DIR/media-mover.env"
 
 load_file_map() {
     local map_file="$BUILD_DIR/file-map.conf"
@@ -88,17 +92,6 @@ if [[ "$units_changed" == "true" ]]; then
     systemctl daemon-reload
 fi
 
-if ! systemctl is-enabled --quiet homelab-media-mover.timer 2>/dev/null; then
-    systemctl enable --now homelab-media-mover.timer
-    print_ok "homelab-media-mover.timer enabled"
-elif [[ "$timer_changed" == "true" ]]; then
-    systemctl restart homelab-media-mover.timer
-    print_ok "homelab-media-mover.timer restarted"
-elif ! systemctl is-active --quiet homelab-media-mover.timer 2>/dev/null; then
-    systemctl start homelab-media-mover.timer
-    print_ok "homelab-media-mover.timer started"
-else
-    print_sub "homelab-media-mover.timer already enabled"
-fi
+ensure_timer_state homelab-media-mover.timer "$ENABLE_MEDIA_MOVER_TIMER" "$timer_changed"
 
 print_header "Media Mover Complete"

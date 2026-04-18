@@ -10,6 +10,7 @@ from .apt_upgrade import deploy as deploy_apt_upgrade
 from .disk_spindown import deploy as deploy_disk_spindown
 from .docker import deploy as deploy_docker
 from .keepalived import deploy as deploy_keepalived
+from .media_pool import deploy as deploy_media_pool
 from .media_mover import deploy as deploy_media_mover
 from .pve_backup import deploy as deploy_pve_backup
 from .pve_exporters import deploy as deploy_pve_exporters
@@ -18,7 +19,6 @@ from .pve_lxc_mounts import deploy as deploy_pve_lxc_mounts
 from .pve_postinstall import deploy as deploy_pve_postinstall
 from .snapraid import deploy as deploy_snapraid
 from .ssh_config import deploy as deploy_ssh_config
-from .tiered_media import deploy as deploy_tiered_media
 from .ubuntu_setup import deploy as deploy_ubuntu_setup
 from .zfs_automation import deploy as deploy_zfs_automation
 
@@ -54,6 +54,7 @@ MODULES: dict[str, ModuleDefinition] = {
         name="Media Mover",
         deploy=deploy_media_mover,
     ),
+    "media-pool": ModuleDefinition(name="Media Pool", deploy=deploy_media_pool),
     "pve-backup": ModuleDefinition(
         name="PVE Backup",
         deploy=deploy_pve_backup,
@@ -76,7 +77,6 @@ MODULES: dict[str, ModuleDefinition] = {
     ),
     "ssh-config": ModuleDefinition(name="SSH Config", deploy=deploy_ssh_config),
     "snapraid": ModuleDefinition(name="SnapRAID", deploy=deploy_snapraid),
-    "tiered-media": ModuleDefinition(name="Tiered Media", deploy=deploy_tiered_media),
     "ubuntu-setup": ModuleDefinition(name="Ubuntu OS Setup", deploy=deploy_ubuntu_setup),
     "zfs-automation": ModuleDefinition(name="ZFS Automation", deploy=deploy_zfs_automation),
 }
@@ -89,9 +89,9 @@ MODULE_ORDER = [
     "disk-spindown",
     "pve-gpu-passthrough",
     "keepalived",
+    "media-pool",
     "media-mover",
     "snapraid",
-    "tiered-media",
     "pve-lxc-mounts",
     "ssh-config",
     "ubuntu-setup",

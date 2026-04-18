@@ -1,9 +1,8 @@
 [Unit]
-Description=Run SnapRAID sync and scrub daily
+Description=Run homelab SnapRAID sync on schedule
 
 [Timer]
 OnCalendar={{ SYNC_SCHEDULE }}
-RandomizedDelaySec=1h
 Persistent=true
 
 [Install]

@@ -84,6 +84,11 @@ If a module has no dedicated test script, use `./deploy --dry-run` as the test.
 - Prefer `HostRegistry` helpers over ad-hoc YAML traversal.
 - Treat booleans passed into remote env files as `true`/`false` strings where existing installers expect them.
 
+### Schedule syntax
+- In `hosts.conf`, prefer full calendar expressions for schedule-like fields instead of shorthand clock strings.
+- Use `*-*-* HH:MM:SS` for daily times and richer expressions like `Mon..Sat *-*-* 00:00:00` when needed.
+- Avoid introducing new shorthand values like `00:30`, `09:00`, or `daily` in inventory unless a consumer explicitly requires a different syntax.
+
 ### Naming conventions
 - Globals/constants: `UPPER_SNAKE_CASE` (`BUILD_ROOT`, `FORCE_UPDATE`).
 - Locals/functions: `snake_case`.

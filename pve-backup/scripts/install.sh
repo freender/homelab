@@ -49,7 +49,7 @@ else
     print_sub "Standalone backup jobs not configured; skipping"
 fi
 
-if [[ -f "$BUILD_DIR/pve-config-backup.timer" ]]; then
+if [[ -f "$BUILD_DIR/homelab-pve-config-backup.timer" ]]; then
     print_sub "Configuring cluster config backup timer..."
     bash "$SCRIPT_DIR/scripts/install-config-backup.sh" "$HOST" || exit 1
 else
