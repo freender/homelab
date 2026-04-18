@@ -22,9 +22,9 @@ prepare_mount_targets() {
     local rootfs="/var/lib/lxc/${ctid}/rootfs"
     local line
     local entry
-    local source
+    local _source
     local target
-    local fstype
+    local _fstype
     local options
     local rest
     local target_path
