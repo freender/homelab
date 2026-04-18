@@ -369,11 +369,31 @@ def parse_int(value: object) -> int | None:
         return None
 
 
-def resolve_unit_from_rating_key(config: Config, api_key: str, rating_key: int, root_name: str) -> Path | None:
-    metadata = tautulli_get(config.tautulli_url, api_key, "get_metadata", rating_key=rating_key)
+def resolve_unit_from_rating_key(
+    config: Config,
+    rating_key: int,
+    resolved_units: dict[int, Path | None],
+) -> Path | None:
+    if rating_key in resolved_units:
+        return resolved_units[rating_key]
+
+    try:
+        metadata = tautulli_get(
+            config.tautulli_url,
+            config.tautulli_api_key,
+            "get_metadata",
+            rating_key=rating_key,
+        )
+    except (OSError, RuntimeError, ValueError, json.JSONDecodeError, urllib.error.URLError) as exc:
+        print(f"warning: skipping Tautulli metadata for rating_key={rating_key}: {exc}")
+        resolved_units[rating_key] = None
+        return None
+
     media_info = metadata.get("media_info", [])
     if not isinstance(media_info, list):
+        resolved_units[rating_key] = None
         return None
+
     for media_item in media_info:
         if not isinstance(media_item, dict):
             continue
@@ -383,9 +403,12 @@ def resolve_unit_from_rating_key(config: Config, api_key: str, rating_key: int, 
             raw_file = part.get("file")
             if not isinstance(raw_file, str) or not raw_file:
                 continue
-            relative_dir = unit_relative_dir_from_plex_path(config, raw_file, root_name)
+            relative_dir = unit_relative_dir_from_plex_path(config, raw_file)
             if relative_dir is not None:
+                resolved_units[rating_key] = relative_dir
                 return relative_dir
+
+    resolved_units[rating_key] = None
     return None
 
 
@@ -395,16 +418,15 @@ def build_hot_scores(config: Config) -> dict[Path, int]:
         time.localtime(time.time() - (config.tautulli_lookback_days * 86400)),
     )
     scores: dict[Path, int] = {}
-    season_samples: dict[int, int] = {}
+    resolved_units: dict[int, Path | None] = {}
+    season_samples: dict[int, list[int]] = {}
     season_scores: dict[int, int] = {}
 
     for row in history_rows(config.tautulli_url, config.tautulli_api_key, after_date, "movie"):
         rating_key = parse_int(row.get("rating_key"))
         if rating_key is None:
             continue
-        sample = resolve_unit_from_rating_key(config, config.tautulli_api_key, rating_key, "movies")
-        if sample is None:
-            sample = resolve_unit_from_rating_key(config, config.tautulli_api_key, rating_key, "movies4k")
+        sample = resolve_unit_from_rating_key(config, rating_key, resolved_units)
         if sample is None:
             continue
         scores[sample] = scores.get(sample, 0) + score_row(row)
@@ -415,12 +437,16 @@ def build_hot_scores(config: Config) -> dict[Path, int]:
         if parent_rating_key is None or rating_key is None:
             continue
         season_scores[parent_rating_key] = season_scores.get(parent_rating_key, 0) + score_row(row)
-        season_samples.setdefault(parent_rating_key, rating_key)
+        samples = season_samples.setdefault(parent_rating_key, [])
+        if rating_key not in samples:
+            samples.append(rating_key)
 
-    for season_key, rating_key in season_samples.items():
-        sample = resolve_unit_from_rating_key(config, config.tautulli_api_key, rating_key, "tv")
-        if sample is None:
-            sample = resolve_unit_from_rating_key(config, config.tautulli_api_key, rating_key, "tv4k")
+    for season_key, rating_keys in season_samples.items():
+        sample = None
+        for rating_key in rating_keys:
+            sample = resolve_unit_from_rating_key(config, rating_key, resolved_units)
+            if sample is not None:
+                break
         if sample is None:
             continue
         scores[sample] = scores.get(sample, 0) + season_scores.get(season_key, 0)
@@ -436,13 +462,16 @@ def try_build_hot_scores(config: Config) -> tuple[dict[Path, int], bool]:
         return {}, False
 
 
-def unit_relative_dir_from_plex_path(config: Config, plex_path: str, root_name: str) -> Path | None:
+def unit_relative_dir_from_plex_path(config: Config, plex_path: str) -> Path | None:
     raw_path = PurePath(plex_path)
     try:
         plex_relative = raw_path.relative_to(config.plex_mount_root)
     except ValueError:
         return None
-    if not plex_relative.parts or plex_relative.parts[0] != root_name:
+    if not plex_relative.parts:
+        return None
+    root_name = plex_relative.parts[0]
+    if root_name not in config.managed_roots:
         return None
     if root_name in MOVIE_ROOTS and len(plex_relative.parts) >= 2:
         return Path(*plex_relative.parts[:2])

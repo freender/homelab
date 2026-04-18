@@ -126,20 +126,12 @@ def normalize_config(registry, host: str) -> MediaMoverConfig:
 
     source_dir_value = registry.get(host, "media-mover.source_dir", "")
     if not str(source_dir_value).strip() and media_storage is not None:
-        source_dir_value = (
-            media_storage.pool_cache_media_path
-            or media_storage.export_cache_media_path
-            or ""
-        )
+        source_dir_value = media_storage.preferred_cache_media_path(host_type) or ""
     source_dir = require_text(source_dir_value, f"media-mover.source_dir is required for {host}")
 
     target_dir_value = registry.get(host, "media-mover.target_dir", "")
     if not str(target_dir_value).strip() and media_storage is not None:
-        target_dir_value = (
-            media_storage.pool_hdd_only_media_path
-            or media_storage.export_hdd_only_media_path
-            or ""
-        )
+        target_dir_value = media_storage.preferred_hdd_only_media_path(host_type) or ""
     target_dir = require_text(target_dir_value, f"media-mover.target_dir is required for {host}")
     if not source_dir.startswith("/") or not target_dir.startswith("/"):
         raise ValueError(f"media-mover paths must be absolute for {host}")
@@ -168,11 +160,7 @@ def normalize_config(registry, host: str) -> MediaMoverConfig:
 
     merged_root_value = registry.get(host, "media-mover.merged_root", "")
     if not str(merged_root_value).strip() and media_storage is not None:
-        merged_root_value = (
-            media_storage.pool_merged_media_path
-            or media_storage.export_merged_media_path
-            or ""
-        )
+        merged_root_value = media_storage.preferred_merged_media_path(host_type) or ""
     merged_root = require_text(merged_root_value, f"media-mover.merged_root is required for {host}")
     if target_dir == merged_root:
         raise ValueError(
@@ -217,23 +205,15 @@ def normalize_config(registry, host: str) -> MediaMoverConfig:
     )
 
     dependency_units: list[str] = []
-    tiered_media_mountpoint = str(registry.get(host, "tiered-media.mountpoint", "")).strip()
+    tiered_media_mountpoint = str(registry.get(host, "media-pool.mountpoint", "")).strip()
     if not tiered_media_mountpoint and media_storage is not None:
-        tiered_media_mountpoint = (
-            media_storage.pool_merged_media_path
-            or media_storage.export_merged_media_path
-            or ""
-        )
+        tiered_media_mountpoint = media_storage.preferred_merged_media_path(host_type) or ""
     if tiered_media_mountpoint and merged_root == tiered_media_mountpoint:
         dependency_units.append("homelab-tiered-media.service")
 
-    tiered_media_hdd_mountpoint = str(registry.get(host, "tiered-media.hdd_only_mountpoint", "")).strip()
+    tiered_media_hdd_mountpoint = str(registry.get(host, "media-pool.hdd_only_mountpoint", "")).strip()
     if not tiered_media_hdd_mountpoint and media_storage is not None:
-        tiered_media_hdd_mountpoint = (
-            media_storage.pool_hdd_only_media_path
-            or media_storage.export_hdd_only_media_path
-            or ""
-        )
+        tiered_media_hdd_mountpoint = media_storage.preferred_hdd_only_media_path(host_type) or ""
     if tiered_media_hdd_mountpoint and target_dir == tiered_media_hdd_mountpoint:
         dependency_units.append("homelab-tiered-media-hdd.service")
 

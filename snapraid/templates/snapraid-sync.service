@@ -5,7 +5,7 @@ After=network.target
 
 [Service]
 Type=oneshot
-ExecStart=/bin/sh -c 'mkdir -p /var/lib/homelab-media && flock -n /var/lib/homelab-media/operations.lock /bin/sh -c "exec /usr/bin/snapraid sync && /usr/bin/snapraid scrub -p 10 -o 30" || { rc=$?; if [ "$rc" -eq 1 ]; then echo "skipped: shared media operations lock is held"; exit 0; fi; exit "$rc"; }'
+ExecStart=/bin/sh -c 'mkdir -p /var/lib/homelab-media || exit 1; exec 9>/var/lib/homelab-media/operations.lock || exit 1; if ! flock -n 9; then echo "skipped: shared media operations lock is held"; exit 0; fi; /usr/bin/snapraid sync && /usr/bin/snapraid scrub -p 10 -o 30'
 StandardOutput=journal
 StandardError=journal
 

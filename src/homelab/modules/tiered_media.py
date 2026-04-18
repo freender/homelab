@@ -55,7 +55,7 @@ def deploy(
     session: DeploySession,
 ) -> int:
     registry = default_registry(root)
-    supported_hosts = registry.list_hosts(feature="tiered-media")
+    supported_hosts = registry.list_hosts(feature="media-pool")
     hosts = registry.filter_hosts(requested_host, supported_hosts)
     if not hosts:
         print_action(f"Skipping tiered-media (not applicable to {requested_host})")
@@ -97,79 +97,75 @@ def normalize_config(registry, host: str) -> TieredMediaConfig:
         raise ValueError(f"tiered-media supports PVE and Ubuntu hosts only: {host}")
 
     media_storage = load_media_storage(registry, host)
-    branches_raw = registry.get(host, "tiered-media.branches", None)
+    branches_raw = registry.get(host, "media-pool.branches", None)
     if branches_raw is None and media_storage is not None:
-        if media_storage.pool_cache_media_path is not None and media_storage.raw_media_branches():
-            branches_raw = [media_storage.pool_cache_media_path, *media_storage.raw_media_branches()]
-        elif media_storage.export_cache_media_path is not None and media_storage.export_media_branches():
-            branches_raw = [media_storage.export_cache_media_path, *media_storage.export_media_branches()]
+        preferred_cache_media_path = media_storage.preferred_cache_media_path(host_type)
+        preferred_branches = media_storage.preferred_media_branches(host_type)
+        if preferred_cache_media_path is not None and preferred_branches:
+            branches_raw = [preferred_cache_media_path, *preferred_branches]
         else:
             branches_raw = []
     elif branches_raw is None:
         branches_raw = []
     if not isinstance(branches_raw, list) or len(branches_raw) < 2:
-        raise ValueError(f"tiered-media.branches must be a list of at least two paths for {host}")
+        raise ValueError(f"media-pool.branches must be a list of at least two paths for {host}")
 
     branches: list[str] = []
     for index, branch in enumerate(branches_raw):
         branch_path = str(branch).strip()
         if not branch_path.startswith("/"):
-            raise ValueError(f"tiered-media.branches[{index}] must be an absolute path for {host}")
+            raise ValueError(f"media-pool.branches[{index}] must be an absolute path for {host}")
         if branch_path in branches:
-            raise ValueError(f"duplicate tiered-media branch path {branch_path} for {host}")
+            raise ValueError(f"duplicate media-pool branch path {branch_path} for {host}")
         branches.append(branch_path)
 
-    mountpoint = str(registry.get(host, "tiered-media.mountpoint", "")).strip()
+    mountpoint = str(registry.get(host, "media-pool.mountpoint", "")).strip()
     if not mountpoint and media_storage is not None:
-        mountpoint = media_storage.pool_merged_media_path or media_storage.export_merged_media_path or ""
+        mountpoint = media_storage.preferred_merged_media_path(host_type) or ""
     if not mountpoint.startswith("/"):
-        raise ValueError(f"tiered-media.mountpoint must be an absolute path for {host}")
+        raise ValueError(f"media-pool.mountpoint must be an absolute path for {host}")
     if mountpoint in branches:
-        raise ValueError(f"tiered-media.mountpoint must differ from branch paths for {host}")
+        raise ValueError(f"media-pool.mountpoint must differ from branch paths for {host}")
 
-    hdd_only_mountpoint_raw = str(registry.get(host, "tiered-media.hdd_only_mountpoint", "")).strip()
+    hdd_only_mountpoint_raw = str(registry.get(host, "media-pool.hdd_only_mountpoint", "")).strip()
     if not hdd_only_mountpoint_raw and media_storage is not None:
-        hdd_only_mountpoint_raw = (
-            media_storage.pool_hdd_only_media_path
-            or media_storage.export_hdd_only_media_path
-            or ""
-        )
+        hdd_only_mountpoint_raw = media_storage.preferred_hdd_only_media_path(host_type) or ""
     hdd_only_mountpoint: str | None = None
     if hdd_only_mountpoint_raw:
         if not hdd_only_mountpoint_raw.startswith("/"):
             raise ValueError(
-                f"tiered-media.hdd_only_mountpoint must be an absolute path for {host}"
+                f"media-pool.hdd_only_mountpoint must be an absolute path for {host}"
             )
         if hdd_only_mountpoint_raw in branches:
             raise ValueError(
-                f"tiered-media.hdd_only_mountpoint must differ from branch paths for {host}"
+                f"media-pool.hdd_only_mountpoint must differ from branch paths for {host}"
             )
         if hdd_only_mountpoint_raw == mountpoint:
             raise ValueError(
-                "tiered-media.hdd_only_mountpoint must differ from "
-                f"tiered-media.mountpoint for {host}"
+                "media-pool.hdd_only_mountpoint must differ from "
+                f"media-pool.mountpoint for {host}"
             )
         hdd_only_mountpoint = hdd_only_mountpoint_raw
 
-    create_policy = str(registry.get(host, "tiered-media.create_policy", "ff")).strip()
+    create_policy = str(registry.get(host, "media-pool.create_policy", "ff")).strip()
     if not create_policy:
-        raise ValueError(f"tiered-media.create_policy must be non-empty for {host}")
+        raise ValueError(f"media-pool.create_policy must be non-empty for {host}")
 
-    min_free_space = str(registry.get(host, "tiered-media.min_free_space", "100G")).strip()
+    min_free_space = str(registry.get(host, "media-pool.min_free_space", "100G")).strip()
     if not min_free_space:
-        raise ValueError(f"tiered-media.min_free_space must be non-empty for {host}")
+        raise ValueError(f"media-pool.min_free_space must be non-empty for {host}")
 
-    consumer_ctids_raw = registry.get(host, "tiered-media.consumer_ctids", [])
+    consumer_ctids_raw = registry.get(host, "media-pool.consumer_ctids", [])
     consumer_units: list[str] = []
     if consumer_ctids_raw not in (None, []):
         if host_type != "pve":
-            raise ValueError(f"tiered-media.consumer_ctids is only valid on PVE hosts: {host}")
+            raise ValueError(f"media-pool.consumer_ctids is only valid on PVE hosts: {host}")
         if not isinstance(consumer_ctids_raw, list):
-            raise ValueError(f"tiered-media.consumer_ctids must be a list for {host}")
+            raise ValueError(f"media-pool.consumer_ctids must be a list for {host}")
         for ctid in consumer_ctids_raw:
             ctid_text = str(ctid).strip()
             if not ctid_text.isdigit():
-                raise ValueError(f"tiered-media.consumer_ctids entries must be numeric for {host}")
+                raise ValueError(f"media-pool.consumer_ctids entries must be numeric for {host}")
             consumer_units.append(f"pve-container@{ctid_text}.service")
 
     return TieredMediaConfig(
