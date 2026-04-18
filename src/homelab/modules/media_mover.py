@@ -144,7 +144,11 @@ def normalize_config(registry, host: str) -> MediaMoverConfig:
         f"media-mover.schedule is required for {host}",
     )
 
-    managed_roots_raw = registry.get(host, "media-mover.managed_roots", ["movies", "movies4k", "tv", "tv4k"])
+    managed_roots_raw = registry.get(
+        host,
+        "media-mover.managed_roots",
+        ["movies", "movies4k", "tv", "tv4k"],
+    )
     if not isinstance(managed_roots_raw, list) or not managed_roots_raw:
         raise ValueError(f"media-mover.managed_roots must be a non-empty list for {host}")
     managed_roots = []
@@ -162,7 +166,10 @@ def normalize_config(registry, host: str) -> MediaMoverConfig:
     merged_root_value = registry.get(host, "media-mover.merged_root", "")
     if not str(merged_root_value).strip() and media_storage is not None:
         merged_root_value = media_storage.preferred_merged_media_path(host_type) or ""
-    merged_root = require_text(merged_root_value, f"media-mover.merged_root is required for {host}")
+    merged_root = require_text(
+        merged_root_value,
+        f"media-mover.merged_root is required for {host}",
+    )
     if target_dir == merged_root:
         raise ValueError(
             "media-mover.target_dir must not use the merged media path "
@@ -213,7 +220,9 @@ def normalize_config(registry, host: str) -> MediaMoverConfig:
     if tiered_media_mountpoint and merged_root == tiered_media_mountpoint:
         dependency_units.append("homelab-media-pool.service")
 
-    tiered_media_hdd_mountpoint = str(registry.get(host, "media-pool.hdd_only_mountpoint", "")).strip()
+    tiered_media_hdd_mountpoint = str(
+        registry.get(host, "media-pool.hdd_only_mountpoint", "")
+    ).strip()
     if not tiered_media_hdd_mountpoint and media_storage is not None:
         tiered_media_hdd_mountpoint = media_storage.preferred_hdd_only_media_path(host_type) or ""
     if tiered_media_hdd_mountpoint and target_dir == tiered_media_hdd_mountpoint:
@@ -285,7 +294,8 @@ def normalize_ignore_paths(registry, host: str, source_dir: str) -> tuple[str, .
             path.relative_to(source_root)
         except ValueError as exc:
             raise ValueError(
-                f"media-mover.ignore_paths entries must stay under media-mover.source_dir for {host}"
+                "media-mover.ignore_paths entries must stay under "
+                f"media-mover.source_dir for {host}"
             ) from exc
         ignore_paths.append(path_text)
     return tuple(ignore_paths)

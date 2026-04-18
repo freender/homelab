@@ -10,8 +10,8 @@ from .apt_upgrade import deploy as deploy_apt_upgrade
 from .disk_spindown import deploy as deploy_disk_spindown
 from .docker import deploy as deploy_docker
 from .keepalived import deploy as deploy_keepalived
-from .media_pool import deploy as deploy_media_pool
 from .media_mover import deploy as deploy_media_mover
+from .media_pool import deploy as deploy_media_pool
 from .pve_backup import deploy as deploy_pve_backup
 from .pve_exporters import deploy as deploy_pve_exporters
 from .pve_gpu_passthrough import deploy as deploy_pve_gpu_passthrough

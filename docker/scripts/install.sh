@@ -62,12 +62,10 @@ if [[ "$RUN_DOCKER_START_ON_BOOT" == "true" || "$ENABLE_DOCKER_START_TIMER" == "
 fi
 
 if [[ "$ENABLE_DOCKER_START_TIMER" == "true" ]]; then
-    for unit in homelab-docker-start.timer; do
-        rc=0
-        copy_if_changed "$BUILD_DIR/$unit" "/etc/systemd/system/$unit" "$unit" || rc=$?
-        [[ $rc -eq 1 ]] || [[ $rc -eq 0 ]] || exit "$rc"
-        [[ $rc -eq 0 ]] && units_changed=true
-    done
+    rc=0
+    copy_if_changed "$BUILD_DIR/homelab-docker-start.timer" "/etc/systemd/system/homelab-docker-start.timer" "homelab-docker-start.timer" || rc=$?
+    [[ $rc -eq 1 ]] || [[ $rc -eq 0 ]] || exit "$rc"
+    [[ $rc -eq 0 ]] && units_changed=true
 fi
 
 if [[ "$ENABLE_DOCKER_BACKUP_TIMER" == "true" ]]; then

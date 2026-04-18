@@ -35,12 +35,12 @@ prepare_mount_targets() {
         [[ "$line" == lxc.mount.entry:* ]] || continue
 
         entry="${line#lxc.mount.entry: }"
-        source=""
+        _source=""
         target=""
-        fstype=""
+        _fstype=""
         options=""
         rest=""
-        IFS=' ' read -r source target fstype options rest <<< "$entry"
+        IFS=' ' read -r _source target _fstype options rest <<< "$entry"
 
         [[ -n "$target" ]] || continue
         [[ "$options" == *"create=dir"* ]] || continue

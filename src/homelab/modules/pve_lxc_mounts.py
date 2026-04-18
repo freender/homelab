@@ -125,7 +125,9 @@ def validate(root: Path, hosts: list[str]) -> None:
                 media_storage = load_media_storage(registry, host)
                 idmapped_mounts = [
                     {"source": source, "target": target}
-                    for source, target in (() if media_storage is None else media_storage.export_idmapped_mounts())
+                    for source, target in (
+                        () if media_storage is None else media_storage.export_idmapped_mounts()
+                    )
                 ]
             if not isinstance(idmapped_mounts, list):
                 raise ValueError(f"{host}: {ctid} idmapped_mounts must be a list")
@@ -180,7 +182,9 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
             media_storage = load_media_storage(registry, host)
             idmapped_mounts_raw = [
                 {"source": source, "target": target}
-                for source, target in (() if media_storage is None else media_storage.export_idmapped_mounts())
+                for source, target in (
+                    () if media_storage is None else media_storage.export_idmapped_mounts()
+                )
             ]
         idmapped_mounts = normalize_idmapped_mounts(idmapped_mounts_raw)
         features = normalize_features(container.get("features", {}))

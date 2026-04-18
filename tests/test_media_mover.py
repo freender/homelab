@@ -6,7 +6,12 @@ from pathlib import Path, PurePath
 
 
 def load_media_mover_module():
-    module_path = Path(__file__).resolve().parents[1] / "media-mover" / "templates" / "homelab-media-mover.py"
+    module_path = (
+        Path(__file__).resolve().parents[1]
+        / "media-mover"
+        / "templates"
+        / "homelab-media-mover.py"
+    )
     spec = importlib.util.spec_from_file_location("test_media_mover_runtime", module_path)
     if spec is None or spec.loader is None:
         raise AssertionError(f"failed to load media mover module from {module_path}")
@@ -51,7 +56,9 @@ def write_movie(config, folder_name: str = "Movie (2026) {tmdb-1}") -> Path:
     return movie_file
 
 
-def test_run_once_keeps_synced_media_on_cache_for_normal_mover(tmp_path: Path, monkeypatch, capsys) -> None:
+def test_run_once_keeps_synced_media_on_cache_for_normal_mover(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
     module = load_media_mover_module()
     config = make_config(module, tmp_path)
     source_file = write_movie(config)

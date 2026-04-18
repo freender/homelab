@@ -49,7 +49,10 @@ FILE_SPECS = (
     FileSpec("snapraid.conf", "/etc/snapraid.conf"),
     FileSpec("homelab-snapraid-sync.service", "/etc/systemd/system/homelab-snapraid-sync.service"),
     FileSpec("homelab-snapraid-sync.timer", "/etc/systemd/system/homelab-snapraid-sync.timer"),
-    FileSpec("homelab-snapraid-scrub.service", "/etc/systemd/system/homelab-snapraid-scrub.service"),
+    FileSpec(
+        "homelab-snapraid-scrub.service",
+        "/etc/systemd/system/homelab-snapraid-scrub.service",
+    ),
     FileSpec("homelab-snapraid-scrub.timer", "/etc/systemd/system/homelab-snapraid-scrub.timer"),
 )
 

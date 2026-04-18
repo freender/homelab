@@ -112,7 +112,10 @@ def load_media_storage(registry, host: str) -> MediaStorageConfig | None:
     except HostLookupError:
         return None
 
-    data_slots = normalize_slots(data_slots_raw, f"media_storage.data_slots must be a non-empty list for {source_host}")
+    data_slots = normalize_slots(
+        data_slots_raw,
+        f"media_storage.data_slots must be a non-empty list for {source_host}",
+    )
     parity_slots = normalize_slots(
         registry.get(source_host, "media_storage.parity_slots", [1]),
         f"media_storage.parity_slots must be a non-empty list for {source_host}",
@@ -121,16 +124,46 @@ def load_media_storage(registry, host: str) -> MediaStorageConfig | None:
     return MediaStorageConfig(
         data_slots=data_slots,
         parity_slots=parity_slots,
-        raw_data_mount_prefix=optional_absolute_prefix(registry.get(source_host, "media_storage.raw.data_mount_prefix", ""), f"media_storage.raw.data_mount_prefix must be absolute for {source_host}"),
-        raw_parity_mount_prefix=optional_absolute_prefix(registry.get(source_host, "media_storage.raw.parity_mount_prefix", ""), f"media_storage.raw.parity_mount_prefix must be absolute for {source_host}"),
-        pool_root_path=optional_absolute_path(registry.get(source_host, "media_storage.pool.root_path", ""), f"media_storage.pool.root_path must be absolute for {source_host}"),
-        pool_cache_media_path=optional_absolute_path(registry.get(source_host, "media_storage.pool.cache_media_path", ""), f"media_storage.pool.cache_media_path must be absolute for {source_host}"),
-        pool_merged_media_path=optional_absolute_path(registry.get(source_host, "media_storage.pool.merged_media_path", ""), f"media_storage.pool.merged_media_path must be absolute for {source_host}"),
-        pool_hdd_only_media_path=optional_absolute_path(registry.get(source_host, "media_storage.pool.hdd_only_media_path", ""), f"media_storage.pool.hdd_only_media_path must be absolute for {source_host}"),
-        export_data_mount_prefix=optional_absolute_prefix(registry.get(source_host, "media_storage.export.data_mount_prefix", ""), f"media_storage.export.data_mount_prefix must be absolute for {source_host}"),
-        export_cache_media_path=optional_absolute_path(registry.get(source_host, "media_storage.export.cache_media_path", ""), f"media_storage.export.cache_media_path must be absolute for {source_host}"),
-        export_merged_media_path=optional_absolute_path(registry.get(source_host, "media_storage.export.merged_media_path", ""), f"media_storage.export.merged_media_path must be absolute for {source_host}"),
-        export_hdd_only_media_path=optional_absolute_path(registry.get(source_host, "media_storage.export.hdd_only_media_path", ""), f"media_storage.export.hdd_only_media_path must be absolute for {source_host}"),
+        raw_data_mount_prefix=optional_absolute_prefix(
+            registry.get(source_host, "media_storage.raw.data_mount_prefix", ""),
+            f"media_storage.raw.data_mount_prefix must be absolute for {source_host}",
+        ),
+        raw_parity_mount_prefix=optional_absolute_prefix(
+            registry.get(source_host, "media_storage.raw.parity_mount_prefix", ""),
+            f"media_storage.raw.parity_mount_prefix must be absolute for {source_host}",
+        ),
+        pool_root_path=optional_absolute_path(
+            registry.get(source_host, "media_storage.pool.root_path", ""),
+            f"media_storage.pool.root_path must be absolute for {source_host}",
+        ),
+        pool_cache_media_path=optional_absolute_path(
+            registry.get(source_host, "media_storage.pool.cache_media_path", ""),
+            f"media_storage.pool.cache_media_path must be absolute for {source_host}",
+        ),
+        pool_merged_media_path=optional_absolute_path(
+            registry.get(source_host, "media_storage.pool.merged_media_path", ""),
+            f"media_storage.pool.merged_media_path must be absolute for {source_host}",
+        ),
+        pool_hdd_only_media_path=optional_absolute_path(
+            registry.get(source_host, "media_storage.pool.hdd_only_media_path", ""),
+            f"media_storage.pool.hdd_only_media_path must be absolute for {source_host}",
+        ),
+        export_data_mount_prefix=optional_absolute_prefix(
+            registry.get(source_host, "media_storage.export.data_mount_prefix", ""),
+            f"media_storage.export.data_mount_prefix must be absolute for {source_host}",
+        ),
+        export_cache_media_path=optional_absolute_path(
+            registry.get(source_host, "media_storage.export.cache_media_path", ""),
+            f"media_storage.export.cache_media_path must be absolute for {source_host}",
+        ),
+        export_merged_media_path=optional_absolute_path(
+            registry.get(source_host, "media_storage.export.merged_media_path", ""),
+            f"media_storage.export.merged_media_path must be absolute for {source_host}",
+        ),
+        export_hdd_only_media_path=optional_absolute_path(
+            registry.get(source_host, "media_storage.export.hdd_only_media_path", ""),
+            f"media_storage.export.hdd_only_media_path must be absolute for {source_host}",
+        ),
     )
 
 

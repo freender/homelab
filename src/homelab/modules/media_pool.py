@@ -37,7 +37,10 @@ class MediaPoolConfig:
     consumer_units: tuple[str, ...]
 
 
-PRIMARY_SERVICE_SPEC = FileSpec("homelab-media-pool.service", "/etc/systemd/system/homelab-media-pool.service")
+PRIMARY_SERVICE_SPEC = FileSpec(
+    "homelab-media-pool.service",
+    "/etc/systemd/system/homelab-media-pool.service",
+)
 HDD_SERVICE_SPEC = FileSpec(
     "homelab-media-pool-hdd-only.service",
     "/etc/systemd/system/homelab-media-pool-hdd-only.service",

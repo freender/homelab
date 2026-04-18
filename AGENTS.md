@@ -157,6 +157,7 @@ CI on push/PR to `main` runs:
 - YAML lint for `hosts.conf`.
 - `homelab validate`.
 Run `PYTHONPATH=src python -m homelab.cli validate` locally for CI parity.
+After pushing, check the GitHub Actions run status for that push and inspect failures immediately if any job is red.
 
 ## Cursor/Copilot Rules
 Checked paths:
@@ -171,4 +172,5 @@ If they are added later, follow them and update this guide.
 2. Match nearby patterns; avoid introducing new framework styles.
 3. Run targeted validation first (ruff/shellcheck + module dry-run).
 4. Run `PYTHONPATH=src python -m homelab.cli validate` when practical before handing off.
-5. Never commit secret files or generated `build/` artifacts.
+5. After any push, verify the matching GitHub Actions run and review error logs before considering the work complete.
+6. Never commit secret files or generated `build/` artifacts.

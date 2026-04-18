@@ -80,8 +80,14 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
     print_sub("Comparing with remote configs...")
     for local_name, remote_path in [
         ("pve-config-backup.sh", "/root/pve-config-backup.sh"),
-        ("homelab-pve-config-backup.service", "/etc/systemd/system/homelab-pve-config-backup.service"),
-        ("homelab-pve-config-backup.timer", "/etc/systemd/system/homelab-pve-config-backup.timer"),
+        (
+            "homelab-pve-config-backup.service",
+            "/etc/systemd/system/homelab-pve-config-backup.service",
+        ),
+        (
+            "homelab-pve-config-backup.timer",
+            "/etc/systemd/system/homelab-pve-config-backup.timer",
+        ),
         ("pbs.env", "/etc/homelab/pve-config-backup.env"),
     ]:
         local_path = build_dir / local_name

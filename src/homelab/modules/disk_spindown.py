@@ -169,7 +169,10 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
     connection = HostConnection(host, user=ssh_user, hostname=ssh_hostname)
 
     print_sub("Comparing with remote configs...")
-    diffs = [(artifacts.build_dir / spec.build_name, spec.remote_path) for spec in artifacts.file_specs]
+    diffs = [
+        (artifacts.build_dir / spec.build_name, spec.remote_path)
+        for spec in artifacts.file_specs
+    ]
     for message in diff_many(connection, diffs):
         print_sub(message)
 
