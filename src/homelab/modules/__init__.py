@@ -7,6 +7,7 @@ from pathlib import Path
 from ..deploy import DeploySession
 from .apcupsd import deploy as deploy_apcupsd
 from .apt_upgrade import deploy as deploy_apt_upgrade
+from .disk_spindown import deploy as deploy_disk_spindown
 from .docker import deploy as deploy_docker
 from .keepalived import deploy as deploy_keepalived
 from .media_mover import deploy as deploy_media_mover
@@ -36,6 +37,10 @@ MODULES: dict[str, ModuleDefinition] = {
     "apt-upgrade": ModuleDefinition(
         name="APT Dist-Upgrade",
         deploy=deploy_apt_upgrade,
+    ),
+    "disk-spindown": ModuleDefinition(
+        name="Disk Spindown",
+        deploy=deploy_disk_spindown,
     ),
     "docker": ModuleDefinition(
         name="Docker Management Scripts",
@@ -81,6 +86,7 @@ MODULE_ORDER = [
     "pve-backup",
     "apcupsd",
     "pve-exporters",
+    "disk-spindown",
     "pve-gpu-passthrough",
     "keepalived",
     "media-mover",

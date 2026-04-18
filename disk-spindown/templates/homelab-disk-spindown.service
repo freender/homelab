@@ -1,0 +1,14 @@
+[Unit]
+Description=Spin down idle media disks
+After=local-fs.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/default/homelab-disk-spindown
+ExecStart=/bin/sh -c 'exec /usr/sbin/hd-idle $HD_IDLE_OPTS'
+Restart=always
+RestartSec=5s
+User=root
+
+[Install]
+WantedBy=multi-user.target

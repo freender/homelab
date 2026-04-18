@@ -717,7 +717,7 @@ def sync_archive(config: Config, inline_evict_non_frequent: set[Path] | None = N
             synced_units += 1
             synced_bytes += result.moved_bytes
             replaced_units += result.conflicts
-            if inline_evict_non_frequent is not None and relative_dir not in inline_evict_non_frequent:
+            if inline_evict_non_frequent is None or relative_dir not in inline_evict_non_frequent:
                 continue
             evict_result = evict_unit(relative_dir, config) if not config.dry_run else MoveResult(moved_bytes=stats.size_on_cache)
             evict_conflicts += evict_result.conflicts
