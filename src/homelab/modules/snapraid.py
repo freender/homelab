@@ -17,6 +17,7 @@ TEMPLATE_FILES = [
     "homelab-snapraid-sync.timer",
     "homelab-snapraid-scrub.service",
     "homelab-snapraid-scrub.timer",
+    "homelab-snapraid-status-notify",
 ]
 
 
@@ -54,6 +55,11 @@ FILE_SPECS = (
         "/etc/systemd/system/homelab-snapraid-scrub.service",
     ),
     FileSpec("homelab-snapraid-scrub.timer", "/etc/systemd/system/homelab-snapraid-scrub.timer"),
+    FileSpec(
+        "homelab-snapraid-status-notify",
+        "/usr/local/bin/homelab-snapraid-status-notify",
+        mode="755",
+    ),
 )
 
 
@@ -254,6 +260,11 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
         else:
             context["ORCHESTRATE_MEDIA_MOVER"] = config.orchestrate_media_mover
         render_file(module_dir / "templates" / tmpl, build_dir / tmpl, **context)
+
+    render_file(
+        module_dir / "templates" / "homelab-snapraid-status-notify",
+        build_dir / "homelab-snapraid-status-notify",
+    )
 
     write_file_map(build_dir)
     return HostArtifacts(build_dir=build_dir, file_specs=FILE_SPECS)

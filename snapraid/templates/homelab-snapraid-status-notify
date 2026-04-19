@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+UNIT_NAME=${1:-homelab-snapraid-scrub.service}
+HOSTNAME_SHORT=$(hostname -s)
+
+ENV_LOCATIONS=(
+    "/etc/homelab/telegram.env"
+    "/etc/apcupsd/telegram/telegram.env"
+)
+
+STATUS_OUTPUT=$(/usr/bin/snapraid status 2>&1 || true)
+printf '%s\n' "$STATUS_OUTPUT"
+
+if ! grep -Eq '^DANGER! In the array there are [1-9][0-9]* errors!$' <<<"$STATUS_OUTPUT"; then
+    exit 0
+fi
+
+SUMMARY=$(
+    printf '%s\n' "$STATUS_OUTPUT" \
+        | grep -E '^(DANGER!|They are at blocks:|To fix them use|The errors will disappear)' || true
+)
+
+if [[ -z "$SUMMARY" ]]; then
+    SUMMARY=$STATUS_OUTPUT
+fi
+
+for ENV_FILE in "${ENV_LOCATIONS[@]}"; do
+    if [[ -f "$ENV_FILE" ]]; then
+        # shellcheck disable=SC1090
+        source "$ENV_FILE"
+        break
+    fi
+done
+
+if [[ -z "${TELEGRAM_TOKEN:-}" ]] || [[ -z "${TELEGRAM_CHATID:-}" ]]; then
+    logger -t homelab-snapraid-status-notify "Missing TELEGRAM_TOKEN or TELEGRAM_CHATID; cannot send alert for $UNIT_NAME"
+    exit 1
+fi
+
+MESSAGE=$(printf 'ALERT: %s SnapRAID scrub found errors\nUnit: %s\n\n%s' \
+    "$HOSTNAME_SHORT" "$UNIT_NAME" "$SUMMARY")
+
+curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage" \
+    --data-urlencode "chat_id=${TELEGRAM_CHATID}" \
+    --data-urlencode "text=${MESSAGE}" \
+    >/dev/null
+
+logger -t homelab-snapraid-status-notify "SnapRAID status reported errors after $UNIT_NAME"
+exit 1

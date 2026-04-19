@@ -67,7 +67,8 @@ for unit in \
     homelab-snapraid-sync.service \
     homelab-snapraid-sync.timer \
     homelab-snapraid-scrub.service \
-    homelab-snapraid-scrub.timer; do
+    homelab-snapraid-scrub.timer \
+    homelab-snapraid-status-notify; do
     rc=0
     install_build_file "$unit" || rc=$?
     if [[ $rc -eq 0 ]]; then
