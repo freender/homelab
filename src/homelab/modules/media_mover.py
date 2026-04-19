@@ -15,7 +15,7 @@ REMOTE_ROOT = "/tmp/homelab-media-mover"
 DEFAULT_MEDIA_MOVER_SCHEDULE = "*-*-* 00:00:00"
 TEMPLATE_FILES = [
     "homelab-media-mover.service",
-    "homelab-media-mover-now.service",
+    "homelab-media-mover-watch.service",
     "homelab-media-mover.timer",
     "homelab-media-mover.py",
 ]
@@ -43,8 +43,8 @@ class MediaMoverConfig:
 FILE_SPECS = (
     FileSpec("homelab-media-mover.service", "/etc/systemd/system/homelab-media-mover.service"),
     FileSpec(
-        "homelab-media-mover-now.service",
-        "/etc/systemd/system/homelab-media-mover-now.service",
+        "homelab-media-mover-watch.service",
+        "/etc/systemd/system/homelab-media-mover-watch.service",
     ),
     FileSpec("homelab-media-mover.timer", "/etc/systemd/system/homelab-media-mover.timer"),
     FileSpec("homelab-media-mover.py", "/usr/local/bin/homelab-media-mover", mode="755"),
@@ -306,8 +306,8 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
         SERVICE_DEPENDENCY_LINES=service_dependency_lines(config.dependency_units),
     )
     render_file(
-        module_dir / "templates" / "homelab-media-mover-now.service",
-        build_dir / "homelab-media-mover-now.service",
+        module_dir / "templates" / "homelab-media-mover-watch.service",
+        build_dir / "homelab-media-mover-watch.service",
         SERVICE_DEPENDENCY_LINES=service_dependency_lines(config.dependency_units),
     )
     render_file(

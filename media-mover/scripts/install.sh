@@ -33,7 +33,7 @@ install_build_file "homelab-media-mover.service" || rc=$?
 [[ $rc -eq 0 ]] && units_changed=true
 
 rc=0
-install_build_file "homelab-media-mover-now.service" || rc=$?
+install_build_file "homelab-media-mover-watch.service" || rc=$?
 [[ $rc -eq 0 ]] && units_changed=true
 
 rc=0
@@ -57,6 +57,14 @@ fi
 if [[ -f "/usr/local/bin/homelab-media-mover-now" ]]; then
     rm -f "/usr/local/bin/homelab-media-mover-now"
     print_sub "Removed /usr/local/bin/homelab-media-mover-now"
+fi
+
+if [[ -f "/etc/systemd/system/homelab-media-mover-now.service" ]]; then
+    systemctl stop homelab-media-mover-now.service >/dev/null 2>&1 || true
+    systemctl disable homelab-media-mover-now.service >/dev/null 2>&1 || true
+    rm -f "/etc/systemd/system/homelab-media-mover-now.service"
+    print_sub "Removed /etc/systemd/system/homelab-media-mover-now.service"
+    units_changed=true
 fi
 
 if [[ "$units_changed" == "true" ]]; then

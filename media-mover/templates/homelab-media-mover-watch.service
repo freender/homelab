@@ -1,5 +1,5 @@
 [Unit]
-Description=Homelab media mover manual cleanup
+Description=Homelab media mover watch (continuous sync and cache drain)
 {{ SERVICE_DEPENDENCY_LINES }}
 
 [Service]
