@@ -22,6 +22,7 @@ class MediaPoolConfig:
     hdd_only_mountpoint: str | None
     create_policy: str
     min_free_space: str
+    hdd_only_min_free_space: str
     consumer_units: tuple[str, ...]
 
 
@@ -143,6 +144,14 @@ def normalize_config(registry, host: str) -> MediaPoolConfig:
     if not min_free_space:
         raise ValueError(f"media-pool.min_free_space must be non-empty for {host}")
 
+    hdd_only_min_free_space = str(
+        registry.get(host, "media-pool.hdd_only_min_free_space", min_free_space)
+    ).strip()
+    if not hdd_only_min_free_space:
+        raise ValueError(
+            f"media-pool.hdd_only_min_free_space must be non-empty for {host}"
+        )
+
     consumer_ctids_raw = registry.get(host, "media-pool.consumer_ctids", [])
     consumer_units: list[str] = []
     if consumer_ctids_raw not in (None, []):
@@ -162,11 +171,12 @@ def normalize_config(registry, host: str) -> MediaPoolConfig:
         hdd_only_mountpoint=hdd_only_mountpoint,
         create_policy=create_policy,
         min_free_space=min_free_space,
+        hdd_only_min_free_space=hdd_only_min_free_space,
         consumer_units=tuple(consumer_units),
     )
 
 
-def mergerfs_options(config: MediaPoolConfig, *, fsname: str) -> str:
+def mergerfs_options(config: MediaPoolConfig, *, fsname: str, min_free_space: str) -> str:
     return ",".join(
         [
             "allow_other",
@@ -174,7 +184,7 @@ def mergerfs_options(config: MediaPoolConfig, *, fsname: str) -> str:
             "cache.files=off",
             "dropcacheonclose=true",
             f"category.create={config.create_policy}",
-            f"minfreespace={config.min_free_space}",
+            f"minfreespace={min_free_space}",
             "moveonenospc=true",
             f"fsname={fsname}",
         ]
@@ -197,7 +207,11 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
         BRANCH_DIRS=" ".join(config.branches),
         BRANCHES=":".join(config.branches),
         MOUNTPOINT=config.mountpoint,
-        MERGERFS_OPTIONS=mergerfs_options(config, fsname="homelab-media-pool"),
+        MERGERFS_OPTIONS=mergerfs_options(
+            config,
+            fsname="homelab-media-pool",
+            min_free_space=config.min_free_space,
+        ),
         ORDERING_LINES=ordering_lines,
         REQUIRES_MOUNTS_FOR=" ".join(config.branches),
     )
@@ -211,7 +225,11 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
             BRANCH_DIRS=" ".join(archive_branches),
             BRANCHES=":".join(archive_branches),
             MOUNTPOINT=config.hdd_only_mountpoint,
-            MERGERFS_OPTIONS=mergerfs_options(config, fsname="homelab-media-pool-hdd-only"),
+            MERGERFS_OPTIONS=mergerfs_options(
+                config,
+                fsname="homelab-media-pool-hdd-only",
+                min_free_space=config.hdd_only_min_free_space,
+            ),
             ORDERING_LINES="",
             REQUIRES_MOUNTS_FOR=" ".join(archive_branches),
         )
