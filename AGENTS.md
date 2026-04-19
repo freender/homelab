@@ -61,7 +61,9 @@ If a module has no dedicated test script, use `./deploy --dry-run` as the test.
 
 ### Imports and shared functions
 - Reuse `src/homelab/hosts.py`, `src/homelab/ssh.py`, and `deploy.py` from Python modules.
+- Reuse `src/homelab/module_support.py` for shared file-map module helpers like `FileSpec`, `HostArtifacts`, `require_text`, and `write_file_map`.
 - Remote installers should source staged `lib/utils.sh` when present.
+- Remote installers using `file-map.conf` should use shared `load_file_map`, `mapped_dest`, `mapped_mode`, and `install_build_file` helpers from `lib/utils.sh` instead of reimplementing them per module.
 - Keep fallback helper functions only where remote context may lack `utils.sh`.
 
 ### Formatting and syntax
