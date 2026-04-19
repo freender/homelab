@@ -4,6 +4,11 @@ import importlib.util
 import sys
 from pathlib import Path, PurePath
 
+import pytest
+
+from homelab.hosts import HostRegistry
+from homelab.modules.media_mover import DEFAULT_MEDIA_MOVER_SCHEDULE, normalize_config
+
 
 def load_media_mover_module():
     module_path = (
@@ -96,3 +101,82 @@ def test_run_once_immediately_evicts_non_frequent_media_for_mover_now(
     output = capsys.readouterr().out
     assert "copied:" in output
     assert "evicted cache file:" in output
+
+
+def write_hosts_conf(tmp_path: Path, body: str) -> HostRegistry:
+    path = tmp_path / "hosts.conf"
+    path.write_text(body.lstrip(), encoding="utf-8")
+    return HostRegistry(path)
+
+
+def test_normalize_config_allows_missing_schedule_when_timer_disabled(tmp_path: Path) -> None:
+    registry = write_hosts_conf(
+        tmp_path,
+        """
+        ace:
+          config:
+            type: pve
+            hostname: ace.internal
+            user: root
+            sshkey: infra
+          features:
+            media-mover:
+              manage_timer: false
+              source_dir: /cache/media
+              target_dir: /user0/media
+              merged_root: /user/media
+        """,
+    )
+
+    config = normalize_config(registry, "ace")
+
+    assert config.manage_timer is False
+    assert config.schedule == DEFAULT_MEDIA_MOVER_SCHEDULE
+
+
+def test_normalize_config_requires_schedule_when_timer_enabled(tmp_path: Path) -> None:
+    registry = write_hosts_conf(
+        tmp_path,
+        """
+        ace:
+          config:
+            type: pve
+            hostname: ace.internal
+            user: root
+            sshkey: infra
+          features:
+            media-mover:
+              manage_timer: true
+              source_dir: /cache/media
+              target_dir: /user0/media
+              merged_root: /user/media
+        """,
+    )
+
+    with pytest.raises(ValueError, match="media-mover.schedule is required for ace"):
+        normalize_config(registry, "ace")
+
+
+def test_normalize_config_converts_daily_schedule_to_full_calendar(tmp_path: Path) -> None:
+    registry = write_hosts_conf(
+        tmp_path,
+        """
+        ace:
+          config:
+            type: pve
+            hostname: ace.internal
+            user: root
+            sshkey: infra
+          features:
+            media-mover:
+              manage_timer: true
+              schedule: daily
+              source_dir: /cache/media
+              target_dir: /user0/media
+              merged_root: /user/media
+        """,
+    )
+
+    config = normalize_config(registry, "ace")
+
+    assert config.schedule == DEFAULT_MEDIA_MOVER_SCHEDULE

@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from homelab.hosts import HostLookupError, HostRegistry
+from homelab.hosts import HostLookupError, HostRegistry, validate_hosts_data
 
 
 @pytest.fixture
@@ -15,6 +15,8 @@ def hosts_file(tmp_path: Path) -> Path:
 ace:
   config:
     type: pve
+    hostname: ace.internal
+    user: root
     sshkey: infra
   features:
     docker:
@@ -22,6 +24,9 @@ ace:
 bray:
   config:
     type: ubuntu
+    hostname: bray.internal
+    user: root
+    sshkey: homelab
   features:
     docker:
     apt-upgrade:
@@ -29,10 +34,12 @@ bray:
 nullbox:
   config:
     type: ubuntu
+    hostname: nullbox.internal
+    user: root
+    sshkey: homelab
   features:
     docker:
       backup: true
-badhost: nope
 """.lstrip(),
         encoding="utf-8",
     )
@@ -42,7 +49,7 @@ badhost: nope
 def test_list_hosts_and_feature_filtering(hosts_file: Path) -> None:
     registry = HostRegistry(hosts_file)
 
-    assert registry.list_hosts() == ["ace", "bray", "nullbox", "badhost"]
+    assert registry.list_hosts() == ["ace", "bray", "nullbox"]
     assert registry.list_hosts(feature="docker") == ["ace", "bray", "nullbox"]
     assert registry.list_hosts(feature="ssh-config") == ["ace"]
 
@@ -73,10 +80,6 @@ def test_get_and_host_lookup_raise_clear_errors(hosts_file: Path) -> None:
     with pytest.raises(HostLookupError, match="missing key 'config.group' for host 'ace'"):
         registry.get("ace", "config.group")
 
-    with pytest.raises(ValueError, match="host entry must be a mapping: badhost"):
-        registry.has("badhost", "docker")
-
-
 def test_filter_hosts_returns_requested_subset(hosts_file: Path) -> None:
     registry = HostRegistry(hosts_file)
     supported = ["ace", "bray"]
@@ -92,3 +95,68 @@ def test_registry_rejects_non_mapping_hosts_file(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="hosts file must contain a mapping"):
         HostRegistry(path).load()
+
+
+def test_registry_rejects_non_mapping_host_entry(tmp_path: Path) -> None:
+    path = tmp_path / "hosts.conf"
+    path.write_text("ace: nope\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="host entry must be a mapping: ace"):
+        HostRegistry(path).load()
+
+
+def test_validate_hosts_data_rejects_unknown_top_level_key(tmp_path: Path) -> None:
+    path = tmp_path / "hosts.conf"
+
+    with pytest.raises(ValueError, match=r"unknown top-level key\(s\) for ace: typo"):
+        validate_hosts_data(
+            {
+                "ace": {
+                    "config": {
+                        "type": "pve",
+                        "hostname": "ace.internal",
+                        "user": "root",
+                        "sshkey": "infra",
+                    },
+                    "typo": True,
+                }
+            },
+            path,
+        )
+
+
+def test_validate_hosts_data_rejects_missing_required_config_key(tmp_path: Path) -> None:
+    path = tmp_path / "hosts.conf"
+
+    with pytest.raises(ValueError, match=r"missing required config key\(s\) for ace: sshkey"):
+        validate_hosts_data(
+            {
+                "ace": {
+                    "config": {
+                        "type": "pve",
+                        "hostname": "ace.internal",
+                        "user": "root",
+                    }
+                }
+            },
+            path,
+        )
+
+
+def test_validate_hosts_data_accepts_null_features(tmp_path: Path) -> None:
+    path = tmp_path / "hosts.conf"
+
+    validate_hosts_data(
+        {
+            "xur": {
+                "config": {
+                    "type": "pbs",
+                    "hostname": "xur.internal",
+                    "user": "root",
+                    "sshkey": "infra",
+                },
+                "features": None,
+            }
+        },
+        path,
+    )

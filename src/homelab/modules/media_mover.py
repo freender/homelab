@@ -12,6 +12,7 @@ from ..output import print_action, print_error, print_sub
 from ..ssh import HostConnection, build_files, diff_many
 
 REMOTE_ROOT = "/tmp/homelab-media-mover"
+DEFAULT_MEDIA_MOVER_SCHEDULE = "*-*-* 00:00:00"
 TEMPLATE_FILES = [
     "homelab-media-mover.service",
     "homelab-media-mover-now.service",
@@ -120,10 +121,14 @@ def normalize_config(registry, host: str) -> MediaMoverConfig:
     if source_dir == target_dir:
         raise ValueError(f"media-mover source_dir and target_dir must differ for {host}")
 
-    schedule = require_text(
-        registry.get(host, "media-mover.schedule", "daily"),
-        f"media-mover.schedule is required for {host}",
-    )
+    manage_timer = str(registry.get(host, "media-mover.manage_timer", "true")).lower() == "true"
+    schedule_raw = registry.get(host, "media-mover.schedule", None)
+    if schedule_raw in (None, ""):
+        if manage_timer:
+            raise ValueError(f"media-mover.schedule is required for {host}")
+        schedule = DEFAULT_MEDIA_MOVER_SCHEDULE
+    else:
+        schedule = normalize_schedule(schedule_raw)
 
     managed_roots_raw = registry.get(
         host,
@@ -192,7 +197,6 @@ def normalize_config(registry, host: str) -> MediaMoverConfig:
         registry.get(host, "media-mover.state_file", "/var/lib/homelab-media-mover/state.json"),
         f"media-mover.state_file is required for {host}",
     )
-    manage_timer = str(registry.get(host, "media-mover.manage_timer", "true")).lower() == "true"
 
     dependency_units: list[str] = []
     tiered_media_mountpoint = str(registry.get(host, "media-pool.mountpoint", "")).strip()
@@ -280,6 +284,13 @@ def normalize_ignore_paths(registry, host: str, source_dir: str) -> tuple[str, .
             ) from exc
         ignore_paths.append(path_text)
     return tuple(ignore_paths)
+
+
+def normalize_schedule(value: object) -> str:
+    schedule = str(value).strip()
+    if schedule.lower() in {"daily", "dayly"}:
+        return DEFAULT_MEDIA_MOVER_SCHEDULE
+    return require_text(schedule, "media-mover.schedule is required")
 
 
 def build_host_artifacts(root: Path, host: str) -> HostArtifacts:

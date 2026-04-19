@@ -9,7 +9,7 @@ import click
 import yaml
 
 from .deploy import DeploySession
-from .hosts import HostLookupError, default_registry
+from .hosts import HostLookupError, default_registry, validate_hosts_data
 from .modules import MODULES, ordered_modules
 from .output import print_action, print_error, print_header, print_ok, print_sub, print_warn
 from .ssh import offline_mode
@@ -77,7 +77,8 @@ def validate() -> None:
 
     print_action("YAML Syntax")
     with (root / "hosts.conf").open("r", encoding="utf-8") as handle:
-        yaml.safe_load(handle)
+        hosts_data = yaml.safe_load(handle)
+    validate_hosts_data({} if hosts_data is None else hosts_data, root / "hosts.conf")
     print_ok("hosts.conf valid")
 
     shellcheck = shutil.which("shellcheck")
