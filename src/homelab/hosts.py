@@ -7,7 +7,6 @@ from typing import Any
 
 import yaml
 
-
 REQUIRED_CONFIG_KEYS = {"type", "hostname", "user", "sshkey"}
 OPTIONAL_CONFIG_KEYS = {"agent", "ssh_config", "zfs_mountpoint", "zfs_pool"}
 ALLOWED_CONFIG_KEYS = REQUIRED_CONFIG_KEYS | OPTIONAL_CONFIG_KEYS
