@@ -6,24 +6,12 @@ from pathlib import Path
 from ..build import render_file
 from ..deploy import DeploySession, force_env, prepare_build_dir, stage_and_run_remote_installer
 from ..hosts import HostLookupError, default_registry
+from ..module_support import FileSpec, HostArtifacts, require_text, write_file_map
 from ..output import print_action, print_error, print_sub
 from ..ssh import HostConnection, build_files, diff_many
 
 REMOTE_ROOT = "/tmp/homelab-keepalived"
 TEMPLATE_FILES = ["healthcheck.sh", "keepalived.conf"]
-
-
-@dataclass(frozen=True)
-class FileSpec:
-    build_name: str
-    remote_path: str
-    mode: str = "644"
-
-
-@dataclass(frozen=True)
-class HostArtifacts:
-    build_dir: Path
-    file_specs: tuple[FileSpec, ...]
 
 
 @dataclass(frozen=True)
@@ -84,13 +72,6 @@ def validate(root: Path, hosts: list[str]) -> None:
     registry = default_registry(root)
     for host in hosts:
         normalize_config(registry, host)
-
-
-def require_text(value: object, message: str) -> str:
-    text = str(value).strip()
-    if not text:
-        raise ValueError(message)
-    return text
 
 
 def normalize_config(registry, host: str) -> KeepalivedConfig:
@@ -189,13 +170,8 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
         VIRTUAL_IPS="\n".join(f"        {vip}" for vip in config.virtual_ips),
     )
 
-    write_file_map(build_dir)
+    write_file_map(build_dir, FILE_SPECS)
     return HostArtifacts(build_dir=build_dir, file_specs=FILE_SPECS)
-
-
-def write_file_map(build_dir: Path) -> None:
-    lines = [f"{spec.build_name}|{spec.remote_path}|{spec.mode}" for spec in FILE_SPECS]
-    (build_dir / "file-map.conf").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:

@@ -21,35 +21,6 @@ require_file "$BUILD_DIR/media-mover.env" "$BUILD_DIR/media-mover.env" || exit 1
 # shellcheck source=/dev/null
 source "$BUILD_DIR/media-mover.env"
 
-load_file_map() {
-    local map_file="$BUILD_DIR/file-map.conf"
-    local filename remote_path mode
-
-    declare -g -A FILE_MAP_DEST=()
-    declare -g -A FILE_MAP_MODE=()
-    while IFS='|' read -r filename remote_path mode; do
-        FILE_MAP_DEST["$filename"]="$remote_path"
-        FILE_MAP_MODE["$filename"]="${mode:-644}"
-    done < "$map_file"
-}
-
-mapped_dest() {
-    printf '%s\n' "${FILE_MAP_DEST[$1]}"
-}
-
-mapped_mode() {
-    printf '%s\n' "${FILE_MAP_MODE[$1]:-644}"
-}
-
-install_build_file() {
-    local name="$1"
-    local rc=0
-
-    install_if_changed "$BUILD_DIR/$name" "$(mapped_dest "$name")" "$(mapped_mode "$name")" "$(mapped_dest "$name")" || rc=$?
-    [[ $rc -eq 0 || $rc -eq 1 ]] || exit "$rc"
-    return "$rc"
-}
-
 load_file_map
 
 print_header "Media Mover"

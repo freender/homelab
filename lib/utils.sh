@@ -18,6 +18,63 @@ fi
 FORCE_UPDATE=${FORCE_UPDATE:-false}
 BACKUP_KEEP_COUNT=${BACKUP_KEEP_COUNT:-3}
 
+load_file_map() {
+    local map_file="${1:-${BUILD_DIR:-}/file-map.conf}"
+    local filename remote_path mode
+
+    if [[ -z "$map_file" ]]; then
+        print_error "file map path is required"
+        return 1
+    fi
+
+    require_file "$map_file" "$map_file" || return 1
+
+    declare -g -A FILE_MAP_DEST=()
+    declare -g -A FILE_MAP_MODE=()
+    while IFS='|' read -r filename remote_path mode; do
+        [[ -n "$filename" ]] || continue
+        FILE_MAP_DEST["$filename"]="$remote_path"
+        FILE_MAP_MODE["$filename"]="${mode:-644}"
+    done < "$map_file"
+}
+
+mapped_dest() {
+    local name="$1"
+
+    if [[ ! -v FILE_MAP_DEST["$name"] ]]; then
+        print_error "missing file-map entry: $name"
+        return 1
+    fi
+
+    printf '%s\n' "${FILE_MAP_DEST[$name]}"
+}
+
+mapped_mode() {
+    local name="$1"
+
+    if [[ ! -v FILE_MAP_MODE["$name"] ]]; then
+        print_error "missing file-map mode: $name"
+        return 1
+    fi
+
+    printf '%s\n' "${FILE_MAP_MODE[$name]:-644}"
+}
+
+install_build_file() {
+    local name="$1"
+    local build_dir="${2:-${BUILD_DIR:-}}"
+    local rc=0
+
+    if [[ -z "$build_dir" ]]; then
+        print_error "BUILD_DIR is required for install_build_file"
+        return 2
+    fi
+
+    install_if_changed "$build_dir/$name" "$(mapped_dest "$name")" "$(mapped_mode "$name")" "$(mapped_dest "$name")" || rc=$?
+    [[ $rc -eq 0 || $rc -eq 1 ]] || return "$rc"
+    return "$rc"
+}
+
 require_file() {
     local path="$1"
     local label="${2:-$path}"

@@ -7,6 +7,7 @@ from ..build import render_file
 from ..deploy import DeploySession, force_env, prepare_build_dir, stage_and_run_remote_installer
 from ..hosts import default_registry
 from ..media_storage import load_media_storage
+from ..module_support import FileSpec, HostArtifacts, require_text, write_file_map
 from ..output import print_action, print_error, print_sub
 from ..ssh import HostConnection, build_files, diff_many
 
@@ -19,13 +20,6 @@ TEMPLATE_FILES = [
     "homelab-snapraid-scrub.timer",
     "homelab-snapraid-status-notify",
 ]
-
-
-@dataclass(frozen=True)
-class FileSpec:
-    build_name: str
-    remote_path: str
-    mode: str = "644"
 
 
 @dataclass(frozen=True)
@@ -101,13 +95,6 @@ def validate(root: Path, hosts: list[str]) -> None:
     registry = default_registry(root)
     for host in hosts:
         normalize_config(registry, host)
-
-
-def require_text(value: object, message: str) -> str:
-    text = str(value).strip()
-    if not text:
-        raise ValueError(message)
-    return text
 
 
 def normalize_config(registry, host: str) -> SnapRaidConfig:
@@ -266,20 +253,15 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
         build_dir / "homelab-snapraid-status-notify",
     )
 
-    write_file_map(build_dir)
+    write_file_map(build_dir, FILE_SPECS)
     return HostArtifacts(build_dir=build_dir, file_specs=FILE_SPECS)
-
-
-def write_file_map(build_dir: Path) -> None:
-    lines = [f"{spec.build_name}|{spec.remote_path}|{spec.mode}" for spec in FILE_SPECS]
-    (build_dir / "file-map.conf").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
     registry = default_registry(root)
     artifacts = build_host_artifacts(root, host)
     ssh_hostname = str(registry.get(host, "config.hostname", host))
-    ssh_user = str(registry.get(host, "config.ssh_config.user", registry.get(host, "config.user")))
+    ssh_user = str(registry.get(host, "config.user"))
     connection = HostConnection(host, user=ssh_user, hostname=ssh_hostname)
 
     print_sub("Comparing with remote configs...")
@@ -311,9 +293,3 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
         require_root=True,
         remote_subdirs=("build", "lib"),
     )
-
-
-@dataclass(frozen=True)
-class HostArtifacts:
-    build_dir: Path
-    file_specs: tuple[FileSpec, ...]
