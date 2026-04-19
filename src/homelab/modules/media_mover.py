@@ -30,8 +30,17 @@ class MediaMoverConfig:
     managed_roots: tuple[str, ...]
     merged_root: str
     plex_mount_root: str
+    plex_url: str
+    tautulli_config_path: str
+    seerr_db_path: str
     tautulli_lookback_days: int
     frequent_budget: str
+    ondeck_enabled: bool
+    ondeck_budget: str
+    ondeck_tv_prefetch_episodes: int
+    ondeck_include_movies: bool
+    watchlist_enabled: bool
+    watchlist_budget: str
     cache_min_free_space: str
     cache_target_free_space: str
     min_file_age: str
@@ -165,6 +174,18 @@ def normalize_config(registry, host: str) -> MediaMoverConfig:
         registry.get(host, "media-mover.plex_mount_root", "/data"),
         f"media-mover.plex_mount_root is required for {host}",
     )
+    plex_url = require_text(
+        registry.get(host, "media-mover.plex_url", "http://127.0.0.1:32400"),
+        f"media-mover.plex_url is required for {host}",
+    )
+    tautulli_config_path = require_text(
+        registry.get(host, "media-mover.tautulli_config_path", "/mnt/cache/appdata/tautulli/config.ini"),
+        f"media-mover.tautulli_config_path is required for {host}",
+    )
+    seerr_db_path = require_text(
+        registry.get(host, "media-mover.seerr_db_path", "/mnt/cache/appdata/seerr/db/db.sqlite3"),
+        f"media-mover.seerr_db_path is required for {host}",
+    )
     lookback_days_raw = registry.get(host, "media-mover.tautulli_lookback_days", 90)
     try:
         tautulli_lookback_days = int(lookback_days_raw)
@@ -176,8 +197,32 @@ def normalize_config(registry, host: str) -> MediaMoverConfig:
         raise ValueError(f"media-mover.tautulli_lookback_days must be at least 1 for {host}")
 
     frequent_budget = require_text(
-        registry.get(host, "media-mover.frequent_budget", "500G"),
+        registry.get(host, "media-mover.frequent_budget", "300G"),
         f"media-mover.frequent_budget is required for {host}",
+    )
+    ondeck_enabled = str(registry.get(host, "media-mover.ondeck_enabled", "true")).lower() == "true"
+    ondeck_budget = require_text(
+        registry.get(host, "media-mover.ondeck_budget", "250G"),
+        f"media-mover.ondeck_budget is required for {host}",
+    )
+    ondeck_tv_prefetch_raw = registry.get(host, "media-mover.ondeck_tv_prefetch_episodes", 1)
+    try:
+        ondeck_tv_prefetch_episodes = int(ondeck_tv_prefetch_raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"media-mover.ondeck_tv_prefetch_episodes must be an integer for {host}"
+        ) from exc
+    if ondeck_tv_prefetch_episodes < 0:
+        raise ValueError(
+            f"media-mover.ondeck_tv_prefetch_episodes must be at least 0 for {host}"
+        )
+    ondeck_include_movies = (
+        str(registry.get(host, "media-mover.ondeck_include_movies", "false")).lower() == "true"
+    )
+    watchlist_enabled = str(registry.get(host, "media-mover.watchlist_enabled", "true")).lower() == "true"
+    watchlist_budget = require_text(
+        registry.get(host, "media-mover.watchlist_budget", "50G"),
+        f"media-mover.watchlist_budget is required for {host}",
     )
 
     cache_min_free_space = require_text(
@@ -223,8 +268,17 @@ def normalize_config(registry, host: str) -> MediaMoverConfig:
         managed_roots=tuple(managed_roots),
         merged_root=merged_root,
         plex_mount_root=plex_mount_root,
+        plex_url=plex_url,
+        tautulli_config_path=tautulli_config_path,
+        seerr_db_path=seerr_db_path,
         tautulli_lookback_days=tautulli_lookback_days,
         frequent_budget=frequent_budget,
+        ondeck_enabled=ondeck_enabled,
+        ondeck_budget=ondeck_budget,
+        ondeck_tv_prefetch_episodes=ondeck_tv_prefetch_episodes,
+        ondeck_include_movies=ondeck_include_movies,
+        watchlist_enabled=watchlist_enabled,
+        watchlist_budget=watchlist_budget,
         cache_min_free_space=cache_min_free_space,
         cache_target_free_space=cache_target_free_space,
         min_file_age=min_file_age,
@@ -328,8 +382,17 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
             "MANAGED_ROOTS": ":".join(config.managed_roots),
             "MERGED_ROOT": config.merged_root,
             "PLEX_MOUNT_ROOT": config.plex_mount_root,
+            "PLEX_URL": config.plex_url,
+            "TAUTULLI_CONFIG_PATH": config.tautulli_config_path,
+            "SEERR_DB_PATH": config.seerr_db_path,
             "TAUTULLI_LOOKBACK_DAYS": str(config.tautulli_lookback_days),
             "FREQUENT_BUDGET": config.frequent_budget,
+            "ONDECK_ENABLED": "true" if config.ondeck_enabled else "false",
+            "ONDECK_BUDGET": config.ondeck_budget,
+            "ONDECK_TV_PREFETCH_EPISODES": str(config.ondeck_tv_prefetch_episodes),
+            "ONDECK_INCLUDE_MOVIES": "true" if config.ondeck_include_movies else "false",
+            "WATCHLIST_ENABLED": "true" if config.watchlist_enabled else "false",
+            "WATCHLIST_BUDGET": config.watchlist_budget,
             "CACHE_MIN_FREE_SPACE": config.cache_min_free_space,
             "CACHE_TARGET_FREE_SPACE": config.cache_target_free_space,
             "MIN_FILE_AGE": config.min_file_age,

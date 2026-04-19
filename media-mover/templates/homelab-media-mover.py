@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import argparse
+import configparser
 import fcntl
 import hashlib
 import json
 import os
 import re
 import shutil
+import sqlite3
 import stat
 import subprocess
 import sys
@@ -16,6 +18,7 @@ import time
 import urllib.parse
 import urllib.error
 import urllib.request
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path, PurePath
 
@@ -35,12 +38,21 @@ class Config:
     target_root: Path
     merged_root: Path
     plex_mount_root: PurePath
+    plex_url: str
+    tautulli_config_path: Path
+    seerr_db_path: Path
     ignore_paths: tuple[Path, ...]
     managed_roots: tuple[str, ...]
     tautulli_url: str
     tautulli_api_key: str
     tautulli_lookback_days: int
     frequent_budget_bytes: int
+    ondeck_enabled: bool
+    ondeck_budget_bytes: int
+    ondeck_tv_prefetch_episodes: int
+    ondeck_include_movies: bool
+    watchlist_enabled: bool
+    watchlist_budget_bytes: int
     cache_min_free_space_bytes: int
     cache_target_free_space_bytes: int
     min_file_age_seconds: int
@@ -84,11 +96,22 @@ class EvictResult:
     conflicts: int = 0
 
 
+@dataclass(frozen=True)
+class PlexContext:
+    server_url: str
+    admin_token: str
+    user_tokens: dict[str, str]
+
+
 def require_env(name: str) -> str:
     value = os.environ.get(name, "").strip()
     if not value:
         raise SystemExit(f"missing required environment variable: {name}")
     return value
+
+
+def parse_bool(value: str) -> bool:
+    return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
 def require_mountpoint(path: Path, name: str) -> None:
@@ -170,12 +193,21 @@ def load_config(args: argparse.Namespace) -> Config:
     target_root = Path(require_env("TARGET_DIR"))
     merged_root = Path(require_env("MERGED_ROOT"))
     plex_mount_root = PurePath(require_env("PLEX_MOUNT_ROOT"))
+    plex_url = require_env("PLEX_URL").rstrip("/")
+    tautulli_config_path = Path(require_env("TAUTULLI_CONFIG_PATH"))
+    seerr_db_path = Path(require_env("SEERR_DB_PATH"))
     ignore_paths = parse_ignore_paths(source_root, os.environ.get("IGNORE_PATHS", ""))
     managed_roots = parse_managed_roots(require_env("MANAGED_ROOTS"))
     tautulli_url = require_env("TAUTULLI_URL").rstrip("/")
     tautulli_api_key = require_env("TAUTULLI_API_KEY").strip().strip('"')
     tautulli_lookback_days = int(require_env("TAUTULLI_LOOKBACK_DAYS"))
     frequent_budget_bytes = parse_size(require_env("FREQUENT_BUDGET"))
+    ondeck_enabled = parse_bool(os.environ.get("ONDECK_ENABLED", "false"))
+    ondeck_budget_bytes = parse_size(require_env("ONDECK_BUDGET"))
+    ondeck_tv_prefetch_episodes = int(require_env("ONDECK_TV_PREFETCH_EPISODES"))
+    ondeck_include_movies = parse_bool(os.environ.get("ONDECK_INCLUDE_MOVIES", "false"))
+    watchlist_enabled = parse_bool(os.environ.get("WATCHLIST_ENABLED", "false"))
+    watchlist_budget_bytes = parse_size(require_env("WATCHLIST_BUDGET"))
     cache_min_free_space_bytes = parse_size(require_env("CACHE_MIN_FREE_SPACE"))
     cache_target_free_space_bytes = parse_size(
         args.cache_target_free_space or require_env("CACHE_TARGET_FREE_SPACE")
@@ -197,6 +229,12 @@ def load_config(args: argparse.Namespace) -> Config:
         raise SystemExit("TAUTULLI_LOOKBACK_DAYS must be at least 1")
     if frequent_budget_bytes < 1:
         raise SystemExit("FREQUENT_BUDGET must be positive")
+    if ondeck_budget_bytes < 1:
+        raise SystemExit("ONDECK_BUDGET must be positive")
+    if ondeck_tv_prefetch_episodes < 0:
+        raise SystemExit("ONDECK_TV_PREFETCH_EPISODES must not be negative")
+    if watchlist_budget_bytes < 1:
+        raise SystemExit("WATCHLIST_BUDGET must be positive")
     if cache_min_free_space_bytes < 1:
         raise SystemExit("CACHE_MIN_FREE_SPACE must be positive")
     if min_file_age_seconds < 0:
@@ -213,12 +251,21 @@ def load_config(args: argparse.Namespace) -> Config:
         target_root=target_root,
         merged_root=merged_root,
         plex_mount_root=plex_mount_root,
+        plex_url=plex_url,
+        tautulli_config_path=tautulli_config_path,
+        seerr_db_path=seerr_db_path,
         ignore_paths=ignore_paths,
         managed_roots=managed_roots,
         tautulli_url=tautulli_url,
         tautulli_api_key=tautulli_api_key,
         tautulli_lookback_days=tautulli_lookback_days,
         frequent_budget_bytes=frequent_budget_bytes,
+        ondeck_enabled=ondeck_enabled,
+        ondeck_budget_bytes=ondeck_budget_bytes,
+        ondeck_tv_prefetch_episodes=ondeck_tv_prefetch_episodes,
+        ondeck_include_movies=ondeck_include_movies,
+        watchlist_enabled=watchlist_enabled,
+        watchlist_budget_bytes=watchlist_budget_bytes,
         cache_min_free_space_bytes=cache_min_free_space_bytes,
         cache_target_free_space_bytes=cache_target_free_space_bytes,
         min_file_age_seconds=min_file_age_seconds,
@@ -455,12 +502,300 @@ def build_hot_scores(config: Config) -> dict[Path, int]:
     return scores
 
 
+def plex_get_xml(url: str, token: str) -> ET.Element:
+    request = urllib.request.Request(
+        url,
+        headers={
+            "Accept": "application/xml",
+            "X-Plex-Token": token,
+        },
+    )
+    with urllib.request.urlopen(request, timeout=30) as response:
+        return ET.fromstring(response.read())
+
+
+def plex_get_json(url: str, token: str) -> dict[str, object]:
+    request = urllib.request.Request(
+        url,
+        headers={
+            "Accept": "application/json",
+            "X-Plex-Token": token,
+        },
+    )
+    with urllib.request.urlopen(request, timeout=30) as response:
+        payload = json.load(response)
+    if not isinstance(payload, dict):
+        raise RuntimeError(f"unexpected Plex payload type for {url}")
+    return payload
+
+
+def plex_part_paths(video: ET.Element) -> list[str]:
+    return [
+        path
+        for path in (
+            part.get("file", "").strip()
+            for part in video.findall(".//Part")
+        )
+        if path
+    ]
+
+
+def unit_set_from_plex_paths(config: Config, paths: list[str]) -> set[Path]:
+    units: set[Path] = set()
+    for raw_path in paths:
+        unit = unit_relative_dir_from_plex_path(config, raw_path)
+        if unit is not None:
+            units.add(unit)
+    return units
+
+
+def load_plex_context(config: Config) -> PlexContext:
+    parser = configparser.ConfigParser()
+    read_paths = parser.read(config.tautulli_config_path, encoding="utf-8")
+    if not read_paths:
+        raise RuntimeError(f"missing Tautulli config for Plex token lookup: {config.tautulli_config_path}")
+    if not parser.has_section("PMS"):
+        raise RuntimeError(f"missing PMS section in Tautulli config: {config.tautulli_config_path}")
+    admin_token = parser.get("PMS", "pms_token", fallback="").strip()
+    if not admin_token:
+        raise RuntimeError(f"missing pms_token in Tautulli config: {config.tautulli_config_path}")
+    machine_identifier = parser.get("PMS", "pms_identifier", fallback="").strip()
+
+    admin_user = plex_get_json("https://plex.tv/api/v2/user", admin_token)
+    admin_name = str(admin_user.get("username") or admin_user.get("title") or "admin")
+    user_tokens = {admin_name: admin_token}
+
+    if machine_identifier:
+        shared_root = plex_get_xml(
+            f"https://plex.tv/api/servers/{machine_identifier}/shared_servers",
+            admin_token,
+        )
+        for item in shared_root.findall("SharedServer"):
+            token = item.get("accessToken", "").strip()
+            username = (
+                item.get("username", "").strip()
+                or item.get("name", "").strip()
+                or item.get("id", "").strip()
+            )
+            if token and username:
+                user_tokens[username] = token
+
+    return PlexContext(server_url=config.plex_url, admin_token=admin_token, user_tokens=user_tokens)
+
+
+def build_ondeck_scores(config: Config) -> dict[Path, int]:
+    if not config.ondeck_enabled:
+        return {}
+
+    context = load_plex_context(config)
+    scores: dict[Path, int] = {}
+    show_cache: dict[tuple[str, str], list[tuple[tuple[int, int], set[Path]]]] = {}
+
+    for username, token in sorted(context.user_tokens.items()):
+        try:
+            root = plex_get_xml(f"{context.server_url}/library/onDeck", token)
+        except (OSError, urllib.error.URLError, ET.ParseError) as exc:
+            print(f"warning: skipping Plex On Deck for {username}: {exc}")
+            continue
+
+        for item in list(root):
+            item_type = item.get("type", "").strip().lower()
+            current_units = unit_set_from_plex_paths(config, plex_part_paths(item))
+            if item_type == "movie":
+                if not config.ondeck_include_movies:
+                    continue
+                for unit in current_units:
+                    scores[unit] = scores.get(unit, 0) + 100
+                continue
+            if item_type != "episode":
+                continue
+
+            for unit in current_units:
+                scores[unit] = scores.get(unit, 0) + 100
+
+            if config.ondeck_tv_prefetch_episodes < 1:
+                continue
+
+            show_key = item.get("grandparentRatingKey", "").strip()
+            season_index = parse_int(item.get("parentIndex"))
+            episode_index = parse_int(item.get("index"))
+            if not show_key or season_index is None or episode_index is None:
+                continue
+
+            cache_key = (token, show_key)
+            if cache_key not in show_cache:
+                leaves_root = plex_get_xml(
+                    f"{context.server_url}/library/metadata/{show_key}/allLeaves",
+                    token,
+                )
+                episodes: list[tuple[tuple[int, int], set[Path]]] = []
+                for episode in leaves_root.findall("Video"):
+                    episode_season = parse_int(episode.get("parentIndex"))
+                    episode_number = parse_int(episode.get("index"))
+                    if episode_season is None or episode_number is None:
+                        continue
+                    units = unit_set_from_plex_paths(config, plex_part_paths(episode))
+                    if not units:
+                        continue
+                    episodes.append(((episode_season, episode_number), units))
+                episodes.sort(key=lambda item: item[0])
+                show_cache[cache_key] = episodes
+
+            next_episodes = 0
+            current_key = (season_index, episode_index)
+            for episode_key, units in show_cache[cache_key]:
+                if episode_key <= current_key:
+                    continue
+                for unit in units:
+                    scores[unit] = scores.get(unit, 0) + 10
+                next_episodes += 1
+                if next_episodes >= config.ondeck_tv_prefetch_episodes:
+                    break
+
+    return scores
+
+
+def resolve_unit_from_plex_rating_key(
+    config: Config,
+    context: PlexContext,
+    rating_key: int,
+    cache: dict[int, Path | None],
+) -> Path | None:
+    if rating_key in cache:
+        return cache[rating_key]
+
+    root = plex_get_xml(f"{context.server_url}/library/metadata/{rating_key}", context.admin_token)
+    for item in list(root):
+        units = unit_set_from_plex_paths(config, plex_part_paths(item))
+        if units:
+            unit = sorted(units, key=str)[0]
+            cache[rating_key] = unit
+            return unit
+
+    cache[rating_key] = None
+    return None
+
+
+def resolve_watchlist_show_unit(
+    config: Config,
+    context: PlexContext,
+    rating_key: int,
+    cache: dict[int, Path | None],
+) -> Path | None:
+    if rating_key in cache:
+        return cache[rating_key]
+
+    root = plex_get_xml(f"{context.server_url}/library/metadata/{rating_key}/allLeaves", context.admin_token)
+    unwatched: dict[int, Path] = {}
+    first_seen: dict[int, Path] = {}
+    for episode in root.findall("Video"):
+        season_index = parse_int(episode.get("parentIndex"))
+        if season_index is None:
+            continue
+        units = unit_set_from_plex_paths(config, plex_part_paths(episode))
+        if not units:
+            continue
+        unit = sorted(units, key=str)[0]
+        first_seen.setdefault(season_index, unit)
+        if parse_int(episode.get("viewCount")) in (None, 0):
+            unwatched.setdefault(season_index, unit)
+
+    if unwatched:
+        selected = unwatched[min(unwatched)]
+        cache[rating_key] = selected
+        return selected
+    if first_seen:
+        selected = first_seen[min(first_seen)]
+        cache[rating_key] = selected
+        return selected
+
+    cache[rating_key] = None
+    return None
+
+
+def build_watchlist_scores(config: Config) -> dict[Path, int]:
+    if not config.watchlist_enabled:
+        return {}
+    if not config.seerr_db_path.exists():
+        print(f"warning: skipping Seerr watchlist, database not found: {config.seerr_db_path}")
+        return {}
+
+    context = load_plex_context(config)
+    media_cache: dict[int, Path | None] = {}
+    show_cache: dict[int, Path | None] = {}
+    scores: dict[Path, int] = {}
+
+    with sqlite3.connect(f"file:{config.seerr_db_path}?mode=ro", uri=True) as connection:
+        rows = connection.execute(
+            """
+            SELECT
+                watchlist.ratingKey AS watchlist_rating_key,
+                watchlist.mediaType AS media_type,
+                watchlist.createdAt AS created_at,
+                media.ratingKey AS media_rating_key
+            FROM watchlist
+            LEFT JOIN media ON media.id = watchlist.mediaId
+            ORDER BY watchlist.createdAt DESC, watchlist.id DESC
+            """
+        ).fetchall()
+
+    total_rows = len(rows)
+    for index, row in enumerate(rows):
+        media_type = str(row[1] or "").strip().lower()
+        rating_key = parse_int(row[0]) or parse_int(row[3])
+        if rating_key is None:
+            continue
+        if media_type == "movie":
+            unit = resolve_unit_from_plex_rating_key(config, context, rating_key, media_cache)
+        elif media_type in {"tv", "show"}:
+            unit = resolve_watchlist_show_unit(config, context, rating_key, show_cache)
+        else:
+            continue
+        if unit is None:
+            continue
+        scores[unit] = scores.get(unit, 0) + max(total_rows - index, 1)
+
+    return scores
+
+
 def try_build_hot_scores(config: Config) -> tuple[dict[Path, int], bool]:
     try:
         return build_hot_scores(config), True
     except (OSError, RuntimeError, ValueError, json.JSONDecodeError, urllib.error.URLError) as exc:
         print(f"warning: Tautulli unavailable, skipping hot-cache actions: {exc}")
         return {}, False
+
+
+def try_build_ondeck_scores(config: Config) -> dict[Path, int]:
+    try:
+        return build_ondeck_scores(config)
+    except (
+        configparser.Error,
+        OSError,
+        RuntimeError,
+        ValueError,
+        ET.ParseError,
+        json.JSONDecodeError,
+        urllib.error.URLError,
+    ) as exc:
+        print(f"warning: skipping Plex On Deck cache actions: {exc}")
+        return {}
+
+
+def try_build_watchlist_scores(config: Config) -> dict[Path, int]:
+    try:
+        return build_watchlist_scores(config)
+    except (
+        configparser.Error,
+        OSError,
+        RuntimeError,
+        ValueError,
+        ET.ParseError,
+        sqlite3.Error,
+        urllib.error.URLError,
+    ) as exc:
+        print(f"warning: skipping Seerr watchlist cache actions: {exc}")
+        return {}
 
 
 def unit_relative_dir_from_plex_path(config: Config, plex_path: str) -> Path | None:
@@ -529,10 +864,10 @@ def unit_age_key(relative_dir: Path, stats: UnitStats | None, state: dict[str, d
     return (float(state.get("units", {}).get(str(relative_dir), {}).get("first_seen", 0.0)), str(relative_dir))
 
 
-def select_desired_frequent_units(unit_stats: dict[Path, UnitStats], hot_scores: dict[Path, int], budget_bytes: int) -> set[Path]:
+def select_desired_units(unit_stats: dict[Path, UnitStats], scores: dict[Path, int], budget_bytes: int) -> set[Path]:
     desired: set[Path] = set()
     used = 0
-    for relative_dir, _score in sorted(hot_scores.items(), key=lambda item: (-item[1], str(item[0]))):
+    for relative_dir, _score in sorted(scores.items(), key=lambda item: (-item[1], str(item[0]))):
         stats = unit_stats.get(relative_dir)
         if stats is None or stats.total_size < 1:
             continue
@@ -543,6 +878,10 @@ def select_desired_frequent_units(unit_stats: dict[Path, UnitStats], hot_scores:
         if used >= budget_bytes:
             break
     return desired
+
+
+def select_desired_frequent_units(unit_stats: dict[Path, UnitStats], hot_scores: dict[Path, int], budget_bytes: int) -> set[Path]:
+    return select_desired_units(unit_stats, hot_scores, budget_bytes)
 
 
 def relative_file_map(root: Path, relative_dir: Path, config: Config, stable_only: bool) -> dict[Path, Path]:
@@ -778,10 +1117,10 @@ def promote_unit(relative_dir: Path, config: Config) -> MoveResult:
     return MoveResult(moved_bytes=moved_bytes)
 
 
-def update_state(state: dict[str, dict[str, float]], cache_units: dict[Path, int], desired_frequent: set[Path]) -> None:
+def update_state(state: dict[str, dict[str, float]], cache_units: dict[Path, int], protected_units: set[Path]) -> None:
     now = time.time()
     unit_state = state.setdefault("units", {})
-    active_keys = {str(unit) for unit, size in cache_units.items() if size > 0 and unit not in desired_frequent}
+    active_keys = {str(unit) for unit, size in cache_units.items() if size > 0 and unit not in protected_units}
     for key in active_keys:
         entry = unit_state.get(key)
         if not isinstance(entry, dict):
@@ -860,32 +1199,34 @@ def run_once(config: Config, args: argparse.Namespace) -> int:
 
     sync_result = SyncResult()
     promote_result = MoveResult()
+    promoted_units = 0
     evict_recent = EvictResult()
+    evict_watchlist = EvictResult()
     evict_frequent = EvictResult()
+    evict_ondeck = EvictResult()
     conflict_count = 0
 
     unit_stats = collect_all_unit_stats(config)
     hot_scores, tautulli_available = try_build_hot_scores(config)
+    ondeck_scores = try_build_ondeck_scores(config)
+    watchlist_scores = try_build_watchlist_scores(config)
     desired_frequent = select_desired_frequent_units(unit_stats, hot_scores, config.frequent_budget_bytes)
+    desired_ondeck = select_desired_units(unit_stats, ondeck_scores, config.ondeck_budget_bytes)
+    desired_watchlist = select_desired_units(unit_stats, watchlist_scores, config.watchlist_budget_bytes)
+    protected_units = desired_frequent | desired_ondeck | desired_watchlist
 
     do_sync = not args.promote_only and not args.evict_only
     do_promote = not args.sync_only and not args.evict_only
     do_evict = args.demote_non_frequent or (not args.sync_only and not args.promote_only)
-
     if not tautulli_available:
-        if do_promote:
-            print("warning: skipping promotion because Tautulli is unavailable")
-        if do_evict:
-            print("warning: skipping eviction because Tautulli is unavailable")
-        do_promote = False
-        do_evict = False
+        print("warning: Tautulli unavailable, frequent cache scoring is disabled for this run")
 
     _total_bytes, used_bytes, available_bytes = filesystem_usage(config.source_root)
 
     if args.demote_non_frequent and do_evict:
         print("manual mode: demoting non-frequent cached media regardless of free-space threshold")
         recent_candidates = sorted(
-            (unit for unit, stats in unit_stats.items() if stats.size_on_cache > 0 and unit not in desired_frequent),
+            (unit for unit, stats in unit_stats.items() if stats.size_on_cache > 0 and unit not in protected_units),
             key=lambda unit: unit_age_key(unit, unit_stats.get(unit), state),
         )
         pre_sync_recent, available_bytes, used_delta, pre_sync_conflicts = evict_units(
@@ -906,7 +1247,7 @@ def run_once(config: Config, args: argparse.Namespace) -> int:
             unit_stats = collect_all_unit_stats(config)
     elif do_evict and available_bytes < config.cache_min_free_space_bytes:
         recent_candidates = sorted(
-            (unit for unit, stats in unit_stats.items() if stats.size_on_cache > 0 and unit not in desired_frequent),
+            (unit for unit, stats in unit_stats.items() if stats.size_on_cache > 0 and unit not in protected_units),
             key=lambda unit: unit_age_key(unit, unit_stats.get(unit), state),
         )
         pre_sync_recent, available_bytes, used_delta, pre_sync_conflicts = evict_units(
@@ -927,7 +1268,7 @@ def run_once(config: Config, args: argparse.Namespace) -> int:
             unit_stats = collect_all_unit_stats(config)
 
     if do_sync:
-        inline_evict_non_frequent = {unit for unit, stats in unit_stats.items() if stats.size_on_cache > 0 and unit not in desired_frequent} if args.demote_non_frequent and do_evict else None
+        inline_evict_non_frequent = {unit for unit, stats in unit_stats.items() if stats.size_on_cache > 0 and unit not in protected_units} if args.demote_non_frequent and do_evict else None
         sync_result, inline_evict_recent = sync_archive(config, inline_evict_non_frequent)
         conflict_count += sync_result.conflicts
         conflict_count += inline_evict_recent.conflicts
@@ -939,13 +1280,19 @@ def run_once(config: Config, args: argparse.Namespace) -> int:
         unit_stats = collect_all_unit_stats(config)
 
     if do_promote:
-        for relative_dir in sorted(desired_frequent, key=str):
+        promote_order = (
+            sorted(desired_ondeck, key=str)
+            + sorted(desired_frequent - desired_ondeck, key=str)
+            + sorted(desired_watchlist - desired_frequent - desired_ondeck, key=str)
+        )
+        for relative_dir in promote_order:
             stats = unit_stats.get(relative_dir)
             if stats is None or stats.size_on_tank < 1 or stats.size_on_cache > 0:
                 continue
             result = promote_unit(relative_dir, config) if not config.dry_run else MoveResult(moved_bytes=stats.size_on_tank)
             conflict_count += result.conflicts
             if result.moved_bytes > 0:
+                promoted_units += 1
                 promote_result = MoveResult(promote_result.moved_bytes + result.moved_bytes, promote_result.conflicts)
         if not config.dry_run:
             unit_stats = collect_all_unit_stats(config)
@@ -956,7 +1303,7 @@ def run_once(config: Config, args: argparse.Namespace) -> int:
 
     if should_evict:
         recent_candidates = sorted(
-            (unit for unit, stats in unit_stats.items() if stats.size_on_cache > 0 and unit not in desired_frequent),
+            (unit for unit, stats in unit_stats.items() if stats.size_on_cache > 0 and unit not in protected_units),
             key=lambda unit: unit_age_key(unit, unit_stats.get(unit), state),
         )
         recent_result, available_bytes, used_delta, recent_conflicts = evict_units(
@@ -975,8 +1322,36 @@ def run_once(config: Config, args: argparse.Namespace) -> int:
         conflict_count += recent_conflicts
 
         if available_bytes < config.cache_target_free_space_bytes:
+            watchlist_candidates = sorted(
+                (
+                    unit
+                    for unit in desired_watchlist - desired_frequent - desired_ondeck
+                    if unit_stats.get(unit) is not None and unit_stats[unit].size_on_cache > 0
+                ),
+                key=lambda unit: (watchlist_scores.get(unit, 0), *unit_age_key(unit, unit_stats.get(unit), state)),
+            )
+            watchlist_result, available_bytes, used_delta, watchlist_conflicts = evict_units(
+                watchlist_candidates,
+                unit_stats,
+                config,
+                available_bytes,
+                stop_at_target=True,
+            )
+            evict_watchlist = EvictResult(
+                evict_watchlist.evicted_units + watchlist_result.evicted_units,
+                evict_watchlist.evicted_bytes + watchlist_result.evicted_bytes,
+                evict_watchlist.conflicts,
+            )
+            used_bytes -= used_delta
+            conflict_count += watchlist_conflicts
+
+        if available_bytes < config.cache_target_free_space_bytes:
             frequent_candidates = sorted(
-                (unit for unit in desired_frequent if unit_stats.get(unit) is not None and unit_stats[unit].size_on_cache > 0),
+                (
+                    unit
+                    for unit in desired_frequent - desired_ondeck
+                    if unit_stats.get(unit) is not None and unit_stats[unit].size_on_cache > 0
+                ),
                 key=lambda unit: (hot_scores.get(unit, 0), *unit_age_key(unit, unit_stats.get(unit), state)),
             )
             frequent_result, available_bytes, used_delta, frequent_conflicts = evict_units(
@@ -994,10 +1369,34 @@ def run_once(config: Config, args: argparse.Namespace) -> int:
             used_bytes -= used_delta
             conflict_count += frequent_conflicts
 
+        if available_bytes < config.cache_target_free_space_bytes:
+            ondeck_candidates = sorted(
+                (
+                    unit
+                    for unit in desired_ondeck
+                    if unit_stats.get(unit) is not None and unit_stats[unit].size_on_cache > 0
+                ),
+                key=lambda unit: (ondeck_scores.get(unit, 0), *unit_age_key(unit, unit_stats.get(unit), state)),
+            )
+            ondeck_result, available_bytes, used_delta, ondeck_conflicts = evict_units(
+                ondeck_candidates,
+                unit_stats,
+                config,
+                available_bytes,
+                stop_at_target=True,
+            )
+            evict_ondeck = EvictResult(
+                evict_ondeck.evicted_units + ondeck_result.evicted_units,
+                evict_ondeck.evicted_bytes + ondeck_result.evicted_bytes,
+                evict_ondeck.conflicts,
+            )
+            used_bytes -= used_delta
+            conflict_count += ondeck_conflicts
+
     if not config.dry_run:
         unit_stats = collect_all_unit_stats(config)
         cache_units = {unit: stats.size_on_cache for unit, stats in unit_stats.items() if stats.size_on_cache > 0}
-        update_state(state, cache_units, desired_frequent)
+        update_state(state, cache_units, protected_units)
         write_state(config.state_file, state)
         prune_empty_dirs(config.source_root)
         _total_bytes, used_bytes, available_bytes = filesystem_usage(config.source_root)
@@ -1007,12 +1406,18 @@ def run_once(config: Config, args: argparse.Namespace) -> int:
         f"synced_units={sync_result.synced_units} synced_bytes={format_bytes(sync_result.synced_bytes)} "
         f"replaced_archive_units={sync_result.replaced_units} "
         f"skipped_unstable_units={sync_result.skipped_units} "
-        f"promoted_units={1 if promote_result.moved_bytes > 0 else 0 if promote_result.moved_bytes == 0 else 0} "
+        f"desired_frequent_units={len(desired_frequent)} desired_ondeck_units={len(desired_ondeck)} "
+        f"desired_watchlist_units={len(desired_watchlist)} "
+        f"promoted_units={promoted_units} "
         f"promoted_bytes={format_bytes(promote_result.moved_bytes)} "
         f"evicted_non_frequent_units={evict_recent.evicted_units} "
         f"evicted_non_frequent_bytes={format_bytes(evict_recent.evicted_bytes)} "
+        f"evicted_watchlist_units={evict_watchlist.evicted_units} "
+        f"evicted_watchlist_bytes={format_bytes(evict_watchlist.evicted_bytes)} "
         f"evicted_frequent_units={evict_frequent.evicted_units} "
         f"evicted_frequent_bytes={format_bytes(evict_frequent.evicted_bytes)} "
+        f"evicted_ondeck_units={evict_ondeck.evicted_units} "
+        f"evicted_ondeck_bytes={format_bytes(evict_ondeck.evicted_bytes)} "
         f"conflicts={conflict_count} "
         f"cache_used={format_bytes(used_bytes)} cache_avail={format_bytes(available_bytes)}"
     )
