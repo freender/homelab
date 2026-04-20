@@ -178,7 +178,11 @@ def normalize_config(registry, host: str) -> MediaMoverConfig:
         f"media-mover.plex_url is required for {host}",
     )
     tautulli_config_path = require_text(
-        registry.get(host, "media-mover.tautulli_config_path", "/mnt/cache/appdata/tautulli/config.ini"),
+        registry.get(
+            host,
+            "media-mover.tautulli_config_path",
+            "/mnt/cache/appdata/tautulli/config.ini",
+        ),
         f"media-mover.tautulli_config_path is required for {host}",
     )
     lookback_days_raw = registry.get(host, "media-mover.tautulli_lookback_days", 90)
@@ -214,7 +218,9 @@ def normalize_config(registry, host: str) -> MediaMoverConfig:
     ondeck_include_movies = (
         str(registry.get(host, "media-mover.ondeck_include_movies", "false")).lower() == "true"
     )
-    watchlist_enabled = str(registry.get(host, "media-mover.watchlist_enabled", "true")).lower() == "true"
+    watchlist_enabled = (
+        str(registry.get(host, "media-mover.watchlist_enabled", "true")).lower() == "true"
+    )
     watchlist_budget = require_text(
         registry.get(host, "media-mover.watchlist_budget", "50G"),
         f"media-mover.watchlist_budget is required for {host}",

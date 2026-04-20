@@ -28,7 +28,7 @@ yq eval '.' hosts.conf >/dev/null
 
 ### Single-file lint (fast targeted check)
 ```bash
-python -m ruff check src/homelab/cli.py
+.venv/bin/python -m ruff check src/homelab/cli.py
 shellcheck -S warning pve-postinstall/scripts/install.sh
 ```
 
@@ -158,7 +158,7 @@ CI on push/PR to `main` runs:
 - ShellCheck (warning severity).
 - YAML lint for `hosts.conf`.
 - `homelab validate`.
-Run `PYTHONPATH=src python -m homelab.cli validate` locally for CI parity.
+Run `PYTHONPATH=src .venv/bin/python -m homelab.cli validate` locally for CI parity (or just `./validate`).
 After pushing, check the GitHub Actions run status for that push and inspect failures immediately if any job is red.
 
 ## Cursor/Copilot Rules
@@ -173,6 +173,6 @@ If they are added later, follow them and update this guide.
 1. Read the module's Python orchestrator and `scripts/install.sh` before editing.
 2. Match nearby patterns; avoid introducing new framework styles.
 3. Run targeted validation first (ruff/shellcheck + module dry-run).
-4. Run `PYTHONPATH=src python -m homelab.cli validate` when practical before handing off.
+4. Run `PYTHONPATH=src .venv/bin/python -m homelab.cli validate` when practical before handing off (or just `./validate`).
 5. After any push, verify the matching GitHub Actions run and review error logs before considering the work complete.
 6. Never commit secret files or generated `build/` artifacts.
