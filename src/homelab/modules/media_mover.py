@@ -32,7 +32,6 @@ class MediaMoverConfig:
     plex_mount_root: str
     plex_url: str
     tautulli_config_path: str
-    seerr_db_path: str
     tautulli_lookback_days: int
     frequent_budget: str
     ondeck_enabled: bool
@@ -182,10 +181,6 @@ def normalize_config(registry, host: str) -> MediaMoverConfig:
         registry.get(host, "media-mover.tautulli_config_path", "/mnt/cache/appdata/tautulli/config.ini"),
         f"media-mover.tautulli_config_path is required for {host}",
     )
-    seerr_db_path = require_text(
-        registry.get(host, "media-mover.seerr_db_path", "/mnt/cache/appdata/seerr/db/db.sqlite3"),
-        f"media-mover.seerr_db_path is required for {host}",
-    )
     lookback_days_raw = registry.get(host, "media-mover.tautulli_lookback_days", 90)
     try:
         tautulli_lookback_days = int(lookback_days_raw)
@@ -270,7 +265,6 @@ def normalize_config(registry, host: str) -> MediaMoverConfig:
         plex_mount_root=plex_mount_root,
         plex_url=plex_url,
         tautulli_config_path=tautulli_config_path,
-        seerr_db_path=seerr_db_path,
         tautulli_lookback_days=tautulli_lookback_days,
         frequent_budget=frequent_budget,
         ondeck_enabled=ondeck_enabled,
@@ -384,7 +378,6 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
             "PLEX_MOUNT_ROOT": config.plex_mount_root,
             "PLEX_URL": config.plex_url,
             "TAUTULLI_CONFIG_PATH": config.tautulli_config_path,
-            "SEERR_DB_PATH": config.seerr_db_path,
             "TAUTULLI_LOOKBACK_DAYS": str(config.tautulli_lookback_days),
             "FREQUENT_BUDGET": config.frequent_budget,
             "ONDECK_ENABLED": "true" if config.ondeck_enabled else "false",

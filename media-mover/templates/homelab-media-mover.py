@@ -10,7 +10,6 @@ import json
 import os
 import re
 import shutil
-import sqlite3
 import stat
 import subprocess
 import sys
@@ -40,7 +39,6 @@ class Config:
     plex_mount_root: PurePath
     plex_url: str
     tautulli_config_path: Path
-    seerr_db_path: Path
     ignore_paths: tuple[Path, ...]
     managed_roots: tuple[str, ...]
     tautulli_url: str
@@ -195,7 +193,6 @@ def load_config(args: argparse.Namespace) -> Config:
     plex_mount_root = PurePath(require_env("PLEX_MOUNT_ROOT"))
     plex_url = require_env("PLEX_URL").rstrip("/")
     tautulli_config_path = Path(require_env("TAUTULLI_CONFIG_PATH"))
-    seerr_db_path = Path(require_env("SEERR_DB_PATH"))
     ignore_paths = parse_ignore_paths(source_root, os.environ.get("IGNORE_PATHS", ""))
     managed_roots = parse_managed_roots(require_env("MANAGED_ROOTS"))
     tautulli_url = require_env("TAUTULLI_URL").rstrip("/")
@@ -253,7 +250,6 @@ def load_config(args: argparse.Namespace) -> Config:
         plex_mount_root=plex_mount_root,
         plex_url=plex_url,
         tautulli_config_path=tautulli_config_path,
-        seerr_db_path=seerr_db_path,
         ignore_paths=ignore_paths,
         managed_roots=managed_roots,
         tautulli_url=tautulli_url,
@@ -713,11 +709,44 @@ def resolve_watchlist_show_unit(
     return None
 
 
+def search_local_items_by_guid(config: Config, context: PlexContext, guid: str) -> list[ET.Element]:
+    guid_plain = guid.split("?", 1)[0].strip()
+    if not guid_plain:
+        return []
+    root = plex_get_xml(
+        f"{context.server_url}/library/all?{urllib.parse.urlencode({'guid': guid_plain})}",
+        context.admin_token,
+    )
+    return list(root)
+
+
+def collect_admin_watchlist(context: PlexContext) -> list[ET.Element]:
+    items: list[ET.Element] = []
+    start = 0
+    page_size = 100
+    while True:
+        request = urllib.request.Request(
+            "https://discover.provider.plex.tv/library/sections/watchlist/all",
+            headers={
+                "Accept": "application/xml",
+                "X-Plex-Token": context.admin_token,
+                "X-Plex-Container-Start": str(start),
+                "X-Plex-Container-Size": str(page_size),
+            },
+        )
+        with urllib.request.urlopen(request, timeout=30) as response:
+            root = ET.fromstring(response.read())
+        page = list(root)
+        items.extend(page)
+        total_size = parse_int(root.get("totalSize")) or parse_int(root.get("size")) or 0
+        start += len(page)
+        if not page or start >= total_size:
+            break
+    return items
+
+
 def build_watchlist_scores(config: Config) -> dict[Path, int]:
     if not config.watchlist_enabled:
-        return {}
-    if not config.seerr_db_path.exists():
-        print(f"warning: skipping Seerr watchlist, database not found: {config.seerr_db_path}")
         return {}
 
     context = load_plex_context(config)
@@ -725,35 +754,31 @@ def build_watchlist_scores(config: Config) -> dict[Path, int]:
     show_cache: dict[int, Path | None] = {}
     scores: dict[Path, int] = {}
 
-    with sqlite3.connect(f"file:{config.seerr_db_path}?mode=ro", uri=True) as connection:
-        rows = connection.execute(
-            """
-            SELECT
-                watchlist.ratingKey AS watchlist_rating_key,
-                watchlist.mediaType AS media_type,
-                watchlist.createdAt AS created_at,
-                media.ratingKey AS media_rating_key
-            FROM watchlist
-            LEFT JOIN media ON media.id = watchlist.mediaId
-            ORDER BY watchlist.createdAt DESC, watchlist.id DESC
-            """
-        ).fetchall()
-
-    total_rows = len(rows)
-    for index, row in enumerate(rows):
-        media_type = str(row[1] or "").strip().lower()
-        rating_key = parse_int(row[0]) or parse_int(row[3])
-        if rating_key is None:
+    items = collect_admin_watchlist(context)
+    if items:
+        print("warning: direct Plex watchlist currently uses the main Plex account only")
+    total_items = len(items)
+    for index, item in enumerate(items):
+        media_type = item.get("type", "").strip().lower()
+        guid = item.get("guid", "").strip()
+        if media_type not in {"movie", "show"} or not guid:
+            continue
+        matches = search_local_items_by_guid(config, context, guid)
+        if not matches:
             continue
         if media_type == "movie":
+            rating_key = parse_int(matches[0].get("ratingKey"))
+            if rating_key is None:
+                continue
             unit = resolve_unit_from_plex_rating_key(config, context, rating_key, media_cache)
-        elif media_type in {"tv", "show"}:
-            unit = resolve_watchlist_show_unit(config, context, rating_key, show_cache)
         else:
-            continue
+            rating_key = parse_int(matches[0].get("ratingKey"))
+            if rating_key is None:
+                continue
+            unit = resolve_watchlist_show_unit(config, context, rating_key, show_cache)
         if unit is None:
             continue
-        scores[unit] = scores.get(unit, 0) + max(total_rows - index, 1)
+        scores[unit] = scores.get(unit, 0) + max(total_items - index, 1)
 
     return scores
 
@@ -791,10 +816,9 @@ def try_build_watchlist_scores(config: Config) -> dict[Path, int]:
         RuntimeError,
         ValueError,
         ET.ParseError,
-        sqlite3.Error,
         urllib.error.URLError,
     ) as exc:
-        print(f"warning: skipping Seerr watchlist cache actions: {exc}")
+        print(f"warning: skipping Plex watchlist cache actions: {exc}")
         return {}
 
 
