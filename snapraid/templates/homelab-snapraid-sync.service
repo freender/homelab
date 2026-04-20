@@ -9,7 +9,7 @@ Type=oneshot
 EnvironmentFile=/etc/default/homelab-media-mover
 EnvironmentFile=-/etc/default/homelab-media-mover.local
 Environment=PYTHONUNBUFFERED=1
-ExecStart=/bin/sh -c '/usr/local/bin/homelab-media-mover --wait-for-lock && mkdir -p /var/lib/homelab-media || exit 1; exec 9>/var/lib/homelab-media/operations.lock || exit 1; flock 9; /usr/bin/snapraid sync'
+ExecStart=/bin/sh -c 'systemctl stop homelab-media-mover-watch.service; /usr/local/bin/homelab-media-mover --wait-for-lock && mkdir -p /var/lib/homelab-media || exit 1; exec 9>/var/lib/homelab-media/operations.lock || exit 1; flock 9; /usr/bin/snapraid sync'
 {% else %}
 ExecStart=/bin/sh -c 'mkdir -p /var/lib/homelab-media || exit 1; exec 9>/var/lib/homelab-media/operations.lock || exit 1; if ! flock -n 9; then echo "skipped: shared media operations lock is held"; exit 0; fi; /usr/bin/snapraid sync'
 {% endif %}
