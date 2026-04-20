@@ -117,6 +117,10 @@ def validate(root: Path, hosts: list[str]) -> None:
                         f"{host}: {ctid} idmapped root must be absolute: {root_path}"
                     )
 
+            use_idmapped_mounts = container.get("use_idmapped_mounts", True)
+            if str(use_idmapped_mounts).lower() not in {"0", "1", "false", "true"}:
+                raise ValueError(f"{host}: {ctid} use_idmapped_mounts must be 0/1/false/true")
+
             idmapped_mounts = container.get("idmapped_mounts", [])
             if not idmapped_mounts and str(container.get("export_media_storage", "")).lower() in {
                 "1",
@@ -174,6 +178,10 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
         ctid = str(container["ctid"])
         root_mounts = normalize_root_mounts(container["root_mounts"])
         idmapped_roots = [str(path) for path in container.get("idmapped_roots", [])]
+        use_idmapped_mounts = str(container.get("use_idmapped_mounts", True)).lower() in {
+            "1",
+            "true",
+        }
         idmapped_mounts_raw = container.get("idmapped_mounts", [])
         if not idmapped_mounts_raw and str(container.get("export_media_storage", "")).lower() in {
             "1",
@@ -199,6 +207,7 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
             leaf_mounts,
             idmapped_mounts,
             features,
+            use_idmapped_mounts,
         )
 
         local_config = build_dir / f"{ctid}.conf"
@@ -308,6 +317,7 @@ def render_config(
     leaf_mounts: list[str],
     idmapped_mounts: list[dict[str, str]],
     features: dict[str, str],
+    use_idmapped_mounts: bool,
 ) -> str:
     managed_slots = {f"mp{mount['slot']}:" for mount in root_mounts}
     managed_root_sources = {mount["source"] for mount in root_mounts}
@@ -323,17 +333,17 @@ def render_config(
         f"mp{mount['slot']}: {mount['source']},mp={mount['target']},backup={mount['backup']}"
         for mount in root_mounts
     ]
-    idmap_enabled = bool(idmapped_roots or idmapped_mounts)
+    idmap_suffix = ",idmap=container 0 0" if use_idmapped_mounts else ""
     idmapped_lines = [
         f"lxc.mount.entry: {mountpoint} mnt/{mountpoint.lstrip('/')}"
         " none bind,create=dir"
-        + (",idmap=container 0 0" if idmap_enabled else "")
+        + idmap_suffix
         for mountpoint in leaf_mounts
-        if mountpoint not in explicit_idmapped_sources
+        if mountpoint not in explicit_idmapped_sources and mountpoint not in managed_root_sources
     ] + [
         f"lxc.mount.entry: {mount['source']} {mount['target'].lstrip('/')}"
         " none bind,create=dir"
-        + (",idmap=container 0 0" if idmap_enabled else "")
+        + idmap_suffix
         for mount in idmapped_mounts
     ]
     managed_idmapped_sources = {
