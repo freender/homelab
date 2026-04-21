@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import configparser
 import fcntl
-import hashlib
 import json
 import os
 import re
@@ -1108,10 +1107,7 @@ def copy_file(source: Path, source_root: Path, target_root: Path) -> int:
         if source.samefile(target):
             return 0
         target_stat = target.stat()
-        if source_stat.st_size == target_stat.st_size and int(source_stat.st_mtime) == int(target_stat.st_mtime):
-            return 0
-        if source_stat.st_size == target_stat.st_size and file_hash(source) == file_hash(target):
-            os.utime(target, (source_stat.st_atime, source_stat.st_mtime))
+        if source_stat.st_size == target_stat.st_size:
             return 0
 
     temp_target = target.with_name(f".{target.name}{TEMP_SUFFIX}")
@@ -1124,17 +1120,8 @@ def copy_file(source: Path, source_root: Path, target_root: Path) -> int:
     return source_stat.st_size
 
 
-def file_hash(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        while chunk := handle.read(1024 * 1024):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
 def sync_directory(relative_dir: Path, config: Config) -> MoveResult:
     source_dir = config.source_root / relative_dir
-    target_dir = config.target_root / relative_dir
     stable_source_files = relative_file_map(config.source_root, relative_dir, config, stable_only=True)
     if not stable_source_files:
         return MoveResult()
@@ -1142,15 +1129,7 @@ def sync_directory(relative_dir: Path, config: Config) -> MoveResult:
     moved_bytes = 0
     for relative_file, source_path in stable_source_files.items():
         moved_bytes += copy_file(source_path, config.source_root, config.target_root)
-    target_files = relative_file_map(config.target_root, relative_dir, config, stable_only=False)
-    stale_files = [target_dir / relative_file for relative_file in target_files if relative_file not in stable_source_files]
-    for stale_path in stale_files:
-        if stale_path.exists():
-            stale_path.unlink()
-            print(f"removed stale archive file: {stale_path}")
-    prune_empty_dirs(target_dir)
-    replaced = 1 if stale_files else 0
-    return MoveResult(moved_bytes=moved_bytes, conflicts=replaced)
+    return MoveResult(moved_bytes=moved_bytes)
 
 
 def file_group_key(relative_dir: Path, file_name: str) -> str | None:
@@ -1187,18 +1166,10 @@ def sync_tv_unit(relative_dir: Path, config: Config) -> MoveResult:
     source_files = unit_file_map(config.source_root, relative_dir, config, stable_only=True)
     if not source_files:
         return MoveResult()
-    target_dir = config.target_root / tv_unit_parent_dir(relative_dir)
-    target_files = unit_file_map(config.target_root, relative_dir, config, stable_only=False)
     moved_bytes = 0
-    stale_paths = [target_dir / rel for rel in target_files if rel not in source_files]
-    for stale_path in stale_paths:
-        if stale_path.exists():
-            stale_path.unlink()
-            print(f"removed stale archive file: {stale_path}")
     for source_path in source_files.values():
         moved_bytes += copy_file(source_path, config.source_root, config.target_root)
-    prune_empty_dirs(target_dir)
-    return MoveResult(moved_bytes=moved_bytes, conflicts=1 if stale_paths else 0)
+    return MoveResult(moved_bytes=moved_bytes)
 
 
 def sync_archive(config: Config, inline_evict_non_frequent: set[Path] | None = None) -> tuple[SyncResult, EvictResult]:

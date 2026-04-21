@@ -81,6 +81,12 @@ def write_archive_movie(config, folder_name: str) -> Path:
     return movie_file
 
 
+def write_text_file(path: Path, content: str) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding="utf-8")
+    return path
+
+
 def write_episode(
     root: Path,
     show_name: str,
@@ -135,6 +141,74 @@ def test_run_once_immediately_evicts_non_frequent_media_for_mover_now(
     output = capsys.readouterr().out
     assert "copied:" in output
     assert "evicted cache file:" in output
+
+
+def test_sync_directory_keeps_archive_video_when_cache_only_has_subtitle(
+    tmp_path: Path, monkeypatch
+) -> None:
+    module = load_media_mover_module()
+    config = make_config(module, tmp_path)
+    folder_name = "Subtitle Only Movie (2026) {tmdb-3}"
+    archive_video = write_archive_movie(config, folder_name)
+    cache_subtitle = write_text_file(
+        config.source_root / "movies" / folder_name / f"{folder_name}.en.srt",
+        "subtitle",
+    )
+
+    monkeypatch.setattr(module, "file_is_open", lambda _path: False)
+
+    result = module.sync_directory(Path("movies") / folder_name, config)
+
+    assert result.conflicts == 0
+    assert archive_video.exists()
+    assert (config.target_root / cache_subtitle.relative_to(config.source_root)).exists()
+
+
+def test_sync_tv_unit_keeps_archive_video_when_cache_only_has_subtitle(
+    tmp_path: Path, monkeypatch
+) -> None:
+    module = load_media_mover_module()
+    config = replace(make_config(module, tmp_path), managed_roots=("movies", "tv"))
+    show_name = "Example Show (2026) {tvdb-1}"
+    archive_video = write_episode(
+        config.target_root,
+        show_name,
+        "Season 1",
+        f"{show_name} - S01E10.mkv",
+        b"video-data",
+    )
+    cache_subtitle = write_text_file(
+        config.source_root / "tv" / show_name / "Season 1" / f"{show_name} - S01E10.en.srt",
+        "subtitle",
+    )
+    unit = Path(f"tv/{show_name}/Season 1/__episodes__/{show_name}|S01|10")
+
+    monkeypatch.setattr(module, "file_is_open", lambda _path: False)
+
+    result = module.sync_tv_unit(unit, config)
+
+    assert result.conflicts == 0
+    assert archive_video.exists()
+    assert (config.target_root / cache_subtitle.relative_to(config.source_root)).exists()
+
+
+def test_copy_file_replaces_same_name_when_size_differs(tmp_path: Path) -> None:
+    module = load_media_mover_module()
+    config = make_config(module, tmp_path)
+    folder_name = "Replace Movie (2026) {tmdb-4}"
+    source_file = write_text_file(
+        config.source_root / "movies" / folder_name / f"{folder_name}.nfo",
+        "new metadata with different size",
+    )
+    target_file = write_text_file(
+        config.target_root / "movies" / folder_name / f"{folder_name}.nfo",
+        "old",
+    )
+
+    copied_bytes = module.copy_file(source_file, config.source_root, config.target_root)
+
+    assert copied_bytes == source_file.stat().st_size
+    assert target_file.read_text(encoding="utf-8") == source_file.read_text(encoding="utf-8")
 
 
 def test_report_cache_effectiveness_shows_watched_cache_hit_rates(
