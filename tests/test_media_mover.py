@@ -52,6 +52,8 @@ def make_config(module, tmp_path: Path):
         ondeck_budget_bytes=1,
         ondeck_tv_prefetch_episodes=0,
         ondeck_include_movies=False,
+        ondeck_movie_max_age_days=30,
+        ondeck_series_max_age_days=60,
         watchlist_enabled=False,
         watchlist_budget_bytes=1,
         cache_min_free_space_bytes=1,
@@ -154,8 +156,32 @@ def test_report_cache_effectiveness_shows_watched_cache_hit_rates(
 
     monkeypatch.setattr(module, "file_is_open", lambda _path: False)
     monkeypatch.setattr(module, "try_build_hot_scores", lambda _config: ({cached_unit: 10, archive_unit: 5}, True))
-    monkeypatch.setattr(module, "try_build_ondeck_scores", lambda _config: {cached_unit: 3})
-    monkeypatch.setattr(module, "try_build_watchlist_scores", lambda _config: {archive_unit: 2})
+    monkeypatch.setattr(
+        module,
+        "try_collect_ondeck_entries",
+        lambda _config: [
+            module.OnDeckEntry(
+                relative_dir=cached_unit,
+                score=3,
+                item_type="episode",
+                age_days=12.0,
+                progress_percent=50.0,
+                current=True,
+            )
+        ],
+    )
+    monkeypatch.setattr(
+        module,
+        "try_collect_watchlist_entries",
+        lambda _config: [
+            module.WatchlistEntry(
+                relative_dir=archive_unit,
+                score=2,
+                media_type="movie",
+                catalog_age_days=400.0,
+            )
+        ],
+    )
     monkeypatch.setattr(module, "filesystem_usage", lambda _path: (1000, 400, 600))
 
     exit_code = module.report_cache_effectiveness(
@@ -173,6 +199,10 @@ def test_report_cache_effectiveness_shows_watched_cache_hit_rates(
     assert "desired_frequent_units=2 desired_frequent_cached_units=1" in output
     assert "desired_ondeck_units=1 desired_ondeck_cached_units=1" in output
     assert "desired_watchlist_units=1 desired_watchlist_cached_units=0" in output
+    assert "ondeck_age: movie_age_limit_days=30 series_age_limit_days=60 current_movies=0 current_episodes=1" in output
+    assert "episode_median_age_days=12.0" in output
+    assert "watchlist_age: age_available=true items=1 movies=1 shows=0" in output
+    assert "movie_median_catalog_age_days=400.0" in output
     assert f"top_watched: rank=1 location=cache score=10 size=10B unit={cached_unit}" in output
     assert f"top_watched: rank=2 location=archive score=5 size=10B unit={archive_unit}" in output
 
@@ -282,6 +312,125 @@ def test_build_ondeck_scores_prefetches_into_next_season(tmp_path: Path, monkeyp
     assert scores[next_same_season] == 10
     assert scores[next_season_one] == 10
     assert scores[next_season_two] == 10
+
+
+def test_build_ondeck_scores_skips_stale_movies(tmp_path: Path, monkeypatch) -> None:
+    module = load_media_mover_module()
+    config = replace(
+        make_config(module, tmp_path),
+        managed_roots=("movies", "tv"),
+        ondeck_enabled=True,
+        ondeck_include_movies=True,
+        ondeck_movie_max_age_days=30,
+    )
+    recent_movie = write_archive_movie(config, "Recent Movie (2026) {tmdb-1}")
+    stale_movie = write_archive_movie(config, "Stale Movie (2026) {tmdb-2}")
+    now = int(1_700_000_000)
+    recent_last_viewed = now - 5 * 86400
+    stale_last_viewed = now - 90 * 86400
+
+    monkeypatch.setattr(module.time, "time", lambda: float(now))
+    monkeypatch.setattr(
+        module,
+        "load_plex_context",
+        lambda _config: module.PlexContext(
+            server_url="http://example.invalid:32400",
+            admin_token="token",
+            user_tokens={"user": "token"},
+        ),
+    )
+    monkeypatch.setattr(
+        module,
+        "plex_get_xml",
+        lambda url, _token: ET.fromstring(
+            f"""
+            <MediaContainer>
+              <Video type=\"movie\" title=\"Recent Movie\" lastViewedAt=\"{recent_last_viewed}\" duration=\"1000\" viewOffset=\"500\">
+                <Media><Part file=\"/data/movies/Recent Movie (2026) {{tmdb-1}}/{recent_movie.name}\" /></Media>
+              </Video>
+              <Video type=\"movie\" title=\"Stale Movie\" lastViewedAt=\"{stale_last_viewed}\" duration=\"1000\" viewOffset=\"500\">
+                <Media><Part file=\"/data/movies/Stale Movie (2026) {{tmdb-2}}/{stale_movie.name}\" /></Media>
+              </Video>
+            </MediaContainer>
+            """
+        ),
+    )
+
+    scores = module.build_ondeck_scores(config)
+
+    recent_unit = Path("movies/Recent Movie (2026) {tmdb-1}")
+    stale_unit = Path("movies/Stale Movie (2026) {tmdb-2}")
+    assert scores[recent_unit] == 100
+    assert stale_unit not in scores
+
+
+def test_build_ondeck_scores_skips_stale_series_and_prefetch(tmp_path: Path, monkeypatch) -> None:
+    module = load_media_mover_module()
+    config = replace(
+        make_config(module, tmp_path),
+        managed_roots=("movies", "tv"),
+        ondeck_enabled=True,
+        ondeck_tv_prefetch_episodes=2,
+        ondeck_series_max_age_days=60,
+    )
+    show_name = "Example Show (2026) {tvdb-1}"
+    current_episode = write_episode(
+        config.target_root,
+        show_name,
+        "Season 1",
+        f"{show_name} - S01E03.mkv",
+    )
+    next_episode = write_episode(
+        config.target_root,
+        show_name,
+        "Season 1",
+        f"{show_name} - S01E04.mkv",
+    )
+    now = int(1_700_000_000)
+    stale_last_viewed = now - 90 * 86400
+    monkeypatch.setattr(module.time, "time", lambda: float(now))
+    monkeypatch.setattr(
+        module,
+        "load_plex_context",
+        lambda _config: module.PlexContext(
+            server_url="http://example.invalid:32400",
+            admin_token="token",
+            user_tokens={"user": "token"},
+        ),
+    )
+    current_xml = ET.fromstring(
+        f"""
+        <MediaContainer>
+          <Video type=\"episode\" grandparentRatingKey=\"show-1\" parentIndex=\"1\" index=\"3\" lastViewedAt=\"{stale_last_viewed}\" duration=\"1000\" viewOffset=\"500\">
+            <Media><Part file=\"/data/tv/{show_name}/Season 1/{current_episode.name}\" /></Media>
+          </Video>
+        </MediaContainer>
+        """
+    )
+    leaves_xml = ET.fromstring(
+        f"""
+        <MediaContainer>
+          <Video parentIndex=\"1\" index=\"3\"><Media><Part file=\"/data/tv/{show_name}/Season 1/{current_episode.name}\" /></Media></Video>
+          <Video parentIndex=\"1\" index=\"4\"><Media><Part file=\"/data/tv/{show_name}/Season 1/{next_episode.name}\" /></Media></Video>
+        </MediaContainer>
+        """
+    )
+
+    def fake_plex_get_xml(url: str, _token: str):
+        if url.endswith("/library/onDeck"):
+            return current_xml
+        if url.endswith("/library/metadata/show-1/allLeaves"):
+            return leaves_xml
+        raise AssertionError(url)
+
+    monkeypatch.setattr(module, "plex_get_xml", fake_plex_get_xml)
+
+    scores = module.build_ondeck_scores(config)
+
+    current_unit = Path(f"tv/{show_name}/Season 1/__episodes__/{show_name}|S01|03")
+    next_unit = Path(f"tv/{show_name}/Season 1/__episodes__/{show_name}|S01|04")
+    assert current_unit not in scores
+    assert next_unit not in scores
 
 
 def write_hosts_conf(tmp_path: Path, body: str) -> HostRegistry:

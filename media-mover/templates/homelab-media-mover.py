@@ -50,6 +50,8 @@ class Config:
     ondeck_budget_bytes: int
     ondeck_tv_prefetch_episodes: int
     ondeck_include_movies: bool
+    ondeck_movie_max_age_days: int
+    ondeck_series_max_age_days: int
     watchlist_enabled: bool
     watchlist_budget_bytes: int
     cache_min_free_space_bytes: int
@@ -108,6 +110,46 @@ class CacheEffectivenessStats:
     watched_score: int = 0
     watched_cached_units: int = 0
     watched_cached_score: int = 0
+
+
+@dataclass(frozen=True)
+class OnDeckEntry:
+    relative_dir: Path
+    score: int
+    item_type: str
+    age_days: float | None
+    progress_percent: float | None
+    current: bool
+
+
+@dataclass(frozen=True)
+class OnDeckAgeStats:
+    current_movies: int = 0
+    current_episodes: int = 0
+    movie_median_age_days: float | None = None
+    episode_median_age_days: float | None = None
+    movie_over_age_limit: int = 0
+    episode_over_age_limit: int = 0
+
+
+@dataclass(frozen=True)
+class WatchlistEntry:
+    relative_dir: Path
+    score: int
+    media_type: str
+    catalog_age_days: float | None
+
+
+@dataclass(frozen=True)
+class WatchlistAgeStats:
+    items: int = 0
+    movies: int = 0
+    shows: int = 0
+    age_available: bool = False
+    movie_median_catalog_age_days: float | None = None
+    show_median_catalog_age_days: float | None = None
+    movie_over_365_days: int = 0
+    show_over_365_days: int = 0
 
 
 def require_env(name: str) -> str:
@@ -214,6 +256,8 @@ def load_config(args: argparse.Namespace) -> Config:
     ondeck_budget_bytes = parse_size(require_env("ONDECK_BUDGET"))
     ondeck_tv_prefetch_episodes = int(require_env("ONDECK_TV_PREFETCH_EPISODES"))
     ondeck_include_movies = parse_bool(os.environ.get("ONDECK_INCLUDE_MOVIES", "false"))
+    ondeck_movie_max_age_days = int(require_env("ONDECK_MOVIE_MAX_AGE_DAYS"))
+    ondeck_series_max_age_days = int(require_env("ONDECK_SERIES_MAX_AGE_DAYS"))
     watchlist_enabled = parse_bool(os.environ.get("WATCHLIST_ENABLED", "false"))
     watchlist_budget_bytes = parse_size(require_env("WATCHLIST_BUDGET"))
     cache_min_free_space_bytes = parse_size(require_env("CACHE_MIN_FREE_SPACE"))
@@ -241,6 +285,10 @@ def load_config(args: argparse.Namespace) -> Config:
         raise SystemExit("ONDECK_BUDGET must be positive")
     if ondeck_tv_prefetch_episodes < 0:
         raise SystemExit("ONDECK_TV_PREFETCH_EPISODES must not be negative")
+    if ondeck_movie_max_age_days < 1:
+        raise SystemExit("ONDECK_MOVIE_MAX_AGE_DAYS must be positive")
+    if ondeck_series_max_age_days < 1:
+        raise SystemExit("ONDECK_SERIES_MAX_AGE_DAYS must be positive")
     if watchlist_budget_bytes < 1:
         raise SystemExit("WATCHLIST_BUDGET must be positive")
     if cache_min_free_space_bytes < 1:
@@ -271,6 +319,8 @@ def load_config(args: argparse.Namespace) -> Config:
         ondeck_budget_bytes=ondeck_budget_bytes,
         ondeck_tv_prefetch_episodes=ondeck_tv_prefetch_episodes,
         ondeck_include_movies=ondeck_include_movies,
+        ondeck_movie_max_age_days=ondeck_movie_max_age_days,
+        ondeck_series_max_age_days=ondeck_series_max_age_days,
         watchlist_enabled=watchlist_enabled,
         watchlist_budget_bytes=watchlist_budget_bytes,
         cache_min_free_space_bytes=cache_min_free_space_bytes,
@@ -422,6 +472,39 @@ def parse_int(value: object) -> int | None:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def item_age_days(item: ET.Element) -> float | None:
+    last_viewed_at = parse_int(item.get("lastViewedAt"))
+    if last_viewed_at is None:
+        return None
+    return max(time.time() - last_viewed_at, 0) / 86400.0
+
+
+def item_progress_percent(item: ET.Element) -> float | None:
+    duration = parse_int(item.get("duration"))
+    if duration is None or duration < 1:
+        return None
+    view_offset = parse_int(item.get("viewOffset")) or 0
+    return max(min((view_offset / duration) * 100.0, 100.0), 0.0)
+
+
+def median(values: list[float]) -> float | None:
+    if not values:
+        return None
+    ordered = sorted(values)
+    middle = len(ordered) // 2
+    if len(ordered) % 2:
+        return ordered[middle]
+    return (ordered[middle - 1] + ordered[middle]) / 2.0
+
+
+def item_catalog_age_days(item: ET.Element) -> float | None:
+    for raw_value in (item.get("addedAt"),):
+        timestamp = parse_int(raw_value)
+        if timestamp is not None:
+            return max(time.time() - timestamp, 0) / 86400.0
+    return None
 
 
 def resolve_unit_from_rating_key(
@@ -577,12 +660,12 @@ def load_plex_context(config: Config) -> PlexContext:
     return PlexContext(server_url=config.plex_url, admin_token=admin_token, user_tokens=user_tokens)
 
 
-def build_ondeck_scores(config: Config) -> dict[Path, int]:
+def collect_ondeck_entries(config: Config) -> list[OnDeckEntry]:
     if not config.ondeck_enabled:
-        return {}
+        return []
 
     context = load_plex_context(config)
-    scores: dict[Path, int] = {}
+    entries: list[OnDeckEntry] = []
     show_cache: dict[tuple[str, str], list[tuple[tuple[int, int], set[Path]]]] = {}
 
     for username, token in sorted(context.user_tokens.items()):
@@ -595,17 +678,19 @@ def build_ondeck_scores(config: Config) -> dict[Path, int]:
         for item in list(root):
             item_type = item.get("type", "").strip().lower()
             current_units = unit_set_from_plex_paths(config, plex_part_paths(item))
+            age_days = item_age_days(item)
+            progress_percent = item_progress_percent(item)
             if item_type == "movie":
                 if not config.ondeck_include_movies:
                     continue
                 for unit in current_units:
-                    scores[unit] = scores.get(unit, 0) + 100
+                    entries.append(OnDeckEntry(unit, 100, item_type, age_days, progress_percent, True))
                 continue
             if item_type != "episode":
                 continue
 
             for unit in current_units:
-                scores[unit] = scores.get(unit, 0) + 100
+                entries.append(OnDeckEntry(unit, 100, item_type, age_days, progress_percent, True))
 
             if config.ondeck_tv_prefetch_episodes < 1:
                 continue
@@ -641,12 +726,50 @@ def build_ondeck_scores(config: Config) -> dict[Path, int]:
                 if episode_key <= current_key:
                     continue
                 for unit in units:
-                    scores[unit] = scores.get(unit, 0) + 10
+                    entries.append(OnDeckEntry(unit, 10, item_type, age_days, progress_percent, False))
                 next_episodes += 1
                 if next_episodes >= config.ondeck_tv_prefetch_episodes:
                     break
 
+    return entries
+
+
+def build_ondeck_scores_from_entries(entries: list[OnDeckEntry], config: Config) -> dict[Path, int]:
+    scores: dict[Path, int] = {}
+    for entry in entries:
+        if (
+            entry.item_type == "movie"
+            and entry.age_days is not None
+            and entry.age_days > config.ondeck_movie_max_age_days
+        ):
+            continue
+        if (
+            entry.item_type == "episode"
+            and entry.age_days is not None
+            and entry.age_days > config.ondeck_series_max_age_days
+        ):
+            continue
+        scores[entry.relative_dir] = scores.get(entry.relative_dir, 0) + entry.score
     return scores
+
+
+def build_ondeck_scores(config: Config) -> dict[Path, int]:
+    return build_ondeck_scores_from_entries(collect_ondeck_entries(config), config)
+
+
+def build_ondeck_age_stats(entries: list[OnDeckEntry], config: Config) -> OnDeckAgeStats:
+    current_movies = [entry for entry in entries if entry.current and entry.item_type == "movie"]
+    current_episodes = [entry for entry in entries if entry.current and entry.item_type == "episode"]
+    movie_ages = [entry.age_days for entry in current_movies if entry.age_days is not None]
+    episode_ages = [entry.age_days for entry in current_episodes if entry.age_days is not None]
+    return OnDeckAgeStats(
+        current_movies=len(current_movies),
+        current_episodes=len(current_episodes),
+        movie_median_age_days=median(movie_ages),
+        episode_median_age_days=median(episode_ages),
+        movie_over_age_limit=sum(1 for age in movie_ages if age > config.ondeck_movie_max_age_days),
+        episode_over_age_limit=sum(1 for age in episode_ages if age > config.ondeck_series_max_age_days),
+    )
 
 
 def resolve_unit_from_plex_rating_key(
@@ -747,14 +870,14 @@ def collect_admin_watchlist(context: PlexContext) -> list[ET.Element]:
     return items
 
 
-def build_watchlist_scores(config: Config) -> dict[Path, int]:
+def collect_watchlist_entries(config: Config) -> list[WatchlistEntry]:
     if not config.watchlist_enabled:
-        return {}
+        return []
 
     context = load_plex_context(config)
     media_cache: dict[int, Path | None] = {}
     show_cache: dict[int, Path | None] = {}
-    scores: dict[Path, int] = {}
+    entries: list[WatchlistEntry] = []
 
     items = collect_admin_watchlist(context)
     if items:
@@ -780,9 +903,42 @@ def build_watchlist_scores(config: Config) -> dict[Path, int]:
             unit = resolve_watchlist_show_unit(config, context, rating_key, show_cache)
         if unit is None:
             continue
-        scores[unit] = scores.get(unit, 0) + max(total_items - index, 1)
+        entries.append(
+            WatchlistEntry(
+                relative_dir=unit,
+                score=max(total_items - index, 1),
+                media_type=media_type,
+                catalog_age_days=item_catalog_age_days(item),
+            )
+        )
 
+    return entries
+
+
+def build_watchlist_scores_from_entries(entries: list[WatchlistEntry]) -> dict[Path, int]:
+    scores: dict[Path, int] = {}
+    for entry in entries:
+        scores[entry.relative_dir] = scores.get(entry.relative_dir, 0) + entry.score
     return scores
+
+
+def build_watchlist_scores(config: Config) -> dict[Path, int]:
+    return build_watchlist_scores_from_entries(collect_watchlist_entries(config))
+
+
+def build_watchlist_age_stats(entries: list[WatchlistEntry]) -> WatchlistAgeStats:
+    movie_ages = [entry.catalog_age_days for entry in entries if entry.media_type == "movie" and entry.catalog_age_days is not None]
+    show_ages = [entry.catalog_age_days for entry in entries if entry.media_type == "show" and entry.catalog_age_days is not None]
+    return WatchlistAgeStats(
+        items=len(entries),
+        movies=sum(1 for entry in entries if entry.media_type == "movie"),
+        shows=sum(1 for entry in entries if entry.media_type == "show"),
+        age_available=bool(movie_ages or show_ages),
+        movie_median_catalog_age_days=median(movie_ages),
+        show_median_catalog_age_days=median(show_ages),
+        movie_over_365_days=sum(1 for age in movie_ages if age > 365),
+        show_over_365_days=sum(1 for age in show_ages if age > 365),
+    )
 
 
 def try_build_hot_scores(config: Config) -> tuple[dict[Path, int], bool]:
@@ -809,6 +965,22 @@ def try_build_ondeck_scores(config: Config) -> dict[Path, int]:
         return {}
 
 
+def try_collect_ondeck_entries(config: Config) -> list[OnDeckEntry]:
+    try:
+        return collect_ondeck_entries(config)
+    except (
+        configparser.Error,
+        OSError,
+        RuntimeError,
+        ValueError,
+        ET.ParseError,
+        json.JSONDecodeError,
+        urllib.error.URLError,
+    ) as exc:
+        print(f"warning: skipping Plex On Deck cache actions: {exc}")
+        return []
+
+
 def try_build_watchlist_scores(config: Config) -> dict[Path, int]:
     try:
         return build_watchlist_scores(config)
@@ -822,6 +994,21 @@ def try_build_watchlist_scores(config: Config) -> dict[Path, int]:
     ) as exc:
         print(f"warning: skipping Plex watchlist cache actions: {exc}")
         return {}
+
+
+def try_collect_watchlist_entries(config: Config) -> list[WatchlistEntry]:
+    try:
+        return collect_watchlist_entries(config)
+    except (
+        configparser.Error,
+        OSError,
+        RuntimeError,
+        ValueError,
+        ET.ParseError,
+        urllib.error.URLError,
+    ) as exc:
+        print(f"warning: skipping Plex watchlist cache actions: {exc}")
+        return []
 
 
 def unit_relative_dir_from_plex_path(config: Config, plex_path: str) -> Path | None:
@@ -1211,6 +1398,12 @@ def format_percent(numerator: int, denominator: int) -> str:
     return f"{(numerator / denominator) * 100:.1f}%"
 
 
+def format_days(value: float | None) -> str:
+    if value is None:
+        return "n/a"
+    return f"{value:.1f}"
+
+
 def build_cache_effectiveness_stats(
     unit_stats: dict[Path, UnitStats],
     hot_scores: dict[Path, int],
@@ -1237,8 +1430,12 @@ def report_cache_effectiveness(config: Config, args: argparse.Namespace) -> int:
 
     unit_stats = collect_all_unit_stats(config)
     hot_scores, tautulli_available = try_build_hot_scores(config)
-    ondeck_scores = try_build_ondeck_scores(config)
-    watchlist_scores = try_build_watchlist_scores(config)
+    ondeck_entries = try_collect_ondeck_entries(config)
+    ondeck_scores = build_ondeck_scores_from_entries(ondeck_entries, config)
+    ondeck_age_stats = build_ondeck_age_stats(ondeck_entries, config)
+    watchlist_entries = try_collect_watchlist_entries(config)
+    watchlist_scores = build_watchlist_scores_from_entries(watchlist_entries)
+    watchlist_age_stats = build_watchlist_age_stats(watchlist_entries)
     desired_frequent = select_desired_frequent_units(unit_stats, hot_scores, config.frequent_budget_bytes)
     desired_ondeck = select_desired_units(unit_stats, ondeck_scores, config.ondeck_budget_bytes)
     desired_watchlist = select_desired_units(unit_stats, watchlist_scores, config.watchlist_budget_bytes)
@@ -1262,6 +1459,23 @@ def report_cache_effectiveness(config: Config, args: argparse.Namespace) -> int:
         f"desired_ondeck_units={len(desired_ondeck)} desired_ondeck_cached_units={cached_count(desired_ondeck)} "
         f"desired_watchlist_units={len(desired_watchlist)} desired_watchlist_cached_units={cached_count(desired_watchlist)} "
         f"cache_units={len(cache_units)} cache_used={format_bytes(used_bytes)} cache_avail={format_bytes(available_bytes)}"
+    )
+    print(
+        f"ondeck_age: movie_age_limit_days={config.ondeck_movie_max_age_days} "
+        f"series_age_limit_days={config.ondeck_series_max_age_days} "
+        f"current_movies={ondeck_age_stats.current_movies} current_episodes={ondeck_age_stats.current_episodes} "
+        f"movie_median_age_days={format_days(ondeck_age_stats.movie_median_age_days)} "
+        f"episode_median_age_days={format_days(ondeck_age_stats.episode_median_age_days)} "
+        f"movie_over_age_limit={ondeck_age_stats.movie_over_age_limit} "
+        f"episode_over_age_limit={ondeck_age_stats.episode_over_age_limit}"
+    )
+    print(
+        f"watchlist_age: age_available={'true' if watchlist_age_stats.age_available else 'false'} "
+        f"items={watchlist_age_stats.items} movies={watchlist_age_stats.movies} shows={watchlist_age_stats.shows} "
+        f"movie_median_catalog_age_days={format_days(watchlist_age_stats.movie_median_catalog_age_days)} "
+        f"show_median_catalog_age_days={format_days(watchlist_age_stats.show_median_catalog_age_days)} "
+        f"movie_over_365_days={watchlist_age_stats.movie_over_365_days} "
+        f"show_over_365_days={watchlist_age_stats.show_over_365_days}"
     )
 
     if not hot_scores:

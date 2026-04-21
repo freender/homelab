@@ -38,6 +38,8 @@ class MediaMoverConfig:
     ondeck_budget: str
     ondeck_tv_prefetch_episodes: int
     ondeck_include_movies: bool
+    ondeck_movie_max_age_days: int
+    ondeck_series_max_age_days: int
     watchlist_enabled: bool
     watchlist_budget: str
     cache_min_free_space: str
@@ -218,6 +220,28 @@ def normalize_config(registry, host: str) -> MediaMoverConfig:
     ondeck_include_movies = (
         str(registry.get(host, "media-mover.ondeck_include_movies", "false")).lower() == "true"
     )
+    ondeck_movie_max_age_raw = registry.get(host, "media-mover.ondeck_movie_max_age_days", 30)
+    try:
+        ondeck_movie_max_age_days = int(ondeck_movie_max_age_raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"media-mover.ondeck_movie_max_age_days must be an integer for {host}"
+        ) from exc
+    if ondeck_movie_max_age_days < 1:
+        raise ValueError(
+            f"media-mover.ondeck_movie_max_age_days must be at least 1 for {host}"
+        )
+    ondeck_series_max_age_raw = registry.get(host, "media-mover.ondeck_series_max_age_days", 60)
+    try:
+        ondeck_series_max_age_days = int(ondeck_series_max_age_raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"media-mover.ondeck_series_max_age_days must be an integer for {host}"
+        ) from exc
+    if ondeck_series_max_age_days < 1:
+        raise ValueError(
+            f"media-mover.ondeck_series_max_age_days must be at least 1 for {host}"
+        )
     watchlist_enabled = (
         str(registry.get(host, "media-mover.watchlist_enabled", "true")).lower() == "true"
     )
@@ -277,6 +301,8 @@ def normalize_config(registry, host: str) -> MediaMoverConfig:
         ondeck_budget=ondeck_budget,
         ondeck_tv_prefetch_episodes=ondeck_tv_prefetch_episodes,
         ondeck_include_movies=ondeck_include_movies,
+        ondeck_movie_max_age_days=ondeck_movie_max_age_days,
+        ondeck_series_max_age_days=ondeck_series_max_age_days,
         watchlist_enabled=watchlist_enabled,
         watchlist_budget=watchlist_budget,
         cache_min_free_space=cache_min_free_space,
@@ -390,6 +416,8 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
             "ONDECK_BUDGET": config.ondeck_budget,
             "ONDECK_TV_PREFETCH_EPISODES": str(config.ondeck_tv_prefetch_episodes),
             "ONDECK_INCLUDE_MOVIES": "true" if config.ondeck_include_movies else "false",
+            "ONDECK_MOVIE_MAX_AGE_DAYS": str(config.ondeck_movie_max_age_days),
+            "ONDECK_SERIES_MAX_AGE_DAYS": str(config.ondeck_series_max_age_days),
             "WATCHLIST_ENABLED": "true" if config.watchlist_enabled else "false",
             "WATCHLIST_BUDGET": config.watchlist_budget,
             "CACHE_MIN_FREE_SPACE": config.cache_min_free_space,
