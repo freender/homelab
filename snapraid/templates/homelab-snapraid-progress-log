@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+if [[ $# -eq 0 ]]; then
+    printf 'usage: %s command [args...]\n' "${0##*/}" >&2
+    exit 2
+fi
+
+set +e
+"$@" 2>&1 | /usr/bin/stdbuf -o0 /usr/bin/tr '\r' '\n'
+statuses=("${PIPESTATUS[@]}")
+command_status=${statuses[0]}
+stream_status=${statuses[1]}
+set -e
+
+if [[ $stream_status -ne 0 ]]; then
+    exit "$stream_status"
+fi
+
+exit "$command_status"

@@ -39,6 +39,7 @@ for unit in \
     homelab-snapraid-sync.timer \
     homelab-snapraid-scrub.service \
     homelab-snapraid-scrub.timer \
+    homelab-snapraid-progress-log \
     homelab-snapraid-status-notify; do
     rc=0
     install_build_file "$unit" || rc=$?
