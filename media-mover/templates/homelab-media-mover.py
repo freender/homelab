@@ -132,26 +132,6 @@ class OnDeckAgeStats:
     episode_over_age_limit: int = 0
 
 
-@dataclass(frozen=True)
-class WatchlistEntry:
-    relative_dir: Path
-    score: int
-    media_type: str
-    catalog_age_days: float | None
-
-
-@dataclass(frozen=True)
-class WatchlistAgeStats:
-    items: int = 0
-    movies: int = 0
-    shows: int = 0
-    age_available: bool = False
-    movie_median_catalog_age_days: float | None = None
-    show_median_catalog_age_days: float | None = None
-    movie_over_365_days: int = 0
-    show_over_365_days: int = 0
-
-
 def require_env(name: str) -> str:
     value = os.environ.get(name, "").strip()
     if not value:
@@ -497,14 +477,6 @@ def median(values: list[float]) -> float | None:
     if len(ordered) % 2:
         return ordered[middle]
     return (ordered[middle - 1] + ordered[middle]) / 2.0
-
-
-def item_catalog_age_days(item: ET.Element) -> float | None:
-    for raw_value in (item.get("addedAt"),):
-        timestamp = parse_int(raw_value)
-        if timestamp is not None:
-            return max(time.time() - timestamp, 0) / 86400.0
-    return None
 
 
 def resolve_unit_from_rating_key(
@@ -870,14 +842,14 @@ def collect_admin_watchlist(context: PlexContext) -> list[ET.Element]:
     return items
 
 
-def collect_watchlist_entries(config: Config) -> list[WatchlistEntry]:
+def build_watchlist_scores(config: Config) -> dict[Path, int]:
     if not config.watchlist_enabled:
-        return []
+        return {}
 
     context = load_plex_context(config)
     media_cache: dict[int, Path | None] = {}
     show_cache: dict[int, Path | None] = {}
-    entries: list[WatchlistEntry] = []
+    scores: dict[Path, int] = {}
 
     items = collect_admin_watchlist(context)
     if items:
@@ -903,42 +875,9 @@ def collect_watchlist_entries(config: Config) -> list[WatchlistEntry]:
             unit = resolve_watchlist_show_unit(config, context, rating_key, show_cache)
         if unit is None:
             continue
-        entries.append(
-            WatchlistEntry(
-                relative_dir=unit,
-                score=max(total_items - index, 1),
-                media_type=media_type,
-                catalog_age_days=item_catalog_age_days(item),
-            )
-        )
+        scores[unit] = scores.get(unit, 0) + max(total_items - index, 1)
 
-    return entries
-
-
-def build_watchlist_scores_from_entries(entries: list[WatchlistEntry]) -> dict[Path, int]:
-    scores: dict[Path, int] = {}
-    for entry in entries:
-        scores[entry.relative_dir] = scores.get(entry.relative_dir, 0) + entry.score
     return scores
-
-
-def build_watchlist_scores(config: Config) -> dict[Path, int]:
-    return build_watchlist_scores_from_entries(collect_watchlist_entries(config))
-
-
-def build_watchlist_age_stats(entries: list[WatchlistEntry]) -> WatchlistAgeStats:
-    movie_ages = [entry.catalog_age_days for entry in entries if entry.media_type == "movie" and entry.catalog_age_days is not None]
-    show_ages = [entry.catalog_age_days for entry in entries if entry.media_type == "show" and entry.catalog_age_days is not None]
-    return WatchlistAgeStats(
-        items=len(entries),
-        movies=sum(1 for entry in entries if entry.media_type == "movie"),
-        shows=sum(1 for entry in entries if entry.media_type == "show"),
-        age_available=bool(movie_ages or show_ages),
-        movie_median_catalog_age_days=median(movie_ages),
-        show_median_catalog_age_days=median(show_ages),
-        movie_over_365_days=sum(1 for age in movie_ages if age > 365),
-        show_over_365_days=sum(1 for age in show_ages if age > 365),
-    )
 
 
 def try_build_hot_scores(config: Config) -> tuple[dict[Path, int], bool]:
@@ -994,21 +933,6 @@ def try_build_watchlist_scores(config: Config) -> dict[Path, int]:
     ) as exc:
         print(f"warning: skipping Plex watchlist cache actions: {exc}")
         return {}
-
-
-def try_collect_watchlist_entries(config: Config) -> list[WatchlistEntry]:
-    try:
-        return collect_watchlist_entries(config)
-    except (
-        configparser.Error,
-        OSError,
-        RuntimeError,
-        ValueError,
-        ET.ParseError,
-        urllib.error.URLError,
-    ) as exc:
-        print(f"warning: skipping Plex watchlist cache actions: {exc}")
-        return []
 
 
 def unit_relative_dir_from_plex_path(config: Config, plex_path: str) -> Path | None:
@@ -1433,9 +1357,7 @@ def report_cache_effectiveness(config: Config, args: argparse.Namespace) -> int:
     ondeck_entries = try_collect_ondeck_entries(config)
     ondeck_scores = build_ondeck_scores_from_entries(ondeck_entries, config)
     ondeck_age_stats = build_ondeck_age_stats(ondeck_entries, config)
-    watchlist_entries = try_collect_watchlist_entries(config)
-    watchlist_scores = build_watchlist_scores_from_entries(watchlist_entries)
-    watchlist_age_stats = build_watchlist_age_stats(watchlist_entries)
+    watchlist_scores = try_build_watchlist_scores(config)
     desired_frequent = select_desired_frequent_units(unit_stats, hot_scores, config.frequent_budget_bytes)
     desired_ondeck = select_desired_units(unit_stats, ondeck_scores, config.ondeck_budget_bytes)
     desired_watchlist = select_desired_units(unit_stats, watchlist_scores, config.watchlist_budget_bytes)
@@ -1468,14 +1390,6 @@ def report_cache_effectiveness(config: Config, args: argparse.Namespace) -> int:
         f"episode_median_age_days={format_days(ondeck_age_stats.episode_median_age_days)} "
         f"movie_over_age_limit={ondeck_age_stats.movie_over_age_limit} "
         f"episode_over_age_limit={ondeck_age_stats.episode_over_age_limit}"
-    )
-    print(
-        f"watchlist_age: age_available={'true' if watchlist_age_stats.age_available else 'false'} "
-        f"items={watchlist_age_stats.items} movies={watchlist_age_stats.movies} shows={watchlist_age_stats.shows} "
-        f"movie_median_catalog_age_days={format_days(watchlist_age_stats.movie_median_catalog_age_days)} "
-        f"show_median_catalog_age_days={format_days(watchlist_age_stats.show_median_catalog_age_days)} "
-        f"movie_over_365_days={watchlist_age_stats.movie_over_365_days} "
-        f"show_over_365_days={watchlist_age_stats.show_over_365_days}"
     )
 
     if not hot_scores:

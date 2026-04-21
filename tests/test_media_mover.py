@@ -170,18 +170,7 @@ def test_report_cache_effectiveness_shows_watched_cache_hit_rates(
             )
         ],
     )
-    monkeypatch.setattr(
-        module,
-        "try_collect_watchlist_entries",
-        lambda _config: [
-            module.WatchlistEntry(
-                relative_dir=archive_unit,
-                score=2,
-                media_type="movie",
-                catalog_age_days=400.0,
-            )
-        ],
-    )
+    monkeypatch.setattr(module, "try_build_watchlist_scores", lambda _config: {archive_unit: 2})
     monkeypatch.setattr(module, "filesystem_usage", lambda _path: (1000, 400, 600))
 
     exit_code = module.report_cache_effectiveness(
@@ -201,8 +190,6 @@ def test_report_cache_effectiveness_shows_watched_cache_hit_rates(
     assert "desired_watchlist_units=1 desired_watchlist_cached_units=0" in output
     assert "ondeck_age: movie_age_limit_days=30 series_age_limit_days=60 current_movies=0 current_episodes=1" in output
     assert "episode_median_age_days=12.0" in output
-    assert "watchlist_age: age_available=true items=1 movies=1 shows=0" in output
-    assert "movie_median_catalog_age_days=400.0" in output
     assert f"top_watched: rank=1 location=cache score=10 size=10B unit={cached_unit}" in output
     assert f"top_watched: rank=2 location=archive score=5 size=10B unit={archive_unit}" in output
 
