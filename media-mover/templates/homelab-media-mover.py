@@ -26,6 +26,7 @@ IGNORED_SUFFIXES = (".part", ".tmp", ".partial", ".!qB")
 TEMP_SUFFIX = ".homelab-media-mover.tmp"
 MOVIE_ROOTS = {"movies", "movies4k"}
 TV_ROOTS = {"tv", "tv4k"}
+TV_UNIT_KEY_PART = "__episodes__"
 MOVIE_FOLDER_RE = re.compile(r"^.+ \((?P<year>\d{4})\) \{tmdb-(?P<tmdb>\d+)\}$")
 EPISODE_RE = re.compile(r"^(?P<title>.+?) - S(?P<season>\d{2})E(?P<first>\d{2})(?:(?:E|-)(?P<second>\d{2}))?$")
 OPERATIONS_LOCK = Path("/var/lib/homelab-media/operations.lock")
@@ -99,6 +100,14 @@ class PlexContext:
     server_url: str
     admin_token: str
     user_tokens: dict[str, str]
+
+
+@dataclass(frozen=True)
+class CacheEffectivenessStats:
+    watched_units: int = 0
+    watched_score: int = 0
+    watched_cached_units: int = 0
+    watched_cached_score: int = 0
 
 
 def require_env(name: str) -> str:
@@ -182,6 +191,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--loop", action="store_true")
     parser.add_argument("--wait-for-lock", action="store_true")
     parser.add_argument("--loop-interval", metavar="DURATION")
+    parser.add_argument("--report-cache-effectiveness", action="store_true")
+    parser.add_argument("--report-limit", type=int, default=10, metavar="N")
     return parser.parse_args(argv)
 
 
@@ -463,8 +474,6 @@ def build_hot_scores(config: Config) -> dict[Path, int]:
     )
     scores: dict[Path, int] = {}
     resolved_units: dict[int, Path | None] = {}
-    season_samples: dict[int, list[int]] = {}
-    season_scores: dict[int, int] = {}
 
     for row in history_rows(config.tautulli_url, config.tautulli_api_key, after_date, "movie"):
         rating_key = parse_int(row.get("rating_key"))
@@ -476,24 +485,13 @@ def build_hot_scores(config: Config) -> dict[Path, int]:
         scores[sample] = scores.get(sample, 0) + score_row(row)
 
     for row in history_rows(config.tautulli_url, config.tautulli_api_key, after_date, "episode"):
-        parent_rating_key = parse_int(row.get("parent_rating_key"))
         rating_key = parse_int(row.get("rating_key"))
-        if parent_rating_key is None or rating_key is None:
+        if rating_key is None:
             continue
-        season_scores[parent_rating_key] = season_scores.get(parent_rating_key, 0) + score_row(row)
-        samples = season_samples.setdefault(parent_rating_key, [])
-        if rating_key not in samples:
-            samples.append(rating_key)
-
-    for season_key, rating_keys in season_samples.items():
-        sample = None
-        for rating_key in rating_keys:
-            sample = resolve_unit_from_rating_key(config, rating_key, resolved_units)
-            if sample is not None:
-                break
+        sample = resolve_unit_from_rating_key(config, rating_key, resolved_units)
         if sample is None:
             continue
-        scores[sample] = scores.get(sample, 0) + season_scores.get(season_key, 0)
+        scores[sample] = scores.get(sample, 0) + score_row(row)
 
     return scores
 
@@ -682,26 +680,30 @@ def resolve_watchlist_show_unit(
         return cache[rating_key]
 
     root = plex_get_xml(f"{context.server_url}/library/metadata/{rating_key}/allLeaves", context.admin_token)
-    unwatched: dict[int, Path] = {}
-    first_seen: dict[int, Path] = {}
+    unwatched: list[tuple[tuple[int, int], Path]] = []
+    first_seen: list[tuple[tuple[int, int], Path]] = []
     for episode in root.findall("Video"):
         season_index = parse_int(episode.get("parentIndex"))
+        episode_index = parse_int(episode.get("index"))
         if season_index is None:
+            continue
+        if episode_index is None:
             continue
         units = unit_set_from_plex_paths(config, plex_part_paths(episode))
         if not units:
             continue
         unit = sorted(units, key=str)[0]
-        first_seen.setdefault(season_index, unit)
+        episode_key = (season_index, episode_index)
+        first_seen.append((episode_key, unit))
         if parse_int(episode.get("viewCount")) in (None, 0):
-            unwatched.setdefault(season_index, unit)
+            unwatched.append((episode_key, unit))
 
     if unwatched:
-        selected = unwatched[min(unwatched)]
+        selected = min(unwatched)[1]
         cache[rating_key] = selected
         return selected
     if first_seen:
-        selected = first_seen[min(first_seen)]
+        selected = min(first_seen)[1]
         cache[rating_key] = selected
         return selected
 
@@ -835,8 +837,11 @@ def unit_relative_dir_from_plex_path(config: Config, plex_path: str) -> Path | N
         return None
     if root_name in MOVIE_ROOTS and len(plex_relative.parts) >= 2:
         return Path(*plex_relative.parts[:2])
-    if root_name in TV_ROOTS and len(plex_relative.parts) >= 3:
-        return Path(*plex_relative.parts[:3])
+    if root_name in TV_ROOTS and len(plex_relative.parts) >= 4:
+        season_dir = Path(*plex_relative.parts[:3])
+        key = file_group_key(season_dir, plex_relative.parts[3])
+        if key is not None:
+            return tv_unit_from_group_key(season_dir, key)
     return None
 
 
@@ -846,9 +851,28 @@ def unit_relative_dir_from_relative_path(relative: Path) -> Path | None:
         return None
     if parts[0] in MOVIE_ROOTS and len(parts) >= 2:
         return Path(parts[0]) / parts[1]
-    if parts[0] in TV_ROOTS and len(parts) >= 3:
-        return Path(parts[0]) / parts[1] / parts[2]
+    if parts[0] in TV_ROOTS and len(parts) >= 4:
+        season_dir = Path(*parts[:3])
+        key = file_group_key(season_dir, parts[3])
+        if key is not None:
+            return tv_unit_from_group_key(season_dir, key)
     return None
+
+
+def is_tv_episode_unit(relative_dir: Path) -> bool:
+    return len(relative_dir.parts) >= 5 and relative_dir.parts[0] in TV_ROOTS and relative_dir.parts[3] == TV_UNIT_KEY_PART
+
+
+def tv_unit_from_group_key(season_dir: Path, key: str) -> Path:
+    return season_dir / TV_UNIT_KEY_PART / key
+
+
+def tv_unit_parent_dir(relative_dir: Path) -> Path:
+    return Path(*relative_dir.parts[:3])
+
+
+def tv_unit_group_key(relative_dir: Path) -> str:
+    return relative_dir.parts[4]
 
 
 def collect_units(root: Path, config: Config) -> dict[Path, tuple[int, float | None]]:
@@ -920,6 +944,32 @@ def relative_file_map(root: Path, relative_dir: Path, config: Config, stable_onl
             continue
         files[path.relative_to(base)] = path
     return files
+
+
+def tv_unit_file_map(root: Path, relative_dir: Path, config: Config, stable_only: bool) -> dict[Path, Path]:
+    if not is_tv_episode_unit(relative_dir):
+        return {}
+    season_dir = tv_unit_parent_dir(relative_dir)
+    base = root / season_dir
+    if not base.exists():
+        return {}
+    group_key = tv_unit_group_key(relative_dir)
+    files: dict[Path, Path] = {}
+    for path in sorted(base.rglob("*")):
+        if should_skip_scan(path, config.ignore_paths):
+            continue
+        if stable_only and not is_file_stable(path, config):
+            continue
+        if file_group_key(season_dir, path.name) != group_key:
+            continue
+        files[path.relative_to(base)] = path
+    return files
+
+
+def unit_file_map(root: Path, relative_dir: Path, config: Config, stable_only: bool) -> dict[Path, Path]:
+    if is_tv_episode_unit(relative_dir):
+        return tv_unit_file_map(root, relative_dir, config, stable_only)
+    return relative_file_map(root, relative_dir, config, stable_only)
 
 
 def ensure_target_parent_dirs(source: Path, source_root: Path, target_root: Path) -> None:
@@ -1023,27 +1073,21 @@ def group_relative_files(relative_dir: Path, files: dict[Path, Path]) -> dict[st
 
 
 def sync_tv_unit(relative_dir: Path, config: Config) -> MoveResult:
-    source_files = relative_file_map(config.source_root, relative_dir, config, stable_only=True)
+    source_files = unit_file_map(config.source_root, relative_dir, config, stable_only=True)
     if not source_files:
         return MoveResult()
-    target_dir = config.target_root / relative_dir
-    source_groups = group_relative_files(relative_dir, source_files)
-    target_groups = group_relative_files(relative_dir, relative_file_map(config.target_root, relative_dir, config, stable_only=False))
+    target_dir = config.target_root / tv_unit_parent_dir(relative_dir)
+    target_files = unit_file_map(config.target_root, relative_dir, config, stable_only=False)
     moved_bytes = 0
-    replaced_groups = 0
-    for key, files in source_groups.items():
-        existing = target_groups.get(key, {})
-        stale_paths = [target_dir / rel for rel in existing if rel not in files]
-        if stale_paths:
-            replaced_groups += 1
-        for stale_path in stale_paths:
-            if stale_path.exists():
-                stale_path.unlink()
-                print(f"removed stale archive file: {stale_path}")
-        for relative_file, source_path in files.items():
-            moved_bytes += copy_file(source_path, config.source_root, config.target_root)
+    stale_paths = [target_dir / rel for rel in target_files if rel not in source_files]
+    for stale_path in stale_paths:
+        if stale_path.exists():
+            stale_path.unlink()
+            print(f"removed stale archive file: {stale_path}")
+    for source_path in source_files.values():
+        moved_bytes += copy_file(source_path, config.source_root, config.target_root)
     prune_empty_dirs(target_dir)
-    return MoveResult(moved_bytes=moved_bytes, conflicts=replaced_groups)
+    return MoveResult(moved_bytes=moved_bytes, conflicts=1 if stale_paths else 0)
 
 
 def sync_archive(config: Config, inline_evict_non_frequent: set[Path] | None = None) -> tuple[SyncResult, EvictResult]:
@@ -1059,20 +1103,17 @@ def sync_archive(config: Config, inline_evict_non_frequent: set[Path] | None = N
     for relative_dir, stats in sorted(unit_stats.items(), key=lambda item: str(item[0])):
         if stats.size_on_cache < 1:
             continue
-        source_dir = config.source_root / relative_dir
-        if not source_dir.exists():
-            continue
         if relative_dir.parts[0] in MOVIE_ROOTS:
-            source_files = relative_file_map(config.source_root, relative_dir, config, stable_only=False)
+            source_files = unit_file_map(config.source_root, relative_dir, config, stable_only=False)
             if not source_files or any(not is_file_stable(path, config) for path in source_files.values()):
                 skipped_units += 1
                 continue
             result = sync_directory(relative_dir, config)
         else:
-            all_files = relative_file_map(config.source_root, relative_dir, config, stable_only=False)
+            all_files = unit_file_map(config.source_root, relative_dir, config, stable_only=False)
             if not all_files:
                 continue
-            stable_files = relative_file_map(config.source_root, relative_dir, config, stable_only=True)
+            stable_files = unit_file_map(config.source_root, relative_dir, config, stable_only=True)
             if not stable_files:
                 skipped_units += 1
                 continue
@@ -1103,40 +1144,30 @@ def remove_cache_file(path: Path, source_root: Path) -> int:
 
 
 def archive_current_for_unit(relative_dir: Path, config: Config) -> bool:
-    source_files = relative_file_map(config.source_root, relative_dir, config, stable_only=False)
-    target_files = relative_file_map(config.target_root, relative_dir, config, stable_only=False)
+    source_files = unit_file_map(config.source_root, relative_dir, config, stable_only=False)
+    target_files = unit_file_map(config.target_root, relative_dir, config, stable_only=False)
     if not source_files:
         return True
-    if relative_dir.parts[0] in MOVIE_ROOTS:
-        return set(source_files) == set(target_files)
-    source_groups = group_relative_files(relative_dir, source_files)
-    target_groups = group_relative_files(relative_dir, target_files)
-    return set(source_groups) <= set(target_groups)
+    return set(source_files) == set(target_files)
 
 
 def evict_unit(relative_dir: Path, config: Config) -> MoveResult:
-    source_dir = config.source_root / relative_dir
-    if not source_dir.exists() or not archive_current_for_unit(relative_dir, config):
+    source_files = unit_file_map(config.source_root, relative_dir, config, stable_only=True)
+    if not source_files or not archive_current_for_unit(relative_dir, config):
         return MoveResult(conflicts=1)
     moved_bytes = 0
-    for path in sorted(source_dir.rglob("*")):
-        if should_skip_scan(path, config.ignore_paths):
-            continue
-        if not is_file_stable(path, config):
-            continue
+    for path in source_files.values():
         moved_bytes += remove_cache_file(path, config.source_root)
-    prune_empty_dirs(source_dir)
+    prune_empty_dirs(config.source_root / (tv_unit_parent_dir(relative_dir) if is_tv_episode_unit(relative_dir) else relative_dir))
     return MoveResult(moved_bytes=moved_bytes)
 
 
 def promote_unit(relative_dir: Path, config: Config) -> MoveResult:
-    target_dir = config.target_root / relative_dir
-    if not target_dir.exists():
+    target_files = unit_file_map(config.target_root, relative_dir, config, stable_only=False)
+    if not target_files:
         return MoveResult()
     moved_bytes = 0
-    for path in sorted(target_dir.rglob("*")):
-        if should_skip_scan(path, ()):
-            continue
+    for path in target_files.values():
         moved_bytes += copy_file(path, config.target_root, config.source_root)
     return MoveResult(moved_bytes=moved_bytes)
 
@@ -1172,6 +1203,92 @@ def format_bytes(value: int) -> str:
         if size < 1024.0:
             return f"{size:.1f}{unit}"
     return f"{size:.1f}EiB"
+
+
+def format_percent(numerator: int, denominator: int) -> str:
+    if denominator < 1:
+        return "n/a"
+    return f"{(numerator / denominator) * 100:.1f}%"
+
+
+def build_cache_effectiveness_stats(
+    unit_stats: dict[Path, UnitStats],
+    hot_scores: dict[Path, int],
+) -> CacheEffectivenessStats:
+    watched_cached_units = 0
+    watched_cached_score = 0
+    for relative_dir, score in hot_scores.items():
+        stats = unit_stats.get(relative_dir)
+        if stats is None or stats.size_on_cache < 1:
+            continue
+        watched_cached_units += 1
+        watched_cached_score += score
+    return CacheEffectivenessStats(
+        watched_units=len(hot_scores),
+        watched_score=sum(hot_scores.values()),
+        watched_cached_units=watched_cached_units,
+        watched_cached_score=watched_cached_score,
+    )
+
+
+def report_cache_effectiveness(config: Config, args: argparse.Namespace) -> int:
+    if args.report_limit < 1:
+        raise SystemExit("--report-limit must be positive")
+
+    unit_stats = collect_all_unit_stats(config)
+    hot_scores, tautulli_available = try_build_hot_scores(config)
+    ondeck_scores = try_build_ondeck_scores(config)
+    watchlist_scores = try_build_watchlist_scores(config)
+    desired_frequent = select_desired_frequent_units(unit_stats, hot_scores, config.frequent_budget_bytes)
+    desired_ondeck = select_desired_units(unit_stats, ondeck_scores, config.ondeck_budget_bytes)
+    desired_watchlist = select_desired_units(unit_stats, watchlist_scores, config.watchlist_budget_bytes)
+    effectiveness = build_cache_effectiveness_stats(unit_stats, hot_scores)
+    cache_units = {unit: stats for unit, stats in unit_stats.items() if stats.size_on_cache > 0}
+    _total_bytes, used_bytes, available_bytes = filesystem_usage(config.source_root)
+
+    def cached_count(units: set[Path]) -> int:
+        return sum(1 for unit in units if unit_stats.get(unit) is not None and unit_stats[unit].size_on_cache > 0)
+
+    print(
+        f"report: tautulli_available={'true' if tautulli_available else 'false'} "
+        f"lookback_days={config.tautulli_lookback_days} "
+        f"watched_units={effectiveness.watched_units} "
+        f"watched_score={effectiveness.watched_score} "
+        f"watched_cached_units={effectiveness.watched_cached_units} "
+        f"watched_cached_score={effectiveness.watched_cached_score} "
+        f"watched_unit_hit_rate={format_percent(effectiveness.watched_cached_units, effectiveness.watched_units)} "
+        f"watched_weighted_hit_rate={format_percent(effectiveness.watched_cached_score, effectiveness.watched_score)} "
+        f"desired_frequent_units={len(desired_frequent)} desired_frequent_cached_units={cached_count(desired_frequent)} "
+        f"desired_ondeck_units={len(desired_ondeck)} desired_ondeck_cached_units={cached_count(desired_ondeck)} "
+        f"desired_watchlist_units={len(desired_watchlist)} desired_watchlist_cached_units={cached_count(desired_watchlist)} "
+        f"cache_units={len(cache_units)} cache_used={format_bytes(used_bytes)} cache_avail={format_bytes(available_bytes)}"
+    )
+
+    if not hot_scores:
+        print("top_watched: none")
+        return 0
+
+    for index, (relative_dir, score) in enumerate(
+        sorted(hot_scores.items(), key=lambda item: (-item[1], str(item[0])))[: args.report_limit],
+        start=1,
+    ):
+        stats = unit_stats.get(relative_dir)
+        if stats is None:
+            location = "missing"
+            total_size = 0
+        elif stats.size_on_cache > 0:
+            location = "cache"
+            total_size = stats.total_size
+        elif stats.size_on_tank > 0:
+            location = "archive"
+            total_size = stats.total_size
+        else:
+            location = "missing"
+            total_size = 0
+        print(
+            f"top_watched: rank={index} location={location} score={score} size={format_bytes(total_size)} unit={relative_dir}"
+        )
+    return 0
 
 
 def try_acquire_lock(path: Path, *, wait: bool = False):
@@ -1451,6 +1568,8 @@ def run_once(config: Config, args: argparse.Namespace) -> int:
 def main() -> int:
     args = parse_args(sys.argv[1:])
     config = load_config(args)
+    if args.report_cache_effectiveness:
+        return report_cache_effectiveness(config, args)
     operations_lock_handle = try_acquire_lock(OPERATIONS_LOCK, wait=args.wait_for_lock)
     if operations_lock_handle is None:
         print("skipped: shared media operations lock is held")
