@@ -48,10 +48,9 @@ rc=0
 install_build_file "media-mover.env" || rc=$?
 [[ $rc -eq 0 || $rc -eq 1 ]]
 
-if [[ -f "$BUILD_DIR/media-mover.local.env" ]]; then
-    rc=0
-    install_build_file "media-mover.local.env" || rc=$?
-    [[ $rc -eq 0 || $rc -eq 1 ]]
+if [[ -f "/etc/default/homelab-media-mover.local" ]]; then
+    rm -f "/etc/default/homelab-media-mover.local"
+    print_sub "Removed /etc/default/homelab-media-mover.local"
 fi
 
 if [[ -f "/usr/local/bin/homelab-media-mover-now" ]]; then

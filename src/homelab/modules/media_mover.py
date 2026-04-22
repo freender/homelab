@@ -32,16 +32,14 @@ class MediaMoverConfig:
     plex_mount_root: str
     plex_url: str
     tautulli_config_path: str
-    tautulli_lookback_days: int
-    frequent_budget: str
     ondeck_enabled: bool
     ondeck_budget: str
     ondeck_tv_prefetch_episodes: int
     ondeck_include_movies: bool
     ondeck_movie_max_age_days: int
     ondeck_series_max_age_days: int
-    watchlist_enabled: bool
-    watchlist_budget: str
+    recent_movie_retention_days: int
+    recent_tv_retention_days: int
     cache_min_free_space: str
     cache_target_free_space: str
     min_file_age: str
@@ -59,11 +57,6 @@ FILE_SPECS = (
     FileSpec("homelab-media-mover.timer", "/etc/systemd/system/homelab-media-mover.timer"),
     FileSpec("homelab-media-mover.py", "/usr/local/bin/homelab-media-mover", mode="755"),
     FileSpec("media-mover.env", "/etc/default/homelab-media-mover", mode="600"),
-)
-LOCAL_ENV_SPEC = FileSpec(
-    "media-mover.local.env",
-    "/etc/default/homelab-media-mover.local",
-    mode="600",
 )
 
 
@@ -187,20 +180,6 @@ def normalize_config(registry, host: str) -> MediaMoverConfig:
         ),
         f"media-mover.tautulli_config_path is required for {host}",
     )
-    lookback_days_raw = registry.get(host, "media-mover.tautulli_lookback_days", 90)
-    try:
-        tautulli_lookback_days = int(lookback_days_raw)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(
-            f"media-mover.tautulli_lookback_days must be an integer for {host}"
-        ) from exc
-    if tautulli_lookback_days < 1:
-        raise ValueError(f"media-mover.tautulli_lookback_days must be at least 1 for {host}")
-
-    frequent_budget = require_text(
-        registry.get(host, "media-mover.frequent_budget", "300G"),
-        f"media-mover.frequent_budget is required for {host}",
-    )
     ondeck_enabled = str(registry.get(host, "media-mover.ondeck_enabled", "true")).lower() == "true"
     ondeck_budget = require_text(
         registry.get(host, "media-mover.ondeck_budget", "250G"),
@@ -242,13 +221,29 @@ def normalize_config(registry, host: str) -> MediaMoverConfig:
         raise ValueError(
             f"media-mover.ondeck_series_max_age_days must be at least 1 for {host}"
         )
-    watchlist_enabled = (
-        str(registry.get(host, "media-mover.watchlist_enabled", "true")).lower() == "true"
-    )
-    watchlist_budget = require_text(
-        registry.get(host, "media-mover.watchlist_budget", "50G"),
-        f"media-mover.watchlist_budget is required for {host}",
-    )
+    recent_movie_retention_raw = registry.get(host, "media-mover.recent_movie_retention_days", 14)
+    try:
+        recent_movie_retention_days = int(recent_movie_retention_raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"media-mover.recent_movie_retention_days must be an integer for {host}"
+        ) from exc
+    if recent_movie_retention_days < 0:
+        raise ValueError(
+            f"media-mover.recent_movie_retention_days must be at least 0 for {host}"
+        )
+
+    recent_tv_retention_raw = registry.get(host, "media-mover.recent_tv_retention_days", 14)
+    try:
+        recent_tv_retention_days = int(recent_tv_retention_raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"media-mover.recent_tv_retention_days must be an integer for {host}"
+        ) from exc
+    if recent_tv_retention_days < 0:
+        raise ValueError(
+            f"media-mover.recent_tv_retention_days must be at least 0 for {host}"
+        )
 
     cache_min_free_space = require_text(
         registry.get(host, "media-mover.cache_min_free_space", "500G"),
@@ -295,16 +290,14 @@ def normalize_config(registry, host: str) -> MediaMoverConfig:
         plex_mount_root=plex_mount_root,
         plex_url=plex_url,
         tautulli_config_path=tautulli_config_path,
-        tautulli_lookback_days=tautulli_lookback_days,
-        frequent_budget=frequent_budget,
         ondeck_enabled=ondeck_enabled,
         ondeck_budget=ondeck_budget,
         ondeck_tv_prefetch_episodes=ondeck_tv_prefetch_episodes,
         ondeck_include_movies=ondeck_include_movies,
         ondeck_movie_max_age_days=ondeck_movie_max_age_days,
         ondeck_series_max_age_days=ondeck_series_max_age_days,
-        watchlist_enabled=watchlist_enabled,
-        watchlist_budget=watchlist_budget,
+        recent_movie_retention_days=recent_movie_retention_days,
+        recent_tv_retention_days=recent_tv_retention_days,
         cache_min_free_space=cache_min_free_space,
         cache_target_free_space=cache_target_free_space,
         min_file_age=min_file_age,
@@ -410,16 +403,14 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
             "PLEX_MOUNT_ROOT": config.plex_mount_root,
             "PLEX_URL": config.plex_url,
             "TAUTULLI_CONFIG_PATH": config.tautulli_config_path,
-            "TAUTULLI_LOOKBACK_DAYS": str(config.tautulli_lookback_days),
-            "FREQUENT_BUDGET": config.frequent_budget,
             "ONDECK_ENABLED": "true" if config.ondeck_enabled else "false",
             "ONDECK_BUDGET": config.ondeck_budget,
             "ONDECK_TV_PREFETCH_EPISODES": str(config.ondeck_tv_prefetch_episodes),
             "ONDECK_INCLUDE_MOVIES": "true" if config.ondeck_include_movies else "false",
             "ONDECK_MOVIE_MAX_AGE_DAYS": str(config.ondeck_movie_max_age_days),
             "ONDECK_SERIES_MAX_AGE_DAYS": str(config.ondeck_series_max_age_days),
-            "WATCHLIST_ENABLED": "true" if config.watchlist_enabled else "false",
-            "WATCHLIST_BUDGET": config.watchlist_budget,
+            "RECENT_MOVIE_RETENTION_DAYS": str(config.recent_movie_retention_days),
+            "RECENT_TV_RETENTION_DAYS": str(config.recent_tv_retention_days),
             "CACHE_MIN_FREE_SPACE": config.cache_min_free_space,
             "CACHE_TARGET_FREE_SPACE": config.cache_target_free_space,
             "MIN_FILE_AGE": config.min_file_age,
@@ -427,13 +418,8 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
             "ENABLE_MEDIA_MOVER_TIMER": "true" if config.manage_timer else "false",
         },
     )
-    file_specs = list(FILE_SPECS)
-    local_env_path = module_dir / ".env"
-    if local_env_path.is_file():
-        copy_file(local_env_path, build_dir / LOCAL_ENV_SPEC.build_name)
-        file_specs.append(LOCAL_ENV_SPEC)
-    write_file_map(build_dir, tuple(file_specs))
-    return HostArtifacts(build_dir=build_dir, file_specs=tuple(file_specs))
+    write_file_map(build_dir, FILE_SPECS)
+    return HostArtifacts(build_dir=build_dir, file_specs=FILE_SPECS)
 
 
 def service_dependency_lines(units: tuple[str, ...]) -> str:

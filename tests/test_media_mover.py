@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 import sys
+import time
 import xml.etree.ElementTree as ET
 from dataclasses import replace
 from pathlib import Path, PurePath
@@ -44,18 +46,14 @@ def make_config(module, tmp_path: Path):
         tautulli_config_path=tmp_path / "tautulli.ini",
         ignore_paths=(),
         managed_roots=("movies",),
-        tautulli_url="http://example.invalid",
-        tautulli_api_key="test-key",
-        tautulli_lookback_days=1,
-        frequent_budget_bytes=1,
         ondeck_enabled=False,
         ondeck_budget_bytes=1,
         ondeck_tv_prefetch_episodes=0,
         ondeck_include_movies=False,
         ondeck_movie_max_age_days=30,
         ondeck_series_max_age_days=60,
-        watchlist_enabled=False,
-        watchlist_budget_bytes=1,
+        recent_movie_retention_days=14,
+        recent_tv_retention_days=14,
         cache_min_free_space_bytes=1,
         cache_target_free_space_bytes=2,
         min_file_age_seconds=0,
@@ -65,19 +63,23 @@ def make_config(module, tmp_path: Path):
     )
 
 
-def write_movie(config, folder_name: str = "Movie (2026) {tmdb-1}") -> Path:
+def write_movie(
+    config,
+    folder_name: str = "Movie (2026) {tmdb-1}",
+    content: bytes = b"movie-data",
+) -> Path:
     movie_dir = config.source_root / "movies" / folder_name
     movie_dir.mkdir(parents=True)
     movie_file = movie_dir / f"{folder_name}.mkv"
-    movie_file.write_bytes(b"movie-data")
+    movie_file.write_bytes(content)
     return movie_file
 
 
-def write_archive_movie(config, folder_name: str) -> Path:
+def write_archive_movie(config, folder_name: str, content: bytes = b"movie-data") -> Path:
     movie_dir = config.target_root / "movies" / folder_name
     movie_dir.mkdir(parents=True)
     movie_file = movie_dir / f"{folder_name}.mkv"
-    movie_file.write_bytes(b"movie-data")
+    movie_file.write_bytes(content)
     return movie_file
 
 
@@ -108,7 +110,6 @@ def test_run_once_keeps_synced_media_on_cache_for_normal_mover(
     config = make_config(module, tmp_path)
     source_file = write_movie(config)
 
-    monkeypatch.setattr(module, "try_build_hot_scores", lambda _config: ({}, True))
     monkeypatch.setattr(module, "file_is_open", lambda _path: False)
 
     exit_code = module.run_once(config, module.parse_args([]))
@@ -126,10 +127,9 @@ def test_run_once_immediately_evicts_non_frequent_media_for_mover_now(
     tmp_path: Path, monkeypatch, capsys
 ) -> None:
     module = load_media_mover_module()
-    config = make_config(module, tmp_path)
+    config = replace(make_config(module, tmp_path), recent_movie_retention_days=0, recent_tv_retention_days=0)
     source_file = write_movie(config)
 
-    monkeypatch.setattr(module, "try_build_hot_scores", lambda _config: ({}, True))
     monkeypatch.setattr(module, "file_is_open", lambda _path: False)
 
     exit_code = module.run_once(config, module.parse_args(["--sync-only", "--demote-non-frequent"]))
@@ -140,6 +140,28 @@ def test_run_once_immediately_evicts_non_frequent_media_for_mover_now(
     assert target_file.exists()
     output = capsys.readouterr().out
     assert "copied:" in output
+    assert "evicted cache file:" in output
+
+
+def test_manual_drain_keeps_recent_cached_media(tmp_path: Path, monkeypatch, capsys) -> None:
+    module = load_media_mover_module()
+    config = replace(make_config(module, tmp_path), recent_movie_retention_days=7)
+    recent_source = write_movie(config, "Recent Movie (2026) {tmdb-1}")
+    stale_source = write_movie(config, "Stale Movie (2026) {tmdb-2}")
+    stale_time = time.time() - 10 * 86400
+    os.utime(stale_source, (stale_time, stale_time))
+
+    monkeypatch.setattr(module, "file_is_open", lambda _path: False)
+
+    exit_code = module.run_once(config, module.parse_args(["--sync-only", "--demote-non-frequent"]))
+
+    assert exit_code == 0
+    assert recent_source.exists()
+    assert not stale_source.exists()
+    assert (config.target_root / recent_source.relative_to(config.source_root)).exists()
+    assert (config.target_root / stale_source.relative_to(config.source_root)).exists()
+    output = capsys.readouterr().out
+    assert "manual mode: demoting cached media outside recent and On Deck protection" in output
     assert "evicted cache file:" in output
 
 
@@ -217,11 +239,8 @@ def test_report_cache_effectiveness_shows_watched_cache_hit_rates(
     module = load_media_mover_module()
     config = replace(
         make_config(module, tmp_path),
-        frequent_budget_bytes=1024,
         ondeck_enabled=True,
         ondeck_budget_bytes=1024,
-        watchlist_enabled=True,
-        watchlist_budget_bytes=1024,
     )
     cached_file = write_movie(config, "Cached Movie (2026) {tmdb-1}")
     archive_file = write_archive_movie(config, "Archive Movie (2026) {tmdb-2}")
@@ -231,24 +250,26 @@ def test_report_cache_effectiveness_shows_watched_cache_hit_rates(
     monkeypatch.setattr(module, "file_is_open", lambda _path: False)
     monkeypatch.setattr(
         module,
-        "try_build_hot_scores",
-        lambda _config: ({cached_unit: 10, archive_unit: 5}, True),
-    )
-    monkeypatch.setattr(
-        module,
         "try_collect_ondeck_entries",
         lambda _config: [
             module.OnDeckEntry(
                 relative_dir=cached_unit,
-                score=3,
-                item_type="episode",
+                score=100,
+                item_type="movie",
                 age_days=12.0,
                 progress_percent=50.0,
                 current=True,
+            ),
+            module.OnDeckEntry(
+                relative_dir=archive_unit,
+                score=10,
+                item_type="movie",
+                age_days=12.0,
+                progress_percent=50.0,
+                current=False,
             )
         ],
     )
-    monkeypatch.setattr(module, "try_build_watchlist_scores", lambda _config: {archive_unit: 2})
     monkeypatch.setattr(module, "filesystem_usage", lambda _path: (1000, 400, 600))
 
     exit_code = module.report_cache_effectiveness(
@@ -258,21 +279,62 @@ def test_report_cache_effectiveness_shows_watched_cache_hit_rates(
 
     assert exit_code == 0
     output = capsys.readouterr().out
-    assert "report: tautulli_available=true" in output
-    assert "watched_units=2" in output
-    assert "watched_cached_units=1" in output
-    assert "watched_unit_hit_rate=50.0%" in output
-    assert "watched_weighted_hit_rate=66.7%" in output
-    assert "desired_frequent_units=2 desired_frequent_cached_units=1" in output
-    assert "desired_ondeck_units=1 desired_ondeck_cached_units=1" in output
-    assert "desired_watchlist_units=1 desired_watchlist_cached_units=0" in output
+    assert "report: desired_ondeck_units=2" in output
+    assert "desired_ondeck_cached_units=1" in output
+    assert "desired_ondeck_hit_rate=50.0%" in output
+    assert "desired_ondeck_byte_hit_rate=50.0%" in output
+    assert "recent_cached_units=1" in output
     assert (
         "ondeck_age: movie_age_limit_days=30 series_age_limit_days=60 "
-        "current_movies=0 current_episodes=1" in output
+        "current_movies=1 current_episodes=0" in output
     )
-    assert "episode_median_age_days=12.0" in output
-    assert f"top_watched: rank=1 location=cache score=10 size=10B unit={cached_unit}" in output
-    assert f"top_watched: rank=2 location=archive score=5 size=10B unit={archive_unit}" in output
+    assert "movie_median_age_days=12.0" in output
+    assert f"top_ondeck: rank=1 location=cache score=100 size=10B unit={cached_unit}" in output
+    assert f"top_ondeck: rank=2 location=archive score=10 size=10B unit={archive_unit}" in output
+
+
+def test_run_once_reclaims_headroom_before_ondeck_promotion(tmp_path: Path, monkeypatch) -> None:
+    module = load_media_mover_module()
+    config = replace(
+        make_config(module, tmp_path),
+        ondeck_enabled=True,
+        ondeck_budget_bytes=32,
+        recent_movie_retention_days=0,
+        recent_tv_retention_days=0,
+        cache_min_free_space_bytes=5,
+        cache_target_free_space_bytes=6,
+    )
+    stale_cached = write_movie(config, "Stale Cached (2026) {tmdb-1}", b"123")
+    archive_ondeck = write_archive_movie(config, "On Deck Archive (2026) {tmdb-2}", b"45")
+    stale_unit = stale_cached.relative_to(config.source_root).parent
+    archive_unit = archive_ondeck.relative_to(config.target_root).parent
+    stale_time = time.time() - 10 * 86400
+    os.utime(stale_cached, (stale_time, stale_time))
+
+    monkeypatch.setattr(module, "file_is_open", lambda _path: False)
+    monkeypatch.setattr(
+        module,
+        "try_collect_ondeck_entries",
+        lambda _config: [
+            module.OnDeckEntry(
+                relative_dir=archive_unit,
+                score=100,
+                item_type="movie",
+                age_days=1.0,
+                progress_percent=50.0,
+                current=True,
+            )
+        ],
+    )
+    monkeypatch.setattr(module, "filesystem_usage", lambda _path: (100, 96, 4))
+
+    exit_code = module.run_once(config, module.parse_args([]))
+
+    assert exit_code == 0
+    assert not stale_cached.exists()
+    assert (config.source_root / archive_ondeck.relative_to(config.target_root)).exists()
+    assert (config.target_root / stale_cached.relative_to(config.source_root)).exists()
+    assert stale_unit not in {unit for unit, stats in module.collect_all_unit_stats(config).items() if stats.size_on_cache > 0}
 
 
 def test_collect_all_unit_stats_uses_episode_units_for_tv(tmp_path: Path) -> None:
