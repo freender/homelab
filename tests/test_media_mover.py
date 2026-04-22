@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import importlib.util
 import sys
+import xml.etree.ElementTree as ET
 from dataclasses import replace
 from pathlib import Path, PurePath
-import xml.etree.ElementTree as ET
 
 import pytest
 
@@ -229,7 +229,11 @@ def test_report_cache_effectiveness_shows_watched_cache_hit_rates(
     archive_unit = archive_file.relative_to(config.target_root).parent
 
     monkeypatch.setattr(module, "file_is_open", lambda _path: False)
-    monkeypatch.setattr(module, "try_build_hot_scores", lambda _config: ({cached_unit: 10, archive_unit: 5}, True))
+    monkeypatch.setattr(
+        module,
+        "try_build_hot_scores",
+        lambda _config: ({cached_unit: 10, archive_unit: 5}, True),
+    )
     monkeypatch.setattr(
         module,
         "try_collect_ondeck_entries",
@@ -262,7 +266,10 @@ def test_report_cache_effectiveness_shows_watched_cache_hit_rates(
     assert "desired_frequent_units=2 desired_frequent_cached_units=1" in output
     assert "desired_ondeck_units=1 desired_ondeck_cached_units=1" in output
     assert "desired_watchlist_units=1 desired_watchlist_cached_units=0" in output
-    assert "ondeck_age: movie_age_limit_days=30 series_age_limit_days=60 current_movies=0 current_episodes=1" in output
+    assert (
+        "ondeck_age: movie_age_limit_days=30 series_age_limit_days=60 "
+        "current_movies=0 current_episodes=1" in output
+    )
     assert "episode_median_age_days=12.0" in output
     assert f"top_watched: rank=1 location=cache score=10 size=10B unit={cached_unit}" in output
     assert f"top_watched: rank=2 location=archive score=5 size=10B unit={archive_unit}" in output
@@ -288,8 +295,14 @@ def test_collect_all_unit_stats_uses_episode_units_for_tv(tmp_path: Path) -> Non
 
     stats = module.collect_all_unit_stats(config)
 
-    unit_one = Path("tv/Example Show (2026) {tvdb-1}/Season 1/__episodes__/Example Show (2026) {tvdb-1}|S01|01")
-    unit_two = Path("tv/Example Show (2026) {tvdb-1}/Season 1/__episodes__/Example Show (2026) {tvdb-1}|S01|02")
+    unit_one = Path(
+        "tv/Example Show (2026) {tvdb-1}/Season 1/__episodes__/"
+        "Example Show (2026) {tvdb-1}|S01|01"
+    )
+    unit_two = Path(
+        "tv/Example Show (2026) {tvdb-1}/Season 1/__episodes__/"
+        "Example Show (2026) {tvdb-1}|S01|02"
+    )
     assert stats[unit_one].size_on_cache == episode_one.stat().st_size
     assert stats[unit_two].size_on_cache == episode_two.stat().st_size
 
@@ -332,7 +345,9 @@ def test_build_ondeck_scores_prefetches_into_next_season(tmp_path: Path, monkeyp
         f"""
         <MediaContainer>
           <Video type=\"episode\" grandparentRatingKey=\"show-1\" parentIndex=\"1\" index=\"3\">
-            <Media><Part file=\"/data/tv/{show_name}/Season 1/{season_one_ep_three.name}\" /></Media>
+            <Media>
+              <Part file=\"/data/tv/{show_name}/Season 1/{season_one_ep_three.name}\" />
+            </Media>
           </Video>
         </MediaContainer>
         """
@@ -340,10 +355,20 @@ def test_build_ondeck_scores_prefetches_into_next_season(tmp_path: Path, monkeyp
     leaves_xml = ET.fromstring(
         f"""
         <MediaContainer>
-          <Video parentIndex=\"1\" index=\"3\"><Media><Part file=\"/data/tv/{show_name}/Season 1/{season_one_ep_three.name}\" /></Media></Video>
-          <Video parentIndex=\"1\" index=\"4\"><Media><Part file=\"/data/tv/{show_name}/Season 1/{season_one_ep_four.name}\" /></Media></Video>
-          <Video parentIndex=\"2\" index=\"1\"><Media><Part file=\"/data/tv/{show_name}/Season 2/{season_two_ep_one.name}\" /></Media></Video>
-          <Video parentIndex=\"2\" index=\"2\"><Media><Part file=\"/data/tv/{show_name}/Season 2/{season_two_ep_two.name}\" /></Media></Video>
+          <Video parentIndex=\"1\" index=\"3\">
+            <Media>
+              <Part file=\"/data/tv/{show_name}/Season 1/{season_one_ep_three.name}\" />
+            </Media>
+          </Video>
+          <Video parentIndex=\"1\" index=\"4\">
+            <Media><Part file=\"/data/tv/{show_name}/Season 1/{season_one_ep_four.name}\" /></Media>
+          </Video>
+          <Video parentIndex=\"2\" index=\"1\">
+            <Media><Part file=\"/data/tv/{show_name}/Season 2/{season_two_ep_one.name}\" /></Media>
+          </Video>
+          <Video parentIndex=\"2\" index=\"2\">
+            <Media><Part file=\"/data/tv/{show_name}/Season 2/{season_two_ep_two.name}\" /></Media>
+          </Video>
         </MediaContainer>
         """
     )
@@ -351,7 +376,11 @@ def test_build_ondeck_scores_prefetches_into_next_season(tmp_path: Path, monkeyp
     monkeypatch.setattr(
         module,
         "load_plex_context",
-        lambda _config: module.PlexContext(server_url="http://example.invalid:32400", admin_token="token", user_tokens={"user": "token"}),
+        lambda _config: module.PlexContext(
+            server_url="http://example.invalid:32400",
+            admin_token="token",
+            user_tokens={"user": "token"},
+        ),
     )
 
     def fake_plex_get_xml(url: str, _token: str):
@@ -386,7 +415,7 @@ def test_build_ondeck_scores_skips_stale_movies(tmp_path: Path, monkeypatch) -> 
     )
     recent_movie = write_archive_movie(config, "Recent Movie (2026) {tmdb-1}")
     stale_movie = write_archive_movie(config, "Stale Movie (2026) {tmdb-2}")
-    now = int(1_700_000_000)
+    now = 1_700_000_000
     recent_last_viewed = now - 5 * 86400
     stale_last_viewed = now - 90 * 86400
 
@@ -406,11 +435,27 @@ def test_build_ondeck_scores_skips_stale_movies(tmp_path: Path, monkeypatch) -> 
         lambda url, _token: ET.fromstring(
             f"""
             <MediaContainer>
-              <Video type=\"movie\" title=\"Recent Movie\" lastViewedAt=\"{recent_last_viewed}\" duration=\"1000\" viewOffset=\"500\">
-                <Media><Part file=\"/data/movies/Recent Movie (2026) {{tmdb-1}}/{recent_movie.name}\" /></Media>
+              <Video
+                type=\"movie\"
+                title=\"Recent Movie\"
+                lastViewedAt=\"{recent_last_viewed}\"
+                duration=\"1000\"
+                viewOffset=\"500\"
+              >
+                <Media>
+                  <Part file=\"/data/movies/Recent Movie (2026) {{tmdb-1}}/{recent_movie.name}\" />
+                </Media>
               </Video>
-              <Video type=\"movie\" title=\"Stale Movie\" lastViewedAt=\"{stale_last_viewed}\" duration=\"1000\" viewOffset=\"500\">
-                <Media><Part file=\"/data/movies/Stale Movie (2026) {{tmdb-2}}/{stale_movie.name}\" /></Media>
+              <Video
+                type=\"movie\"
+                title=\"Stale Movie\"
+                lastViewedAt=\"{stale_last_viewed}\"
+                duration=\"1000\"
+                viewOffset=\"500\"
+              >
+                <Media>
+                  <Part file=\"/data/movies/Stale Movie (2026) {{tmdb-2}}/{stale_movie.name}\" />
+                </Media>
               </Video>
             </MediaContainer>
             """
@@ -447,7 +492,7 @@ def test_build_ondeck_scores_skips_stale_series_and_prefetch(tmp_path: Path, mon
         "Season 1",
         f"{show_name} - S01E04.mkv",
     )
-    now = int(1_700_000_000)
+    now = 1_700_000_000
     stale_last_viewed = now - 90 * 86400
     monkeypatch.setattr(module.time, "time", lambda: float(now))
     monkeypatch.setattr(
@@ -462,7 +507,15 @@ def test_build_ondeck_scores_skips_stale_series_and_prefetch(tmp_path: Path, mon
     current_xml = ET.fromstring(
         f"""
         <MediaContainer>
-          <Video type=\"episode\" grandparentRatingKey=\"show-1\" parentIndex=\"1\" index=\"3\" lastViewedAt=\"{stale_last_viewed}\" duration=\"1000\" viewOffset=\"500\">
+          <Video
+            type=\"episode\"
+            grandparentRatingKey=\"show-1\"
+            parentIndex=\"1\"
+            index=\"3\"
+            lastViewedAt=\"{stale_last_viewed}\"
+            duration=\"1000\"
+            viewOffset=\"500\"
+          >
             <Media><Part file=\"/data/tv/{show_name}/Season 1/{current_episode.name}\" /></Media>
           </Video>
         </MediaContainer>
@@ -471,8 +524,12 @@ def test_build_ondeck_scores_skips_stale_series_and_prefetch(tmp_path: Path, mon
     leaves_xml = ET.fromstring(
         f"""
         <MediaContainer>
-          <Video parentIndex=\"1\" index=\"3\"><Media><Part file=\"/data/tv/{show_name}/Season 1/{current_episode.name}\" /></Media></Video>
-          <Video parentIndex=\"1\" index=\"4\"><Media><Part file=\"/data/tv/{show_name}/Season 1/{next_episode.name}\" /></Media></Video>
+          <Video parentIndex=\"1\" index=\"3\">
+            <Media><Part file=\"/data/tv/{show_name}/Season 1/{current_episode.name}\" /></Media>
+          </Video>
+          <Video parentIndex=\"1\" index=\"4\">
+            <Media><Part file=\"/data/tv/{show_name}/Season 1/{next_episode.name}\" /></Media>
+          </Video>
         </MediaContainer>
         """
     )
