@@ -1171,10 +1171,11 @@ def evict_units(
     config: Config,
     available_bytes: int,
     stop_at_bytes: int | None,
-) -> tuple[EvictResult, int, int, int]:
+) -> tuple[EvictResult, int, int, int, set[Path]]:
     result_total = EvictResult()
     used_delta = 0
     conflict_count = 0
+    evicted_units: set[Path] = set()
     for relative_dir in candidates:
         if stop_at_bytes is not None and available_bytes >= stop_at_bytes:
             break
@@ -1188,7 +1189,8 @@ def evict_units(
             )
             available_bytes += result.moved_bytes
             used_delta += result.moved_bytes
-    return result_total, available_bytes, used_delta, conflict_count
+            evicted_units.add(relative_dir)
+    return result_total, available_bytes, used_delta, conflict_count, evicted_units
 
 
 def merge_evict_results(current: EvictResult, delta: EvictResult) -> EvictResult:
@@ -1212,6 +1214,7 @@ def run_once(config: Config, args: argparse.Namespace) -> int:
     evict_recent = EvictResult()
     evict_ondeck = EvictResult()
     conflict_count = 0
+    evicted_this_run: set[Path] = set()
 
     do_sync = not args.promote_only and not args.evict_only
     do_promote = not args.sync_only and not args.evict_only
@@ -1252,8 +1255,8 @@ def run_once(config: Config, args: argparse.Namespace) -> int:
         result_total: EvictResult,
         stop_at_bytes: int | None,
     ) -> tuple[EvictResult, int]:
-        nonlocal available_bytes, used_bytes, conflict_count
-        result, available_bytes, used_delta, evict_conflicts = evict_units(
+        nonlocal available_bytes, used_bytes, conflict_count, evicted_this_run
+        result, available_bytes, used_delta, evict_conflicts, evicted_units = evict_units(
             candidates,
             unit_stats,
             config,
@@ -1262,6 +1265,7 @@ def run_once(config: Config, args: argparse.Namespace) -> int:
         )
         used_bytes -= used_delta
         conflict_count += evict_conflicts
+        evicted_this_run.update(evicted_units)
         return merge_evict_results(result_total, result), result.evicted_units
 
     refresh_policy_state()
@@ -1276,23 +1280,23 @@ def run_once(config: Config, args: argparse.Namespace) -> int:
         )
         if evicted_units > 0 and not config.dry_run:
             refresh_policy_state()
-    elif do_evict and available_bytes < config.cache_target_free_space_bytes:
+    elif do_evict and available_bytes < config.cache_min_free_space_bytes:
         unprotected_cached, prefetched_cached, recent_cached, current_cached = cached_policy_sets()
         reclaim_target = config.cache_target_free_space_bytes
         for units, bucket in (
             (sort_units_by_age(unprotected_cached, unit_stats, state), "unprotected"),
-            (sort_units_by_age(prefetched_cached, unit_stats, state), "prefetch"),
             (sort_units_by_age(recent_cached, unit_stats, state), "recent"),
+            (sort_units_by_age(prefetched_cached, unit_stats, state), "prefetch"),
             (sort_units_by_age(current_cached, unit_stats, state), "ondeck"),
         ):
             if available_bytes >= reclaim_target:
                 break
             if bucket == "unprotected":
                 evict_unprotected, evicted_units = apply_evictions(units, evict_unprotected, reclaim_target)
-            elif bucket == "prefetch":
-                evict_prefetch, evicted_units = apply_evictions(units, evict_prefetch, reclaim_target)
             elif bucket == "recent":
                 evict_recent, evicted_units = apply_evictions(units, evict_recent, reclaim_target)
+            elif bucket == "prefetch":
+                evict_prefetch, evicted_units = apply_evictions(units, evict_prefetch, reclaim_target)
             else:
                 evict_ondeck, evicted_units = apply_evictions(units, evict_ondeck, reclaim_target)
             if evicted_units > 0 and not config.dry_run:
@@ -1323,20 +1327,23 @@ def run_once(config: Config, args: argparse.Namespace) -> int:
         ]
         planned_promotion_bytes = sum(unit_stats[unit].total_size for unit in missing_ondeck)
 
-        if do_evict and missing_ondeck:
+        if do_evict and missing_ondeck and available_bytes < config.cache_min_free_space_bytes:
             extra_headroom_target = max(
                 config.cache_target_free_space_bytes,
                 config.cache_min_free_space_bytes + planned_promotion_bytes,
             )
-            unprotected_cached, prefetched_cached, _recent_cached, _current_cached = cached_policy_sets()
+            unprotected_cached, prefetched_cached, recent_cached, _current_cached = cached_policy_sets()
             for units, bucket in (
                 (sort_units_by_age(unprotected_cached, unit_stats, state), "unprotected"),
+                (sort_units_by_age(recent_cached, unit_stats, state), "recent"),
                 (sort_units_by_age(prefetched_cached, unit_stats, state), "prefetch"),
             ):
                 if available_bytes >= extra_headroom_target:
                     break
                 if bucket == "unprotected":
                     evict_unprotected, evicted_units = apply_evictions(units, evict_unprotected, extra_headroom_target)
+                elif bucket == "recent":
+                    evict_recent, evicted_units = apply_evictions(units, evict_recent, extra_headroom_target)
                 else:
                     evict_prefetch, evicted_units = apply_evictions(units, evict_prefetch, extra_headroom_target)
                 if evicted_units > 0 and not config.dry_run:
@@ -1352,6 +1359,8 @@ def run_once(config: Config, args: argparse.Namespace) -> int:
         for relative_dir in promote_order:
             stats = unit_stats.get(relative_dir)
             if stats is None or stats.size_on_tank < 1 or stats.size_on_cache > 0:
+                continue
+            if relative_dir in evicted_this_run:
                 continue
             if available_bytes - stats.total_size < config.cache_min_free_space_bytes:
                 continue

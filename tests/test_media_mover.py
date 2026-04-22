@@ -169,6 +169,31 @@ def test_manual_drain_keeps_recent_cached_media(tmp_path: Path, monkeypatch, cap
     assert "evicted cache file:" in output
 
 
+def test_run_once_does_not_reclaim_between_min_and_target(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    module = load_media_mover_module()
+    config = replace(
+        make_config(module, tmp_path),
+        recent_movie_retention_days=0,
+        recent_tv_retention_days=0,
+        cache_min_free_space_bytes=5,
+        cache_target_free_space_bytes=6,
+    )
+    source_file = write_movie(config, "Buffered Movie (2026) {tmdb-9}")
+
+    monkeypatch.setattr(module, "file_is_open", lambda _path: False)
+    monkeypatch.setattr(module, "filesystem_usage", lambda _path: (100, 95, 5))
+
+    exit_code = module.run_once(config, module.parse_args([]))
+
+    assert exit_code == 0
+    assert source_file.exists()
+    assert (config.target_root / source_file.relative_to(config.source_root)).exists()
+    output = capsys.readouterr().out
+    assert "evicted cache file:" not in output
+
+
 def test_sync_directory_keeps_archive_video_when_cache_only_has_subtitle(
     tmp_path: Path, monkeypatch
 ) -> None:
