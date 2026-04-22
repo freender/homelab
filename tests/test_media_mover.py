@@ -127,7 +127,11 @@ def test_run_once_immediately_evicts_non_frequent_media_for_mover_now(
     tmp_path: Path, monkeypatch, capsys
 ) -> None:
     module = load_media_mover_module()
-    config = replace(make_config(module, tmp_path), recent_movie_retention_days=0, recent_tv_retention_days=0)
+    config = replace(
+        make_config(module, tmp_path),
+        recent_movie_retention_days=0,
+        recent_tv_retention_days=0,
+    )
     source_file = write_movie(config)
 
     monkeypatch.setattr(module, "file_is_open", lambda _path: False)
@@ -334,7 +338,12 @@ def test_run_once_reclaims_headroom_before_ondeck_promotion(tmp_path: Path, monk
     assert not stale_cached.exists()
     assert (config.source_root / archive_ondeck.relative_to(config.target_root)).exists()
     assert (config.target_root / stale_cached.relative_to(config.source_root)).exists()
-    assert stale_unit not in {unit for unit, stats in module.collect_all_unit_stats(config).items() if stats.size_on_cache > 0}
+    cached_units = {
+        unit
+        for unit, stats in module.collect_all_unit_stats(config).items()
+        if stats.size_on_cache > 0
+    }
+    assert stale_unit not in cached_units
 
 
 def test_collect_all_unit_stats_uses_episode_units_for_tv(tmp_path: Path) -> None:

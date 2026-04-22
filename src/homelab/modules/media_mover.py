@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from ..build import copy_file, render_file, write_env_file
+from ..build import render_file, write_env_file
 from ..deploy import DeploySession, force_env, prepare_build_dir, stage_and_run_remote_installer
 from ..hosts import HostLookupError, default_registry
 from ..media_storage import load_media_storage
