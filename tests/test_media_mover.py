@@ -169,6 +169,28 @@ def test_manual_drain_keeps_recent_cached_media(tmp_path: Path, monkeypatch, cap
     assert "evicted cache file:" in output
 
 
+def test_cleanup_respects_ignored_paths(tmp_path: Path, monkeypatch) -> None:
+    module = load_media_mover_module()
+    config = replace(
+        make_config(module, tmp_path),
+        ignore_paths=(tmp_path / "cache" / "downloads",),
+    )
+    ignored_dir = config.source_root / "downloads" / "usenet" / "temp"
+    ignored_dir.mkdir(parents=True)
+    stale_temp = ignored_dir / f"keep{module.TEMP_SUFFIX}"
+    stale_temp.write_text("temp", encoding="utf-8")
+    stale_time = time.time() - 2 * 86400
+    os.utime(stale_temp, (stale_time, stale_time))
+
+    monkeypatch.setattr(module, "file_is_open", lambda _path: False)
+
+    module.cleanup_stale_temp_files(config.source_root, config.ignore_paths)
+    module.prune_empty_dirs(config.source_root, config.ignore_paths)
+
+    assert stale_temp.exists()
+    assert ignored_dir.exists()
+
+
 def test_run_once_does_not_reclaim_between_min_and_target(
     tmp_path: Path, monkeypatch, capsys
 ) -> None:

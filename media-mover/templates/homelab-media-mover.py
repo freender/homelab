@@ -337,11 +337,13 @@ def is_file_stable(path: Path, config: Config) -> bool:
     return time.time() - path.stat().st_mtime >= config.min_file_age_seconds
 
 
-def prune_empty_dirs(root: Path) -> None:
+def prune_empty_dirs(root: Path, ignore_paths: tuple[Path, ...] = ()) -> None:
     directories = [path for path in root.rglob("*") if path.is_dir()]
     directories.sort(key=lambda path: (len(path.relative_to(root).parts), str(path)), reverse=True)
     for directory in directories:
         if len(directory.relative_to(root).parts) <= 1:
+            continue
+        if is_ignored(directory, ignore_paths):
             continue
         try:
             directory.rmdir()
@@ -350,8 +352,10 @@ def prune_empty_dirs(root: Path) -> None:
             continue
 
 
-def cleanup_stale_temp_files(root: Path) -> None:
+def cleanup_stale_temp_files(root: Path, ignore_paths: tuple[Path, ...] = ()) -> None:
     for path in root.rglob(f"*{TEMP_SUFFIX}"):
+        if is_ignored(path, ignore_paths):
+            continue
         if time.time() - path.stat().st_mtime < 86400:
             continue
         try:
@@ -988,7 +992,10 @@ def evict_unit(relative_dir: Path, config: Config) -> MoveResult:
     moved_bytes = 0
     for path in source_files.values():
         moved_bytes += remove_cache_file(path, config.source_root)
-    prune_empty_dirs(config.source_root / (tv_unit_parent_dir(relative_dir) if is_tv_episode_unit(relative_dir) else relative_dir))
+    prune_empty_dirs(
+        config.source_root / (tv_unit_parent_dir(relative_dir) if is_tv_episode_unit(relative_dir) else relative_dir),
+        config.ignore_paths,
+    )
     return MoveResult(moved_bytes=moved_bytes)
 
 
@@ -1203,7 +1210,7 @@ def merge_evict_results(current: EvictResult, delta: EvictResult) -> EvictResult
 
 def run_once(config: Config, args: argparse.Namespace) -> int:
     state = read_state(config.state_file)
-    cleanup_stale_temp_files(config.source_root)
+    cleanup_stale_temp_files(config.source_root, config.ignore_paths)
     cleanup_stale_temp_files(config.target_root)
 
     sync_result = SyncResult()
@@ -1381,7 +1388,7 @@ def run_once(config: Config, args: argparse.Namespace) -> int:
         cache_units = {unit: stats.size_on_cache for unit, stats in unit_stats.items() if stats.size_on_cache > 0}
         update_state(state, cache_units, protected_units)
         write_state(config.state_file, state)
-        prune_empty_dirs(config.source_root)
+        prune_empty_dirs(config.source_root, config.ignore_paths)
         _total_bytes, used_bytes, available_bytes = filesystem_usage(config.source_root)
 
     print(
