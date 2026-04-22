@@ -19,6 +19,7 @@ TEMPLATE_FILES = [
     "homelab-snapraid-scrub.service",
     "homelab-snapraid-scrub.timer",
     "homelab-snapraid-progress-log",
+    "homelab-snapraid-failure-notify",
     "homelab-snapraid-status-notify",
 ]
 
@@ -53,6 +54,11 @@ FILE_SPECS = (
     FileSpec(
         "homelab-snapraid-progress-log",
         "/usr/local/bin/homelab-snapraid-progress-log",
+        mode="755",
+    ),
+    FileSpec(
+        "homelab-snapraid-failure-notify",
+        "/usr/local/bin/homelab-snapraid-failure-notify",
         mode="755",
     ),
     FileSpec(
@@ -245,6 +251,7 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
         "homelab-snapraid-scrub.service",
         "homelab-snapraid-scrub.timer",
         "homelab-snapraid-progress-log",
+        "homelab-snapraid-failure-notify",
     ]:
         context = {}
         if tmpl == "homelab-snapraid-sync.timer":

@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+UNIT_NAME=${1:-unknown}
+SERVICE_RESULT=${SERVICE_RESULT:-unknown}
+EXIT_CODE_VALUE=${EXIT_CODE:-unknown}
+EXIT_STATUS_VALUE=${EXIT_STATUS:-unknown}
+HOSTNAME_SHORT=$(hostname -s)
+
+ENV_LOCATIONS=(
+    "/etc/homelab/telegram.env"
+    "/etc/apcupsd/telegram/telegram.env"
+)
+
+if [[ "$SERVICE_RESULT" == "success" ]]; then
+    exit 0
+fi
+
+for ENV_FILE in "${ENV_LOCATIONS[@]}"; do
+    if [[ -f "$ENV_FILE" ]]; then
+        # shellcheck disable=SC1090
+        source "$ENV_FILE"
+        break
+    fi
+done
+
+if [[ -z "${TELEGRAM_TOKEN:-}" ]] || [[ -z "${TELEGRAM_CHATID:-}" ]]; then
+    logger -t homelab-snapraid-failure-notify "Missing TELEGRAM_TOKEN or TELEGRAM_CHATID; cannot send alert for $UNIT_NAME"
+    exit 0
+fi
+
+JOURNAL_TAIL=$(journalctl -u "$UNIT_NAME" --no-pager -n 15 --output=short-monotonic 2>/dev/null || true)
+
+MESSAGE=$(printf 'ALERT: %s SnapRAID unit failed\nUnit: %s\nResult: %s\nExit code: %s\nExit status: %s\n\n%s' \
+    "$HOSTNAME_SHORT" "$UNIT_NAME" "$SERVICE_RESULT" "$EXIT_CODE_VALUE" "$EXIT_STATUS_VALUE" "$JOURNAL_TAIL")
+
+curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage" \
+    --data-urlencode "chat_id=${TELEGRAM_CHATID}" \
+    --data-urlencode "text=${MESSAGE}" \
+    >/dev/null
+
+logger -t homelab-snapraid-failure-notify "Sent failure alert for $UNIT_NAME ($SERVICE_RESULT/$EXIT_CODE_VALUE/$EXIT_STATUS_VALUE)"
