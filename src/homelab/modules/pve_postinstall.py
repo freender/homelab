@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ..build import copy_files, render_file
+from ..build import copy_file, copy_files, render_file
 from ..deploy import DeploySession, force_env, prepare_build_dir, stage_and_run_remote_installer
 from ..hosts import HostLookupError, default_registry
 from ..media_storage import load_media_storage
@@ -17,6 +17,8 @@ PVE_FILES = [
     "no-nag-script",
     "pve-remove-nag.sh",
     "sshd-hardening.conf",
+    "notify-failure.sh",
+    "homelab-notify-failure@.service",
 ]
 
 REMOTE_PATHS = {
@@ -26,10 +28,13 @@ REMOTE_PATHS = {
     "no-nag-script": "/etc/apt/apt.conf.d/no-nag-script",
     "pve-remove-nag.sh": "/usr/local/bin/pve-remove-nag.sh",
     "sshd-hardening.conf": "/etc/ssh/sshd_config.d/99-disable-password-auth.conf",
+    "notify-failure.sh": "/usr/local/bin/homelab-notify-failure",
+    "homelab-notify-failure@.service": "/etc/systemd/system/homelab-notify-failure@.service",
 }
 
 MODES = {
     "pve-remove-nag.sh": "755",
+    "notify-failure.sh": "755",
 }
 
 
@@ -60,14 +65,22 @@ def deploy(
 def validate(root: Path) -> None:
     config_dir = root / "pve-postinstall" / "configs" / "pve"
     interfaces_template = root / "pve-postinstall" / "templates" / "pve-interfaces"
+    notify_script = root / "ubuntu-setup" / "scripts" / "notify-failure.sh"
+    notify_template = root / "ubuntu-setup" / "templates" / "homelab-notify-failure@.service"
 
     for file_name in PVE_FILES:
+        if file_name in {"notify-failure.sh", "homelab-notify-failure@.service"}:
+            continue
         file_path = config_dir / file_name
         if not file_path.is_file():
             raise ValueError(f"missing config file: {file_path}")
 
     if not interfaces_template.is_file():
         raise ValueError(f"missing interfaces template: {interfaces_template}")
+    if not notify_script.is_file():
+        raise ValueError(f"missing notify script: {notify_script}")
+    if not notify_template.is_file():
+        raise ValueError(f"missing notify template: {notify_template}")
 
 
 def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
@@ -110,10 +123,22 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
     prepare_build_dir(build_dir)
 
     for file_name in PVE_FILES:
+        if file_name in {"notify-failure.sh", "homelab-notify-failure@.service"}:
+            continue
         source_path = config_dir / file_name
         if not source_path.is_file():
             raise ValueError(f"Missing config file: {source_path}")
-    copy_files(config_dir, build_dir, PVE_FILES)
+    copy_files(
+        config_dir,
+        build_dir,
+        [file_name for file_name in PVE_FILES if file_name not in {"notify-failure.sh", "homelab-notify-failure@.service"}],
+    )
+    copy_file(root / "ubuntu-setup" / "scripts" / "notify-failure.sh", build_dir / "notify-failure.sh")
+    render_file(
+        root / "ubuntu-setup" / "templates" / "homelab-notify-failure@.service",
+        build_dir / "homelab-notify-failure@.service",
+        NOTIFY_SCRIPT="/usr/local/bin/homelab-notify-failure",
+    )
 
     write_file_map(build_dir)
     build_network_interfaces_bundle(root, host, build_dir)

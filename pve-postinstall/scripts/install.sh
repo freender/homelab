@@ -32,7 +32,7 @@ required_files_for_type() {
     local host_type="$1"
     case "$host_type" in
         pve)
-            printf '%s\n' proxmox.sources ceph.sources pve-test.sources no-nag-script pve-remove-nag.sh sshd-hardening.conf
+            printf '%s\n' proxmox.sources ceph.sources pve-test.sources no-nag-script pve-remove-nag.sh sshd-hardening.conf notify-failure.sh homelab-notify-failure@.service
             ;;
         *)
             return 1
@@ -274,6 +274,17 @@ case "$HOST_TYPE" in
             fi
         else
             exit 1
+        fi
+
+        print_sub "Deploying failure notification helper..."
+        install_file notify-failure.sh || exit 1
+        notify_unit_changed=false
+        install_file homelab-notify-failure@.service || exit 1
+        if [[ "$INSTALL_FILE_CHANGED" == "true" ]]; then
+            notify_unit_changed=true
+        fi
+        if [[ "$notify_unit_changed" == "true" ]]; then
+            systemctl daemon-reload
         fi
 
         print_sub "Installing required packages..."
