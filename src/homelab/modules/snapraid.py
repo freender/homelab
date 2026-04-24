@@ -110,12 +110,18 @@ def validate(root: Path, hosts: list[str]) -> None:
 
 
 def normalize_config(registry, host: str) -> SnapRaidConfig:
+    host_type = str(registry.get(host, "config.type"))
     media_storage = load_media_storage(registry, host)
     data_disks_raw = registry.get(host, "snapraid.data_disks", None)
     if data_disks_raw is None and media_storage is not None:
+        default_data_disks = (
+            media_storage.raw_data_disks()
+            if host_type == "pve"
+            else media_storage.export_data_disks()
+        )
         data_disks_raw = [
             {"name": name, "path": path}
-            for name, path in media_storage.raw_data_disks()
+            for name, path in default_data_disks
         ]
     elif data_disks_raw is None:
         data_disks_raw = []
@@ -134,9 +140,14 @@ def normalize_config(registry, host: str) -> SnapRaidConfig:
 
     parity_disks_raw = registry.get(host, "snapraid.parity_disks", None)
     if parity_disks_raw is None and media_storage is not None:
+        default_parity_disks = (
+            media_storage.raw_parity_disks()
+            if host_type == "pve"
+            else media_storage.export_parity_disks()
+        )
         parity_disks_raw = [
             {"name": name, "path": path}
-            for name, path in media_storage.raw_parity_disks()
+            for name, path in default_parity_disks
         ]
     elif parity_disks_raw is None:
         parity_disks_raw = []
@@ -161,7 +172,11 @@ def normalize_config(registry, host: str) -> SnapRaidConfig:
 
     content_files_raw = registry.get(host, "snapraid.content_files", None)
     if content_files_raw is None and media_storage is not None:
-        content_files_raw = list(media_storage.raw_content_files())
+        content_files_raw = list(
+            media_storage.raw_content_files()
+            if host_type == "pve"
+            else media_storage.export_content_files()
+        )
     elif content_files_raw is None:
         content_files_raw = []
     if not isinstance(content_files_raw, list) or not content_files_raw:
@@ -187,7 +202,11 @@ def normalize_config(registry, host: str) -> SnapRaidConfig:
 
     pool_path_value = registry.get(host, "snapraid.pool_path", "")
     if not str(pool_path_value).strip() and media_storage is not None:
-        pool_path_value = media_storage.pool_root_path or ""
+        if host_type == "pve":
+            pool_path_value = media_storage.pool_root_path or ""
+        else:
+            merged_path = media_storage.preferred_merged_media_path(host_type)
+            pool_path_value = str(Path(merged_path).parent) if merged_path else ""
     pool_path = require_text(pool_path_value, f"snapraid.pool_path is required for {host}")
     if not pool_path.startswith("/"):
         raise ValueError(f"snapraid.pool_path must be an absolute path for {host}")

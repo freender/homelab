@@ -22,6 +22,7 @@ ALLOWED_MEDIA_STORAGE_POOL_KEYS = {
 }
 ALLOWED_MEDIA_STORAGE_EXPORT_KEYS = {
     "data_mount_prefix",
+    "parity_mount_prefix",
     "cache_media_path",
     "merged_media_path",
     "hdd_only_media_path",

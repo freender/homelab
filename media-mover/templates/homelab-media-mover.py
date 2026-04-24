@@ -474,24 +474,31 @@ def load_plex_context(config: Config) -> PlexContext:
         raise RuntimeError(f"missing pms_token in Tautulli config: {config.tautulli_config_path}")
     machine_identifier = parser.get("PMS", "pms_identifier", fallback="").strip()
 
-    admin_user = plex_get_json("https://plex.tv/api/v2/user", admin_token)
-    admin_name = str(admin_user.get("username") or admin_user.get("title") or "admin")
+    admin_name = "admin"
+    try:
+        admin_user = plex_get_json("https://plex.tv/api/v2/user", admin_token)
+        admin_name = str(admin_user.get("username") or admin_user.get("title") or "admin")
+    except (OSError, urllib.error.URLError, TimeoutError) as exc:
+        print(f"warning: Plex account lookup failed; using admin token only: {exc}")
     user_tokens = {admin_name: admin_token}
 
     if machine_identifier:
-        shared_root = plex_get_xml(
-            f"https://plex.tv/api/servers/{machine_identifier}/shared_servers",
-            admin_token,
-        )
-        for item in shared_root.findall("SharedServer"):
-            token = item.get("accessToken", "").strip()
-            username = (
-                item.get("username", "").strip()
-                or item.get("name", "").strip()
-                or item.get("id", "").strip()
+        try:
+            shared_root = plex_get_xml(
+                f"https://plex.tv/api/servers/{machine_identifier}/shared_servers",
+                admin_token,
             )
-            if token and username:
-                user_tokens[username] = token
+            for item in shared_root.findall("SharedServer"):
+                token = item.get("accessToken", "").strip()
+                username = (
+                    item.get("username", "").strip()
+                    or item.get("name", "").strip()
+                    or item.get("id", "").strip()
+                )
+                if token and username:
+                    user_tokens[username] = token
+        except (OSError, urllib.error.URLError, TimeoutError, ET.ParseError) as exc:
+            print(f"warning: Plex shared-user lookup failed; using admin token only: {exc}")
 
     return PlexContext(server_url=config.plex_url, admin_token=admin_token, user_tokens=user_tokens)
 

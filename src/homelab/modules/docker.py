@@ -73,6 +73,7 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
     syncthing_timer_enabled = (
         "true" if syncthing_unpause_schedule and syncthing_pause_schedule else "false"
     )
+    dependency_units = docker_dependency_units(registry, host)
 
     templates_dir = root / "docker" / "templates"
     build_dir = root / "docker" / "build" / host
@@ -81,6 +82,7 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
     render_file(
         templates_dir / "homelab-docker-start.service",
         build_dir / "homelab-docker-start.service",
+        DOCKER_DEPENDENCY_UNITS=" ".join(dependency_units),
     )
     if start_schedule:
         render_file(
@@ -102,6 +104,7 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
         render_file(
             templates_dir / "homelab-docker-update.service",
             build_dir / "homelab-docker-update.service",
+            DOCKER_DEPENDENCY_UNITS=" ".join(dependency_units),
         )
         render_file(
             templates_dir / "homelab-docker-update.timer",
@@ -238,4 +241,15 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
         require_root=True,
         interpreter="bash",
         remote_subdirs=("build", "lib"),
+    )
+
+
+def docker_dependency_units(registry, host: str) -> tuple[str, ...]:
+    if host not in registry.list_hosts(feature="media-pool"):
+        return ()
+    if str(registry.get(host, "media-pool.enabled", "true")).lower() != "true":
+        return ()
+    return (
+        "homelab-media-pool.service",
+        "homelab-media-pool-hdd-only.service",
     )

@@ -16,6 +16,7 @@ class MediaStorageConfig:
     pool_merged_media_path: str | None
     pool_hdd_only_media_path: str | None
     export_data_mount_prefix: str | None
+    export_parity_mount_prefix: str | None
     export_cache_media_path: str | None
     export_merged_media_path: str | None
     export_hdd_only_media_path: str | None
@@ -78,9 +79,30 @@ class MediaStorageConfig:
             for slot in self.parity_slots
         )
 
+    def export_data_disks(self) -> tuple[tuple[str, str], ...]:
+        if self.export_data_mount_prefix is None:
+            return ()
+        return tuple(
+            (f"data{slot}", f"{self.export_data_mount_prefix}{slot}")
+            for slot in self.data_slots
+        )
+
+    def export_parity_disks(self) -> tuple[tuple[str, str], ...]:
+        if self.export_parity_mount_prefix is None:
+            return ()
+        return tuple(
+            (f"parity{slot}", f"{self.export_parity_mount_prefix}{slot}")
+            for slot in self.parity_slots
+        )
+
     def raw_content_files(self) -> tuple[str, ...]:
         content_files = [f"{path}/snapraid.content" for _name, path in self.raw_data_disks()]
         content_files.extend(f"{path}/snapraid.content" for _name, path in self.raw_parity_disks())
+        return tuple(content_files)
+
+    def export_content_files(self) -> tuple[str, ...]:
+        content_files = [f"{path}/snapraid.content" for _name, path in self.export_data_disks()]
+        content_files.extend(f"{path}/snapraid.content" for _name, path in self.export_parity_disks())
         return tuple(content_files)
 
     def raw_media_branches(self) -> tuple[str, ...]:
@@ -91,13 +113,22 @@ class MediaStorageConfig:
     def export_idmapped_mounts(self) -> tuple[tuple[str, str], ...]:
         if self.raw_data_mount_prefix is None or self.export_data_mount_prefix is None:
             return ()
-        return tuple(
+        mounts = [
             (
                 f"{self.raw_data_mount_prefix}{slot}",
                 f"{self.export_data_mount_prefix}{slot}",
             )
             for slot in self.data_slots
-        )
+        ]
+        if self.raw_parity_mount_prefix is not None and self.export_parity_mount_prefix is not None:
+            mounts.extend(
+                (
+                    f"{self.raw_parity_mount_prefix}{slot}",
+                    f"{self.export_parity_mount_prefix}{slot}",
+                )
+                for slot in self.parity_slots
+            )
+        return tuple(mounts)
 
     def export_media_branches(self) -> tuple[str, ...]:
         if self.export_data_mount_prefix is None:
@@ -151,6 +182,10 @@ def load_media_storage(registry, host: str) -> MediaStorageConfig | None:
         export_data_mount_prefix=optional_absolute_prefix(
             registry.get(source_host, "media_storage.export.data_mount_prefix", ""),
             f"media_storage.export.data_mount_prefix must be absolute for {source_host}",
+        ),
+        export_parity_mount_prefix=optional_absolute_prefix(
+            registry.get(source_host, "media_storage.export.parity_mount_prefix", ""),
+            f"media_storage.export.parity_mount_prefix must be absolute for {source_host}",
         ),
         export_cache_media_path=optional_absolute_path(
             registry.get(source_host, "media_storage.export.cache_media_path", ""),

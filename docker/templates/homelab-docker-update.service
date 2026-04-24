@@ -1,7 +1,8 @@
 [Unit]
 Description=Homelab docker update
 Wants=network-online.target
-After=network-online.target docker.service
+After=network-online.target docker.service{% if DOCKER_DEPENDENCY_UNITS %} {{ DOCKER_DEPENDENCY_UNITS }}
+Requires={{ DOCKER_DEPENDENCY_UNITS }}{% endif %}
 
 [Service]
 Type=oneshot

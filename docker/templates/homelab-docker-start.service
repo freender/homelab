@@ -1,7 +1,7 @@
 [Unit]
 Description=Homelab Docker container startup
-After=docker.service
-Requires=docker.service
+After=docker.service{% if DOCKER_DEPENDENCY_UNITS %} {{ DOCKER_DEPENDENCY_UNITS }}{% endif %}
+Requires=docker.service{% if DOCKER_DEPENDENCY_UNITS %} {{ DOCKER_DEPENDENCY_UNITS }}{% endif %}
 OnFailure=homelab-notify-failure@%n.service
 
 [Service]
