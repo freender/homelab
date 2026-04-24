@@ -131,9 +131,16 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
     copy_files(
         config_dir,
         build_dir,
-        [file_name for file_name in PVE_FILES if file_name not in {"notify-failure.sh", "homelab-notify-failure@.service"}],
+        [
+            file_name
+            for file_name in PVE_FILES
+            if file_name not in {"notify-failure.sh", "homelab-notify-failure@.service"}
+        ],
     )
-    copy_file(root / "ubuntu-setup" / "scripts" / "notify-failure.sh", build_dir / "notify-failure.sh")
+    copy_file(
+        root / "ubuntu-setup" / "scripts" / "notify-failure.sh",
+        build_dir / "notify-failure.sh",
+    )
     render_file(
         root / "ubuntu-setup" / "templates" / "homelab-notify-failure@.service",
         build_dir / "homelab-notify-failure@.service",
