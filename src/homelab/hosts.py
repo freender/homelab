@@ -12,14 +12,8 @@ OPTIONAL_CONFIG_KEYS = {"agent", "ssh_config", "zfs_mountpoint", "zfs_pool"}
 ALLOWED_CONFIG_KEYS = REQUIRED_CONFIG_KEYS | OPTIONAL_CONFIG_KEYS
 ALLOWED_HOST_KEYS = {"config", "features", "media_storage", "media_storage_ref"}
 ALLOWED_SSH_CONFIG_KEYS = {"user", "sshkey"}
-ALLOWED_MEDIA_STORAGE_KEYS = {"data_slots", "parity_slots", "raw", "pool", "export"}
+ALLOWED_MEDIA_STORAGE_KEYS = {"data_slots", "parity_slots", "raw", "export"}
 ALLOWED_MEDIA_STORAGE_RAW_KEYS = {"data_mount_prefix", "parity_mount_prefix"}
-ALLOWED_MEDIA_STORAGE_POOL_KEYS = {
-    "root_path",
-    "cache_media_path",
-    "merged_media_path",
-    "hdd_only_media_path",
-}
 ALLOWED_MEDIA_STORAGE_EXPORT_KEYS = {
     "data_mount_prefix",
     "parity_mount_prefix",
@@ -189,12 +183,6 @@ def validate_media_storage(host: str, media_storage: object) -> None:
         "media_storage.raw",
         media_storage.get("raw"),
         ALLOWED_MEDIA_STORAGE_RAW_KEYS,
-    )
-    validate_optional_mapping_keys(
-        host,
-        "media_storage.pool",
-        media_storage.get("pool"),
-        ALLOWED_MEDIA_STORAGE_POOL_KEYS,
     )
     validate_optional_mapping_keys(
         host,

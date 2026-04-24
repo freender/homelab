@@ -126,13 +126,20 @@ def validate(root: Path, hosts: list[str]) -> None:
                 "1",
                 "true",
             }:
-                media_storage = load_media_storage(registry, host)
+                media_storage_host = str(container.get("media_storage_target_host", host)).strip()
+                if not media_storage_host:
+                    raise ValueError(f"{host}: {ctid} media_storage_target_host must be non-empty")
+                media_storage = load_media_storage(registry, media_storage_host)
                 idmapped_mounts = [
                     {"source": source, "target": target}
                     for source, target in (
                         () if media_storage is None else media_storage.export_idmapped_mounts()
                     )
                 ]
+                if not idmapped_mounts:
+                    raise ValueError(
+                        f"{host}: {ctid} export_media_storage resolved no media mounts"
+                    )
             if not isinstance(idmapped_mounts, list):
                 raise ValueError(f"{host}: {ctid} idmapped_mounts must be a list")
             if not root_mounts and not idmapped_mounts:
@@ -187,13 +194,18 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
             "1",
             "true",
         }:
-            media_storage = load_media_storage(registry, host)
+            media_storage_host = str(container.get("media_storage_target_host", host)).strip()
+            if not media_storage_host:
+                raise ValueError(f"{host}: {ctid} media_storage_target_host must be non-empty")
+            media_storage = load_media_storage(registry, media_storage_host)
             idmapped_mounts_raw = [
                 {"source": source, "target": target}
                 for source, target in (
                     () if media_storage is None else media_storage.export_idmapped_mounts()
                 )
             ]
+            if not idmapped_mounts_raw:
+                raise ValueError(f"{host}: {ctid} export_media_storage resolved no media mounts")
         idmapped_mounts = normalize_idmapped_mounts(idmapped_mounts_raw)
         features = normalize_features(container.get("features", {}))
         leaf_roots = idmapped_roots

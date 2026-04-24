@@ -202,9 +202,7 @@ def normalize_config(registry, host: str) -> SnapRaidConfig:
 
     pool_path_value = registry.get(host, "snapraid.pool_path", "")
     if not str(pool_path_value).strip() and media_storage is not None:
-        if host_type == "pve":
-            pool_path_value = media_storage.pool_root_path or ""
-        else:
+        if host_type != "pve":
             merged_path = media_storage.preferred_merged_media_path(host_type)
             pool_path_value = str(Path(merged_path).parent) if merged_path else ""
     pool_path = require_text(pool_path_value, f"snapraid.pool_path is required for {host}")

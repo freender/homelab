@@ -11,30 +11,20 @@ class MediaStorageConfig:
     parity_slots: tuple[int, ...]
     raw_data_mount_prefix: str | None
     raw_parity_mount_prefix: str | None
-    pool_root_path: str | None
-    pool_cache_media_path: str | None
-    pool_merged_media_path: str | None
-    pool_hdd_only_media_path: str | None
     export_data_mount_prefix: str | None
     export_parity_mount_prefix: str | None
     export_cache_media_path: str | None
     export_merged_media_path: str | None
     export_hdd_only_media_path: str | None
 
-    def preferred_cache_media_path(self, host_type: str) -> str | None:
-        if host_type == "pve":
-            return self.pool_cache_media_path or self.export_cache_media_path
-        return self.export_cache_media_path or self.pool_cache_media_path
+    def preferred_cache_media_path(self, _host_type: str) -> str | None:
+        return self.export_cache_media_path
 
-    def preferred_merged_media_path(self, host_type: str) -> str | None:
-        if host_type == "pve":
-            return self.pool_merged_media_path or self.export_merged_media_path
-        return self.export_merged_media_path or self.pool_merged_media_path
+    def preferred_merged_media_path(self, _host_type: str) -> str | None:
+        return self.export_merged_media_path
 
-    def preferred_hdd_only_media_path(self, host_type: str) -> str | None:
-        if host_type == "pve":
-            return self.pool_hdd_only_media_path or self.export_hdd_only_media_path
-        return self.export_hdd_only_media_path or self.pool_hdd_only_media_path
+    def preferred_hdd_only_media_path(self, _host_type: str) -> str | None:
+        return self.export_hdd_only_media_path
 
     def preferred_media_branches(self, host_type: str) -> tuple[str, ...]:
         if host_type == "pve":
@@ -102,7 +92,9 @@ class MediaStorageConfig:
 
     def export_content_files(self) -> tuple[str, ...]:
         content_files = [f"{path}/snapraid.content" for _name, path in self.export_data_disks()]
-        content_files.extend(f"{path}/snapraid.content" for _name, path in self.export_parity_disks())
+        content_files.extend(
+            f"{path}/snapraid.content" for _name, path in self.export_parity_disks()
+        )
         return tuple(content_files)
 
     def raw_media_branches(self) -> tuple[str, ...]:
@@ -138,6 +130,7 @@ class MediaStorageConfig:
 
 def load_media_storage(registry, host: str) -> MediaStorageConfig | None:
     source_host = resolve_media_storage_host(registry, host)
+    export_host = resolve_media_storage_export_host(registry, host, source_host)
     try:
         data_slots_raw = registry.get(source_host, "media_storage.data_slots")
     except HostLookupError:
@@ -163,41 +156,25 @@ def load_media_storage(registry, host: str) -> MediaStorageConfig | None:
             registry.get(source_host, "media_storage.raw.parity_mount_prefix", ""),
             f"media_storage.raw.parity_mount_prefix must be absolute for {source_host}",
         ),
-        pool_root_path=optional_absolute_path(
-            registry.get(source_host, "media_storage.pool.root_path", ""),
-            f"media_storage.pool.root_path must be absolute for {source_host}",
-        ),
-        pool_cache_media_path=optional_absolute_path(
-            registry.get(source_host, "media_storage.pool.cache_media_path", ""),
-            f"media_storage.pool.cache_media_path must be absolute for {source_host}",
-        ),
-        pool_merged_media_path=optional_absolute_path(
-            registry.get(source_host, "media_storage.pool.merged_media_path", ""),
-            f"media_storage.pool.merged_media_path must be absolute for {source_host}",
-        ),
-        pool_hdd_only_media_path=optional_absolute_path(
-            registry.get(source_host, "media_storage.pool.hdd_only_media_path", ""),
-            f"media_storage.pool.hdd_only_media_path must be absolute for {source_host}",
-        ),
         export_data_mount_prefix=optional_absolute_prefix(
-            registry.get(source_host, "media_storage.export.data_mount_prefix", ""),
-            f"media_storage.export.data_mount_prefix must be absolute for {source_host}",
+            registry.get(export_host, "media_storage.export.data_mount_prefix", ""),
+            f"media_storage.export.data_mount_prefix must be absolute for {export_host}",
         ),
         export_parity_mount_prefix=optional_absolute_prefix(
-            registry.get(source_host, "media_storage.export.parity_mount_prefix", ""),
-            f"media_storage.export.parity_mount_prefix must be absolute for {source_host}",
+            registry.get(export_host, "media_storage.export.parity_mount_prefix", ""),
+            f"media_storage.export.parity_mount_prefix must be absolute for {export_host}",
         ),
         export_cache_media_path=optional_absolute_path(
-            registry.get(source_host, "media_storage.export.cache_media_path", ""),
-            f"media_storage.export.cache_media_path must be absolute for {source_host}",
+            registry.get(export_host, "media_storage.export.cache_media_path", ""),
+            f"media_storage.export.cache_media_path must be absolute for {export_host}",
         ),
         export_merged_media_path=optional_absolute_path(
-            registry.get(source_host, "media_storage.export.merged_media_path", ""),
-            f"media_storage.export.merged_media_path must be absolute for {source_host}",
+            registry.get(export_host, "media_storage.export.merged_media_path", ""),
+            f"media_storage.export.merged_media_path must be absolute for {export_host}",
         ),
         export_hdd_only_media_path=optional_absolute_path(
-            registry.get(source_host, "media_storage.export.hdd_only_media_path", ""),
-            f"media_storage.export.hdd_only_media_path must be absolute for {source_host}",
+            registry.get(export_host, "media_storage.export.hdd_only_media_path", ""),
+            f"media_storage.export.hdd_only_media_path must be absolute for {export_host}",
         ),
     )
 
@@ -209,6 +186,13 @@ def resolve_media_storage_host(registry, host: str) -> str:
     if ref_host == host:
         raise ValueError(f"media_storage_ref must not self-reference for {host}")
     return ref_host
+
+
+def resolve_media_storage_export_host(registry, host: str, source_host: str) -> str:
+    export_config = registry.get(host, "media_storage.export", None)
+    if isinstance(export_config, dict) and export_config:
+        return host
+    return source_host
 
 
 def normalize_slots(value: object, message: str) -> tuple[int, ...]:
