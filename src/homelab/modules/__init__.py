@@ -18,6 +18,7 @@ from .pve_gpu_passthrough import deploy as deploy_pve_gpu_passthrough
 from .pve_lxc_mounts import deploy as deploy_pve_lxc_mounts
 from .pve_postinstall import deploy as deploy_pve_postinstall
 from .snapraid import deploy as deploy_snapraid
+from .snapraid_daemon import deploy as deploy_snapraid_daemon
 from .ssh_config import deploy as deploy_ssh_config
 from .ubuntu_setup import deploy as deploy_ubuntu_setup
 from .zfs_automation import deploy as deploy_zfs_automation
@@ -77,6 +78,10 @@ MODULES: dict[str, ModuleDefinition] = {
     ),
     "ssh-config": ModuleDefinition(name="SSH Config", deploy=deploy_ssh_config),
     "snapraid": ModuleDefinition(name="SnapRAID", deploy=deploy_snapraid),
+    "snapraid-daemon": ModuleDefinition(
+        name="SnapRAID Daemon",
+        deploy=deploy_snapraid_daemon,
+    ),
     "ubuntu-setup": ModuleDefinition(name="Ubuntu OS Setup", deploy=deploy_ubuntu_setup),
     "zfs-automation": ModuleDefinition(name="ZFS Automation", deploy=deploy_zfs_automation),
 }
@@ -92,6 +97,7 @@ MODULE_ORDER = [
     "media-pool",
     "media-mover",
     "snapraid",
+    "snapraid-daemon",
     "pve-lxc-mounts",
     "ssh-config",
     "ubuntu-setup",

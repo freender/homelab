@@ -5,6 +5,7 @@ set -e
 HOST=${1:-$(hostname)}
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD_DIR="$SCRIPT_DIR/build/$HOST"
+ENV_FILE="$BUILD_DIR/snapraid.env"
 
 if [[ -f "$SCRIPT_DIR/lib/utils.sh" ]]; then
     # shellcheck source=/dev/null
@@ -15,14 +16,31 @@ else
 fi
 
 require_dir "$BUILD_DIR" "$BUILD_DIR" || exit 1
+require_file "$ENV_FILE" "$ENV_FILE" || exit 1
 require_file "$BUILD_DIR/file-map.conf" "$BUILD_DIR/file-map.conf" || exit 1
 
+# shellcheck source=/dev/null
+source "$ENV_FILE"
 load_file_map
 
 print_header "Installing SnapRAID"
 
 # 1. Install snapraid package
-if ! command -v snapraid >/dev/null 2>&1; then
+if [[ -n "$SNAPRAID_VERSION" ]]; then
+    installed_version="$(dpkg-query -W -f='${Version}' snapraid 2>/dev/null || true)"
+    if [[ "$installed_version" != "$SNAPRAID_VERSION" ]]; then
+        apt-get update -q
+        apt-get install -y -q ca-certificates curl
+
+        package_path="/tmp/snapraid_${SNAPRAID_VERSION}_amd64.deb"
+        curl -fsSL "$SNAPRAID_DEB_URL" -o "$package_path"
+        printf '%s  %s\n' "$SNAPRAID_SHA256" "$package_path" | sha256sum -c -
+        apt-get install -y -q "$package_path"
+        print_ok "snapraid $SNAPRAID_VERSION installed"
+    else
+        print_sub "snapraid $SNAPRAID_VERSION already installed"
+    fi
+elif ! command -v snapraid >/dev/null 2>&1; then
     apt-get update -q
     apt-get install -y -q snapraid
     print_ok "snapraid installed"

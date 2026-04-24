@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from ..build import render_file
+from ..build import render_file, write_env_file
 from ..deploy import DeploySession, force_env, prepare_build_dir, stage_and_run_remote_installer
 from ..hosts import default_registry
 from ..media_storage import load_media_storage
@@ -32,6 +32,9 @@ class SnapRaidDisk:
 
 @dataclass(frozen=True)
 class SnapRaidConfig:
+    package_version: str | None
+    package_deb_url: str | None
+    package_sha256: str | None
     data_disks: tuple[SnapRaidDisk, ...]
     parity_disks: tuple[SnapRaidDisk, ...]
     content_files: tuple[str, ...]
@@ -111,7 +114,28 @@ def validate(root: Path, hosts: list[str]) -> None:
 
 def normalize_config(registry, host: str) -> SnapRaidConfig:
     host_type = str(registry.get(host, "config.type"))
+    if host_type == "pve":
+        raise ValueError(f"snapraid must not run on deprecated PVE host {host}")
+
     media_storage = load_media_storage(registry, host)
+
+    package_version = optional_text(registry.get(host, "snapraid.version", ""))
+    package_deb_url = optional_text(registry.get(host, "snapraid.deb_url", ""))
+    package_sha256 = optional_text(registry.get(host, "snapraid.sha256", ""))
+    package_fields = [package_version, package_deb_url, package_sha256]
+    if any(package_fields) and not all(package_fields):
+        raise ValueError(
+            "snapraid.version, snapraid.deb_url, and snapraid.sha256 "
+            f"must be set together for {host}"
+        )
+    if package_deb_url is not None and not package_deb_url.startswith("https://"):
+        raise ValueError(f"snapraid.deb_url must be https for {host}")
+    if package_sha256 is not None and (
+        len(package_sha256) != 64
+        or any(char not in "0123456789abcdef" for char in package_sha256.lower())
+    ):
+        raise ValueError(f"snapraid.sha256 must be a hex sha256 for {host}")
+
     data_disks_raw = registry.get(host, "snapraid.data_disks", None)
     if data_disks_raw is None and media_storage is not None:
         default_data_disks = (
@@ -232,6 +256,9 @@ def normalize_config(registry, host: str) -> SnapRaidConfig:
         raise ValueError(f"snapraid.orchestrate_media_mover requires media-mover on {host}")
 
     return SnapRaidConfig(
+        package_version=package_version,
+        package_deb_url=package_deb_url,
+        package_sha256=package_sha256.lower() if package_sha256 is not None else None,
         data_disks=tuple(data_disks),
         parity_disks=tuple(parity_disks),
         content_files=tuple(content_files),
@@ -258,6 +285,14 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
         CONTENT_FILES=config.content_files,
         EXCLUDE_PATTERNS=config.exclude_patterns,
         POOL_PATH=config.pool_path,
+    )
+    write_env_file(
+        build_dir / "snapraid.env",
+        {
+            "SNAPRAID_VERSION": config.package_version or "",
+            "SNAPRAID_DEB_URL": config.package_deb_url or "",
+            "SNAPRAID_SHA256": config.package_sha256 or "",
+        },
     )
 
     # Use render_file for simple copies if no vars needed, or use a simple copy if preferred
@@ -324,3 +359,8 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
         require_root=True,
         remote_subdirs=("build", "lib"),
     )
+
+
+def optional_text(value: object) -> str | None:
+    text = str(value).strip()
+    return text or None
