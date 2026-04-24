@@ -16,45 +16,10 @@ fi
 
 require_dir "$BUILD_DIR" "$BUILD_DIR" || exit 1
 require_file "$BUILD_DIR/file-map.conf" "$BUILD_DIR/file-map.conf" || exit 1
-require_file "$BUILD_DIR/media-pool.env" "$BUILD_DIR/media-pool.env" || exit 1
-
-# shellcheck source=/dev/null
-source "$BUILD_DIR/media-pool.env"
 
 load_file_map
 
 print_header "Media Pool"
-
-if [[ "${ENABLE_MEDIA_POOL:-true}" != "true" ]]; then
-    units_changed=false
-    for unit in \
-        homelab-media-pool.service \
-        homelab-media-pool-hdd-only.service \
-        homelab-tiered-media.service \
-        homelab-tiered-media-hdd.service; do
-        if systemctl is-enabled --quiet "$unit" 2>/dev/null; then
-            systemctl disable --now "$unit"
-            print_ok "$unit disabled"
-            units_changed=true
-        elif systemctl is-active --quiet "$unit" 2>/dev/null; then
-            systemctl stop "$unit"
-            print_ok "$unit stopped"
-            units_changed=true
-        fi
-        if [[ -f "/etc/systemd/system/$unit" ]]; then
-            rm -f "/etc/systemd/system/$unit"
-            print_ok "$unit removed"
-            units_changed=true
-        fi
-    done
-
-    if [[ "$units_changed" == "true" ]]; then
-        systemctl daemon-reload
-    fi
-
-    print_header "Media Pool Disabled"
-    exit 0
-fi
 
 print_action "MergerFS"
 if ! command -v mergerfs >/dev/null 2>&1; then

@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from ..build import render_file, write_env_file
+from ..build import render_file
 from ..deploy import DeploySession, force_env, prepare_build_dir, stage_and_run_remote_installer
 from ..hosts import HostLookupError, default_registry
 from ..media_storage import load_media_storage
@@ -17,7 +17,6 @@ TEMPLATE_FILES = ["homelab-media-pool.service"]
 
 @dataclass(frozen=True)
 class MediaPoolConfig:
-    enabled: bool
     branches: tuple[str, ...]
     mountpoint: str
     hdd_only_mountpoint: str | None
@@ -85,19 +84,6 @@ def normalize_config(registry, host: str) -> MediaPoolConfig:
 
     if host_type not in {"pve", "ubuntu"}:
         raise ValueError(f"media-pool supports PVE and Ubuntu hosts only: {host}")
-
-    enabled = str(registry.get(host, "media-pool.enabled", "true")).lower() == "true"
-    if not enabled:
-        return MediaPoolConfig(
-            enabled=False,
-            branches=(),
-            mountpoint="",
-            hdd_only_mountpoint=None,
-            create_policy="ff",
-            min_free_space="100G",
-            hdd_only_min_free_space="100G",
-            consumer_units=(),
-        )
 
     media_storage = load_media_storage(registry, host)
     branches_raw = registry.get(host, "media-pool.branches", None)
@@ -180,7 +166,6 @@ def normalize_config(registry, host: str) -> MediaPoolConfig:
             consumer_units.append(f"pve-container@{ctid_text}.service")
 
     return MediaPoolConfig(
-        enabled=enabled,
         branches=tuple(branches),
         mountpoint=mountpoint,
         hdd_only_mountpoint=hdd_only_mountpoint,
@@ -212,15 +197,6 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
     module_dir = root / "media-pool"
     build_dir = module_dir / "build" / host
     prepare_build_dir(build_dir)
-
-    write_env_file(
-        build_dir / "media-pool.env",
-        {"ENABLE_MEDIA_POOL": "true" if config.enabled else "false"},
-    )
-
-    if not config.enabled:
-        write_file_map(build_dir, ())
-        return HostArtifacts(build_dir=build_dir, file_specs=())
 
     file_specs = [PRIMARY_SERVICE_SPEC]
     ordering_lines = "\n".join(f"Before={unit}" for unit in config.consumer_units)
