@@ -1,5 +1,5 @@
 [Unit]
-Description=Homelab media mover watch (continuous sync and cache drain)
+Description=Homelab media mover watch (continuous cache management loop)
 {{ SERVICE_DEPENDENCY_LINES }}
 
 [Service]
@@ -7,7 +7,7 @@ Type=simple
 EnvironmentFile=/etc/default/homelab-media-mover
 Environment=PYTHONUNBUFFERED=1
 StateDirectory=homelab-media-mover
-ExecStart=/usr/local/bin/homelab-media-mover --loop --sync-only --demote-non-frequent
+ExecStart=/usr/local/bin/homelab-media-mover --loop
 Restart=on-failure
 RestartSec=10
 StandardOutput=journal
