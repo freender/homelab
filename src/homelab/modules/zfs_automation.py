@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from shlex import quote
@@ -11,6 +12,7 @@ from ..output import print_action, print_sub
 from ..ssh import HostConnection, build_files, diff_many
 
 REMOTE_ROOT = "/tmp/homelab-zfs-automation"
+REPLICATION_JOB_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
 STATIC_CONFIG_FILES = ["zfs-scrub.timer"]
 TEMPLATE_FILES = [
     "homelab-zfs-snapshots.service",
@@ -147,9 +149,37 @@ def normalize_string_list(value: object, message: str) -> list[str]:
     return [require_string(item, message) for item in value]
 
 
+def normalize_bool(value: object, default: bool, message: str) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "yes", "1", "on"}:
+            return True
+        if normalized in {"false", "no", "0", "off"}:
+            return False
+    raise ValueError(message)
+
+
+def normalize_replication_job_name(value: object, host: str) -> str:
+    name = require_string(value, f"replication job name required for {host}")
+    if not REPLICATION_JOB_NAME_PATTERN.fullmatch(name):
+        raise ValueError(
+            f"replication job name '{name}' for {host} must use only letters, numbers,"
+            " underscores, or hyphens and must start with a letter or number"
+        )
+    return name
+
+
 def dataset_pool(dataset: str) -> str:
     dataset_name = dataset.split(":", 1)[1] if ":" in dataset else dataset
     return dataset_name.split("/", 1)[0]
+
+
+def is_remote_dataset(dataset: str) -> bool:
+    return ":" in dataset
 
 
 def normalize_dataset_under_root(dataset: str, root_dataset: str) -> str:
@@ -225,34 +255,52 @@ def normalize_replication_config(
     if jobs is not None:
         if not isinstance(jobs, dict):
             raise ValueError(f"zfs-automation.replication_jobs must be a dict for {host}")
-        
+
         parsed_jobs: list[ReplicationJob] = []
+        seen_job_names: set[str] = set()
         for job_name, job_config in jobs.items():
             if not isinstance(job_config, dict):
                 raise ValueError(f"invalid replication job '{job_name}' for {host}")
-            
+
+            normalized_job_name = normalize_replication_job_name(job_name, host)
+            if normalized_job_name in seen_job_names:
+                raise ValueError(
+                    f"duplicate replication job name '{normalized_job_name}' for {host}"
+                )
+            seen_job_names.add(normalized_job_name)
+
+            if not normalize_bool(
+                job_config.get("enabled"),
+                True,
+                f"enabled for replication job '{normalized_job_name}' must be true or false"
+                f" for {host}",
+            ):
+                continue
+
             schedule = str(job_config.get("schedule", "*-*-* 02:30:00"))
             plans: list[ReplicationPlan] = []
             explicit_plans = job_config.get("plans", [])
             if not isinstance(explicit_plans, list):
                 raise ValueError(
-                    f"plans for replication job '{job_name}' must be a list for {host}"
+                    f"plans for replication job '{normalized_job_name}' must be a list for {host}"
                 )
 
             for index, plan in enumerate(explicit_plans):
                 if not isinstance(plan, dict):
                     raise ValueError(
-                        f"invalid plan at index {index} in job '{job_name}' for {host}"
+                        f"invalid plan at index {index} in job '{normalized_job_name}' for {host}"
                     )
                 plans.append(
                     ReplicationPlan(
                         source=require_string(
                             plan.get("source", ""),
-                            f"plan source required at index {index} in job '{job_name}' for {host}",
+                            f"plan source required at index {index} in job"
+                            f" '{normalized_job_name}' for {host}",
                         ),
                         target=require_string(
                             plan.get("target", ""),
-                            f"plan target required at index {index} in job '{job_name}' for {host}",
+                            f"plan target required at index {index} in job"
+                            f" '{normalized_job_name}' for {host}",
                         ),
                         post_hook=str(plan.get("post_hook", "")).strip(),
                     )
@@ -260,12 +308,13 @@ def normalize_replication_config(
 
             after_commands = normalize_string_list(
                 job_config.get("after_replication_commands", []),
-                f"after_replication_commands for job '{job_name}' must be a list for {host}",
+                f"after_replication_commands for job '{normalized_job_name}' must be a list"
+                f" for {host}",
             )
 
             parsed_jobs.append(
                 ReplicationJob(
-                    name=job_name,
+                    name=normalized_job_name,
                     schedule=schedule,
                     plans=tuple(plans),
                     after_commands=tuple(after_commands),
@@ -359,11 +408,14 @@ def resolve_pools(registry, host: str) -> list[str]:
     snapshot_plans = normalize_snapshot_plans(registry, host)
     replication_jobs = normalize_replication_config(registry, host)
     pools: list[str] = []
-    for dataset in [
-        *(plan.dataset for plan in snapshot_plans),
-        *(plan.source for job in replication_jobs for plan in job.plans),
-        *(plan.target for job in replication_jobs for plan in job.plans),
-    ]:
+    local_replication_datasets = [
+        dataset
+        for job in replication_jobs
+        for plan in job.plans
+        for dataset in (plan.source, plan.target)
+        if not is_remote_dataset(dataset)
+    ]
+    for dataset in [*(plan.dataset for plan in snapshot_plans), *local_replication_datasets]:
         pool = dataset_pool(dataset)
         if pool not in pools:
             pools.append(pool)
@@ -561,7 +613,7 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
         script_name = f"homelab-zfs-replication-{job.name}.sh"
         service_name = f"homelab-zfs-replication-{job.name}.service"
         timer_name = f"homelab-zfs-replication-{job.name}.timer"
-        
+
         render_file(
             templates_dir / "homelab-zfs-replication.service",
             build_dir / service_name,
@@ -576,17 +628,23 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
             build_replication_script(list(job.plans), list(job.after_commands)),
             encoding="utf-8",
         )
-        file_specs.extend([
-            FileSpec(
-                service_name,
-                f"/etc/systemd/system/{service_name}",
-            ),
-            FileSpec(
-                timer_name,
-                f"/etc/systemd/system/{timer_name}",
-            ),
-            FileSpec(script_name, f"/usr/local/bin/homelab-zfs-replication-{job.name}", mode="755"),
-        ])
+        file_specs.extend(
+            [
+                FileSpec(
+                    service_name,
+                    f"/etc/systemd/system/{service_name}",
+                ),
+                FileSpec(
+                    timer_name,
+                    f"/etc/systemd/system/{timer_name}",
+                ),
+                FileSpec(
+                    script_name,
+                    f"/usr/local/bin/homelab-zfs-replication-{job.name}",
+                    mode="755",
+                ),
+            ]
+        )
 
     render_file(
         templates_dir / "homelab-zfs-scrub.sh",
