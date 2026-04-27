@@ -185,6 +185,7 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
         ctid = str(container["ctid"])
         root_mounts = normalize_root_mounts(container["root_mounts"])
         idmapped_roots = [str(path) for path in container.get("idmapped_roots", [])]
+        idmapped_exclude = [str(path) for path in container.get("idmapped_exclude", [])]
         use_idmapped_mounts = str(container.get("use_idmapped_mounts", True)).lower() in {
             "1",
             "true",
@@ -211,7 +212,7 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
         leaf_roots = idmapped_roots
 
         current_config = read_remote_text(connection, f"/etc/pve/lxc/{ctid}.conf")
-        leaf_mounts = query_leaf_mounts(connection, leaf_roots)
+        leaf_mounts = query_leaf_mounts(connection, leaf_roots, idmapped_exclude)
         desired_config = render_config(
             current_config,
             root_mounts,
@@ -299,7 +300,11 @@ def read_remote_text(connection: HostConnection, remote_path: str) -> str:
     return result.stdout
 
 
-def query_leaf_mounts(connection: HostConnection, roots: list[str]) -> list[str]:
+def query_leaf_mounts(
+    connection: HostConnection,
+    roots: list[str],
+    exclude_roots: list[str],
+) -> list[str]:
     if offline_mode():
         raise ValueError("offline mode cannot query remote ZFS datasets")
 
@@ -312,6 +317,10 @@ def query_leaf_mounts(connection: HostConnection, roots: list[str]) -> list[str]
             mountpoint
             for mountpoint in mountpoints
             if any(mountpoint == root or mountpoint.startswith(f"{root}/") for root in roots)
+            and not any(
+                mountpoint == exclude_root or mountpoint.startswith(f"{exclude_root}/")
+                for exclude_root in exclude_roots
+            )
         }
     )
     return [

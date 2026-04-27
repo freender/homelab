@@ -158,6 +158,48 @@ sync_rebuild_bundle() {
     fi
 }
 
+prepare_zfs_pull_source_user() {
+    if [[ "${ENABLE_ZFS_PULL_SOURCE:-false}" != "true" ]]; then
+        return 0
+    fi
+
+    if ! id "$ZFS_PULL_SOURCE_USER" >/dev/null 2>&1; then
+        useradd --system --home-dir "$ZFS_PULL_SOURCE_HOME" --create-home --shell /bin/bash "$ZFS_PULL_SOURCE_USER"
+        print_ok "Created $ZFS_PULL_SOURCE_USER user"
+    fi
+
+    mkdir -p "$ZFS_PULL_SOURCE_HOME/.ssh" /etc/homelab
+    chmod 700 "$ZFS_PULL_SOURCE_HOME/.ssh"
+    chown -R "$ZFS_PULL_SOURCE_USER:$ZFS_PULL_SOURCE_USER" "$ZFS_PULL_SOURCE_HOME"
+}
+
+configure_zfs_pull_source_access() {
+    local dataset
+
+    if [[ "${ENABLE_ZFS_PULL_SOURCE:-false}" != "true" ]]; then
+        return 0
+    fi
+
+    require_file /etc/homelab/zfs-pull-datasets.conf /etc/homelab/zfs-pull-datasets.conf || exit 1
+    require_file "$ZFS_PULL_SOURCE_HOME/.ssh/authorized_keys" "$ZFS_PULL_SOURCE_HOME/.ssh/authorized_keys" || exit 1
+    require_file /usr/local/sbin/homelab-zfs-send-only /usr/local/sbin/homelab-zfs-send-only || exit 1
+
+    chown -R "$ZFS_PULL_SOURCE_USER:$ZFS_PULL_SOURCE_USER" "$ZFS_PULL_SOURCE_HOME"
+    chmod 700 "$ZFS_PULL_SOURCE_HOME/.ssh"
+    chmod 600 "$ZFS_PULL_SOURCE_HOME/.ssh/authorized_keys"
+    chmod 755 /usr/local/sbin/homelab-zfs-send-only
+
+    while IFS= read -r dataset; do
+        [[ -n "$dataset" ]] || continue
+        if ! zfs list -H -o name "$dataset" >/dev/null 2>&1; then
+            print_error "ZFS pull source dataset not found: $dataset"
+            exit 1
+        fi
+        zfs allow -u "$ZFS_PULL_SOURCE_USER" send,hold,release "$dataset"
+        print_ok "Granted send-only pull access for $dataset"
+    done < /etc/homelab/zfs-pull-datasets.conf
+}
+
 load_file_map
 
 print_header "ZFS Automation"
@@ -171,14 +213,19 @@ else
 fi
 
 print_action "Sanoid / Syncoid"
-if ! command -v sanoid >/dev/null 2>&1 || ! command -v syncoid >/dev/null 2>&1; then
-    apt-get install -y -q sanoid
-    print_ok "Sanoid installed"
+if ! command -v sanoid >/dev/null 2>&1 \
+    || ! command -v syncoid >/dev/null 2>&1 \
+    || ! command -v lzop >/dev/null 2>&1 \
+    || ! command -v mbuffer >/dev/null 2>&1 \
+    || ! command -v pv >/dev/null 2>&1; then
+    apt-get install -y -q sanoid lzop mbuffer pv
+    print_ok "Sanoid/Syncoid helper packages installed"
 else
-    print_sub "Sanoid already installed"
+    print_sub "Sanoid/Syncoid helper packages already installed"
 fi
 
 mkdir -p /etc/sanoid "$APPDATA_SCRIPTS_DIR" "$MANAGED_DIR"
+prepare_zfs_pull_source_user
 
 cleanup_legacy_replication_units
 cleanup_obsolete_replication_units
@@ -206,6 +253,8 @@ for unit in "${!FILE_MAP_DEST[@]}"; do
     [[ $rc -eq 0 || $rc -eq 1 ]] || exit "$rc"
     [[ $rc -eq 0 ]] && units_changed=true
 done
+
+configure_zfs_pull_source_access
 
 if systemctl is-enabled --quiet sanoid.timer 2>/dev/null; then
     systemctl disable --now sanoid.timer

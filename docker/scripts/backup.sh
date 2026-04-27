@@ -29,7 +29,8 @@ fi
 
 # Define source and destination directories
 SRC="${ROOT}/"
-DEST="/mnt/cache/backup/appdata/"
+BACKUP_HOST="${BACKUP_HOST:-$(hostname -s)}"
+DEST="/mnt/cache/${BACKUP_HOST}/appdata/"
 
 # Define containers that should NEVER be stopped during backup
 # These are critical infrastructure containers that need to stay running

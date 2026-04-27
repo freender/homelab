@@ -66,6 +66,21 @@ class ReplicationJob:
     schedule: str
     plans: tuple[ReplicationPlan, ...]
     after_commands: tuple[str, ...]
+    syncoid_options: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class ZfsPuller:
+    name: str
+    from_address: str
+    public_key: str
+
+
+@dataclass(frozen=True)
+class ZfsPullSourceAccess:
+    user: str
+    datasets: tuple[str, ...]
+    pullers: tuple[ZfsPuller, ...]
 
 
 BASE_FILE_SPECS = (
@@ -127,6 +142,7 @@ def validate(root: Path, hosts: list[str]) -> None:
     for host in hosts:
         normalize_snapshot_plans(registry, host)
         normalize_replication_config(registry, host)
+        normalize_pull_source_access(registry, host)
         pools = resolve_pools(registry, host)
         if not pools:
             raise ValueError(f"zfs-automation requires at least one managed pool for {host}")
@@ -171,6 +187,13 @@ def normalize_replication_job_name(value: object, host: str) -> str:
             " underscores, or hyphens and must start with a letter or number"
         )
     return name
+
+
+def require_safe_authorized_key_option(value: object, message: str) -> str:
+    text = require_string(value, message)
+    if any(char in text for char in ['"', "'", ",", " ", "\t", "\n", "\r"]):
+        raise ValueError(message)
+    return text
 
 
 def dataset_pool(dataset: str) -> str:
@@ -311,6 +334,10 @@ def normalize_replication_config(
                 f"after_replication_commands for job '{normalized_job_name}' must be a list"
                 f" for {host}",
             )
+            syncoid_options = normalize_string_list(
+                job_config.get("syncoid_options", []),
+                f"syncoid_options for job '{normalized_job_name}' must be a list for {host}",
+            )
 
             parsed_jobs.append(
                 ReplicationJob(
@@ -318,6 +345,7 @@ def normalize_replication_config(
                     schedule=schedule,
                     plans=tuple(plans),
                     after_commands=tuple(after_commands),
+                    syncoid_options=tuple(syncoid_options),
                 )
             )
         return parsed_jobs
@@ -355,6 +383,7 @@ def normalize_replication_config(
                 schedule=schedule,
                 plans=tuple(plans),
                 after_commands=tuple(after_commands),
+                syncoid_options=(),
             )
         ]
 
@@ -396,8 +425,60 @@ def normalize_replication_config(
                 ),
             ),
             after_commands=tuple(after_commands),
+            syncoid_options=(),
         )
     ]
+
+
+def normalize_pull_source_access(registry, host: str) -> ZfsPullSourceAccess | None:
+    config = registry.get(host, "zfs-automation.pull_source_access", None)
+    if config is None:
+        return None
+    if not isinstance(config, dict):
+        raise ValueError(f"zfs-automation.pull_source_access must be a mapping for {host}")
+
+    user = require_safe_authorized_key_option(
+        config.get("user", "zfs-pull"),
+        f"zfs-automation.pull_source_access.user is invalid for {host}",
+    )
+    datasets = normalize_string_list(
+        config.get("datasets", []),
+        f"zfs-automation.pull_source_access.datasets must be a list for {host}",
+    )
+    if not datasets:
+        raise ValueError(f"zfs-automation.pull_source_access.datasets is required for {host}")
+
+    puller_configs = config.get("allowed_pullers", [])
+    if not isinstance(puller_configs, list) or not puller_configs:
+        raise ValueError(
+            f"zfs-automation.pull_source_access.allowed_pullers must be a non-empty list"
+            f" for {host}"
+        )
+    pullers: list[ZfsPuller] = []
+    for index, puller_config in enumerate(puller_configs):
+        if not isinstance(puller_config, dict):
+            raise ValueError(f"invalid pull source allowed_puller at index {index} for {host}")
+        name = require_safe_authorized_key_option(
+            puller_config.get("name", ""),
+            f"puller name required at index {index} for {host}",
+        )
+        from_address = require_safe_authorized_key_option(
+            puller_config.get("from", ""),
+            f"puller from address required at index {index} for {host}",
+        )
+        public_key = require_string(
+            puller_config.get("public_key", ""),
+            f"puller public_key required at index {index} for {host}",
+        )
+        if not public_key.startswith(("ssh-ed25519 ", "sk-ssh-ed25519@openssh.com ")):
+            raise ValueError(f"puller public_key at index {index} for {host} must be ed25519")
+        pullers.append(ZfsPuller(name=name, from_address=from_address, public_key=public_key))
+
+    return ZfsPullSourceAccess(
+        user=user,
+        datasets=tuple(datasets),
+        pullers=tuple(pullers),
+    )
 
 
 def resolve_pools(registry, host: str) -> list[str]:
@@ -475,17 +556,50 @@ def shell_array_block(name: str, values: list[str]) -> str:
 
 
 def build_replication_script(
-    replication_plans: list[ReplicationPlan], after_commands: list[str]
+    replication_plans: list[ReplicationPlan],
+    after_commands: list[str],
+    syncoid_options: list[str],
 ) -> str:
-    lines = ["#!/bin/bash", "", "set -euo pipefail", ""]
+    lines = [
+        "#!/bin/bash",
+        "",
+        "set -euo pipefail",
+        "",
+        'SCRIPT_LOCK_FILE="/run/lock/$(basename "$0").lock"',
+        'GLOBAL_LOCK_FILE="/run/lock/homelab-zfs-replication.lock"',
+        'exec 9>"$SCRIPT_LOCK_FILE"',
+        "if ! flock -n 9; then",
+        '  echo "$(basename "$0") is already running; exiting"',
+        "  exit 0",
+        "fi",
+        'exec 8>"$GLOBAL_LOCK_FILE"',
+        "flock 8",
+        "",
+        "wait_for_existing_replication() {",
+        "  while pgrep -af '(/usr/sbin/syncoid|zfs receive|zfs send)' >/dev/null; do",
+        '    echo "Waiting for existing ZFS replication process to finish"',
+        "    pgrep -af '(/usr/sbin/syncoid|zfs receive|zfs send)' || true",
+        "    sleep 300",
+        "  done",
+        "}",
+        "",
+        "wait_for_existing_replication",
+        "",
+    ]
     if not replication_plans:
         lines.extend(["echo 'No replication plans configured; nothing to do'", ""])
     else:
         for plan in replication_plans:
-            lines.append(
-                f"/usr/sbin/syncoid -r --delete-target-snapshots --force-delete"
-                f" {quote(plan.source)} {quote(plan.target)}"
-            )
+            command = [
+                "/usr/sbin/syncoid",
+                "-r",
+                "--delete-target-snapshots",
+                "--force-delete",
+                *syncoid_options,
+                plan.source,
+                plan.target,
+            ]
+            lines.append(" ".join(quote(item) for item in command))
             if plan.post_hook:
                 lines.append(plan.post_hook)
             lines.append("")
@@ -494,6 +608,170 @@ def build_replication_script(
         lines.append(command)
     lines.append("")
     return "\n".join(lines)
+
+
+def build_zfs_pull_source_authorized_keys(access: ZfsPullSourceAccess) -> str:
+    allowed_roots = " ".join(access.datasets)
+    lines = []
+    for puller in access.pullers:
+        options = [
+            f'from="{puller.from_address}"',
+            "restrict",
+            f'command="/usr/local/sbin/homelab-zfs-send-only {allowed_roots}"',
+        ]
+        lines.append(f"{','.join(options)} {puller.public_key}")
+    return "\n".join(lines) + "\n"
+
+
+def build_zfs_pull_source_wrapper() -> str:
+    return r"""#!/bin/bash
+
+set -euo pipefail
+
+deny() {
+    printf 'Denied ZFS pull command: %s\n' "${SSH_ORIGINAL_COMMAND:-}" >&2
+    exit 1
+}
+
+ALLOWED_ROOTS=("$@")
+COMMAND="${SSH_ORIGINAL_COMMAND:-}"
+
+[[ ${#ALLOWED_ROOTS[@]} -gt 0 ]] || deny
+[[ -n "$COMMAND" ]] || deny
+
+case "$COMMAND" in
+    "exit") exit 0 ;;
+    "echo -n") printf '' ; exit 0 ;;
+esac
+
+case "$COMMAND" in
+    *';'*|*'&'*|*'`'*|*'$'*|*'<'*|*'>'*|*$'\n'*|*$'\r'*) deny ;;
+esac
+
+trim() {
+    local text="$1"
+    text="${text#"${text%%[![:space:]]*}"}"
+    text="${text%"${text##*[![:space:]]}"}"
+    printf '%s' "$text"
+}
+
+split_args() {
+    local segment="$1"
+    local -n out_ref="$2"
+    read -r -a out_ref <<< "$segment"
+    for index in "${!out_ref[@]}"; do
+        out_ref[$index]="${out_ref[$index]//\'/}"
+        out_ref[$index]="${out_ref[$index]//\"/}"
+    done
+}
+
+case "$COMMAND" in
+    "command -v mbuffer"|"command -v lzop"|"command -v pv")
+        command -v "${COMMAND##* }" || exit 1
+        exit 0
+        ;;
+esac
+
+split_args "$COMMAND" ARGV
+
+if [[ "${ARGV[0]:-}" == "zpool" \
+    || "${ARGV[0]:-}" == "/sbin/zpool" \
+    || "${ARGV[0]:-}" == "/usr/sbin/zpool" ]]; then
+    [[ "${ARGV[1]:-}" == "get" ]] || deny
+    [[ "${ARGV[2]:-}" == "-o" && "${ARGV[3]:-}" == "value" ]] || deny
+    [[ "${ARGV[4]:-}" == "-H" && "${ARGV[5]:-}" == "feature@extensible_dataset" ]] || deny
+    [[ "${ARGV[6]:-}" == "cache" && ${#ARGV[@]} -eq 7 ]] || deny
+    exec /usr/sbin/zpool get -o value -H feature@extensible_dataset cache
+fi
+
+IFS='|' read -r -a PIPE_SEGMENTS <<< "$COMMAND"
+[[ ${#PIPE_SEGMENTS[@]} -ge 1 && ${#PIPE_SEGMENTS[@]} -le 3 ]] || deny
+
+ZFS_SEGMENT="$(trim "${PIPE_SEGMENTS[0]}")"
+split_args "$ZFS_SEGMENT" ARGV
+
+case "${ARGV[0]:-}" in
+    zfs|/sbin/zfs|/usr/sbin/zfs) ;;
+    *) deny ;;
+esac
+
+case "${ARGV[1]:-}" in
+    list|get|send|hold|release) ;;
+    *) deny ;;
+esac
+
+FOUND_DATASET=false
+for token in "${ARGV[@]:2}"; do
+    [[ "$token" == -* ]] && continue
+    dataset="${token%%[@#]*}"
+    [[ "$dataset" == cache || "$dataset" == cache/* ]] || continue
+
+    allowed=false
+    for root in "${ALLOWED_ROOTS[@]}"; do
+        if [[ "$dataset" == "$root" || "$dataset" == "$root/"* ]]; then
+            allowed=true
+            break
+        fi
+    done
+    [[ "$allowed" == true ]] || deny
+    FOUND_DATASET=true
+done
+
+[[ "$FOUND_DATASET" == true ]] || deny
+
+if [[ ${#PIPE_SEGMENTS[@]} -eq 1 ]]; then
+    exec /usr/sbin/zfs "${ARGV[@]:1}"
+fi
+
+RUN_LZOP=false
+RUN_MBUFFER=false
+MBUFFER_ARGS=()
+
+for segment in "${PIPE_SEGMENTS[@]:1}"; do
+    segment="$(trim "$segment")"
+    split_args "$segment" PIPE_ARGV
+    case "${PIPE_ARGV[0]:-}" in
+        lzop|/usr/bin/lzop)
+            [[ ${#PIPE_ARGV[@]} -eq 1 ]] || deny
+            [[ "$RUN_LZOP" == false ]] || deny
+            RUN_LZOP=true
+            ;;
+        mbuffer|/usr/bin/mbuffer)
+            [[ "$RUN_MBUFFER" == false ]] || deny
+            RUN_MBUFFER=true
+            MBUFFER_ARGS=("${PIPE_ARGV[@]:1}")
+            ;;
+        *) deny ;;
+    esac
+done
+
+if [[ "$RUN_MBUFFER" == true ]]; then
+    index=0
+    while [[ $index -lt ${#MBUFFER_ARGS[@]} ]]; do
+        case "${MBUFFER_ARGS[$index]}" in
+            -q)
+                index=$((index + 1))
+                ;;
+            -s|-m)
+                [[ $((index + 1)) -lt ${#MBUFFER_ARGS[@]} ]] || deny
+                [[ "${MBUFFER_ARGS[$((index + 1))]}" =~ ^[0-9]+[kKmMgG]?$ ]] || deny
+                index=$((index + 2))
+                ;;
+            *) deny ;;
+        esac
+    done
+fi
+
+if [[ "$RUN_LZOP" == true && "$RUN_MBUFFER" == true ]]; then
+    /usr/sbin/zfs "${ARGV[@]:1}" | /usr/bin/lzop | /usr/bin/mbuffer "${MBUFFER_ARGS[@]}"
+elif [[ "$RUN_LZOP" == true ]]; then
+    /usr/sbin/zfs "${ARGV[@]:1}" | /usr/bin/lzop
+elif [[ "$RUN_MBUFFER" == true ]]; then
+    /usr/sbin/zfs "${ARGV[@]:1}" | /usr/bin/mbuffer "${MBUFFER_ARGS[@]}"
+else
+    deny
+fi
+"""
 
 
 def build_health_check_script(pools: list[str]) -> str:
@@ -590,6 +868,7 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
         registry,
         host,
     )
+    pull_source_access = normalize_pull_source_access(registry, host)
 
     build_dir = module_dir / "build" / host
     prepare_build_dir(build_dir)
@@ -625,7 +904,11 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
             REPLICATION_SCHEDULE=job.schedule,
         )
         (build_dir / script_name).write_text(
-            build_replication_script(list(job.plans), list(job.after_commands)),
+            build_replication_script(
+                list(job.plans),
+                list(job.after_commands),
+                list(job.syncoid_options),
+            ),
             encoding="utf-8",
         )
         file_specs.extend(
@@ -642,6 +925,35 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
                     script_name,
                     f"/usr/local/bin/homelab-zfs-replication-{job.name}",
                     mode="755",
+                ),
+            ]
+        )
+
+    if pull_source_access is not None:
+        (build_dir / "homelab-zfs-send-only.sh").write_text(
+            build_zfs_pull_source_wrapper(),
+            encoding="utf-8",
+        )
+        (build_dir / "zfs-pull-datasets.conf").write_text(
+            "\n".join(pull_source_access.datasets) + "\n",
+            encoding="utf-8",
+        )
+        (build_dir / "zfs-pull-authorized-keys").write_text(
+            build_zfs_pull_source_authorized_keys(pull_source_access),
+            encoding="utf-8",
+        )
+        file_specs.extend(
+            [
+                FileSpec(
+                    "homelab-zfs-send-only.sh",
+                    "/usr/local/sbin/homelab-zfs-send-only",
+                    mode="755",
+                ),
+                FileSpec("zfs-pull-datasets.conf", "/etc/homelab/zfs-pull-datasets.conf"),
+                FileSpec(
+                    "zfs-pull-authorized-keys",
+                    "/var/lib/homelab-zfs-pull/.ssh/authorized_keys",
+                    mode="600",
                 ),
             ]
         )
@@ -680,6 +992,9 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
             ),
             "ENABLE_ZFS_SCRUB": "true" if pools and manage_scrub else "false",
             "ENABLE_ZFS_HEALTH_CHECK": "true" if pools and manage_health_check else "false",
+            "ENABLE_ZFS_PULL_SOURCE": "true" if pull_source_access is not None else "false",
+            "ZFS_PULL_SOURCE_USER": pull_source_access.user if pull_source_access else "zfs-pull",
+            "ZFS_PULL_SOURCE_HOME": "/var/lib/homelab-zfs-pull",
             "REBUILD_BUNDLE_ROOT": f"{zfs_mountpoint}/appdata/.homelab/zfs-automation",
         },
     )
