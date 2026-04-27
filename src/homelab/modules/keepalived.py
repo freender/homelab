@@ -8,10 +8,11 @@ from ..deploy import DeploySession, force_env, prepare_build_dir, stage_and_run_
 from ..hosts import HostLookupError, default_registry
 from ..module_support import FileSpec, HostArtifacts, require_text, write_file_map
 from ..output import print_action, print_error, print_sub
-from ..ssh import HostConnection, build_files, diff_many
+from ..ssh import HostConnection, build_files, diff_many, offline_mode
 
 REMOTE_ROOT = "/tmp/homelab-keepalived"
 TEMPLATE_FILES = ["healthcheck.sh", "keepalived.conf"]
+SECRETS_FILE = "keepalived.env"
 
 
 @dataclass(frozen=True)
@@ -71,10 +72,10 @@ def validate(root: Path, hosts: list[str]) -> None:
 
     registry = default_registry(root)
     for host in hosts:
-        normalize_config(registry, host)
+        normalize_config(root, registry, host)
 
 
-def normalize_config(registry, host: str) -> KeepalivedConfig:
+def normalize_config(root: Path, registry, host: str) -> KeepalivedConfig:
     try:
         host_type = str(registry.get(host, "config.type"))
     except HostLookupError as exc:
@@ -91,13 +92,22 @@ def normalize_config(registry, host: str) -> KeepalivedConfig:
         registry.get(host, "keepalived.instance_name", host),
         f"keepalived.instance_name must be non-empty for {host}",
     )
+    healthcheck_values = load_keepalived_env(root)
+    healthcheck_host_env = require_text(
+        registry.get(host, "keepalived.healthcheck_host_env", ""),
+        f"keepalived.healthcheck_host_env is required for {host}",
+    )
+    healthcheck_url_env = require_text(
+        registry.get(host, "keepalived.healthcheck_url_env", ""),
+        f"keepalived.healthcheck_url_env is required for {host}",
+    )
     healthcheck_host = require_text(
-        registry.get(host, "keepalived.healthcheck_host", ""),
-        f"keepalived.healthcheck_host is required for {host}",
+        healthcheck_values.get(healthcheck_host_env, ""),
+        f"{healthcheck_host_env} is required in {keepalived_env_path(root)} for {host}",
     )
     healthcheck_url = require_text(
-        registry.get(host, "keepalived.healthcheck_url", ""),
-        f"keepalived.healthcheck_url is required for {host}",
+        healthcheck_values.get(healthcheck_url_env, ""),
+        f"{healthcheck_url_env} is required in {keepalived_env_path(root)} for {host}",
     )
     unicast_src_ip = require_text(
         registry.get(host, "keepalived.unicast_src_ip", ""),
@@ -146,7 +156,7 @@ def normalize_config(registry, host: str) -> KeepalivedConfig:
 
 def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
     registry = default_registry(root)
-    config = normalize_config(registry, host)
+    config = normalize_config(root, registry, host)
     module_dir = root / "keepalived"
     build_dir = module_dir / "build" / host
     prepare_build_dir(build_dir)
@@ -172,6 +182,42 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
 
     write_file_map(build_dir, FILE_SPECS)
     return HostArtifacts(build_dir=build_dir, file_specs=FILE_SPECS)
+
+
+def keepalived_env_path(root: Path) -> Path:
+    secret = root / "secrets" / SECRETS_FILE
+    if offline_mode() and not secret.is_file():
+        return root / "secrets" / f"{SECRETS_FILE}.example"
+    return secret
+
+
+def load_keepalived_env(root: Path) -> dict[str, str]:
+    path = keepalived_env_path(root)
+    if not path.is_file():
+        raise ValueError(
+            f"missing keepalived env file: {path}; "
+            f"copy secrets/{SECRETS_FILE}.example to secrets/{SECRETS_FILE}"
+        )
+
+    values: dict[str, str] = {}
+    for line_number, raw_line in enumerate(
+        path.read_text(encoding="utf-8").splitlines(),
+        start=1,
+    ):
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line.removeprefix("export ").strip()
+        key, separator, value = line.partition("=")
+        if not separator:
+            raise ValueError(f"invalid env line in {path}:{line_number}")
+        key = key.strip()
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {'\"', "'"}:
+            value = value[1:-1]
+        values[key] = value
+    return values
 
 
 def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:

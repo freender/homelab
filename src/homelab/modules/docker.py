@@ -13,8 +13,6 @@ REMOTE_ROOT = "/tmp/homelab-docker"
 TEMPLATE_FILES = [
     "homelab-docker-start.service",
     "homelab-docker-start.timer",
-    "homelab-docker-backup.service",
-    "homelab-docker-backup.timer",
     "homelab-docker-update.service",
     "homelab-docker-update.timer",
     "syncthing-unpause.service",
@@ -55,9 +53,6 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
     registry = default_registry(root)
     ssh_user = str(registry.get(host, "config.user"))
     ssh_hostname = str(registry.get(host, "config.hostname", host))
-    backup_enabled = str(registry.get(host, "docker.backup", "false")).lower()
-    backup_schedule = str(registry.get(host, "docker.backup_schedule", "")).strip()
-    backup_timer_enabled = "true" if backup_enabled == "true" and backup_schedule else "false"
     update_schedule = str(registry.get(host, "docker.update_schedule", "")).strip()
     update_timer_enabled = "true" if update_schedule else "false"
     run_on_boot = str(registry.get(host, "docker.run_on_boot", "false")).lower()
@@ -89,16 +84,6 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
             templates_dir / "homelab-docker-start.timer",
             build_dir / "homelab-docker-start.timer",
             DOCKER_START_SCHEDULE=start_schedule,
-        )
-    if backup_timer_enabled == "true":
-        render_file(
-            templates_dir / "homelab-docker-backup.service",
-            build_dir / "homelab-docker-backup.service",
-        )
-        render_file(
-            templates_dir / "homelab-docker-backup.timer",
-            build_dir / "homelab-docker-backup.timer",
-            DOCKER_BACKUP_SCHEDULE=backup_schedule,
         )
     if update_timer_enabled == "true":
         render_file(
@@ -135,8 +120,6 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
     write_env_file(
         build_dir / "env",
         {
-            "DOCKER_BACKUP": backup_enabled,
-            "ENABLE_DOCKER_BACKUP_TIMER": backup_timer_enabled,
             "ENABLE_DOCKER_UPDATE_TIMER": update_timer_enabled,
             "RUN_DOCKER_START_ON_BOOT": run_on_boot,
             "ENABLE_DOCKER_START_TIMER": timer_enabled,
@@ -166,17 +149,6 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
             (
                 build_dir / "homelab-docker-start.timer",
                 "/etc/systemd/system/homelab-docker-start.timer",
-            ),
-        ]
-    if backup_timer_enabled == "true":
-        diff_pairs += [
-            (
-                build_dir / "homelab-docker-backup.service",
-                "/etc/systemd/system/homelab-docker-backup.service",
-            ),
-            (
-                build_dir / "homelab-docker-backup.timer",
-                "/etc/systemd/system/homelab-docker-backup.timer",
             ),
         ]
     if update_timer_enabled == "true":
@@ -212,13 +184,6 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
                 "/etc/systemd/system/syncthing-pause.timer",
             ),
         ]
-
-    if backup_enabled == "true":
-        _, message = connection.remote_diff(
-            root / "docker" / "scripts" / "backup.sh",
-            "/mnt/cache/appdata/scripts/backup.sh",
-        )
-        print_sub(message)
 
     if dry_run:
         print_sub(f"[DRY-RUN] Would deploy to {host}:{REMOTE_ROOT}/")

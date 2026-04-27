@@ -130,7 +130,7 @@ Keep the same flow used across modules:
 - Prefer a new module when the capability is independently deployable (`./deploy <module> <host>` makes sense on its own), has its own validation requirements, or has a distinct service/restart/reboot/rebuild boundary.
 - Prefer a feature or subfeature when it only changes what a parent module renders or installs and shares the same install/reload lifecycle.
 - Good module examples in this repo: `pve-gpu-passthrough`, `ssh-config`, `zfs-automation`, `pve-backup`.
-- Good feature examples in this repo: `ubuntu-setup.wireguard`, `ubuntu-setup.samba`, `ubuntu-setup.network.pin_interface`, `docker.backup`, `zfs-automation.sanoid`, `zfs-automation.replication`.
+- Good feature examples in this repo: `ubuntu-setup.wireguard`, `ubuntu-setup.samba`, `ubuntu-setup.network.pin_interface`, `docker.update_schedule`, `zfs-automation.sanoid`, `zfs-automation.replication`.
 - If a concern owns packages, systemd units, generated config, and its own rebuild behavior, it usually deserves a module.
 - If a concern is just policy/data for a parent module, keep it inside the parent instead of creating a thin wrapper module.
 
@@ -145,6 +145,7 @@ Keep the same flow used across modules:
 - Never commit `.env`, `telegram.env`, or actual secret values.
 - `.env.example` is allowed.
 - Validate secret file existence before starting deployment.
+- Keep real domain names, public route hosts, and externally reachable URLs out of committed inventory/templates; put them in ignored `.env` files and commit only placeholder `.env.example` values.
 
 ### ShellCheck directives
 - Use suppressions only when necessary and localize them near the affected line.

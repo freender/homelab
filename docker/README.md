@@ -18,7 +18,7 @@ cd ~/homelab
 
 ## Host Registry
 
-Per-host settings live in `docker/hosts.conf` using `docker.*` keys.
+Per-host settings live in `hosts.conf` using `docker.*` keys.
 
 ### What Gets Deployed
 
@@ -26,12 +26,9 @@ Per-host settings live in `docker/hosts.conf` using `docker.*` keys.
 - `start.sh` - Updates and starts Docker stacks (Traefik first), cleans up unused images and volumes
 - `rm.sh` - Stops all Docker stacks with confirmation
 
-**Hosts with backup enabled** (`/mnt/cache/appdata/scripts/`):
-- `backup.sh` - Backup appdata with smart container orchestration
-
-**Hosts with backup schedule configured** (`/etc/systemd/system/`):
-- `homelab-docker-backup.service`
-- `homelab-docker-backup.timer`
+**Hosts with update schedules configured** (`/etc/systemd/system/`):
+- `homelab-docker-update.service`
+- `homelab-docker-update.timer`
 
 ### Directory Structure
 
@@ -40,28 +37,18 @@ All hosts:
   /mnt/cache/appdata/
     - start.sh, rm.sh     # Docker management scripts
 
-Hosts with backup enabled:
-  /mnt/cache/appdata/scripts/
-    - backup.sh           # Backup automation
-  /mnt/cache/appdata/scripts/logs/
-    - backup.log          # Backup output
-
-Hosts with backup schedule configured:
+Hosts with update schedules configured:
   /etc/systemd/system/
-    - homelab-docker-backup.service
-    - homelab-docker-backup.timer
+    - homelab-docker-update.service
+    - homelab-docker-update.timer
 
 tower:
   /mnt/cache/appdata/scripts/  # Managed by User Scripts plugin
 ```
 
-### Backup Schedule
+### Update Schedule
 
-**helm:**
-- `homelab-docker-backup.timer` runs daily at 02:00 local time
-
-**tower:**
-- No repo-managed backup timer configured
+Docker auto-update is handled by `homelab-docker-update.timer`, rendered from `hosts.conf` via `docker.update_schedule`. The timer runs `start.sh`, which pulls images before `docker compose up -d` by default.
 
 ## Traefik Sync
 
@@ -80,9 +67,6 @@ cd /mnt/cache/appdata && ./start.sh
 
 # Stop all containers
 cd /mnt/cache/appdata && ./rm.sh
-
-# Manual backup (helm only)
-/mnt/cache/appdata/scripts/backup.sh
 ```
 
 ## Scripts
@@ -100,13 +84,3 @@ Stops all Docker Compose stacks:
 - Interactive confirmation required
 - Removes orphaned containers
 - Processes all subdirectories
-
-### backup.sh
-Smart backup with container orchestration (helm only):
-- Stops non-critical containers
-- Never stops: traefik2, socket-proxy2, crowdsec, traefik-redis2, traefik-kop2, traefik-logrotate, traefik-sync2
-- Rsyncs appdata to backup location
-- Restarts containers and updates images
-- Verifies container health
-
-`homelab-docker-backup.timer` is rendered from `hosts.conf` via `docker.backup_schedule`.

@@ -58,8 +58,7 @@ Remote apt dist-upgrade across PVE and Ubuntu hosts
 Docker management scripts
 - `start.sh`: Update and start all containers (Traefik first)
 - `rm.sh`: Stop all containers
-- `backup.sh`: Backup appdata with container orchestration
-- Optional systemd timers for Docker start, backup, and Syncthing pause/unpause windows
+- Optional systemd timers for Docker start/update and Syncthing pause/unpause windows
 
 ```bash
 ./deploy docker all
