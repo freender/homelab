@@ -142,6 +142,7 @@ def validate(root: Path, hosts: list[str]) -> None:
     for host in hosts:
         normalize_snapshot_plans(registry, host)
         normalize_replication_config(registry, host)
+        normalize_replication_config(registry, host, include_disabled=True)
         normalize_pull_source_access(registry, host)
         pools = resolve_pools(registry, host)
         if not pools:
@@ -237,9 +238,6 @@ def normalize_snapshot_plans(registry, host: str) -> list[SnapshotPlan]:
                 plan.get("exclude", plan.get("excludes", [])),
                 f"snapshot plan excludes must be a list for {host}",
             )
-            # auto_exclude_replication is not set for explicit plans — the caller is
-            # responsible for listing replication sources under 'exclude' if they
-            # should be omitted from sanoid snapshots.
             plans.append(
                 SnapshotPlan(
                     dataset=dataset,
@@ -249,6 +247,7 @@ def normalize_snapshot_plans(registry, host: str) -> list[SnapshotPlan]:
                     weekly=str(plan.get("weekly", 4)),
                     monthly=str(plan.get("monthly", 3)),
                     yearly=str(plan.get("yearly", 0)),
+                    auto_exclude_replication=True,
                 )
             )
         return plans
@@ -272,7 +271,7 @@ def normalize_snapshot_plans(registry, host: str) -> list[SnapshotPlan]:
 
 
 def normalize_replication_config(
-    registry, host: str
+    registry, host: str, *, include_disabled: bool = False
 ) -> list[ReplicationJob]:
     jobs = registry.get(host, "zfs-automation.replication_jobs", None)
     if jobs is not None:
@@ -292,12 +291,13 @@ def normalize_replication_config(
                 )
             seen_job_names.add(normalized_job_name)
 
-            if not normalize_bool(
+            enabled = normalize_bool(
                 job_config.get("enabled"),
                 True,
                 f"enabled for replication job '{normalized_job_name}' must be true or false"
                 f" for {host}",
-            ):
+            )
+            if not enabled and not include_disabled:
                 continue
 
             schedule = str(job_config.get("schedule", "*-*-* 02:30:00"))
@@ -510,10 +510,7 @@ def build_sanoid_config(
     replication_jobs: list[ReplicationJob],
 ) -> str:
     lines: list[str] = []
-    replication_datasets = (
-        {plan.source for job in replication_jobs for plan in job.plans}
-        | {plan.target for job in replication_jobs for plan in job.plans}
-    )
+    replication_datasets = {plan.target for job in replication_jobs for plan in job.plans}
     for plan in snapshot_plans:
         lines.extend(
             [
@@ -536,15 +533,29 @@ def build_sanoid_config(
         }
         if plan.auto_exclude_replication:
             excluded.update(
-                dataset
+                replication_exclude
                 for dataset in replication_datasets
-                if dataset == plan.dataset or dataset.startswith(f"{plan.dataset}/")
+                for replication_exclude in local_replication_excludes(dataset, plan.dataset)
             )
 
         for dataset in sorted(excluded):
             lines.extend([f"[{dataset}]", "autosnap = no", "autoprune = no", ""])
 
     return "\n".join(lines).rstrip() + "\n"
+
+
+def local_replication_excludes(dataset: str, root_dataset: str) -> list[str]:
+    if is_remote_dataset(dataset):
+        return []
+    if dataset != root_dataset and not dataset.startswith(f"{root_dataset}/"):
+        return []
+
+    parts = dataset.split("/")
+    root_parts = root_dataset.split("/")
+    excludes = []
+    for index in range(len(root_parts) + 1, len(parts) + 1):
+        excludes.append("/".join(parts[:index]))
+    return excludes
 
 
 def shell_array_block(name: str, values: list[str]) -> str:
@@ -868,13 +879,18 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
         registry,
         host,
     )
+    replication_exclude_jobs = normalize_replication_config(
+        registry,
+        host,
+        include_disabled=True,
+    )
     pull_source_access = normalize_pull_source_access(registry, host)
 
     build_dir = module_dir / "build" / host
     prepare_build_dir(build_dir)
     copy_files(config_dir, build_dir, STATIC_CONFIG_FILES)
     (build_dir / "sanoid.conf").write_text(
-        build_sanoid_config(snapshot_plans, replication_jobs),
+        build_sanoid_config(snapshot_plans, replication_exclude_jobs),
         encoding="utf-8",
     )
     render_file(
