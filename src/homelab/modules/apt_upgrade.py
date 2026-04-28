@@ -38,8 +38,8 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
     except HostLookupError as exc:
         raise ValueError(str(exc)) from exc
 
-    if host_type not in {"pve", "ubuntu"}:
-        print_sub(f"Skipping {host}: apt-upgrade supports type pve/ubuntu only")
+    if host_type != "ubuntu":
+        print_sub(f"Skipping {host}: apt-upgrade supports type ubuntu only")
         return
 
     autoupgrade = str(registry.get(host, "apt-upgrade.autoupgrade", "false")).lower()
@@ -47,12 +47,15 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
 
     build_dir = root / "apt-upgrade" / "build" / host
     prepare_build_dir(build_dir)
-    write_service(build_dir, cleanup=False)
+    restart_docker_stacks = registry.has(host, "docker")
+    write_service(build_dir, cleanup=False, restart_docker_stacks=restart_docker_stacks)
     if autoupgrade == "true":
         write_timer(build_dir, schedule)
     write_env(build_dir, autoupgrade=autoupgrade, schedule=schedule)
 
-    connection = HostConnection(host)
+    ssh_hostname = str(registry.get(host, "config.hostname", host))
+    ssh_user = str(registry.get(host, "config.user"))
+    connection = HostConnection(host, user=ssh_user, hostname=ssh_hostname)
     print_sub("Comparing with remote configs...")
     _, message = connection.remote_diff(
         build_dir / "service",
@@ -78,7 +81,7 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
     stage_and_install(root, build_dir, connection, force=force)
 
 
-def write_service(build_dir: Path, cleanup: bool) -> None:
+def write_service(build_dir: Path, cleanup: bool, restart_docker_stacks: bool) -> None:
     lines = [
         "[Unit]",
         "Description=Homelab daily apt update and dist-upgrade",
@@ -99,6 +102,12 @@ def write_service(build_dir: Path, cleanup: bool) -> None:
                 ),
                 "ExecStart=/usr/bin/apt-get -y autoclean",
             ]
+        )
+    if restart_docker_stacks:
+        lines.append(
+            "ExecStartPost=/bin/bash -lc 'if [[ -x /mnt/cache/appdata/start.sh ]]; "
+            "then sleep 90; /mnt/cache/appdata/start.sh --no-pull || "
+            "{ sleep 60; /mnt/cache/appdata/start.sh --no-pull; }; fi'"
         )
     (build_dir / "service").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
