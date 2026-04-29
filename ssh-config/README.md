@@ -30,10 +30,11 @@ Per-host connection metadata lives in `hosts.conf` under `config`:
 - `config.agent` (only where needed, like `exo`)
 
 Optional generated SSH overrides also live under `config`:
+- `config.ssh_config.hostname`
 - `config.ssh_config.user`
 - `config.ssh_config.sshkey`
 
-When those overrides differ from the canonical deploy connection, the generator keeps the base host name for the interactive default and also emits a `<host>-root` alias for the canonical deploy/root path.
+When user/key overrides differ from the canonical deploy connection, the generator keeps the base host name for the interactive default and also emits a `<host>-root` alias for the canonical deploy/root path.
 
 Hosts currently managed by this module:
 - `riven`
@@ -45,15 +46,16 @@ Hosts currently managed by this module:
 - **Connection keepalive:** Uses server alive probes to survive idle sessions
 - **Known host privacy:** Uses `HashKnownHosts=yes`
 - **Inventory-driven identities:** Uses `hosts.conf` `config.sshkey` metadata to assign `homelab` vs `infra`
+- **Offsite identity isolation:** Uses `offsite` for root/admin access to cinci and cottonwood
 - **Agent-aware paths:** `exo` uses `config.agent: op` and `.pub` identity stubs; other hosts use standard key paths
-- **DNS-based:** All hosts use internal DNS instead of IPs
+- **DNS-based by default:** Hosts use internal DNS unless `config.ssh_config.hostname` intentionally points an interactive alias at an IP or alternate name.
 
 ## Troubleshooting
 
-- If `zavala` asks for password even with key present, fix key ownership inside the Incus container:
+- `zavala` is a PBS container on cinci and is not emitted as a direct SSH alias unless container SSH is intentionally exposed. Use `cinci-root` plus `docker exec` for container administration:
 
 ```bash
-ssh cinci 'sudo incus exec zavala -- chown root:root /root/.ssh/authorized_keys && sudo incus exec zavala -- chmod 600 /root/.ssh/authorized_keys'
+ssh cinci-root 'docker exec zavala proxmox-backup-manager datastore list'
 ```
 
 ## Structure

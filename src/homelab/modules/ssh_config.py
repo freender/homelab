@@ -16,6 +16,7 @@ REMOTE_ROOT = "/tmp/homelab-ssh-config"
 IDENTITY_FILES = {
     "homelab": "id_ed25519",
     "infra": "id_ed25519_pve",
+    "offsite": "id_ed25519_offsite",
 }
 
 
@@ -29,12 +30,13 @@ def collect_ssh_entries(registry) -> list[dict[str, str]]:
         except (HostLookupError, ValueError):
             continue
 
+        ssh_hostname = str(registry.get(host, "config.ssh_config.hostname", hostname))
         user = str(registry.get(host, "config.ssh_config.user", default_user))
         sshkey = str(registry.get(host, "config.ssh_config.sshkey", default_sshkey))
         entries.append(
             {
                 "name": host,
-                "hostname": hostname,
+                "hostname": ssh_hostname,
                 "user": user,
                 "sshkey": sshkey,
             }

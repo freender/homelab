@@ -41,7 +41,7 @@ load_file_map() {
 mapped_dest() {
     local name="$1"
 
-    if [[ ! -v FILE_MAP_DEST["$name"] ]]; then
+    if [[ -z "${FILE_MAP_DEST[$name]+x}" ]]; then
         print_error "missing file-map entry: $name"
         return 1
     fi
@@ -52,7 +52,7 @@ mapped_dest() {
 mapped_mode() {
     local name="$1"
 
-    if [[ ! -v FILE_MAP_MODE["$name"] ]]; then
+    if [[ -z "${FILE_MAP_MODE[$name]+x}" ]]; then
         print_error "missing file-map mode: $name"
         return 1
     fi
