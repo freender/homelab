@@ -50,6 +50,8 @@ class SnapshotPlan:
     weekly: str
     monthly: str
     yearly: str
+    recursive: bool = True
+    process_children_only: bool = True
     auto_exclude_replication: bool = False
 
 
@@ -247,6 +249,17 @@ def normalize_snapshot_plans(registry, host: str) -> list[SnapshotPlan]:
                     weekly=str(plan.get("weekly", 4)),
                     monthly=str(plan.get("monthly", 3)),
                     yearly=str(plan.get("yearly", 0)),
+                    recursive=normalize_bool(
+                        plan.get("recursive"),
+                        True,
+                        f"recursive for snapshot plan {dataset} must be true or false for {host}",
+                    ),
+                    process_children_only=normalize_bool(
+                        plan.get("process_children_only"),
+                        True,
+                        "process_children_only for snapshot plan "
+                        f"{dataset} must be true or false for {host}",
+                    ),
                     auto_exclude_replication=True,
                 )
             )
@@ -265,6 +278,8 @@ def normalize_snapshot_plans(registry, host: str) -> list[SnapshotPlan]:
             weekly=str(registry.get(host, "zfs-automation.sanoid.weekly", 4)),
             monthly=str(registry.get(host, "zfs-automation.sanoid.monthly", 3)),
             yearly=str(registry.get(host, "zfs-automation.sanoid.yearly", 0)),
+            recursive=True,
+            process_children_only=True,
             auto_exclude_replication=True,
         )
     ]
@@ -515,8 +530,8 @@ def build_sanoid_config(
         lines.extend(
             [
                 f"[{plan.dataset}]",
-                "recursive = yes",
-                "process_children_only = yes",
+                f"recursive = {'yes' if plan.recursive else 'no'}",
+                f"process_children_only = {'yes' if plan.process_children_only else 'no'}",
                 f"hourly = {plan.hourly}",
                 f"daily = {plan.daily}",
                 f"weekly = {plan.weekly}",
@@ -691,8 +706,17 @@ if [[ "${ARGV[0]:-}" == "zpool" \
     [[ "${ARGV[1]:-}" == "get" ]] || deny
     [[ "${ARGV[2]:-}" == "-o" && "${ARGV[3]:-}" == "value" ]] || deny
     [[ "${ARGV[4]:-}" == "-H" && "${ARGV[5]:-}" == "feature@extensible_dataset" ]] || deny
-    [[ "${ARGV[6]:-}" == "cache" && ${#ARGV[@]} -eq 7 ]] || deny
-    exec /usr/sbin/zpool get -o value -H feature@extensible_dataset cache
+    [[ ${#ARGV[@]} -eq 7 ]] || deny
+    requested_pool="${ARGV[6]:-}"
+    pool_allowed=false
+    for root in "${ALLOWED_ROOTS[@]}"; do
+        if [[ "${root%%/*}" == "$requested_pool" ]]; then
+            pool_allowed=true
+            break
+        fi
+    done
+    [[ "$pool_allowed" == true ]] || deny
+    exec /usr/sbin/zpool get -o value -H feature@extensible_dataset "$requested_pool"
 fi
 
 IFS='|' read -r -a PIPE_SEGMENTS <<< "$COMMAND"
@@ -715,17 +739,23 @@ FOUND_DATASET=false
 for token in "${ARGV[@]:2}"; do
     [[ "$token" == -* ]] && continue
     dataset="${token%%[@#]*}"
-    [[ "$dataset" == cache || "$dataset" == cache/* ]] || continue
 
     allowed=false
+    known_pool=false
     for root in "${ALLOWED_ROOTS[@]}"; do
         if [[ "$dataset" == "$root" || "$dataset" == "$root/"* ]]; then
             allowed=true
             break
         fi
+        if [[ "$dataset" == "${root%%/*}" || "$dataset" == "${root%%/*}/"* ]]; then
+            known_pool=true
+        fi
     done
-    [[ "$allowed" == true ]] || deny
-    FOUND_DATASET=true
+    if [[ "$allowed" == true ]]; then
+        FOUND_DATASET=true
+        continue
+    fi
+    [[ "$known_pool" == false ]] || deny
 done
 
 [[ "$FOUND_DATASET" == true ]] || deny

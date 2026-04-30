@@ -92,9 +92,10 @@ def validate(root: Path, hosts: list[str]) -> None:
                 source = str(mount.get("source", "")).strip()
                 target = str(mount.get("target", "")).strip()
                 backup = str(mount.get("backup", "")).strip()
-                if not source.startswith("/"):
+                if not is_valid_root_mount_source(source):
                     raise ValueError(
-                        f"{host}: {ctid} source must be absolute for root mount {mount_index}"
+                        f"{host}: {ctid} source must be absolute or a Proxmox volume "
+                        f"for root mount {mount_index}"
                     )
                 if not target.startswith("/mnt/"):
                     raise ValueError(
@@ -117,31 +118,38 @@ def validate(root: Path, hosts: list[str]) -> None:
                         f"{host}: {ctid} idmapped root must be absolute: {root_path}"
                     )
 
+            prune_idmapped_roots = container.get("prune_idmapped_roots", [])
+            if not isinstance(prune_idmapped_roots, list):
+                raise ValueError(f"{host}: {ctid} prune_idmapped_roots must be a list")
+            for root_path in prune_idmapped_roots:
+                if not str(root_path).startswith("/"):
+                    raise ValueError(
+                        f"{host}: {ctid} prune idmapped root must be absolute: {root_path}"
+                    )
+
             use_idmapped_mounts = container.get("use_idmapped_mounts", True)
             if str(use_idmapped_mounts).lower() not in {"0", "1", "false", "true"}:
                 raise ValueError(f"{host}: {ctid} use_idmapped_mounts must be 0/1/false/true")
 
             idmapped_mounts = container.get("idmapped_mounts", [])
-            if not idmapped_mounts and str(container.get("export_media_storage", "")).lower() in {
-                "1",
-                "true",
-            }:
+            if not isinstance(idmapped_mounts, list):
+                raise ValueError(f"{host}: {ctid} idmapped_mounts must be a list")
+            if str(container.get("export_media_storage", "")).lower() in {"1", "true"}:
                 media_storage_host = str(container.get("media_storage_target_host", host)).strip()
                 if not media_storage_host:
                     raise ValueError(f"{host}: {ctid} media_storage_target_host must be non-empty")
                 media_storage = load_media_storage(registry, media_storage_host)
-                idmapped_mounts = [
+                exported_mounts = [
                     {"source": source, "target": target}
                     for source, target in (
                         () if media_storage is None else media_storage.export_idmapped_mounts()
                     )
                 ]
-                if not idmapped_mounts:
+                if not exported_mounts:
                     raise ValueError(
                         f"{host}: {ctid} export_media_storage resolved no media mounts"
                     )
-            if not isinstance(idmapped_mounts, list):
-                raise ValueError(f"{host}: {ctid} idmapped_mounts must be a list")
+                idmapped_mounts = [*idmapped_mounts, *exported_mounts]
             if not root_mounts and not idmapped_mounts:
                 raise ValueError(
                     f"{host}: {ctid} must define at least one root_mount or idmapped_mount"
@@ -185,13 +193,16 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
         ctid = str(container["ctid"])
         root_mounts = normalize_root_mounts(container["root_mounts"])
         idmapped_roots = [str(path) for path in container.get("idmapped_roots", [])]
+        prune_idmapped_roots = [
+            str(path) for path in container.get("prune_idmapped_roots", [])
+        ]
         idmapped_exclude = [str(path) for path in container.get("idmapped_exclude", [])]
         use_idmapped_mounts = str(container.get("use_idmapped_mounts", True)).lower() in {
             "1",
             "true",
         }
         idmapped_mounts_raw = container.get("idmapped_mounts", [])
-        if not idmapped_mounts_raw and str(container.get("export_media_storage", "")).lower() in {
+        if str(container.get("export_media_storage", "")).lower() in {
             "1",
             "true",
         }:
@@ -199,14 +210,15 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
             if not media_storage_host:
                 raise ValueError(f"{host}: {ctid} media_storage_target_host must be non-empty")
             media_storage = load_media_storage(registry, media_storage_host)
-            idmapped_mounts_raw = [
+            exported_mounts = [
                 {"source": source, "target": target}
                 for source, target in (
                     () if media_storage is None else media_storage.export_idmapped_mounts()
                 )
             ]
-            if not idmapped_mounts_raw:
+            if not exported_mounts:
                 raise ValueError(f"{host}: {ctid} export_media_storage resolved no media mounts")
+            idmapped_mounts_raw = [*idmapped_mounts_raw, *exported_mounts]
         idmapped_mounts = normalize_idmapped_mounts(idmapped_mounts_raw)
         features = normalize_features(container.get("features", {}))
         leaf_roots = idmapped_roots
@@ -217,6 +229,7 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
             current_config,
             root_mounts,
             idmapped_roots,
+            prune_idmapped_roots,
             leaf_mounts,
             idmapped_mounts,
             features,
@@ -268,6 +281,15 @@ def normalize_root_mounts(root_mounts: list[dict[str, object]]) -> list[dict[str
             }
         )
     return mounts
+
+
+def is_valid_root_mount_source(source: str) -> bool:
+    if source.startswith("/"):
+        return True
+    if any(char.isspace() for char in source) or "," in source:
+        return False
+    storage, separator, volume = source.partition(":")
+    return bool(storage and separator and volume)
 
 
 def normalize_features(features: dict[str, object]) -> dict[str, str]:
@@ -335,6 +357,7 @@ def render_config(
     current_config: str,
     root_mounts: list[dict[str, str]],
     idmapped_roots: list[str],
+    prune_idmapped_roots: list[str],
     leaf_mounts: list[str],
     idmapped_mounts: list[dict[str, str]],
     features: dict[str, str],
@@ -361,6 +384,7 @@ def render_config(
         + idmap_suffix
         for mountpoint in leaf_mounts
         if mountpoint not in explicit_idmapped_sources and mountpoint not in managed_root_sources
+        and f"/mnt/{mountpoint.lstrip('/')}" not in managed_root_targets
     ] + [
         f"lxc.mount.entry: {mount['source']} {mount['target'].lstrip('/')}"
         " none bind,create=dir"
@@ -369,6 +393,7 @@ def render_config(
     ]
     managed_idmapped_sources = {
         *idmapped_roots,
+        *prune_idmapped_roots,
         *(mount["source"] for mount in idmapped_mounts),
     }
 
