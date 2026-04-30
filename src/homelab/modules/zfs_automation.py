@@ -586,10 +586,13 @@ def build_replication_script(
     after_commands: list[str],
     syncoid_options: list[str],
 ) -> str:
+    syncoid_options_block = shell_array_block("SYNCOID_OPTIONS", syncoid_options)
     lines = [
         "#!/bin/bash",
         "",
         "set -euo pipefail",
+        "",
+        syncoid_options_block,
         "",
         'SCRIPT_LOCK_FILE="/run/lock/$(basename "$0").lock"',
         'GLOBAL_LOCK_FILE="/run/lock/homelab-zfs-replication.lock"',
@@ -609,6 +612,72 @@ def build_replication_script(
         "  done",
         "}",
         "",
+        "syncoid_sshkey() {",
+        "  local option",
+        "  for option in \"${SYNCOID_OPTIONS[@]}\"; do",
+        "    case \"$option\" in",
+        "      --sshkey=*) printf '%s\\n' \"${option#--sshkey=}\"; return 0 ;;",
+        "    esac",
+        "  done",
+        "  return 1",
+        "}",
+        "",
+        "list_snapshot_names() {",
+        "  local dataset_ref=\"$1\"",
+        "  local dataset remote sshkey",
+        "",
+        "  if [[ \"$dataset_ref\" == *:* ]]; then",
+        "    remote=\"${dataset_ref%%:*}\"",
+        "    dataset=\"${dataset_ref#*:}\"",
+        "    if sshkey=\"$(syncoid_sshkey)\"; then",
+        "      ssh -i \"$sshkey\" \"$remote\" zfs list -H -t snapshot -o name \\",
+        "        -s creation \"$dataset\"",
+        "    else",
+        "      ssh \"$remote\" zfs list -H -t snapshot -o name -s creation \\",
+        "        \"$dataset\"",
+        "    fi",
+        "  else",
+        "    dataset=\"$dataset_ref\"",
+        "    zfs list -H -t snapshot -o name -s creation \"$dataset\"",
+        "  fi | sed \"s#^${dataset}@##\"",
+        "}",
+        "",
+        "require_common_snapshot_lineage() {",
+        "  local source=\"$1\"",
+        "  local target=\"$2\"",
+        "  local source_snaps target_snaps common_snaps",
+        "",
+        "  if ! zfs list -H -o name \"$target\" >/dev/null 2>&1; then",
+        "    return 0",
+        "  fi",
+        "",
+        "  source_snaps=\"$(mktemp)\"",
+        "  target_snaps=\"$(mktemp)\"",
+        "  common_snaps=\"$(mktemp)\"",
+        "",
+        "  list_snapshot_names \"$source\" | sort -u > \"$source_snaps\"",
+        "  list_snapshot_names \"$target\" | sort -u > \"$target_snaps\"",
+        "",
+        "  if [[ ! -s \"$target_snaps\" ]]; then",
+        "    echo \"ERROR: target $target exists but has no snapshots; refusing\" \\",
+        "      \"replication without known lineage\" >&2",
+        "    exit 1",
+        "  fi",
+        "  if [[ ! -s \"$source_snaps\" ]]; then",
+        "    echo \"ERROR: source $source has no snapshots; refusing replication\" >&2",
+        "    exit 1",
+        "  fi",
+        "",
+        "  comm -12 \"$source_snaps\" \"$target_snaps\" > \"$common_snaps\"",
+        "  if [[ ! -s \"$common_snaps\" ]]; then",
+        "    echo \"ERROR: source $source and target $target have no common\" \\",
+        "      \"snapshots; refusing destructive replication\" >&2",
+        "    exit 1",
+        "  fi",
+        "",
+        "  rm -f \"$source_snaps\" \"$target_snaps\" \"$common_snaps\"",
+        "}",
+        "",
         "wait_for_existing_replication",
         "",
     ]
@@ -621,11 +690,19 @@ def build_replication_script(
                 "-r",
                 "--delete-target-snapshots",
                 "--force-delete",
-                *syncoid_options,
+                '"${SYNCOID_OPTIONS[@]}"',
                 plan.source,
                 plan.target,
             ]
-            lines.append(" ".join(quote(item) for item in command))
+            lines.append(
+                f"require_common_snapshot_lineage {quote(plan.source)} {quote(plan.target)}"
+            )
+            lines.append(
+                " ".join(
+                    item if item == '"${SYNCOID_OPTIONS[@]}"' else quote(item)
+                    for item in command
+                )
+            )
             if plan.post_hook:
                 lines.append(plan.post_hook)
             lines.append("")
