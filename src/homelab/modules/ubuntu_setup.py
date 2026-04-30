@@ -27,7 +27,8 @@ class FileSpec:
 @dataclass(frozen=True)
 class HostArtifacts:
     build_dir: Path
-    zfs_mountpoint: str
+    homelab_state_dir: str
+    storage_mountpoint: str
     deploy_user: str
     samba_enabled: bool
     wireguard_enabled: bool
@@ -41,20 +42,20 @@ FILE_SPECS = (
     FileSpec("sshd-hardening.conf", "/etc/ssh/sshd_config.d/99-disable-password-auth.conf"),
     FileSpec("zfs.conf", "/etc/modprobe.d/zfs.conf"),
     FileSpec("99-inotify.conf", "/etc/sysctl.d/99-inotify.conf"),
-    FileSpec("rebuild.sh", "{zfs_mountpoint}/appdata/scripts/rebuild.sh", mode="755"),
+    FileSpec("rebuild.sh", "{homelab_state_dir}/ubuntu-setup/rebuild.sh", mode="755"),
     FileSpec(
         "docker-install.sh",
-        "{zfs_mountpoint}/appdata/.homelab/ubuntu-setup/docker-install.sh",
+        "{homelab_state_dir}/ubuntu-setup/docker-install.sh",
         mode="755",
     ),
     FileSpec(
         "fix_backup_permissions.sh",
-        "{zfs_mountpoint}/appdata/.homelab/ubuntu-setup/fix_backup_permissions.sh",
+        "{homelab_state_dir}/ubuntu-setup/fix_backup_permissions.sh",
         mode="755",
     ),
     FileSpec(
         "pin-primary-nic.sh",
-        "{zfs_mountpoint}/appdata/.homelab/ubuntu-setup/pin-primary-nic.sh",
+        "{homelab_state_dir}/ubuntu-setup/pin-primary-nic.sh",
         mode="755",
     ),
     FileSpec("notify-failure.sh", "/usr/local/bin/homelab-notify-failure", mode="755"),
@@ -135,7 +136,7 @@ def load_network_mac(root: Path, host: str) -> str:
 def resolve_remote_path(spec: FileSpec, artifacts: HostArtifacts) -> str:
     return spec.remote_path.format(
         deploy_user=artifacts.deploy_user,
-        zfs_mountpoint=artifacts.zfs_mountpoint,
+        homelab_state_dir=artifacts.homelab_state_dir,
     )
 
 
@@ -237,8 +238,11 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
     primary_interface_mac = load_network_mac(root, host)
     samba_enabled = str(registry.get(host, "ubuntu-setup.samba", "false")).lower() == "true"
     wireguard_enabled = str(registry.get(host, "ubuntu-setup.wireguard", "false")).lower() == "true"
-    zfs_pool = str(registry.get(host, "config.zfs_pool", "cache"))
-    zfs_mountpoint = str(registry.get(host, "config.zfs_mountpoint", f"/mnt/{zfs_pool}"))
+    zfs_pool = str(registry.get(host, "ubuntu-setup.zfs_pool", "cache"))
+    storage_mountpoint = str(
+        registry.get(host, "ubuntu-setup.storage_mountpoint", f"/mnt/{zfs_pool}")
+    )
+    homelab_state_dir = str(registry.get(host, "config.homelab_state_dir", "/var/lib/homelab"))
     zfs_arc_max = str(registry.get(host, "ubuntu-setup.zfs_arc_max", "8589934592"))
     notifications_enabled = False
     telegram_path: Path | None = None
@@ -268,7 +272,8 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
         SYSTEM_HOSTNAME=system_hostname,
         SYSTEM_TIMEZONE=system_timezone,
         ZFS_POOL=zfs_pool,
-        ZFS_MOUNTPOINT=zfs_mountpoint,
+        HOMELAB_STATE_DIR=homelab_state_dir,
+        STORAGE_MOUNTPOINT=storage_mountpoint,
     )
     render_file(
         templates_dir / "homelab-notify-failure@.service",
@@ -295,16 +300,18 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
             "WIREGUARD_ENABLED": "true" if wireguard_enabled else "false",
             "NOTIFICATIONS_ENABLED": "true" if notifications_enabled else "false",
             "ZFS_ARC_MAX": zfs_arc_max,
-            "ZFS_MOUNTPOINT": zfs_mountpoint,
+            "HOMELAB_STATE_DIR": homelab_state_dir,
+            "STORAGE_MOUNTPOINT": storage_mountpoint,
             "NOTIFY_SCRIPT_DEST": "/usr/local/bin/homelab-notify-failure",
             "TELEGRAM_ENV_DEST": "/etc/homelab/telegram.env",
-            "REBUILD_BUNDLE_ROOT": f"{zfs_mountpoint}/appdata/.homelab/ubuntu-setup",
+            "REBUILD_BUNDLE_ROOT": f"{homelab_state_dir}/ubuntu-setup",
         },
     )
 
     artifacts = HostArtifacts(
         build_dir=build_dir,
-        zfs_mountpoint=zfs_mountpoint,
+        homelab_state_dir=homelab_state_dir,
+        storage_mountpoint=storage_mountpoint,
         deploy_user=user,
         samba_enabled=samba_enabled,
         wireguard_enabled=wireguard_enabled,
@@ -314,7 +321,8 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
     file_specs = build_file_specs(artifacts)
     artifacts = HostArtifacts(
         build_dir=build_dir,
-        zfs_mountpoint=zfs_mountpoint,
+        homelab_state_dir=homelab_state_dir,
+        storage_mountpoint=storage_mountpoint,
         deploy_user=user,
         samba_enabled=samba_enabled,
         wireguard_enabled=wireguard_enabled,

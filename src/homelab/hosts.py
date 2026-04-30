@@ -8,7 +8,7 @@ from typing import Any
 import yaml
 
 REQUIRED_CONFIG_KEYS = {"type", "hostname", "user", "sshkey"}
-OPTIONAL_CONFIG_KEYS = {"agent", "ssh_config", "zfs_mountpoint", "zfs_pool"}
+OPTIONAL_CONFIG_KEYS = {"agent", "homelab_state_dir", "ssh_config"}
 ALLOWED_CONFIG_KEYS = REQUIRED_CONFIG_KEYS | OPTIONAL_CONFIG_KEYS
 ALLOWED_HOST_KEYS = {"config", "features", "media_storage", "media_storage_ref"}
 ALLOWED_SSH_CONFIG_KEYS = {"hostname", "user", "sshkey"}

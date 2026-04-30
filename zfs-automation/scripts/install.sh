@@ -22,8 +22,7 @@ require_file "$BUILD_DIR/file-map.conf" "$BUILD_DIR/file-map.conf" || exit 1
 # shellcheck source=/dev/null
 source "$BUILD_DIR/env"
 
-APPDATA_SCRIPTS_DIR="${ZFS_MOUNTPOINT}/appdata/scripts"
-HOMELAB_STATE_DIR="${ZFS_MOUNTPOINT}/appdata/.homelab"
+HOMELAB_STATE_DIR="${HOMELAB_STATE_DIR:-/var/lib/homelab}"
 MANAGED_DIR="${HOMELAB_STATE_DIR}/zfs-automation-managed"
 REBUILD_BUNDLE_ROOT="${REBUILD_BUNDLE_ROOT:-${HOMELAB_STATE_DIR}/zfs-automation}"
 REBUILD_BUNDLE_BUILD_DIR="${REBUILD_BUNDLE_ROOT}/build/${HOST}"
@@ -224,7 +223,7 @@ else
     print_sub "Sanoid/Syncoid helper packages already installed"
 fi
 
-mkdir -p /etc/sanoid "$APPDATA_SCRIPTS_DIR" "$MANAGED_DIR"
+mkdir -p /etc/sanoid "$HOMELAB_STATE_DIR" "$MANAGED_DIR"
 prepare_zfs_pull_source_user
 
 cleanup_legacy_replication_units

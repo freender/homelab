@@ -33,15 +33,13 @@ source "$SCRIPT_DIR/scripts/docker-install.sh"
 # shellcheck source=/dev/null
 source "$SCRIPT_DIR/scripts/pin-primary-nic.sh"
 
-APPDATA_ROOT="${ZFS_MOUNTPOINT}/appdata"
-APPDATA_SCRIPTS_DIR="${APPDATA_ROOT}/scripts"
-HOMELAB_STATE_DIR="${APPDATA_ROOT}/.homelab"
+HOMELAB_STATE_DIR="${HOMELAB_STATE_DIR:-/var/lib/homelab}"
 REBUILD_BUNDLE_ROOT="${REBUILD_BUNDLE_ROOT:-${HOMELAB_STATE_DIR}/ubuntu-setup}"
 REBUILD_BUNDLE_BUILD_DIR="${REBUILD_BUNDLE_ROOT}/build/${HOST}"
 REBUILD_BUNDLE_SCRIPTS_DIR="${REBUILD_BUNDLE_ROOT}/scripts"
 REBUILD_BUNDLE_LIB_DIR="${REBUILD_BUNDLE_ROOT}/lib"
 
-mkdir -p "$APPDATA_ROOT" "$APPDATA_SCRIPTS_DIR" "$HOMELAB_STATE_DIR"
+mkdir -p "$HOMELAB_STATE_DIR" "$REBUILD_BUNDLE_ROOT"
 
 load_file_map() {
     local map_file="$BUILD_DIR/file-map.conf"

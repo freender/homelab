@@ -1,15 +1,14 @@
 #!/bin/bash
-# rebuild.sh - Restore ubuntu-setup from the persisted ZFS rebuild bundle
+# rebuild.sh - Restore ubuntu-setup from the persisted homelab rebuild bundle
 # Assumes: ZFS data disk already imported (zpool import -f {{ ZFS_POOL }})
-# Usage: sudo bash {{ ZFS_MOUNTPOINT }}/appdata/scripts/rebuild.sh
+# Usage: sudo bash {{ HOMELAB_STATE_DIR }}/ubuntu-setup/rebuild.sh
 
 set -e
 
 ZFS_POOL="{{ ZFS_POOL }}"
-ZFS_MOUNTPOINT="{{ ZFS_MOUNTPOINT }}"
+STORAGE_MOUNTPOINT="{{ STORAGE_MOUNTPOINT }}"
+HOMELAB_STATE_DIR="{{ HOMELAB_STATE_DIR }}"
 SYSTEM_HOSTNAME="{{ SYSTEM_HOSTNAME }}"
-APPDATA="${ZFS_MOUNTPOINT}/appdata"
-HOMELAB_STATE_DIR="${APPDATA}/.homelab"
 BUNDLE_ROOT="${HOMELAB_STATE_DIR}/ubuntu-setup"
 BUNDLE_INSTALL_SH="${BUNDLE_ROOT}/scripts/install.sh"
 BUNDLE_BUILD_DIR="${BUNDLE_ROOT}/build/${SYSTEM_HOSTNAME}"
@@ -29,12 +28,12 @@ if [[ "$(id -u)" -ne 0 ]]; then
     die "Run as root: sudo bash $0"
 fi
 
-if ! mountpoint -q "$ZFS_MOUNTPOINT"; then
-    die "$ZFS_MOUNTPOINT is not mounted. Run 'zpool import -f ${ZFS_POOL}' first."
+if ! mountpoint -q "$STORAGE_MOUNTPOINT"; then
+    die "$STORAGE_MOUNTPOINT is not mounted. Run 'zpool import -f ${ZFS_POOL}' first."
 fi
 
-if [[ ! -f "$APPDATA/start.sh" ]]; then
-    die "$APPDATA/start.sh not found. ZFS data looks incomplete."
+if [[ ! -d "$HOMELAB_STATE_DIR" ]]; then
+    die "$HOMELAB_STATE_DIR not found. Re-deploy ubuntu-setup once the box is back online."
 fi
 
 if [[ ! -f "$BUNDLE_INSTALL_SH" ]]; then

@@ -36,7 +36,7 @@ class FileSpec:
 @dataclass(frozen=True)
 class HostArtifacts:
     build_dir: Path
-    zfs_mountpoint: str
+    homelab_state_dir: str
     deploy_user: str
     file_specs: tuple[FileSpec, ...]
 
@@ -265,7 +265,7 @@ def normalize_snapshot_plans(registry, host: str) -> list[SnapshotPlan]:
             )
         return plans
 
-    zfs_pool = str(registry.get(host, "config.zfs_pool", "cache"))
+    zfs_pool = str(registry.get(host, "zfs-automation.sanoid.dataset", "cache"))
     excludes = registry.get(host, "zfs-automation.sanoid.exclude", [])
     if not isinstance(excludes, list):
         raise ValueError(f"zfs-automation.sanoid.exclude must be a list for {host}")
@@ -416,12 +416,12 @@ def normalize_replication_config(
         registry.get(host, "zfs-automation.replication.target", ""),
         f"zfs-automation.replication.target required for {host}",
     )
-    zfs_mountpoint = str(registry.get(host, "config.zfs_mountpoint", "/mnt/cache"))
+    homelab_state_dir = str(registry.get(host, "config.homelab_state_dir", "/var/lib/homelab"))
     docker_restart = str(
         registry.get(
             host,
             "zfs-automation.docker_restart_command",
-            f"{zfs_mountpoint}/appdata/start.sh",
+            f"{homelab_state_dir}/appdata/start.sh",
         )
     ).strip()
     after_commands = [docker_restart] if docker_restart else []
@@ -517,7 +517,7 @@ def resolve_pools(registry, host: str) -> list[str]:
             pools.append(pool)
     if pools:
         return pools
-    return [str(registry.get(host, "config.zfs_pool", "cache"))]
+    return ["cache"]
 
 
 def build_sanoid_config(
@@ -631,15 +631,15 @@ def build_replication_script(
         "    dataset=\"${dataset_ref#*:}\"",
         "    if sshkey=\"$(syncoid_sshkey)\"; then",
         "      ssh -i \"$sshkey\" \"$remote\" zfs list -H -t snapshot -o name \\",
-        "        -s creation \"$dataset\"",
+        "        -s creation \"$dataset\" | sed \"s#^${dataset}@##\"",
         "    else",
         "      ssh \"$remote\" zfs list -H -t snapshot -o name -s creation \\",
-        "        \"$dataset\"",
+        "        \"$dataset\" | sed \"s#^${dataset}@##\"",
         "    fi",
         "  else",
         "    dataset=\"$dataset_ref\"",
-        "    zfs list -H -t snapshot -o name -s creation \"$dataset\"",
-        "  fi | sed \"s#^${dataset}@##\"",
+        "    zfs list -H -t snapshot -o name -s creation \"$dataset\" | sed \"s#^${dataset}@##\"",
+        "  fi",
         "}",
         "",
         "require_common_snapshot_lineage() {",
@@ -909,7 +909,7 @@ def build_health_check_script(pools: list[str]) -> str:
 
 
 def resolve_remote_path(spec: FileSpec, artifacts: HostArtifacts) -> str:
-    return spec.remote_path.format(zfs_mountpoint=artifacts.zfs_mountpoint)
+    return spec.remote_path.format(homelab_state_dir=artifacts.homelab_state_dir)
 
 
 def write_file_map(build_dir: Path, artifacts: HostArtifacts) -> None:
@@ -969,7 +969,7 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
     deploy_user = str(
         registry.get(host, "ubuntu-setup.deploy_user", registry.get(host, "config.user"))
     )
-    zfs_mountpoint = str(registry.get(host, "config.zfs_mountpoint", "/mnt/cache"))
+    homelab_state_dir = str(registry.get(host, "config.homelab_state_dir", "/var/lib/homelab"))
     snapshot_schedule = str(
         registry.get(host, "zfs-automation.snapshot_schedule", "*-*-* 04:35:00")
     )
@@ -1108,7 +1108,7 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
         build_dir / "env",
         {
             "DEPLOY_USER": deploy_user,
-            "ZFS_MOUNTPOINT": zfs_mountpoint,
+            "HOMELAB_STATE_DIR": homelab_state_dir,
             "ENABLE_ZFS_SNAPSHOTS": "true" if snapshot_plans and manage_snapshots else "false",
             "ENABLE_ZFS_REPLICATION": (
                 "true" if replication_jobs and manage_replication else "false"
@@ -1118,13 +1118,13 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
             "ENABLE_ZFS_PULL_SOURCE": "true" if pull_source_access is not None else "false",
             "ZFS_PULL_SOURCE_USER": pull_source_access.user if pull_source_access else "zfs-pull",
             "ZFS_PULL_SOURCE_HOME": "/var/lib/homelab-zfs-pull",
-            "REBUILD_BUNDLE_ROOT": f"{zfs_mountpoint}/appdata/.homelab/zfs-automation",
+            "REBUILD_BUNDLE_ROOT": f"{homelab_state_dir}/zfs-automation",
         },
     )
 
     artifacts = HostArtifacts(
         build_dir=build_dir,
-        zfs_mountpoint=zfs_mountpoint,
+        homelab_state_dir=homelab_state_dir,
         deploy_user=deploy_user,
         file_specs=tuple(file_specs),
     )
