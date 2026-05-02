@@ -69,6 +69,7 @@ class ReplicationJob:
     plans: tuple[ReplicationPlan, ...]
     after_commands: tuple[str, ...]
     syncoid_options: tuple[str, ...]
+    delete_target_snapshots: bool
 
 
 @dataclass(frozen=True)
@@ -353,6 +354,12 @@ def normalize_replication_config(
                 job_config.get("syncoid_options", []),
                 f"syncoid_options for job '{normalized_job_name}' must be a list for {host}",
             )
+            delete_target_snapshots = normalize_bool(
+                job_config.get("delete_target_snapshots"),
+                True,
+                "delete_target_snapshots for replication job "
+                f"'{normalized_job_name}' must be true or false for {host}",
+            )
 
             parsed_jobs.append(
                 ReplicationJob(
@@ -361,6 +368,7 @@ def normalize_replication_config(
                     plans=tuple(plans),
                     after_commands=tuple(after_commands),
                     syncoid_options=tuple(syncoid_options),
+                    delete_target_snapshots=delete_target_snapshots,
                 )
             )
         return parsed_jobs
@@ -399,6 +407,7 @@ def normalize_replication_config(
                 plans=tuple(plans),
                 after_commands=tuple(after_commands),
                 syncoid_options=(),
+                delete_target_snapshots=True,
             )
         ]
 
@@ -441,6 +450,7 @@ def normalize_replication_config(
             ),
             after_commands=tuple(after_commands),
             syncoid_options=(),
+            delete_target_snapshots=True,
         )
     ]
 
@@ -585,6 +595,7 @@ def build_replication_script(
     replication_plans: list[ReplicationPlan],
     after_commands: list[str],
     syncoid_options: list[str],
+    delete_target_snapshots: bool,
 ) -> str:
     syncoid_options_block = shell_array_block("SYNCOID_OPTIONS", syncoid_options)
     lines = [
@@ -688,12 +699,12 @@ def build_replication_script(
             command = [
                 "/usr/sbin/syncoid",
                 "-r",
-                "--delete-target-snapshots",
-                "--force-delete",
                 '"${SYNCOID_OPTIONS[@]}"',
                 plan.source,
                 plan.target,
             ]
+            if delete_target_snapshots:
+                command[2:2] = ["--delete-target-snapshots", "--force-delete"]
             lines.append(
                 f"require_common_snapshot_lineage {quote(plan.source)} {quote(plan.target)}"
             )
@@ -1031,6 +1042,7 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
                 list(job.plans),
                 list(job.after_commands),
                 list(job.syncoid_options),
+                job.delete_target_snapshots,
             ),
             encoding="utf-8",
         )

@@ -13,7 +13,7 @@ cd ~/homelab
 ./deploy docker all
 ./deploy docker tower
 ./deploy docker helm
-./deploy docker orbit
+./deploy docker neo
 ```
 
 ## Host Registry
@@ -52,12 +52,12 @@ Docker auto-update is handled by `homelab-docker-update.timer`, rendered from `h
 
 ## Traefik Sync
 
-- `tower` runs `traefik-sync` in source mode on `net_overlay`
-- `helm` runs `traefik-sync2` in client mode
-- `orbit` runs `traefik-sync3` in client mode
-- Clients pull `acme.json` and `fileConfig.yml` over overlay HTTP from `http://traefik-sync:8080`
+- `tower` runs `traefik-sync-tower` in source mode on `net_overlay`
+- `helm` runs `traefik-sync-helm` in client mode
+- `neo` runs `traefik-sync-neo` in client mode
+- Clients pull `acme.json` and `fileConfig.yml` over overlay HTTP from `http://traefik-sync-tower:8080`
 - Auth uses `TRAEFIK_SYNC_API_TOKEN` in the Traefik stack `.env`
-- `start.sh` is deployed to all docker hosts, including `orbit`, so Traefik stack updates can be applied with `cd /mnt/cache/appdata && ./start.sh`
+- `start.sh` is deployed to all docker hosts, including `neo`, so Traefik stack updates can be applied with `cd /mnt/cache/appdata && ./start.sh`
 
 ### Manual Usage
 

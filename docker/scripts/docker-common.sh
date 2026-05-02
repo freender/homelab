@@ -43,7 +43,7 @@ get_priority_stacks() {
     local root="$1"
     local stack
 
-    for stack in traefik traefik2 traefik3; do
+    for stack in traefik traefik-helm traefik-neo; do
         if has_compose_file "$root/$stack"; then
             printf '%s\n' "$stack"
         fi
