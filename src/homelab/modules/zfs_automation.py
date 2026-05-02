@@ -63,6 +63,12 @@ class ReplicationPlan:
 
 
 @dataclass(frozen=True)
+class TargetSnapshotPrune:
+    keep_days: int
+    patterns: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class ReplicationJob:
     name: str
     schedule: str
@@ -70,6 +76,7 @@ class ReplicationJob:
     after_commands: tuple[str, ...]
     syncoid_options: tuple[str, ...]
     delete_target_snapshots: bool
+    target_snapshot_prune: TargetSnapshotPrune | None
 
 
 @dataclass(frozen=True)
@@ -191,6 +198,56 @@ def normalize_replication_job_name(value: object, host: str) -> str:
             " underscores, or hyphens and must start with a letter or number"
         )
     return name
+
+
+def normalize_positive_int(value: object, message: str) -> int:
+    try:
+        normalized = int(str(value))
+    except (TypeError, ValueError) as exc:
+        raise ValueError(message) from exc
+    if normalized <= 0:
+        raise ValueError(message)
+    return normalized
+
+
+def normalize_snapshot_patterns(value: object, message: str) -> tuple[str, ...]:
+    patterns = normalize_string_list(value, message)
+    if not patterns:
+        raise ValueError(message)
+    for pattern in patterns:
+        if any(char in pattern for char in ["/", "@", "\0", "\n", "\r"]):
+            raise ValueError(message)
+    return tuple(patterns)
+
+
+def normalize_target_snapshot_prune(
+    value: object,
+    host: str,
+    job_name: str,
+) -> TargetSnapshotPrune | None:
+    if value in (None, False):
+        return None
+    if not isinstance(value, dict):
+        raise ValueError(f"target_snapshot_prune must be a mapping for job '{job_name}' on {host}")
+    enabled = normalize_bool(
+        value.get("enabled"),
+        True,
+        f"target_snapshot_prune.enabled must be true or false for job '{job_name}' on {host}",
+    )
+    if not enabled:
+        return None
+    return TargetSnapshotPrune(
+        keep_days=normalize_positive_int(
+            value.get("keep_days", 90),
+            "target_snapshot_prune.keep_days must be a positive integer for job "
+            f"'{job_name}' on {host}",
+        ),
+        patterns=normalize_snapshot_patterns(
+            value.get("patterns", ["autosnap_*", "__replicate_*"]),
+            "target_snapshot_prune.patterns must be a non-empty list of snapshot "
+            f"name patterns for job '{job_name}' on {host}",
+        ),
+    )
 
 
 def require_safe_authorized_key_option(value: object, message: str) -> str:
@@ -360,6 +417,11 @@ def normalize_replication_config(
                 "delete_target_snapshots for replication job "
                 f"'{normalized_job_name}' must be true or false for {host}",
             )
+            target_snapshot_prune = normalize_target_snapshot_prune(
+                job_config.get("target_snapshot_prune"),
+                host,
+                normalized_job_name,
+            )
 
             parsed_jobs.append(
                 ReplicationJob(
@@ -369,6 +431,7 @@ def normalize_replication_config(
                     after_commands=tuple(after_commands),
                     syncoid_options=tuple(syncoid_options),
                     delete_target_snapshots=delete_target_snapshots,
+                    target_snapshot_prune=target_snapshot_prune,
                 )
             )
         return parsed_jobs
@@ -408,6 +471,7 @@ def normalize_replication_config(
                 after_commands=tuple(after_commands),
                 syncoid_options=(),
                 delete_target_snapshots=True,
+                target_snapshot_prune=None,
             )
         ]
 
@@ -451,6 +515,7 @@ def normalize_replication_config(
             after_commands=tuple(after_commands),
             syncoid_options=(),
             delete_target_snapshots=True,
+            target_snapshot_prune=None,
         )
     ]
 
@@ -596,8 +661,19 @@ def build_replication_script(
     after_commands: list[str],
     syncoid_options: list[str],
     delete_target_snapshots: bool,
+    target_snapshot_prune: TargetSnapshotPrune | None,
 ) -> str:
     syncoid_options_block = shell_array_block("SYNCOID_OPTIONS", syncoid_options)
+    prune_config_lines: list[str] = []
+    if target_snapshot_prune:
+        prune_config_lines = [
+            shell_array_block(
+                "TARGET_PRUNE_PATTERNS",
+                list(target_snapshot_prune.patterns),
+            ),
+            f"TARGET_PRUNE_KEEP_DAYS={target_snapshot_prune.keep_days}",
+            "",
+        ]
     lines = [
         "#!/bin/bash",
         "",
@@ -605,6 +681,7 @@ def build_replication_script(
         "",
         syncoid_options_block,
         "",
+        *prune_config_lines,
         'SCRIPT_LOCK_FILE="/run/lock/$(basename "$0").lock"',
         'GLOBAL_LOCK_FILE="/run/lock/homelab-zfs-replication.lock"',
         'exec 9>"$SCRIPT_LOCK_FILE"',
@@ -692,6 +769,45 @@ def build_replication_script(
         "wait_for_existing_replication",
         "",
     ]
+    if target_snapshot_prune:
+        lines.extend(
+            [
+                "snapshot_matches_target_prune_pattern() {",
+                "  local snapshot_name=\"$1\"",
+                "  local pattern",
+                "  for pattern in \"${TARGET_PRUNE_PATTERNS[@]}\"; do",
+                "    case \"$snapshot_name\" in",
+                "      $pattern) return 0 ;;",
+                "    esac",
+                "  done",
+                "  return 1",
+                "}",
+                "",
+                "prune_target_snapshots() {",
+                "  local dataset=\"$1\"",
+                "  local cutoff snapshot created snapshot_name",
+                "",
+                "  if ! zfs list -H -o name \"$dataset\" >/dev/null 2>&1; then",
+                "    echo \"Target prune skipped: dataset $dataset does not exist\"",
+                "    return 0",
+                "  fi",
+                "",
+                "  cutoff=$(($(date +%s) - TARGET_PRUNE_KEEP_DAYS * 86400))",
+                "  while IFS=$'\\t' read -r snapshot created; do",
+                "    [[ -n \"$snapshot\" && -n \"$created\" ]] || continue",
+                "    snapshot_name=\"${snapshot#*@}\"",
+                "    snapshot_matches_target_prune_pattern \"$snapshot_name\" || continue",
+                "    [[ \"$created\" =~ ^[0-9]+$ ]] || continue",
+                "    if (( created < cutoff )); then",
+                "      echo \"Destroying old target snapshot $snapshot\"",
+                "      zfs destroy \"$snapshot\"",
+                "    fi",
+                "  done < <(zfs list -H -p -r -t snapshot -o name,creation "
+                "-s creation \"$dataset\")",
+                "}",
+                "",
+            ]
+        )
     if not replication_plans:
         lines.extend(["echo 'No replication plans configured; nothing to do'", ""])
     else:
@@ -716,6 +832,8 @@ def build_replication_script(
             )
             if plan.post_hook:
                 lines.append(plan.post_hook)
+            if target_snapshot_prune and not is_remote_dataset(plan.target):
+                lines.append(f"prune_target_snapshots {quote(plan.target)}")
             lines.append("")
 
     for command in after_commands:
@@ -1043,6 +1161,7 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
                 list(job.after_commands),
                 list(job.syncoid_options),
                 job.delete_target_snapshots,
+                job.target_snapshot_prune,
             ),
             encoding="utf-8",
         )
