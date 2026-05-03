@@ -97,9 +97,9 @@ def validate(root: Path, hosts: list[str]) -> None:
                         f"{host}: {ctid} source must be absolute or a Proxmox volume "
                         f"for root mount {mount_index}"
                     )
-                if not target.startswith("/mnt/"):
+                if not target.startswith("/"):
                     raise ValueError(
-                        f"{host}: {ctid} target must live under /mnt for root mount {mount_index}"
+                        f"{host}: {ctid} target must be absolute for root mount {mount_index}"
                     )
                 if backup not in {"0", "1"}:
                     raise ValueError(
@@ -436,6 +436,8 @@ def render_config(
                     rendered_lines.extend(idmapped_lines)
                     idmapped_inserted = True
                 continue
+        if not use_idmapped_mounts and stripped.startswith("lxc.idmap: "):
+            continue
         rendered_lines.append(line)
 
     if not root_mounts_inserted:

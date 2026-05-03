@@ -162,11 +162,56 @@ ensure_local_zfs_storage() {
 
     if pvesm status --storage local-zfs >/dev/null 2>&1; then
         print_sub "local-zfs storage already configured"
-        return 0
+    else
+        print_sub "Creating local-zfs storage on rpool..."
+        pvesm add zfspool local-zfs --pool rpool --content images,rootdir --sparse 0 || print_warn "failed to create local-zfs storage"
     fi
 
-    print_sub "Creating local-zfs storage on rpool..."
-    pvesm add zfspool local-zfs --pool rpool --content images,rootdir --sparse 0 || print_warn "failed to create local-zfs storage"
+    if zpool list vm-disks >/dev/null 2>&1; then
+        local current_node
+        local existing_nodes
+        current_node="$(hostname -s)"
+        if pvesm status --storage vm-disks >/dev/null 2>&1; then
+            print_sub "vm-disks storage already configured"
+            existing_nodes="$(storage_nodes vm-disks)"
+            if [[ -n "$existing_nodes" ]] && ! node_in_csv "$current_node" "$existing_nodes"; then
+                print_sub "Adding $current_node to vm-disks storage node list"
+                pvesm set vm-disks --nodes "${existing_nodes},${current_node}" || print_warn "failed to update vm-disks storage nodes"
+            fi
+        else
+            print_sub "Creating vm-disks storage on vm-disks..."
+            if [[ -f /etc/pve/corosync.conf ]]; then
+                pvesm add zfspool vm-disks --pool vm-disks --content images,rootdir --sparse 0 --nodes "$current_node" || print_warn "failed to create vm-disks storage"
+            else
+                pvesm add zfspool vm-disks --pool vm-disks --content images,rootdir --sparse 0 || print_warn "failed to create vm-disks storage"
+            fi
+        fi
+    fi
+}
+
+storage_nodes() {
+    local storage="$1"
+    awk -v storage="$storage" '
+        $1 == "zfspool:" && $2 == storage { inside = 1; next }
+        $0 !~ /^[[:space:]]/ { inside = 0 }
+        inside && $1 == "nodes" { print $2; exit }
+    ' /etc/pve/storage.cfg 2>/dev/null || true
+}
+
+node_in_csv() {
+    local needle="$1"
+    local csv="$2"
+    local old_ifs="$IFS"
+    local item
+    IFS=','
+    for item in $csv; do
+        if [[ "$item" == "$needle" ]]; then
+            IFS="$old_ifs"
+            return 0
+        fi
+    done
+    IFS="$old_ifs"
+    return 1
 }
 
 ensure_required_packages() {
