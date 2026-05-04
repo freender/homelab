@@ -102,26 +102,6 @@ class MediaStorageConfig:
             return ()
         return tuple(f"{self.raw_data_mount_prefix}{slot}/media" for slot in self.data_slots)
 
-    def export_idmapped_mounts(self) -> tuple[tuple[str, str], ...]:
-        if self.raw_data_mount_prefix is None or self.export_data_mount_prefix is None:
-            return ()
-        mounts = [
-            (
-                f"{self.raw_data_mount_prefix}{slot}",
-                f"{self.export_data_mount_prefix}{slot}",
-            )
-            for slot in self.data_slots
-        ]
-        if self.raw_parity_mount_prefix is not None and self.export_parity_mount_prefix is not None:
-            mounts.extend(
-                (
-                    f"{self.raw_parity_mount_prefix}{slot}",
-                    f"{self.export_parity_mount_prefix}{slot}",
-                )
-                for slot in self.parity_slots
-            )
-        return tuple(mounts)
-
     def export_media_branches(self) -> tuple[str, ...]:
         if self.export_data_mount_prefix is None:
             return ()
