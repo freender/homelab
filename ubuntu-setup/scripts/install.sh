@@ -231,6 +231,15 @@ if [[ $rc -eq 0 ]]; then
 fi
 
 if [[ "$WIREGUARD_ENABLED" == "true" ]]; then
+    print_action "WireGuard packages"
+    if ! command -v wg >/dev/null 2>&1 || ! command -v wg-quick >/dev/null 2>&1; then
+        apt-get update -y -q
+        apt-get install -y -q wireguard wireguard-tools
+        print_ok "WireGuard packages installed"
+    else
+        print_sub "WireGuard packages already installed"
+    fi
+
     print_action "WireGuard sysctl"
     rc=0
     install_build_file "99-wireguard.conf" || rc=$?
@@ -238,6 +247,15 @@ if [[ "$WIREGUARD_ENABLED" == "true" ]]; then
         sysctl --system >/dev/null
         print_ok "WireGuard sysctl applied"
     fi
+
+    print_action "WireGuard services"
+    shopt -s nullglob
+    for conf in /etc/wireguard/*.conf; do
+        interface_name="$(basename "$conf" .conf)"
+        systemctl enable --now "wg-quick@${interface_name}.service"
+        print_ok "wg-quick@${interface_name}.service enabled"
+    done
+    shopt -u nullglob
 fi
 
 if [[ "$SAMBA_ENABLED" == "true" ]]; then

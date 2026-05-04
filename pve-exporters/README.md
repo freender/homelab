@@ -18,7 +18,7 @@ Prometheus-native host metrics exporters for Proxmox nodes.
 - node_exporter: `:9100`
 - smartctl_exporter: `:9633`
 - apcupsd exporter: `:9162`
-- igpu-exporter: `:9400` on `ace` and `bray`
+- igpu-exporter: `:9400` on `ace`, `bray`, and `clovis`
 
 ## Configuration Files
 
