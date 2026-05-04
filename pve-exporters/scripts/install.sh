@@ -10,6 +10,7 @@ BUILD_DIR="$SCRIPT_DIR/build/$HOST"
 FORCE_UPDATE=${FORCE_UPDATE:-false}
 TMP_DIR=""
 IGPU_TMP_DIR=""
+NODE_EXPORTER_CHANGED=false
 
 cleanup_tmp_dirs() {
     rm -rf "$TMP_DIR" "$IGPU_TMP_DIR"
@@ -59,6 +60,7 @@ mkdir -p /etc/default
 rc=0
 backup_and_copy_if_changed "$NODE_ENV_SRC" /etc/default/prometheus-node-exporter || rc=$?
 [[ $rc -eq 1 ]] || [[ $rc -eq 0 ]] || exit "$rc"
+[[ $rc -eq 1 ]] && NODE_EXPORTER_CHANGED=true
 
 rc=0
 backup_and_copy_if_changed "$SMART_ENV_SRC" /etc/default/smartctl-exporter || rc=$?
@@ -158,6 +160,9 @@ fi
 
 systemctl daemon-reload
 systemctl enable --now prometheus-node-exporter
+if [[ "$FORCE_UPDATE" == "true" || "$NODE_EXPORTER_CHANGED" == "true" ]]; then
+    systemctl restart prometheus-node-exporter
+fi
 systemctl enable --now smartctl-exporter
 if [[ -f "$IGPU_ENV_SRC" && -f "$IGPU_SVC_SRC" ]]; then
     systemctl enable --now igpu-exporter
