@@ -98,8 +98,19 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
 
     mounts: list[str] = []
     mounts_raw = registry.get(host, "pve-postinstall.mounts", None)
+    import_media_storage = str(
+        registry.get(host, "pve-postinstall.import_media_storage", "false")
+    ).lower()
+    if import_media_storage not in {"0", "1", "false", "true"}:
+        raise ValueError(
+            f"pve-postinstall.import_media_storage must be 0/1/false/true for {host}"
+        )
     media_storage = load_media_storage(registry, host)
-    if mounts_raw is None and media_storage is not None:
+    if mounts_raw is None and import_media_storage in {"1", "true"}:
+        if media_storage is None:
+            raise ValueError(
+                f"pve-postinstall.import_media_storage requires media_storage for {host}"
+            )
         mounts_raw = [
             {"label": label, "path": path}
             for label, path in media_storage.raw_mounts()
