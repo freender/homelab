@@ -234,6 +234,46 @@ ensure_required_packages() {
     apt-get install -y -q "${missing_pkgs[@]}"
 }
 
+configure_native_zfs_scrub_timers() {
+    local pool
+    local monthly_timer
+    local weekly_timer
+
+    if ! command -v zpool >/dev/null 2>&1; then
+        print_warn "zpool not found; skipping native scrub timer setup"
+        return 0
+    fi
+
+    if ! systemctl cat zfs-scrub-monthly@.timer >/dev/null 2>&1; then
+        print_warn "native zfs-scrub-monthly@.timer not available; skipping scrub timer setup"
+        return 0
+    fi
+
+    if systemctl is-enabled --quiet zfs-scrub.timer 2>/dev/null; then
+        systemctl disable --now zfs-scrub.timer
+        print_ok "zfs-scrub.timer disabled in favor of native PVE scrub timers"
+    fi
+
+    while IFS= read -r pool; do
+        [[ -n "$pool" ]] || continue
+
+        monthly_timer="zfs-scrub-monthly@${pool}.timer"
+        weekly_timer="zfs-scrub-weekly@${pool}.timer"
+
+        if systemctl is-enabled --quiet "$weekly_timer" 2>/dev/null; then
+            systemctl disable --now "$weekly_timer"
+            print_ok "$weekly_timer disabled"
+        fi
+
+        if ! systemctl is-enabled --quiet "$monthly_timer" 2>/dev/null; then
+            systemctl enable --now "$monthly_timer"
+            print_ok "$monthly_timer enabled"
+        else
+            print_sub "$monthly_timer already enabled"
+        fi
+    done < <(zpool list -H -o name)
+}
+
 install_other_subfeatures() {
     if [[ -f "$BUILD_DIR/interfaces" ]]; then
         print_sub "Configuring network interfaces..."
@@ -340,6 +380,9 @@ case "$HOST_TYPE" in
 
         print_sub "Reconciling local ZFS storage..."
         ensure_local_zfs_storage
+
+        print_sub "Configuring native ZFS scrub timers..."
+        configure_native_zfs_scrub_timers || exit 1
 
         print_sub "Applying additional subfeatures..."
         install_other_subfeatures || exit 1
