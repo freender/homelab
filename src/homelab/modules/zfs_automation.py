@@ -273,10 +273,16 @@ def normalize_dataset_under_root(dataset: str, root_dataset: str) -> str:
 
 
 def normalize_snapshot_plans(registry, host: str) -> list[SnapshotPlan]:
+    defaults = registry.get(host, "zfs-automation.snapshot_defaults", {})
+    if defaults is None:
+        defaults = {}
+    if not isinstance(defaults, dict):
+        raise ValueError(f"zfs-automation.snapshot_defaults must be a mapping for {host}")
+
     explicit = registry.get(host, "zfs-automation.snapshot_plans", None)
     if explicit is not None:
-        if not isinstance(explicit, list) or not explicit:
-            raise ValueError(f"zfs-automation.snapshot_plans must be a non-empty list for {host}")
+        if not isinstance(explicit, list):
+            raise ValueError(f"zfs-automation.snapshot_plans must be a list for {host}")
         plans: list[SnapshotPlan] = []
         seen: set[str] = set()
         for index, plan in enumerate(explicit):
@@ -302,18 +308,21 @@ def normalize_snapshot_plans(registry, host: str) -> list[SnapshotPlan]:
                 SnapshotPlan(
                     dataset=dataset,
                     excludes=tuple(excludes),
-                    hourly=str(plan.get("hourly", 0)),
-                    daily=str(plan.get("daily", 7)),
-                    weekly=str(plan.get("weekly", 4)),
-                    monthly=str(plan.get("monthly", 3)),
-                    yearly=str(plan.get("yearly", 0)),
+                    hourly=str(plan.get("hourly", defaults.get("hourly", 0))),
+                    daily=str(plan.get("daily", defaults.get("daily", 7))),
+                    weekly=str(plan.get("weekly", defaults.get("weekly", 4))),
+                    monthly=str(plan.get("monthly", defaults.get("monthly", 3))),
+                    yearly=str(plan.get("yearly", defaults.get("yearly", 0))),
                     recursive=normalize_bool(
-                        plan.get("recursive"),
+                        plan.get("recursive", defaults.get("recursive")),
                         True,
                         f"recursive for snapshot plan {dataset} must be true or false for {host}",
                     ),
                     process_children_only=normalize_bool(
-                        plan.get("process_children_only"),
+                        plan.get(
+                            "process_children_only",
+                            defaults.get("process_children_only"),
+                        ),
                         True,
                         "process_children_only for snapshot plan "
                         f"{dataset} must be true or false for {host}",
@@ -323,201 +332,146 @@ def normalize_snapshot_plans(registry, host: str) -> list[SnapshotPlan]:
             )
         return plans
 
-    zfs_pool = str(registry.get(host, "zfs-automation.sanoid.dataset", "cache"))
-    excludes = registry.get(host, "zfs-automation.sanoid.exclude", [])
-    if not isinstance(excludes, list):
-        raise ValueError(f"zfs-automation.sanoid.exclude must be a list for {host}")
-    return [
-        SnapshotPlan(
-            dataset=zfs_pool,
-            excludes=tuple(str(item) for item in excludes),
-            hourly=str(registry.get(host, "zfs-automation.sanoid.hourly", 0)),
-            daily=str(registry.get(host, "zfs-automation.sanoid.daily", 7)),
-            weekly=str(registry.get(host, "zfs-automation.sanoid.weekly", 4)),
-            monthly=str(registry.get(host, "zfs-automation.sanoid.monthly", 3)),
-            yearly=str(registry.get(host, "zfs-automation.sanoid.yearly", 0)),
-            recursive=True,
-            process_children_only=True,
-            auto_exclude_replication=True,
+    if registry.get(host, "zfs-automation.sanoid", None) is not None:
+        raise ValueError(
+            f"zfs-automation.sanoid is no longer supported for {host}; use snapshot_plans"
         )
-    ]
+
+    return []
 
 
 def normalize_replication_config(
     registry, host: str, *, include_disabled: bool = False
 ) -> list[ReplicationJob]:
+    defaults = registry.get(host, "zfs-automation.replication_defaults", {})
+    if defaults is None:
+        defaults = {}
+    if not isinstance(defaults, dict):
+        raise ValueError(f"zfs-automation.replication_defaults must be a mapping for {host}")
+
+    for legacy_key in ("replication_plans", "replication"):
+        if registry.get(host, f"zfs-automation.{legacy_key}", None) is not None:
+            raise ValueError(
+                f"zfs-automation.{legacy_key} is no longer supported for {host}; "
+                "use replication_jobs"
+            )
+
     jobs = registry.get(host, "zfs-automation.replication_jobs", None)
-    if jobs is not None:
-        if not isinstance(jobs, dict):
-            raise ValueError(f"zfs-automation.replication_jobs must be a dict for {host}")
+    if jobs is None:
+        return []
+    if not isinstance(jobs, dict):
+        raise ValueError(f"zfs-automation.replication_jobs must be a dict for {host}")
 
-        parsed_jobs: list[ReplicationJob] = []
-        seen_job_names: set[str] = set()
-        for job_name, job_config in jobs.items():
-            if not isinstance(job_config, dict):
-                raise ValueError(f"invalid replication job '{job_name}' for {host}")
+    default_after_commands = normalize_string_list(
+        defaults.get("after_replication_commands", []),
+        f"replication_defaults.after_replication_commands must be a list for {host}",
+    )
+    default_syncoid_options = normalize_string_list(
+        defaults.get("syncoid_options", []),
+        f"replication_defaults.syncoid_options must be a list for {host}",
+    )
+    default_delete_target_snapshots = normalize_bool(
+        defaults.get("delete_target_snapshots"),
+        True,
+        f"replication_defaults.delete_target_snapshots must be true or false for {host}",
+    )
+    default_target_snapshot_prune = normalize_target_snapshot_prune(
+        defaults.get("target_snapshot_prune"),
+        host,
+        "replication_defaults",
+    )
 
-            normalized_job_name = normalize_replication_job_name(job_name, host)
-            if normalized_job_name in seen_job_names:
-                raise ValueError(
-                    f"duplicate replication job name '{normalized_job_name}' for {host}"
-                )
-            seen_job_names.add(normalized_job_name)
+    parsed_jobs: list[ReplicationJob] = []
+    seen_job_names: set[str] = set()
+    for job_name, job_config in jobs.items():
+        if not isinstance(job_config, dict):
+            raise ValueError(f"invalid replication job '{job_name}' for {host}")
 
-            enabled = normalize_bool(
-                job_config.get("enabled"),
-                True,
-                f"enabled for replication job '{normalized_job_name}' must be true or false"
-                f" for {host}",
-            )
-            if not enabled and not include_disabled:
-                continue
+        normalized_job_name = normalize_replication_job_name(job_name, host)
+        if normalized_job_name in seen_job_names:
+            raise ValueError(f"duplicate replication job name '{normalized_job_name}' for {host}")
+        seen_job_names.add(normalized_job_name)
 
-            schedule = str(job_config.get("schedule", "*-*-* 02:30:00"))
-            plans: list[ReplicationPlan] = []
-            explicit_plans = job_config.get("plans", [])
-            if not isinstance(explicit_plans, list):
-                raise ValueError(
-                    f"plans for replication job '{normalized_job_name}' must be a list for {host}"
-                )
+        enabled = normalize_bool(
+            job_config.get("enabled"),
+            True,
+            f"enabled for replication job '{normalized_job_name}' must be true or false for {host}",
+        )
+        if not enabled and not include_disabled:
+            continue
 
-            for index, plan in enumerate(explicit_plans):
-                if not isinstance(plan, dict):
-                    raise ValueError(
-                        f"invalid plan at index {index} in job '{normalized_job_name}' for {host}"
-                    )
-                plans.append(
-                    ReplicationPlan(
-                        source=require_string(
-                            plan.get("source", ""),
-                            f"plan source required at index {index} in job"
-                            f" '{normalized_job_name}' for {host}",
-                        ),
-                        target=require_string(
-                            plan.get("target", ""),
-                            f"plan target required at index {index} in job"
-                            f" '{normalized_job_name}' for {host}",
-                        ),
-                        post_hook=str(plan.get("post_hook", "")).strip(),
-                    )
-                )
-
-            after_commands = normalize_string_list(
-                job_config.get("after_replication_commands", []),
-                f"after_replication_commands for job '{normalized_job_name}' must be a list"
-                f" for {host}",
-            )
-            syncoid_options = normalize_string_list(
-                job_config.get("syncoid_options", []),
-                f"syncoid_options for job '{normalized_job_name}' must be a list for {host}",
-            )
-            delete_target_snapshots = normalize_bool(
-                job_config.get("delete_target_snapshots"),
-                True,
-                "delete_target_snapshots for replication job "
-                f"'{normalized_job_name}' must be true or false for {host}",
-            )
-            target_snapshot_prune = normalize_target_snapshot_prune(
-                job_config.get("target_snapshot_prune"),
-                host,
-                normalized_job_name,
-            )
-
-            parsed_jobs.append(
-                ReplicationJob(
-                    name=normalized_job_name,
-                    schedule=schedule,
-                    plans=tuple(plans),
-                    after_commands=tuple(after_commands),
-                    syncoid_options=tuple(syncoid_options),
-                    delete_target_snapshots=delete_target_snapshots,
-                    target_snapshot_prune=target_snapshot_prune,
-                )
-            )
-        return parsed_jobs
-
-    # Fallback to old format
-    explicit = registry.get(host, "zfs-automation.replication_plans", None)
-    if explicit is not None:
-        if not isinstance(explicit, list):
-            raise ValueError(f"zfs-automation.replication_plans must be a list for {host}")
+        schedule = str(job_config.get("schedule", defaults.get("schedule", "*-*-* 02:30:00")))
         plans: list[ReplicationPlan] = []
-        for index, plan in enumerate(explicit):
+        explicit_plans = job_config.get("plans", [])
+        if not isinstance(explicit_plans, list):
+            raise ValueError(
+                f"plans for replication job '{normalized_job_name}' must be a list for {host}"
+            )
+
+        for index, plan in enumerate(explicit_plans):
             if not isinstance(plan, dict):
-                raise ValueError(f"invalid replication plan at index {index} for {host}")
+                raise ValueError(
+                    f"invalid plan at index {index} in job '{normalized_job_name}' for {host}"
+                )
             plans.append(
                 ReplicationPlan(
                     source=require_string(
                         plan.get("source", ""),
-                        f"replication plan source required at index {index} for {host}",
+                        f"plan source required at index {index} in job"
+                        f" '{normalized_job_name}' for {host}",
                     ),
                     target=require_string(
                         plan.get("target", ""),
-                        f"replication plan target required at index {index} for {host}",
+                        f"plan target required at index {index} in job"
+                        f" '{normalized_job_name}' for {host}",
                     ),
                     post_hook=str(plan.get("post_hook", "")).strip(),
                 )
             )
-        after_commands = normalize_string_list(
-            registry.get(host, "zfs-automation.after_replication_commands", []),
-            f"zfs-automation.after_replication_commands must be a list for {host}",
+
+        after_commands = [
+            *default_after_commands,
+            *normalize_string_list(
+                job_config.get("after_replication_commands", []),
+                f"after_replication_commands for job '{normalized_job_name}' must be a list"
+                f" for {host}",
+            ),
+        ]
+        syncoid_options = [
+            *default_syncoid_options,
+            *normalize_string_list(
+                job_config.get("syncoid_options", []),
+                f"syncoid_options for job '{normalized_job_name}' must be a list for {host}",
+            ),
+        ]
+        delete_target_snapshots = normalize_bool(
+            job_config.get("delete_target_snapshots"),
+            default_delete_target_snapshots,
+            "delete_target_snapshots for replication job "
+            f"'{normalized_job_name}' must be true or false for {host}",
         )
-        schedule = str(registry.get(host, "zfs-automation.replication_schedule", "*-*-* 02:30:00"))
-        return [
+        target_snapshot_prune = (
+            normalize_target_snapshot_prune(
+                job_config.get("target_snapshot_prune"),
+                host,
+                normalized_job_name,
+            )
+            if "target_snapshot_prune" in job_config
+            else default_target_snapshot_prune
+        )
+
+        parsed_jobs.append(
             ReplicationJob(
-                name="default",
+                name=normalized_job_name,
                 schedule=schedule,
                 plans=tuple(plans),
                 after_commands=tuple(after_commands),
-                syncoid_options=(),
-                delete_target_snapshots=True,
-                target_snapshot_prune=None,
+                syncoid_options=tuple(syncoid_options),
+                delete_target_snapshots=delete_target_snapshots,
+                target_snapshot_prune=target_snapshot_prune,
             )
-        ]
-
-    replication = registry.get(host, "zfs-automation.replication", None)
-    if replication is None:
-        return []
-    if not isinstance(replication, dict):
-        raise ValueError(f"zfs-automation.replication must be a mapping for {host}")
-
-    source = require_string(
-        registry.get(host, "zfs-automation.replication.source", ""),
-        f"zfs-automation.replication.source required for {host}",
-    )
-    target = require_string(
-        registry.get(host, "zfs-automation.replication.target", ""),
-        f"zfs-automation.replication.target required for {host}",
-    )
-    homelab_state_dir = str(registry.get(host, "config.homelab_state_dir", "/var/lib/homelab"))
-    docker_restart = str(
-        registry.get(
-            host,
-            "zfs-automation.docker_restart_command",
-            f"{homelab_state_dir}/appdata/start.sh",
         )
-    ).strip()
-    after_commands = [docker_restart] if docker_restart else []
-    schedule = str(registry.get(host, "zfs-automation.replication_schedule", "*-*-* 02:30:00"))
-    return [
-        ReplicationJob(
-            name="default",
-            schedule=schedule,
-            plans=(
-                ReplicationPlan(
-                    source=source,
-                    target=target,
-                    post_hook=str(
-                        registry.get(host, "zfs-automation.replication_post_hook", "")
-                    ).strip(),
-                ),
-            ),
-            after_commands=tuple(after_commands),
-            syncoid_options=(),
-            delete_target_snapshots=True,
-            target_snapshot_prune=None,
-        )
-    ]
+    return parsed_jobs
 
 
 def normalize_pull_source_access(registry, host: str) -> ZfsPullSourceAccess | None:
@@ -1100,15 +1054,31 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
     )
     homelab_state_dir = str(registry.get(host, "config.homelab_state_dir", "/var/lib/homelab"))
     snapshot_schedule = str(
-        registry.get(host, "zfs-automation.snapshot_schedule", "*-*-* 04:35:00")
+        registry.get(host, "zfs-automation.snapshot_schedule", "*-*-* 00:00:00")
     )
     health_check_schedule = str(
         registry.get(host, "zfs-automation.health_check_schedule", "hourly")
     )
-    manage_snapshots = bool(registry.get(host, "zfs-automation.manage_snapshots", True))
-    manage_replication = bool(registry.get(host, "zfs-automation.manage_replication", True))
-    manage_scrub = bool(registry.get(host, "zfs-automation.manage_scrub", True))
-    manage_health_check = bool(registry.get(host, "zfs-automation.manage_health_check", True))
+    manage_snapshots = normalize_bool(
+        registry.get(host, "zfs-automation.manage_snapshots", None),
+        True,
+        f"zfs-automation.manage_snapshots must be true or false for {host}",
+    )
+    manage_replication = normalize_bool(
+        registry.get(host, "zfs-automation.manage_replication", None),
+        True,
+        f"zfs-automation.manage_replication must be true or false for {host}",
+    )
+    manage_scrub = normalize_bool(
+        registry.get(host, "zfs-automation.manage_scrub", None),
+        True,
+        f"zfs-automation.manage_scrub must be true or false for {host}",
+    )
+    manage_health_check = normalize_bool(
+        registry.get(host, "zfs-automation.manage_health_check", None),
+        True,
+        f"zfs-automation.manage_health_check must be true or false for {host}",
+    )
     pools = resolve_pools(registry, host)
     snapshot_plans = normalize_snapshot_plans(registry, host)
     replication_jobs = normalize_replication_config(

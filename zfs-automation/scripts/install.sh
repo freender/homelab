@@ -29,21 +29,6 @@ REBUILD_BUNDLE_BUILD_DIR="${REBUILD_BUNDLE_ROOT}/build/${HOST}"
 REBUILD_BUNDLE_SCRIPTS_DIR="${REBUILD_BUNDLE_ROOT}/scripts"
 REBUILD_BUNDLE_LIB_DIR="${REBUILD_BUNDLE_ROOT}/lib"
 
-load_file_map() {
-    local map_file="$BUILD_DIR/file-map.conf"
-    local filename remote_path mode
-
-    declare -g -A FILE_MAP_DEST=()
-    declare -g -A FILE_MAP_MODE=()
-    while IFS='|' read -r filename remote_path mode; do
-        FILE_MAP_DEST["$filename"]="$remote_path"
-        FILE_MAP_MODE["$filename"]="${mode:-644}"
-    done < "$map_file"
-}
-
-mapped_dest() { printf '%s\n' "${FILE_MAP_DEST[$1]}"; }
-mapped_mode() { printf '%s\n' "${FILE_MAP_MODE[$1]:-644}"; }
-
 cleanup_legacy_replication_units() {
     local path
     local unit_name
@@ -105,15 +90,6 @@ cleanup_obsolete_replication_units() {
         print_ok "Removed obsolete $unit_name"
     done
     shopt -u nullglob
-}
-
-install_build_file() {
-    local name="$1"
-    local rc=0
-
-    install_if_changed "$BUILD_DIR/$name" "$(mapped_dest "$name")" "$(mapped_mode "$name")" "$(mapped_dest "$name")" || rc=$?
-    [[ $rc -eq 0 || $rc -eq 1 ]] || exit "$rc"
-    return "$rc"
 }
 
 sync_rebuild_bundle() {
@@ -231,6 +207,7 @@ cleanup_obsolete_replication_units
 
 rc=0
 install_build_file "sanoid.conf" || rc=$?
+[[ $rc -eq 0 || $rc -eq 1 ]] || exit "$rc"
 if [[ $rc -eq 0 ]]; then
     print_ok "sanoid.conf updated"
 fi
