@@ -4,6 +4,6 @@ OnFailure=homelab-notify-failure@%n.service
 
 [Service]
 Type=oneshot
-ExecStart=/usr/sbin/sanoid --configdir=/etc/sanoid --cron --verbose
+ExecStart=/usr/local/bin/homelab-zfs-snapshots
 StandardOutput=journal
 StandardError=journal
