@@ -71,6 +71,18 @@ class DynamicLxcSource:
 
 
 @dataclass(frozen=True)
+class MigratableLxcSnapshotPlan:
+    vmid: int
+    dataset: str
+
+
+@dataclass(frozen=True)
+class MigratableLxcSnapshotGroup:
+    name: str
+    plans: tuple[MigratableLxcSnapshotPlan, ...]
+
+
+@dataclass(frozen=True)
 class ReplicationPlan:
     target: str
     source: str = ""
@@ -213,6 +225,16 @@ def normalize_replication_job_name(value: object, host: str) -> str:
         raise ValueError(
             f"replication job name '{name}' for {host} must use only letters, numbers,"
             " underscores, or hyphens and must start with a letter or number"
+        )
+    return name
+
+
+def normalize_migratable_lxc_snapshot_group_name(value: object, host: str) -> str:
+    name = require_string(value, f"migratable LXC snapshot group name required for {host}")
+    if not REPLICATION_JOB_NAME_PATTERN.fullmatch(name):
+        raise ValueError(
+            f"migratable LXC snapshot group '{name}' for {host} must use only letters, "
+            "numbers, underscores, or hyphens and must start with a letter or number"
         )
     return name
 
@@ -454,45 +476,97 @@ def snapshot_plan_from_config(
     )
 
 
-def dynamic_lxc_source_dataset(source: DynamicLxcSource) -> str:
-    datasets = {candidate.source.split(":", 1)[1] for candidate in source.candidates}
-    if len(datasets) != 1:
-        raise ValueError("dynamic LXC source candidates must use the same dataset")
-    return next(iter(datasets))
+def normalize_migratable_lxc_snapshot_groups(
+    registry,
+    host: str,
+) -> dict[str, MigratableLxcSnapshotGroup]:
+    groups_config = registry.get(host, "zfs-automation.migratable_lxc_snapshot_groups", None)
+    if groups_config is None:
+        return {}
+    if not isinstance(groups_config, dict):
+        raise ValueError(
+            f"zfs-automation.migratable_lxc_snapshot_groups must be a dict for {host}"
+        )
+
+    groups: dict[str, MigratableLxcSnapshotGroup] = {}
+    for group_name, group_config in groups_config.items():
+        if not isinstance(group_config, dict):
+            raise ValueError(f"invalid migratable LXC snapshot group '{group_name}' for {host}")
+        normalized_group_name = normalize_migratable_lxc_snapshot_group_name(group_name, host)
+        if normalized_group_name in groups:
+            raise ValueError(
+                f"duplicate migratable LXC snapshot group '{normalized_group_name}' for {host}"
+            )
+
+        explicit_plans = group_config.get("plans", [])
+        if not isinstance(explicit_plans, list) or not explicit_plans:
+            raise ValueError(
+                "migratable LXC snapshot group "
+                f"'{normalized_group_name}' plans must be a non-empty list for {host}"
+            )
+        plans: list[MigratableLxcSnapshotPlan] = []
+        seen_datasets: set[str] = set()
+        for index, plan in enumerate(explicit_plans):
+            if not isinstance(plan, dict):
+                raise ValueError(
+                    "invalid migratable LXC snapshot plan at index "
+                    f"{index} in group '{normalized_group_name}' for {host}"
+                )
+            vmid = normalize_positive_int(
+                plan.get("vmid"),
+                "vmid must be a positive integer for migratable LXC snapshot plan "
+                f"{index} in group '{normalized_group_name}' for {host}",
+            )
+            dataset = require_string(
+                plan.get("dataset", ""),
+                "dataset required for migratable LXC snapshot plan "
+                f"{index} in group '{normalized_group_name}' for {host}",
+            )
+            if dataset in seen_datasets:
+                raise ValueError(
+                    f"duplicate dataset {dataset} in migratable LXC snapshot group "
+                    f"'{normalized_group_name}' for {host}"
+                )
+            seen_datasets.add(dataset)
+            plans.append(MigratableLxcSnapshotPlan(vmid=vmid, dataset=dataset))
+
+        groups[normalized_group_name] = MigratableLxcSnapshotGroup(
+            name=normalized_group_name,
+            plans=tuple(plans),
+        )
+    return groups
 
 
-def expand_migratable_snapshot_plans(
+def expand_migratable_lxc_snapshot_group(
     registry,
     value: object,
     defaults: dict,
     host: str,
 ) -> list[SnapshotPlan]:
-    ref = require_string(value, f"migratable_lxc_job must be set for {host}")
+    ref = require_string(value, f"migratable_lxc_snapshot_group must be set for {host}")
     if ":" in ref:
-        source_host, job_name = ref.split(":", 1)
+        source_host, group_name = ref.split(":", 1)
     elif "." in ref:
-        source_host, job_name = ref.split(".", 1)
+        source_host, group_name = ref.split(".", 1)
     else:
-        raise ValueError(f"migratable_lxc_job for {host} must use host:job format")
+        raise ValueError(
+            f"migratable_lxc_snapshot_group for {host} must use host:group format"
+        )
 
-    for job in normalize_replication_config(registry, source_host, include_disabled=True):
-        if job.name != job_name:
-            continue
-        plans = []
-        for replication_plan in job.plans:
-            if not replication_plan.dynamic_lxc_source:
-                continue
-            plans.append(
-                snapshot_plan_from_config(
-                    {"require_active_lxc": replication_plan.dynamic_lxc_source.vmid},
-                    defaults,
-                    dynamic_lxc_source_dataset(replication_plan.dynamic_lxc_source),
-                    host,
-                )
-            )
-        return plans
+    groups = normalize_migratable_lxc_snapshot_groups(registry, source_host)
+    group = groups.get(group_name)
+    if group is None:
+        raise ValueError(f"migratable_lxc_snapshot_group {ref} not found for {host}")
 
-    raise ValueError(f"migratable_lxc_job {ref} not found for {host}")
+    return [
+        snapshot_plan_from_config(
+            {"require_active_lxc": plan.vmid},
+            defaults,
+            plan.dataset,
+            host,
+        )
+        for plan in group.plans
+    ]
 
 
 def normalize_snapshot_plans(registry, host: str) -> list[SnapshotPlan]:
@@ -512,13 +586,13 @@ def normalize_snapshot_plans(registry, host: str) -> list[SnapshotPlan]:
             if not isinstance(plan, dict):
                 raise ValueError(f"invalid snapshot plan at index {index} for {host}")
             expanded_plans = (
-                expand_migratable_snapshot_plans(
+                expand_migratable_lxc_snapshot_group(
                     registry,
-                    plan.get("migratable_lxc_job"),
+                    plan.get("migratable_lxc_snapshot_group"),
                     defaults,
                     host,
                 )
-                if "migratable_lxc_job" in plan
+                if "migratable_lxc_snapshot_group" in plan
                 else [
                     snapshot_plan_from_config(
                         plan,
