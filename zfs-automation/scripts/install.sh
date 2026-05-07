@@ -166,13 +166,31 @@ configure_zfs_pull_source_access() {
 
     while IFS= read -r dataset; do
         [[ -n "$dataset" ]] || continue
-        if ! zfs list -H -o name "$dataset" >/dev/null 2>&1; then
-            print_error "ZFS pull source dataset not found: $dataset"
-            exit 1
-        fi
+        grant_zfs_pull_source_dataset "$dataset"
+    done < /etc/homelab/zfs-pull-datasets.conf
+}
+
+grant_zfs_pull_source_dataset() {
+    local dataset="$1"
+    local parent="$dataset"
+
+    if zfs list -H -o name "$dataset" >/dev/null 2>&1; then
         zfs allow -u "$ZFS_PULL_SOURCE_USER" send,hold,release "$dataset"
         print_ok "Granted send-only pull access for $dataset"
-    done < /etc/homelab/zfs-pull-datasets.conf
+        return 0
+    fi
+
+    while [[ "$parent" == */* ]]; do
+        parent="${parent%/*}"
+        if zfs list -H -o name "$parent" >/dev/null 2>&1; then
+            zfs allow -d -u "$ZFS_PULL_SOURCE_USER" send,hold,release "$parent"
+            print_warn "ZFS pull source dataset not present yet: $dataset; granted future descendant access at $parent"
+            return 0
+        fi
+    done
+
+    print_error "ZFS pull source dataset parent not found: $dataset"
+    exit 1
 }
 
 load_file_map

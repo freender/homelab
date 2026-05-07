@@ -335,6 +335,57 @@ def normalize_dynamic_lxc_source(
     return DynamicLxcSource(vmid=vmid, candidates=tuple(candidates))
 
 
+def node_mgmt_ip(registry, node: str) -> str:
+    mgmt_ip = require_string(
+        registry.get(node, "pve-postinstall.interfaces.mgmt_ip", ""),
+        f"pve-postinstall.interfaces.mgmt_ip required for dynamic LXC source node {node}",
+    )
+    return mgmt_ip.split("/", 1)[0]
+
+
+def normalize_dynamic_lxc_source_from_candidates(
+    registry,
+    plan: dict,
+    candidate_names: list[str],
+    host: str,
+    job_name: str,
+    plan_index: int,
+) -> DynamicLxcSource:
+    vmid = normalize_positive_int(
+        plan.get("vmid"),
+        "vmid must be a positive integer for dynamic plan "
+        f"{plan_index} in job '{job_name}' on {host}",
+    )
+    dataset = require_string(
+        plan.get("dataset", ""),
+        f"dataset required for dynamic plan {plan_index} in job '{job_name}' on {host}",
+    )
+
+    candidates = []
+    seen_names: set[str] = set()
+    for candidate_name in candidate_names:
+        name = require_safe_authorized_key_option(
+            candidate_name,
+            f"dynamic_lxc_candidates contains invalid node name for job '{job_name}' on {host}",
+        )
+        if name in seen_names:
+            raise ValueError(
+                f"duplicate dynamic_lxc_candidates entry '{name}' for job '{job_name}' on {host}"
+            )
+        seen_names.add(name)
+        source = f"zfs-pull@{node_mgmt_ip(registry, name)}:{dataset}"
+        candidates.append(
+            DynamicLxcSourceCandidate(
+                name=name,
+                source=source,
+                sshkey=f"/root/.ssh/homelab-zfs-pull_{name}_ed25519",
+                syncoid_options=(f"--identifier={name}",),
+            )
+        )
+
+    return DynamicLxcSource(vmid=vmid, candidates=tuple(candidates))
+
+
 def require_safe_authorized_key_option(value: object, message: str) -> str:
     text = require_string(value, message)
     if any(char in text for char in ['"', "'", ",", " ", "\t", "\n", "\r"]):
@@ -357,6 +408,93 @@ def normalize_dataset_under_root(dataset: str, root_dataset: str) -> str:
     return f"{root_dataset}/{dataset}"
 
 
+def snapshot_plan_from_config(
+    plan: dict,
+    defaults: dict,
+    dataset: str,
+    host: str,
+) -> SnapshotPlan:
+    if "exclude" in plan and "excludes" in plan:
+        raise ValueError(
+            f"snapshot plan for {dataset} on {host} specifies both 'exclude' and 'excludes'; "
+            "use only 'exclude'"
+        )
+    excludes = normalize_string_list(
+        plan.get("exclude", plan.get("excludes", [])),
+        f"snapshot plan excludes must be a list for {host}",
+    )
+    return SnapshotPlan(
+        dataset=dataset,
+        excludes=tuple(excludes),
+        hourly=str(plan.get("hourly", defaults.get("hourly", 0))),
+        daily=str(plan.get("daily", defaults.get("daily", 7))),
+        weekly=str(plan.get("weekly", defaults.get("weekly", 4))),
+        monthly=str(plan.get("monthly", defaults.get("monthly", 3))),
+        yearly=str(plan.get("yearly", defaults.get("yearly", 0))),
+        recursive=normalize_bool(
+            plan.get("recursive", defaults.get("recursive")),
+            True,
+            f"recursive for snapshot plan {dataset} must be true or false for {host}",
+        ),
+        process_children_only=normalize_bool(
+            plan.get("process_children_only", defaults.get("process_children_only")),
+            True,
+            f"process_children_only for snapshot plan {dataset} must be true or false for {host}",
+        ),
+        auto_exclude_replication=True,
+        require_active_lxc=(
+            normalize_positive_int(
+                plan.get("require_active_lxc"),
+                "require_active_lxc must be a positive integer for snapshot plan "
+                f"{dataset} on {host}",
+            )
+            if plan.get("require_active_lxc") is not None
+            else None
+        ),
+    )
+
+
+def dynamic_lxc_source_dataset(source: DynamicLxcSource) -> str:
+    datasets = {candidate.source.split(":", 1)[1] for candidate in source.candidates}
+    if len(datasets) != 1:
+        raise ValueError("dynamic LXC source candidates must use the same dataset")
+    return next(iter(datasets))
+
+
+def expand_migratable_snapshot_plans(
+    registry,
+    value: object,
+    defaults: dict,
+    host: str,
+) -> list[SnapshotPlan]:
+    ref = require_string(value, f"migratable_lxc_job must be set for {host}")
+    if ":" in ref:
+        source_host, job_name = ref.split(":", 1)
+    elif "." in ref:
+        source_host, job_name = ref.split(".", 1)
+    else:
+        raise ValueError(f"migratable_lxc_job for {host} must use host:job format")
+
+    for job in normalize_replication_config(registry, source_host, include_disabled=True):
+        if job.name != job_name:
+            continue
+        plans = []
+        for replication_plan in job.plans:
+            if not replication_plan.dynamic_lxc_source:
+                continue
+            plans.append(
+                snapshot_plan_from_config(
+                    {"require_active_lxc": replication_plan.dynamic_lxc_source.vmid},
+                    defaults,
+                    dynamic_lxc_source_dataset(replication_plan.dynamic_lxc_source),
+                    host,
+                )
+            )
+        return plans
+
+    raise ValueError(f"migratable_lxc_job {ref} not found for {host}")
+
+
 def normalize_snapshot_plans(registry, host: str) -> list[SnapshotPlan]:
     defaults = registry.get(host, "zfs-automation.snapshot_defaults", {})
     if defaults is None:
@@ -373,57 +511,33 @@ def normalize_snapshot_plans(registry, host: str) -> list[SnapshotPlan]:
         for index, plan in enumerate(explicit):
             if not isinstance(plan, dict):
                 raise ValueError(f"invalid snapshot plan at index {index} for {host}")
-            dataset = require_string(
-                plan.get("dataset", ""),
-                f"snapshot plan dataset required for {host}",
-            )
-            if dataset in seen:
-                raise ValueError(f"duplicate snapshot plan dataset {dataset} for {host}")
-            seen.add(dataset)
-            if "exclude" in plan and "excludes" in plan:
-                raise ValueError(
-                    f"snapshot plan at index {index} for {host} specifies both 'exclude' and"
-                    " 'excludes'; use only 'exclude'"
+            expanded_plans = (
+                expand_migratable_snapshot_plans(
+                    registry,
+                    plan.get("migratable_lxc_job"),
+                    defaults,
+                    host,
                 )
-            excludes = normalize_string_list(
-                plan.get("exclude", plan.get("excludes", [])),
-                f"snapshot plan excludes must be a list for {host}",
-            )
-            plans.append(
-                SnapshotPlan(
-                    dataset=dataset,
-                    excludes=tuple(excludes),
-                    hourly=str(plan.get("hourly", defaults.get("hourly", 0))),
-                    daily=str(plan.get("daily", defaults.get("daily", 7))),
-                    weekly=str(plan.get("weekly", defaults.get("weekly", 4))),
-                    monthly=str(plan.get("monthly", defaults.get("monthly", 3))),
-                    yearly=str(plan.get("yearly", defaults.get("yearly", 0))),
-                    recursive=normalize_bool(
-                        plan.get("recursive", defaults.get("recursive")),
-                        True,
-                        f"recursive for snapshot plan {dataset} must be true or false for {host}",
-                    ),
-                    process_children_only=normalize_bool(
-                        plan.get(
-                            "process_children_only",
-                            defaults.get("process_children_only"),
+                if "migratable_lxc_job" in plan
+                else [
+                    snapshot_plan_from_config(
+                        plan,
+                        defaults,
+                        require_string(
+                            plan.get("dataset", ""),
+                            f"snapshot plan dataset required for {host}",
                         ),
-                        True,
-                        "process_children_only for snapshot plan "
-                        f"{dataset} must be true or false for {host}",
-                    ),
-                    auto_exclude_replication=True,
-                    require_active_lxc=(
-                        normalize_positive_int(
-                            plan.get("require_active_lxc"),
-                            "require_active_lxc must be a positive integer for snapshot plan "
-                            f"{dataset} on {host}",
-                        )
-                        if plan.get("require_active_lxc") is not None
-                        else None
-                    ),
-                )
+                        host,
+                    )
+                ]
             )
+            for expanded_plan in expanded_plans:
+                if expanded_plan.dataset in seen:
+                    raise ValueError(
+                        f"duplicate snapshot plan dataset {expanded_plan.dataset} for {host}"
+                    )
+                seen.add(expanded_plan.dataset)
+                plans.append(expanded_plan)
         return plans
 
     if registry.get(host, "zfs-automation.sanoid", None) is not None:
@@ -501,6 +615,10 @@ def normalize_replication_config(
             raise ValueError(
                 f"plans for replication job '{normalized_job_name}' must be a list for {host}"
             )
+        dynamic_lxc_candidates = normalize_string_list(
+            job_config.get("dynamic_lxc_candidates", []),
+            f"dynamic_lxc_candidates for job '{normalized_job_name}' must be a list for {host}",
+        )
 
         for index, plan in enumerate(explicit_plans):
             if not isinstance(plan, dict):
@@ -515,6 +633,15 @@ def normalize_replication_config(
                     index,
                 )
                 if "dynamic_lxc_source" in plan
+                else normalize_dynamic_lxc_source_from_candidates(
+                    registry,
+                    plan,
+                    dynamic_lxc_candidates,
+                    host,
+                    normalized_job_name,
+                    index,
+                )
+                if dynamic_lxc_candidates and "vmid" in plan and "dataset" in plan
                 else None
             )
             source = str(plan.get("source", "")).strip()
