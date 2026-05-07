@@ -148,6 +148,29 @@ prepare_zfs_pull_source_user() {
     chown -R "$ZFS_PULL_SOURCE_USER:$ZFS_PULL_SOURCE_USER" "$ZFS_PULL_SOURCE_HOME"
 }
 
+cleanup_zfs_pull_source_access() {
+    local path
+
+    if [[ "${ENABLE_ZFS_PULL_SOURCE:-false}" == "true" ]]; then
+        return 0
+    fi
+
+    for path in \
+        /etc/homelab/zfs-pull-datasets.conf \
+        /usr/local/sbin/homelab-zfs-send-only \
+        "$ZFS_PULL_SOURCE_HOME/.ssh/authorized_keys" \
+        "$MANAGED_DIR/homelab-zfs-send-only.sh" \
+        "$MANAGED_DIR/zfs-pull-authorized-keys" \
+        "$MANAGED_DIR/zfs-pull-datasets.conf" \
+        "$REBUILD_BUNDLE_BUILD_DIR/homelab-zfs-send-only.sh" \
+        "$REBUILD_BUNDLE_BUILD_DIR/zfs-pull-authorized-keys" \
+        "$REBUILD_BUNDLE_BUILD_DIR/zfs-pull-datasets.conf"; do
+        [[ -e "$path" ]] || continue
+        rm -f "$path"
+        print_ok "Removed obsolete $(basename "$path")"
+    done
+}
+
 configure_zfs_pull_source_access() {
     local dataset
 
@@ -219,6 +242,7 @@ fi
 
 mkdir -p /etc/sanoid "$HOMELAB_STATE_DIR" "$MANAGED_DIR"
 prepare_zfs_pull_source_user
+cleanup_zfs_pull_source_access
 
 cleanup_legacy_replication_units
 cleanup_obsolete_replication_units
