@@ -10,17 +10,8 @@ import yaml
 REQUIRED_CONFIG_KEYS = {"type", "hostname", "user", "sshkey"}
 OPTIONAL_CONFIG_KEYS = {"agent", "homelab_state_dir", "ssh_config"}
 ALLOWED_CONFIG_KEYS = REQUIRED_CONFIG_KEYS | OPTIONAL_CONFIG_KEYS
-ALLOWED_HOST_KEYS = {"config", "features", "media_storage", "media_storage_ref"}
+ALLOWED_HOST_KEYS = {"config", "features"}
 ALLOWED_SSH_CONFIG_KEYS = {"hostname", "user", "sshkey"}
-ALLOWED_MEDIA_STORAGE_KEYS = {"data_slots", "parity_slots", "raw", "export"}
-ALLOWED_MEDIA_STORAGE_RAW_KEYS = {"data_mount_prefix", "parity_mount_prefix"}
-ALLOWED_MEDIA_STORAGE_EXPORT_KEYS = {
-    "data_mount_prefix",
-    "parity_mount_prefix",
-    "cache_media_path",
-    "merged_media_path",
-    "hdd_only_media_path",
-}
 
 
 class _Missing:
@@ -131,8 +122,6 @@ def validate_hosts_data(data: object, path: Path) -> None:
 
         validate_host_config(host, config)
         validate_host_features(host, config.get("features"))
-        validate_media_storage(host, config.get("media_storage"))
-        validate_media_storage_ref(host, config.get("media_storage_ref"))
 
 
 def validate_host_config(host: str, config: dict[str, Any]) -> None:
@@ -165,38 +154,6 @@ def validate_host_config(host: str, config: dict[str, Any]) -> None:
 def validate_host_features(host: str, features: object) -> None:
     if features is not None and not isinstance(features, dict):
         raise ValueError(f"features must be a mapping for {host}")
-
-
-def validate_media_storage(host: str, media_storage: object) -> None:
-    if media_storage is None:
-        return
-    if not isinstance(media_storage, dict):
-        raise ValueError(f"media_storage must be a mapping for {host}")
-
-    unknown_media_storage_keys = sorted(set(media_storage) - ALLOWED_MEDIA_STORAGE_KEYS)
-    if unknown_media_storage_keys:
-        keys = ", ".join(unknown_media_storage_keys)
-        raise ValueError(f"unknown media_storage key(s) for {host}: {keys}")
-
-    validate_optional_mapping_keys(
-        host,
-        "media_storage.raw",
-        media_storage.get("raw"),
-        ALLOWED_MEDIA_STORAGE_RAW_KEYS,
-    )
-    validate_optional_mapping_keys(
-        host,
-        "media_storage.export",
-        media_storage.get("export"),
-        ALLOWED_MEDIA_STORAGE_EXPORT_KEYS,
-    )
-
-
-def validate_media_storage_ref(host: str, media_storage_ref: object) -> None:
-    if media_storage_ref is None:
-        return
-    if not isinstance(media_storage_ref, str) or not media_storage_ref.strip():
-        raise ValueError(f"media_storage_ref must be a non-empty string for {host}")
 
 
 def validate_optional_mapping_keys(
