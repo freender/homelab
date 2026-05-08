@@ -26,6 +26,7 @@ class ArchivePlan:
 
 @dataclass(frozen=True)
 class BackupPlan:
+    enabled: bool
     schedule: str
     repository: str
     namespace: str
@@ -81,10 +82,26 @@ def validate(root: Path, hosts: list[str]) -> None:
     registry = default_registry(root)
     for host in hosts:
         plan = normalize_backup_plan(registry, host)
+        if not plan.enabled:
+            continue
         secret = secret_path(root, plan.secret_profile, allow_example=offline_mode())
         if not secret.is_file():
             expected = secret_path(root, plan.secret_profile)
             raise ValueError(f"{host}: missing secret file: {expected}")
+
+
+def normalize_bool(value: object, default: bool, message: str) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "yes", "1", "on"}:
+            return True
+        if normalized in {"false", "no", "0", "off"}:
+            return False
+    raise ValueError(message)
 
 
 def normalize_backup_plan(registry, host: str) -> BackupPlan:
@@ -115,6 +132,11 @@ def normalize_backup_plan(registry, host: str) -> BackupPlan:
         raise ValueError(f"{prefix}.runner for {host} must be 'host' or 'docker'")
 
     return BackupPlan(
+        enabled=normalize_bool(
+            registry.get(host, f"{prefix}.enabled", None),
+            True,
+            f"{prefix}.enabled for {host} must be true or false",
+        ),
         schedule=str(registry.get(host, f"{prefix}.schedule", "*-*-* 00:20:00")),
         repository=require_text(
             registry.get(host, f"{prefix}.repository", ""),
@@ -143,6 +165,7 @@ def secret_path(root: Path, profile: str, allow_example: bool = False) -> Path:
         "backup-cinci": root / "secrets" / "pbs-backup-cinci.env",
         "backup-cinci-hosts": root / "secrets" / "pbs-backup-cinci-hosts.env",
         "backup-xur-cinci": root / "secrets" / "pbs-backup-xur-cinci.env",
+        "backup-xur-cottonwood": root / "secrets" / "pbs-backup-xur-cottonwood.env",
     }
     if profile not in paths:
         raise ValueError(f"invalid PBS secret_profile '{profile}'")
@@ -158,6 +181,10 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
         raise ValueError(f"{MODULE_DIR} supports Ubuntu hosts only")
 
     plan = normalize_backup_plan(registry, host)
+    if not plan.enabled:
+        print_sub(f"{MODULE_DIR} disabled for {host}; skipping")
+        return
+
     build_dir = root / MODULE_DIR / "build" / host
     prepare_build_dir(build_dir)
     build_host_bundle(root, host, plan, build_dir)

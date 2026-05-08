@@ -116,6 +116,7 @@ class ZfsPuller:
 
 @dataclass(frozen=True)
 class ZfsPullSourceAccess:
+    enabled: bool
     user: str
     datasets: tuple[str, ...]
     pullers: tuple[ZfsPuller, ...]
@@ -183,6 +184,7 @@ def validate(root: Path, hosts: list[str]) -> None:
         normalize_replication_config(registry, host)
         normalize_replication_config(registry, host, include_disabled=True)
         normalize_pull_source_access(registry, host)
+        normalize_pull_source_access(registry, host, include_disabled=True)
         pools = resolve_pools(registry, host)
         if not pools:
             raise ValueError(f"zfs-automation requires at least one managed pool for {host}")
@@ -782,12 +784,25 @@ def normalize_replication_config(
     return parsed_jobs
 
 
-def normalize_pull_source_access(registry, host: str) -> ZfsPullSourceAccess | None:
+def normalize_pull_source_access(
+    registry,
+    host: str,
+    *,
+    include_disabled: bool = False,
+) -> ZfsPullSourceAccess | None:
     config = registry.get(host, "zfs-automation.pull_source_access", None)
     if config is None:
         return None
     if not isinstance(config, dict):
         raise ValueError(f"zfs-automation.pull_source_access must be a mapping for {host}")
+
+    enabled = normalize_bool(
+        config.get("enabled"),
+        True,
+        f"zfs-automation.pull_source_access.enabled must be true or false for {host}",
+    )
+    if not enabled and not include_disabled:
+        return None
 
     user = require_safe_authorized_key_option(
         config.get("user", "zfs-pull"),
@@ -827,6 +842,7 @@ def normalize_pull_source_access(registry, host: str) -> ZfsPullSourceAccess | N
         pullers.append(ZfsPuller(name=name, from_address=from_address, public_key=public_key))
 
     return ZfsPullSourceAccess(
+        enabled=enabled,
         user=user,
         datasets=tuple(datasets),
         pullers=tuple(pullers),
