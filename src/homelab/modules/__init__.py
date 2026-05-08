@@ -9,6 +9,7 @@ from .apcupsd import deploy as deploy_apcupsd
 from .apt_upgrade import deploy as deploy_apt_upgrade
 from .docker import deploy as deploy_docker
 from .keepalived import deploy as deploy_keepalived
+from .pbs_client_backup import deploy as deploy_pbs_client_backup
 from .pve_backup import deploy as deploy_pve_backup
 from .pve_exporters import deploy as deploy_pve_exporters
 from .pve_gpu_passthrough import deploy as deploy_pve_gpu_passthrough
@@ -41,6 +42,10 @@ MODULES: dict[str, ModuleDefinition] = {
         name="Keepalived",
         deploy=deploy_keepalived,
     ),
+    "pbs-client-backup": ModuleDefinition(
+        name="PBS Client Backup",
+        deploy=deploy_pbs_client_backup,
+    ),
     "pve-backup": ModuleDefinition(
         name="PVE Backup",
         deploy=deploy_pve_backup,
@@ -72,6 +77,7 @@ MODULE_ORDER = [
     "ssh-config",
     "ubuntu-setup",
     "zfs-automation",
+    "pbs-client-backup",
     "docker",
     "apt-upgrade",
 ]

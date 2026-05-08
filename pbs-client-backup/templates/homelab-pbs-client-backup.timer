@@ -1,0 +1,9 @@
+[Unit]
+Description=Run homelab PBS client backup on schedule
+
+[Timer]
+OnCalendar={{ SCHEDULE }}
+Persistent=true
+
+[Install]
+WantedBy=timers.target
