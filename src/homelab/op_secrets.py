@@ -281,7 +281,8 @@ def secret_file(root: Path, name: str) -> Path:
     On first call the file is materialized into the session tmpfs dir.
     Subsequent calls return the cached path.
     """
-    if name in _rendered:
+    is_offline = offline_mode()
+    if not is_offline and name in _rendered:
         return _rendered[name]
 
     catalog = load_catalog(root)
@@ -289,13 +290,12 @@ def secret_file(root: Path, name: str) -> Path:
     if entry is None:
         raise OpSecretsError(f"unknown secret '{name}' (not in {CATALOG_PATH})")
 
-    if offline_mode():
+    if is_offline:
         if entry.example is None:
             raise OpSecretsError(
                 f"offline mode: no example file for secret '{name}'. "
                 f"Create {entry.template}.example to support offline validation."
             )
-        _rendered[name] = entry.example
         return entry.example
 
     ensure_op_session()
