@@ -22,6 +22,7 @@ VALID_ARCHIVE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 class ArchivePlan:
     name: str
     dataset: str
+    path: str
     excludes: tuple[str, ...]
 
 
@@ -140,12 +141,19 @@ def normalize_backup_plan(registry, host: str) -> BackupPlan:
         if name in seen:
             raise ValueError(f"duplicate archive name {name!r} for {host}")
         seen.add(name)
-        dataset = require_text(archive.get("dataset", ""), f"archive dataset required for {host}")
+        dataset = str(archive.get("dataset", "")).strip()
+        path = str(archive.get("path", "")).strip()
+        if bool(dataset) == bool(path):
+            raise ValueError(
+                f"archive {name!r} for {host} must specify exactly one of dataset or path"
+            )
         excludes = normalize_string_list(
             archive.get("exclude", []),
             f"archive excludes for {host} must be a list",
         )
-        archives.append(ArchivePlan(name=name, dataset=dataset, excludes=tuple(excludes)))
+        archives.append(
+            ArchivePlan(name=name, dataset=dataset, path=path, excludes=tuple(excludes))
+        )
 
     runner = str(registry.get(host, f"{prefix}.runner", "host")).strip().lower()
     if runner not in {"host", "docker"}:
@@ -284,6 +292,7 @@ def write_config(path: Path, plan: BackupPlan) -> None:
             [
                 f'ARCHIVE_{index}_NAME="{archive.name}"',
                 f'ARCHIVE_{index}_DATASET="{archive.dataset}"',
+                f'ARCHIVE_{index}_PATH="{archive.path}"',
                 f'ARCHIVE_{index}_EXCLUDE_COUNT="{len(archive.excludes)}"',
             ]
         )

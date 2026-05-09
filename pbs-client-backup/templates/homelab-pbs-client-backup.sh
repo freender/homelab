@@ -28,6 +28,9 @@ fi
 if [[ "$REPOSITORY" == *'!'* && -z "${PBS_TOKEN_SECRET:-}" ]]; then
     PBS_TOKEN_SECRET="$PBS_PASSWORD"
 fi
+if [[ "$REPOSITORY" == *'!'* && -z "${PBS_PASSWORD:-}" ]]; then
+    PBS_PASSWORD="$PBS_TOKEN_SECRET"
+fi
 
 export PBS_PASSWORD PBS_TOKEN_SECRET PBS_FINGERPRINT
 
@@ -131,12 +134,18 @@ fi
 for ((i = 0; i < archive_count; i++)); do
     name_var="ARCHIVE_${i}_NAME"
     dataset_var="ARCHIVE_${i}_DATASET"
+    path_var="ARCHIVE_${i}_PATH"
     exclude_count_var="ARCHIVE_${i}_EXCLUDE_COUNT"
     name="${!name_var:-}"
     dataset="${!dataset_var:-}"
+    path="${!path_var:-}"
     exclude_count="${!exclude_count_var:-0}"
-    if [[ -z "$name" || -z "$dataset" ]]; then
-        echo "Archive $i is missing name or dataset" >&2
+    if [[ -z "$name" ]]; then
+        echo "Archive $i is missing name" >&2
+        exit 1
+    fi
+    if [[ -n "$dataset" && -n "$path" ]] || [[ -z "$dataset" && -z "$path" ]]; then
+        echo "Archive $i must specify exactly one of dataset or path" >&2
         exit 1
     fi
     if [[ ! "$exclude_count" =~ ^[0-9]+$ ]]; then
@@ -144,11 +153,20 @@ for ((i = 0; i < archive_count; i++)); do
         exit 1
     fi
 
-    snapshot_path="$(latest_snapshot_path "$dataset")"
-    echo "Using $dataset latest snapshot: $snapshot_path"
-    HOST_ARCHIVE_SPECS+=("${name}.pxar:${snapshot_path}")
+    if [[ -n "$dataset" ]]; then
+        source_path="$(latest_snapshot_path "$dataset")"
+        echo "Using $dataset latest snapshot: $source_path"
+    else
+        source_path="$path"
+        if [[ ! -e "$source_path" ]]; then
+            echo "Archive path not found: $source_path" >&2
+            exit 1
+        fi
+        echo "Using path archive $name: $source_path"
+    fi
+    HOST_ARCHIVE_SPECS+=("${name}.pxar:${source_path}")
     DOCKER_ARCHIVE_SPECS+=("${name}.pxar:/backup-source/${name}")
-    DOCKER_MOUNT_ARGS+=(--mount "type=bind,src=${snapshot_path},dst=/backup-source/${name},readonly")
+    DOCKER_MOUNT_ARGS+=(--mount "type=bind,src=${source_path},dst=/backup-source/${name},readonly")
 
     for ((j = 0; j < exclude_count; j++)); do
         exclude_var="ARCHIVE_${i}_EXCLUDE_${j}"
