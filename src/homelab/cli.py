@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import sys
@@ -8,6 +9,7 @@ from pathlib import Path
 import click
 import yaml
 
+from . import op_secrets
 from .deploy import DeploySession
 from .hosts import HostLookupError, default_registry, validate_hosts_data
 from .modules import MODULES, ordered_modules
@@ -68,6 +70,10 @@ def deploy(dry_run: bool, force: bool, module: str, host: str) -> None:
 
 @main.command()
 def validate() -> None:
+    # Validation is intentionally offline: no SSH, no op CLI calls.
+    # Modules fall back to template `.example` siblings under secrets/templates/.
+    os.environ.setdefault("HOMELAB_OFFLINE", "1")
+
     root = repo_root()
     print_header("Homelab Validation")
 
@@ -124,6 +130,133 @@ def execute_module(module_name: str, host: str, dry_run: bool, force: bool) -> i
     except (HostLookupError, ValueError) as exc:
         print_error(f"{module_name}: {exc}")
         return 1
+
+
+@main.group()
+def secrets() -> None:
+    """1Password-backed secret management."""
+
+
+@secrets.command("doctor")
+@click.argument("names", nargs=-1)
+def secrets_doctor(names: tuple[str, ...]) -> None:
+    """Verify catalog entries resolve via `op inject`. Names are not printed."""
+    root = repo_root()
+    print_header("Homelab Secrets Doctor")
+    if offline_mode():
+        print_sub("Offline mode: checking offline example fallbacks only")
+    exit_code = op_secrets.doctor(root, names if names else None)
+    raise SystemExit(exit_code)
+
+
+@secrets.command("list")
+def secrets_list() -> None:
+    """List all secret names defined in secrets/catalog.yml."""
+    root = repo_root()
+    try:
+        for name in op_secrets.list_secret_names(root):
+            click.echo(name)
+    except op_secrets.OpSecretsError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+
+@secrets.command("render")
+def secrets_render() -> None:
+    """Materialize all secrets into the session tmpfs and report the path.
+
+    The directory is automatically shredded and removed when this process exits.
+    Use this for manual inspection only; never copy contents elsewhere.
+    """
+    root = repo_root()
+    print_header("Render Secrets (ephemeral)")
+    try:
+        path = op_secrets.render_all(root)
+    except op_secrets.OpSecretsError as exc:
+        raise click.ClickException(str(exc)) from exc
+    print_sub(f"Rendered to: {path}")
+    print_warn("This directory is removed when this process exits.")
+
+
+@secrets.command("bootstrap")
+@click.option(
+    "--force",
+    is_flag=True,
+    default=False,
+    help="Overwrite existing fields on items already present in 1Password.",
+)
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    default=False,
+    help="Show what would be created/updated without writing to 1Password.",
+)
+@click.argument("names", nargs=-1)
+def secrets_bootstrap(force: bool, dry_run: bool, names: tuple[str, ...]) -> None:
+    """One-time migration: create 1Password items from legacy secrets/*.env files.
+
+    Requires the service-account token (or session) to have rw on the vault.
+    After bootstrap, downgrade the service account back to read-only and
+    run `homelab secrets purge-local`.
+    """
+    root = repo_root()
+    print_header("Homelab Secrets Bootstrap")
+    if dry_run:
+        print_sub("Dry-run: no writes will be sent to 1Password.")
+    if force:
+        print_sub("Force enabled: existing items will be overwritten.")
+    exit_code = op_secrets.bootstrap(
+        root,
+        names if names else None,
+        force=force,
+        dry_run=dry_run,
+    )
+    raise SystemExit(exit_code)
+
+
+@secrets.command("purge-local")
+@click.option("--yes", is_flag=True, default=False, help="Skip confirmation.")
+def secrets_purge_local(yes: bool) -> None:
+    """Shred and remove plaintext secrets/*.env files on this machine.
+
+    Run only AFTER `homelab secrets doctor` confirms every catalog entry
+    resolves from 1Password. Examples and templates are kept.
+    """
+    root = repo_root()
+    secrets_dir = root / "secrets"
+    candidates = sorted(
+        path
+        for path in secrets_dir.glob("*.env")
+        if path.is_file() and not path.name.endswith(".example")
+    )
+    if not candidates:
+        print_action("No plaintext .env files under secrets/ to purge.")
+        return
+
+    print_action(f"Found {len(candidates)} plaintext file(s) under {secrets_dir}:")
+    for path in candidates:
+        print_sub(path.name)
+
+    if not yes:
+        click.confirm(
+            "Shred and remove these files? Confirm 1Password has every value first.",
+            abort=True,
+        )
+
+    shred = shutil.which("shred")
+    for path in candidates:
+        try:
+            if shred:
+                subprocess.run(
+                    [shred, "-u", "-n", "1", str(path)],
+                    check=False,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+            if path.exists():
+                path.unlink()
+            print_ok(f"removed {path.name}")
+        except OSError as exc:
+            print_error(f"failed to remove {path}: {exc}")
 
 
 if __name__ == "__main__":

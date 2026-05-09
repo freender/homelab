@@ -2,11 +2,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from .. import op_secrets
 from ..build import render_file, write_env_file
 from ..deploy import DeploySession, force_env, prepare_build_dir, stage_and_run_remote_installer
 from ..hosts import HostLookupError, default_registry
 from ..output import print_action, print_error, print_sub
-from ..ssh import HostConnection, build_files, diff_many, offline_mode
+from ..ssh import HostConnection, build_files, diff_many
 
 REMOTE_ROOT = "/tmp/homelab-apcupsd"
 
@@ -44,18 +45,10 @@ def validate(root: Path) -> None:
 
 
 def telegram_env_path(root: Path) -> Path:
-    telegram_env = root / "secrets" / "telegram.env"
-    if telegram_env.is_file():
-        return telegram_env
-
-    telegram_example = root / "secrets" / "telegram.env.example"
-    if offline_mode() and telegram_example.is_file():
-        return telegram_example
-
-    raise ValueError(
-        "telegram.env not found; copy secrets/telegram.env.example "
-        "secrets/telegram.env"
-    )
+    try:
+        return op_secrets.secret_file(root, "telegram")
+    except op_secrets.OpSecretsError as exc:
+        raise ValueError(str(exc)) from exc
 
 
 def get_slave_hosts(root: Path) -> str:

@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+from .. import op_secrets
 from ..build import copy_file, copy_files, render_file, write_env_file
 from ..deploy import DeploySession, force_env, prepare_build_dir, stage_and_run_remote_installer
 from ..hosts import HostLookupError, default_registry
@@ -11,7 +12,7 @@ from ..output import print_action, print_sub
 from ..ssh import HostConnection, build_files, diff_many
 
 REMOTE_ROOT = "/tmp/homelab-ubuntu-setup"
-NETWORK_MACS_ENV = "network-macs.env"
+NETWORK_MACS_SECRET = "network-macs"
 
 STATIC_CONFIG_FILES = ["99-inotify.conf", "sshd-hardening.conf"]
 
@@ -118,7 +119,10 @@ def validate(root: Path, hosts: list[str]) -> None:
                 raise ValueError(f"missing samba config: {samba_config}")
 
 def load_network_mac(root: Path, host: str) -> str:
-    env_path = root / "secrets" / NETWORK_MACS_ENV
+    try:
+        env_path = op_secrets.secret_file(root, NETWORK_MACS_SECRET)
+    except op_secrets.OpSecretsError:
+        return ""
     if not env_path.is_file():
         return ""
 

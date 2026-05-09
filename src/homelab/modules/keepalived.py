@@ -3,16 +3,17 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+from .. import op_secrets
 from ..build import render_file
 from ..deploy import DeploySession, force_env, prepare_build_dir, stage_and_run_remote_installer
 from ..hosts import HostLookupError, default_registry
 from ..module_support import FileSpec, HostArtifacts, require_text, write_file_map
 from ..output import print_action, print_error, print_sub
-from ..ssh import HostConnection, build_files, diff_many, offline_mode
+from ..ssh import HostConnection, build_files, diff_many
 
 REMOTE_ROOT = "/tmp/homelab-keepalived"
 TEMPLATE_FILES = ["healthcheck.sh", "keepalived.conf"]
-SECRETS_FILE = "keepalived.env"
+SECRET_NAME = "keepalived"
 
 
 @dataclass(frozen=True)
@@ -185,19 +186,16 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
 
 
 def keepalived_env_path(root: Path) -> Path:
-    secret = root / "secrets" / SECRETS_FILE
-    if offline_mode() and not secret.is_file():
-        return root / "secrets" / f"{SECRETS_FILE}.example"
-    return secret
+    try:
+        return op_secrets.secret_file(root, SECRET_NAME)
+    except op_secrets.OpSecretsError as exc:
+        raise ValueError(str(exc)) from exc
 
 
 def load_keepalived_env(root: Path) -> dict[str, str]:
     path = keepalived_env_path(root)
     if not path.is_file():
-        raise ValueError(
-            f"missing keepalived env file: {path}; "
-            f"copy secrets/{SECRETS_FILE}.example to secrets/{SECRETS_FILE}"
-        )
+        raise ValueError(f"missing keepalived env file: {path}")
 
     values: dict[str, str] = {}
     for line_number, raw_line in enumerate(

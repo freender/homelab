@@ -3,13 +3,18 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from .. import op_secrets
 from ..deploy import DeploySession, force_env, prepare_build_dir, stage_and_run_remote_installer
 from ..hosts import default_registry
 from ..output import print_action, print_sub
-from ..ssh import HostConnection, build_files, offline_mode
+from ..ssh import HostConnection, build_files
 from ..templates import render_template
 
 REMOTE_ROOT = "/tmp/homelab-pve-backup"
+PROFILE_TO_SECRET = {
+    "backup-main": "pbs-backup-main",
+    "backup-cinci": "pbs-backup-cinci",
+}
 
 
 def deploy(
@@ -44,25 +49,23 @@ def validate(root: Path, hosts: list[str]) -> None:
         secret_profile = str(
             registry.get(host, "pve-backup.proxmox_backup_client.secret_profile", "")
         )
-        secret_file = secret_path(root, secret_profile, allow_example=offline_mode())
-        if secret_profile and not secret_file.is_file():
-            raise ValueError(
-                f"{host}: missing secret file: {secret_path(root, secret_profile)}"
-            )
+        if not secret_profile:
+            continue
+        try:
+            secret_file = secret_path(root, secret_profile)
+        except (ValueError, op_secrets.OpSecretsError) as exc:
+            raise ValueError(f"{host}: {exc}") from exc
+        if not secret_file.is_file():
+            raise ValueError(f"{host}: missing secret file for profile '{secret_profile}'")
 
 
-def secret_path(root: Path, profile: str, allow_example: bool = False) -> Path:
-    if profile == "backup-main":
-        secret = root / "secrets" / "pbs-backup-main.env"
-        if allow_example and not secret.is_file():
-            return root / "secrets" / "pbs-backup-main.env.example"
-        return secret
-    if profile == "backup-cinci":
-        secret = root / "secrets" / "pbs-backup-cinci.env"
-        if allow_example and not secret.is_file():
-            return root / "secrets" / "pbs-backup-cinci.env.example"
-        return secret
-    raise ValueError(f"invalid secret_profile '{profile}'")
+def secret_path(root: Path, profile: str) -> Path:
+    if profile not in PROFILE_TO_SECRET:
+        raise ValueError(f"invalid secret_profile '{profile}'")
+    try:
+        return op_secrets.secret_file(root, PROFILE_TO_SECRET[profile])
+    except op_secrets.OpSecretsError as exc:
+        raise ValueError(str(exc)) from exc
 
 
 def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
@@ -259,7 +262,7 @@ def build_cluster_config_backup_bundle(root: Path, host: str, build_dir: Path) -
             "skipping config backup bundle"
         )
         return
-    env_source = secret_path(root, profile, allow_example=offline_mode())
+    env_source = secret_path(root, profile)
     render_template(
         root / "pve-backup" / "configs" / "pve-config-backup.sh.tpl",
         build_dir / "pve-config-backup.sh",

@@ -55,7 +55,7 @@ If a module has no dedicated test script, use `./deploy --dry-run` as the test.
 - `*/templates`: rendered files with Jinja `{{ VAR }}` placeholders when templated.
 - `*/configs`: static files copied directly.
 - `*/build`: generated output (gitignored).
-- `secrets/`: local operator inputs.
+- `secrets/`: 1Password-backed deploy-time secret catalog/templates only; no plaintext `.env` files should live here.
 
 ## Coding Style Guidelines
 
@@ -143,9 +143,15 @@ Keep the same flow used across modules:
 
 ### Secrets and sensitive data
 - Never commit `.env`, `telegram.env`, or actual secret values.
-- `.env.example` is allowed.
-- Validate secret file existence before starting deployment.
-- Keep real domain names, public route hosts, and externally reachable URLs out of committed inventory/templates; put them in ignored `.env` files and commit only placeholder `.env.example` values.
+- Homelab repo deploy-time secrets are sourced from 1Password via `src/homelab/op_secrets.py` and `op inject`.
+- `secrets/catalog.yml` maps stable secret names to `secrets/templates/*.env.tpl` files containing `op://Homelab/<Item>/<field>` references.
+- Rendered secrets must live only in `/dev/shm/homelab-secrets.*` and are shredded on cleanup; do not write generated secret files under the repo.
+- The normal read-only service-account token path on `riven` is `~/.config/op/service-account-token`; `~/.config/op/homelab.token` is reserved for a temporary bootstrap token and should not remain after bootstrap.
+- Use `PATH="$HOME/.local/bin:$PATH" PYTHONPATH=src .venv/bin/python -m homelab.cli secrets doctor` to verify 1Password secret resolution.
+- Use `homelab secrets bootstrap` only for one-time migration from existing ignored `secrets/*.env` files into 1Password; it requires temporary write access and should be followed by `homelab secrets purge-local` and token downgrade/removal.
+- `.env.example` and `*.env.tpl.example` placeholders are allowed for offline validation.
+- Keep Docker compose `.env` files out of this repo secret workflow; compose runtime env files stay on the Docker hosts under `/mnt/cache/appdata/<app>/`.
+- Keep real domain names, public route hosts, and externally reachable URLs out of committed inventory/templates unless already intentionally modeled as non-secret infrastructure metadata.
 
 ### ShellCheck directives
 - Use suppressions only when necessary and localize them near the affected line.

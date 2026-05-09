@@ -4,11 +4,12 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
+from .. import op_secrets
 from ..deploy import DeploySession, force_env, prepare_build_dir, stage_and_run_remote_installer
 from ..hosts import default_registry
 from ..module_support import FileSpec, require_text, write_file_map
 from ..output import print_action, print_sub
-from ..ssh import HostConnection, build_files, diff_many, offline_mode
+from ..ssh import HostConnection, build_files, diff_many
 from ..templates import render_template
 
 REMOTE_ROOT = "/tmp/homelab-pbs-client-backup"
@@ -16,6 +17,13 @@ MODULE_DIR = "pbs-client-backup"
 SERVICE_NAME = "homelab-pbs-client-backup.service"
 TIMER_NAME = "homelab-pbs-client-backup.timer"
 VALID_ARCHIVE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+PROFILE_TO_SECRET = {
+    "backup-main": "pbs-backup-main",
+    "backup-cinci": "pbs-backup-cinci",
+    "backup-cinci-hosts": "pbs-backup-cinci-hosts",
+    "backup-xur-cinci": "pbs-backup-xur-cinci",
+    "backup-xur-cottonwood": "pbs-backup-xur-cottonwood",
+}
 
 
 @dataclass(frozen=True)
@@ -86,10 +94,14 @@ def validate(root: Path, hosts: list[str]) -> None:
         plan = normalize_backup_plan(registry, host)
         if not plan.enabled:
             continue
-        secret = secret_path(root, plan.secret_profile, allow_example=offline_mode())
+        try:
+            secret = secret_path(root, plan.secret_profile)
+        except (ValueError, op_secrets.OpSecretsError) as exc:
+            raise ValueError(f"{host}: {exc}") from exc
         if not secret.is_file():
-            expected = secret_path(root, plan.secret_profile)
-            raise ValueError(f"{host}: missing secret file: {expected}")
+            raise ValueError(
+                f"{host}: missing secret file for profile '{plan.secret_profile}'"
+            )
 
 
 def normalize_bool(value: object, default: bool, message: str) -> bool:
@@ -187,20 +199,13 @@ def normalize_backup_plan(registry, host: str) -> BackupPlan:
     )
 
 
-def secret_path(root: Path, profile: str, allow_example: bool = False) -> Path:
-    paths = {
-        "backup-main": root / "secrets" / "pbs-backup-main.env",
-        "backup-cinci": root / "secrets" / "pbs-backup-cinci.env",
-        "backup-cinci-hosts": root / "secrets" / "pbs-backup-cinci-hosts.env",
-        "backup-xur-cinci": root / "secrets" / "pbs-backup-xur-cinci.env",
-        "backup-xur-cottonwood": root / "secrets" / "pbs-backup-xur-cottonwood.env",
-    }
-    if profile not in paths:
+def secret_path(root: Path, profile: str) -> Path:
+    if profile not in PROFILE_TO_SECRET:
         raise ValueError(f"invalid PBS secret_profile '{profile}'")
-    path = paths[profile]
-    if allow_example and not path.is_file():
-        return path.with_suffix(path.suffix + ".example")
-    return path
+    try:
+        return op_secrets.secret_file(root, PROFILE_TO_SECRET[profile])
+    except op_secrets.OpSecretsError as exc:
+        raise ValueError(str(exc)) from exc
 
 
 def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
@@ -268,7 +273,7 @@ def build_host_bundle(root: Path, host: str, plan: BackupPlan, build_dir: Path) 
         SCHEDULE=plan.schedule,
     )
     write_config(build_dir / "homelab-pbs-client-backup.conf", plan)
-    secret = secret_path(root, plan.secret_profile, allow_example=offline_mode())
+    secret = secret_path(root, plan.secret_profile)
     (build_dir / "homelab-pbs-client-backup.env").write_text(
         secret.read_text(encoding="utf-8"),
         encoding="utf-8",

@@ -3,8 +3,11 @@
 **/telegram.env
 **/*.env
 
-# Allow examples
+# Allow examples and op-inject templates (no secret values)
 !**/.env.example
+!secrets/templates/*.env.tpl
+!secrets/templates/*.env.tpl.example
+!secrets/catalog.yml
 
 # Local overrides
 *.local
