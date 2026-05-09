@@ -138,6 +138,21 @@ def shell_quote(value: object) -> str:
     return str(value).replace("'", "'\"'\"'")
 
 
+def normalize_string_list(value: object, message: str) -> list[str]:
+    if value in (None, ""):
+        return []
+    if isinstance(value, str):
+        return [value]
+    if not isinstance(value, list):
+        raise ValueError(message)
+    normalized = []
+    for item in value:
+        text = str(item).strip()
+        if text:
+            normalized.append(text)
+    return normalized
+
+
 def build_standalone_backup_plans(root: Path, host: str, build_dir: Path) -> None:
     registry = default_registry(root)
     storages = registry.get(host, "pve-backup.pbs_setup.storages", [])
@@ -181,6 +196,7 @@ def build_standalone_backup_plans(root: Path, host: str, build_dir: Path) -> Non
         defaults = {
             "vmid": "",
             "exclude": "",
+            "exclude_path": [],
             "compress": "zstd",
             "mode": "snapshot",
             "notes_template": "{{guestname}}",
@@ -190,6 +206,10 @@ def build_standalone_backup_plans(root: Path, host: str, build_dir: Path) -> Non
             "fleecing": "0",
         }
         merged = {**defaults, **job}
+        exclude_paths = normalize_string_list(
+            merged.get("exclude_path", []),
+            f"exclude_path for standalone backup job at index {index} for {host} must be a list",
+        )
         for key in [
             "schedule",
             "storage",
@@ -204,6 +224,11 @@ def build_standalone_backup_plans(root: Path, host: str, build_dir: Path) -> Non
             "fleecing",
         ]:
             job_lines.append(f"JOB_{index}_{key.upper()}='{shell_quote(merged[key])}'")
+        job_lines.append(f"JOB_{index}_EXCLUDE_PATH_COUNT='{len(exclude_paths)}'")
+        for path_index, exclude_path in enumerate(exclude_paths):
+            job_lines.append(
+                f"JOB_{index}_EXCLUDE_PATH_{path_index}='{shell_quote(exclude_path)}'"
+            )
     (build_dir / "jobs-plan.conf").write_text(
         "\n".join(job_lines) + "\n",
         encoding="utf-8",

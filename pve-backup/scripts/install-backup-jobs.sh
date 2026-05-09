@@ -74,6 +74,27 @@ else:
 ' "$storage" "$vmid" "$exclude"
 }
 
+set_exclude_paths() {
+    local job_id="$1"
+    local pvesh_args=()
+    local path
+    shift
+
+    if [[ -z "$job_id" ]]; then
+        print_error "Cannot set exclude paths without backup job ID"
+        exit 1
+    fi
+
+    if [[ "$#" -gt 0 ]]; then
+        for path in "$@"; do
+            pvesh_args+=(--exclude-path "$path")
+        done
+        pvesh set "/cluster/backup/$job_id" "${pvesh_args[@]}"
+    else
+        pvesh set "/cluster/backup/$job_id" --delete exclude-path >/dev/null || true
+    fi
+}
+
 for (( i=0; i<JOB_COUNT; i++ )); do
     schedule_var="JOB_${i}_SCHEDULE"
     storage_var="JOB_${i}_STORAGE"
@@ -86,6 +107,7 @@ for (( i=0; i<JOB_COUNT; i++ )); do
     prune_backups_var="JOB_${i}_PRUNE_BACKUPS"
     enabled_var="JOB_${i}_ENABLED"
     fleecing_var="JOB_${i}_FLEECING"
+    exclude_path_count_var="JOB_${i}_EXCLUDE_PATH_COUNT"
 
     schedule="${!schedule_var}"
     storage="${!storage_var}"
@@ -98,6 +120,8 @@ for (( i=0; i<JOB_COUNT; i++ )); do
     prune_backups="${!prune_backups_var}"
     enabled="${!enabled_var}"
     fleecing="${!fleecing_var}"
+    exclude_path_count="${!exclude_path_count_var:-0}"
+    exclude_path_args=()
 
     if [[ -z "$schedule" || -z "$storage" ]]; then
         print_error "Job $i is missing required schedule/storage"
@@ -108,6 +132,16 @@ for (( i=0; i<JOB_COUNT; i++ )); do
         print_error "Job $i cannot set both vmid and exclude"
         exit 1
     fi
+
+    if [[ ! "$exclude_path_count" =~ ^[0-9]+$ ]]; then
+        print_error "Job $i exclude path count is invalid"
+        exit 1
+    fi
+
+    for (( j=0; j<exclude_path_count; j++ )); do
+        exclude_path_var="JOB_${i}_EXCLUDE_PATH_${j}"
+        exclude_path_args+=("${!exclude_path_var}")
+    done
 
     job_id=$(find_job_id "$storage" "$vmid" "$exclude")
 
@@ -136,6 +170,7 @@ for (( i=0; i<JOB_COUNT; i++ )); do
                 pvesh set "/cluster/backup/$job_id" --delete exclude >/dev/null
             fi
         fi
+        set_exclude_paths "$job_id" "${exclude_path_args[@]}"
     else
         print_sub "Creating backup job (storage=$storage vmid=${vmid:-all})..."
         if [[ -n "$vmid" ]]; then
@@ -150,6 +185,8 @@ for (( i=0; i<JOB_COUNT; i++ )); do
                 --prune-backups "$prune_backups" \
                 --enabled "$enabled" \
                 --fleecing "$fleecing"
+            job_id=$(find_job_id "$storage" "$vmid" "$exclude")
+            set_exclude_paths "$job_id" "${exclude_path_args[@]}"
         else
             if [[ -n "$exclude" ]]; then
                 pvesh create /cluster/backup \
@@ -177,6 +214,8 @@ for (( i=0; i<JOB_COUNT; i++ )); do
                     --enabled "$enabled" \
                     --fleecing "$fleecing"
             fi
+            job_id=$(find_job_id "$storage" "$vmid" "$exclude")
+            set_exclude_paths "$job_id" "${exclude_path_args[@]}"
         fi
     fi
 done

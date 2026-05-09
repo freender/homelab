@@ -22,6 +22,7 @@ VALID_ARCHIVE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 class ArchivePlan:
     name: str
     dataset: str
+    excludes: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -104,6 +105,21 @@ def normalize_bool(value: object, default: bool, message: str) -> bool:
     raise ValueError(message)
 
 
+def normalize_string_list(value: object, message: str) -> list[str]:
+    if value in (None, ""):
+        return []
+    if isinstance(value, str):
+        return [value]
+    if not isinstance(value, list):
+        raise ValueError(message)
+    normalized = []
+    for item in value:
+        text = str(item).strip()
+        if text:
+            normalized.append(text)
+    return normalized
+
+
 def normalize_backup_plan(registry, host: str) -> BackupPlan:
     prefix = MODULE_DIR
     archives_config = registry.get(host, f"{prefix}.archives", [])
@@ -125,7 +141,11 @@ def normalize_backup_plan(registry, host: str) -> BackupPlan:
             raise ValueError(f"duplicate archive name {name!r} for {host}")
         seen.add(name)
         dataset = require_text(archive.get("dataset", ""), f"archive dataset required for {host}")
-        archives.append(ArchivePlan(name=name, dataset=dataset))
+        excludes = normalize_string_list(
+            archive.get("exclude", []),
+            f"archive excludes for {host} must be a list",
+        )
+        archives.append(ArchivePlan(name=name, dataset=dataset, excludes=tuple(excludes)))
 
     runner = str(registry.get(host, f"{prefix}.runner", "host")).strip().lower()
     if runner not in {"host", "docker"}:
@@ -264,6 +284,9 @@ def write_config(path: Path, plan: BackupPlan) -> None:
             [
                 f'ARCHIVE_{index}_NAME="{archive.name}"',
                 f'ARCHIVE_{index}_DATASET="{archive.dataset}"',
+                f'ARCHIVE_{index}_EXCLUDE_COUNT="{len(archive.excludes)}"',
             ]
         )
+        for exclude_index, exclude in enumerate(archive.excludes):
+            lines.append(f'ARCHIVE_{index}_EXCLUDE_{exclude_index}="{exclude}"')
     path.write_text("\n".join([*lines, ""]), encoding="utf-8")
