@@ -36,6 +36,54 @@ fi
 config_changed=false
 units_changed=false
 
+discover_hdd_devices() {
+    lsblk -dn -o NAME,TYPE,ROTA | while read -r name type rota; do
+        [[ "$type" == "disk" ]] || continue
+        [[ "$rota" == "1" ]] || continue
+        [[ -b "/dev/$name" ]] || continue
+        printf '/dev/%s\n' "$name"
+    done
+}
+
+write_discovered_defaults() {
+    local defaults_path="/etc/default/homelab-disk-spindown"
+    local tmp_path
+    local devices=()
+    local opts
+    local device
+
+    # shellcheck source=/dev/null
+    source "$defaults_path"
+
+    mapfile -t devices < <(discover_hdd_devices)
+    if [[ ${#devices[@]} -eq 0 ]]; then
+        print_error "No rotational disks discovered for disk spindown"
+        return 1
+    fi
+
+    opts="-i 0 -c ${HD_IDLE_COMMAND_TYPE:-ata} -s ${HD_IDLE_SYMLINK_POLICY:-1}"
+    for device in "${devices[@]}"; do
+        opts+=" -a $device -i ${HD_IDLE_IDLE_SECONDS:-1800}"
+    done
+
+    tmp_path="$(mktemp)"
+    {
+        printf 'HD_IDLE_IDLE_SECONDS="%s"\n' "${HD_IDLE_IDLE_SECONDS:-1800}"
+        printf 'HD_IDLE_COMMAND_TYPE="%s"\n' "${HD_IDLE_COMMAND_TYPE:-ata}"
+        printf 'HD_IDLE_SYMLINK_POLICY="%s"\n' "${HD_IDLE_SYMLINK_POLICY:-1}"
+        printf 'HD_IDLE_OPTS="%s"\n' "$opts"
+    } > "$tmp_path"
+
+    if ! cmp -s "$tmp_path" "$defaults_path"; then
+        install -m 0644 "$tmp_path" "$defaults_path"
+        config_changed=true
+        print_ok "Discovered HDDs: ${devices[*]}"
+    else
+        print_sub "Discovered HDDs unchanged: ${devices[*]}"
+    fi
+    rm -f "$tmp_path"
+}
+
 for file_name in \
     homelab-disk-spindown.defaults \
     homelab-disk-spindown.service \
@@ -51,6 +99,8 @@ for file_name in \
         esac
     fi
 done
+
+write_discovered_defaults
 
 if [[ "$units_changed" == "true" ]]; then
     systemctl daemon-reload

@@ -11,14 +11,8 @@ from ..ssh import HostConnection, build_files, diff_many
 REMOTE_ROOT = "/tmp/homelab-docker"
 
 TEMPLATE_FILES = [
-    "homelab-docker-start.service",
-    "homelab-docker-start.timer",
     "homelab-docker-update.service",
     "homelab-docker-update.timer",
-    "syncthing-unpause.service",
-    "syncthing-unpause.timer",
-    "syncthing-pause.service",
-    "syncthing-pause.timer",
 ]
 
 
@@ -55,36 +49,12 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
     ssh_hostname = str(registry.get(host, "config.hostname", host))
     update_schedule = str(registry.get(host, "docker.update_schedule", "")).strip()
     update_timer_enabled = "true" if update_schedule else "false"
-    run_on_boot = str(registry.get(host, "docker.run_on_boot", "false")).lower()
-    start_schedule = str(registry.get(host, "docker.start_schedule", "")).strip()
-    timer_enabled = "true" if start_schedule else "false"
-    docker_start_service_enabled = run_on_boot == "true" or timer_enabled == "true"
-    syncthing_unpause_schedule = str(
-        registry.get(host, "docker.syncthing_unpause_schedule", "")
-    ).strip()
-    syncthing_pause_schedule = str(
-        registry.get(host, "docker.syncthing_pause_schedule", "")
-    ).strip()
-    syncthing_timer_enabled = (
-        "true" if syncthing_unpause_schedule and syncthing_pause_schedule else "false"
-    )
     dependency_units = docker_dependency_units(registry, host)
 
     templates_dir = root / "docker" / "templates"
     build_dir = root / "docker" / "build" / host
     prepare_build_dir(build_dir)
 
-    render_file(
-        templates_dir / "homelab-docker-start.service",
-        build_dir / "homelab-docker-start.service",
-        DOCKER_DEPENDENCY_UNITS=" ".join(dependency_units),
-    )
-    if start_schedule:
-        render_file(
-            templates_dir / "homelab-docker-start.timer",
-            build_dir / "homelab-docker-start.timer",
-            DOCKER_START_SCHEDULE=start_schedule,
-        )
     if update_timer_enabled == "true":
         render_file(
             templates_dir / "homelab-docker-update.service",
@@ -97,33 +67,10 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
             DOCKER_UPDATE_SCHEDULE=update_schedule,
         )
 
-    if syncthing_unpause_schedule and syncthing_pause_schedule:
-        render_file(
-            templates_dir / "syncthing-unpause.service",
-            build_dir / "syncthing-unpause.service",
-        )
-        render_file(
-            templates_dir / "syncthing-unpause.timer",
-            build_dir / "syncthing-unpause.timer",
-            SYNCTHING_UNPAUSE_SCHEDULE=syncthing_unpause_schedule,
-        )
-        render_file(
-            templates_dir / "syncthing-pause.service",
-            build_dir / "syncthing-pause.service",
-        )
-        render_file(
-            templates_dir / "syncthing-pause.timer",
-            build_dir / "syncthing-pause.timer",
-            SYNCTHING_PAUSE_SCHEDULE=syncthing_pause_schedule,
-        )
-
     write_env_file(
         build_dir / "env",
         {
             "ENABLE_DOCKER_UPDATE_TIMER": update_timer_enabled,
-            "RUN_DOCKER_START_ON_BOOT": run_on_boot,
-            "ENABLE_DOCKER_START_TIMER": timer_enabled,
-            "ENABLE_SYNCTHING_TIMERS": syncthing_timer_enabled,
         },
     )
 
@@ -137,20 +84,6 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
             "/mnt/cache/appdata/.homelab/docker/docker-common.sh",
         ),
     ]
-    if docker_start_service_enabled:
-        diff_pairs.append(
-            (
-                build_dir / "homelab-docker-start.service",
-                "/etc/systemd/system/homelab-docker-start.service",
-            )
-        )
-    if timer_enabled == "true":
-        diff_pairs += [
-            (
-                build_dir / "homelab-docker-start.timer",
-                "/etc/systemd/system/homelab-docker-start.timer",
-            ),
-        ]
     if update_timer_enabled == "true":
         diff_pairs += [
             (
@@ -164,26 +97,6 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
         ]
     for message in diff_many(connection, diff_pairs):
         print_sub(message)
-
-    if syncthing_timer_enabled == "true":
-        diff_pairs += [
-            (
-                build_dir / "syncthing-unpause.service",
-                "/etc/systemd/system/syncthing-unpause.service",
-            ),
-            (
-                build_dir / "syncthing-unpause.timer",
-                "/etc/systemd/system/syncthing-unpause.timer",
-            ),
-            (
-                build_dir / "syncthing-pause.service",
-                "/etc/systemd/system/syncthing-pause.service",
-            ),
-            (
-                build_dir / "syncthing-pause.timer",
-                "/etc/systemd/system/syncthing-pause.timer",
-            ),
-        ]
 
     if dry_run:
         print_sub(f"[DRY-RUN] Would deploy to {host}:{REMOTE_ROOT}/")

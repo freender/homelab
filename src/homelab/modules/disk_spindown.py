@@ -25,7 +25,6 @@ class DiskSpindownConfig:
     command_type: str
     symlink_policy: int
     wakeup_schedule: str
-    devices: tuple[str, ...]
 
 
 FILE_SPECS = (
@@ -108,43 +107,12 @@ def normalize_config(registry, host: str) -> DiskSpindownConfig:
         f"disk-spindown.wakeup_schedule must be non-empty for {host}",
     )
 
-    devices_raw = registry.get(host, "disk-spindown.devices", [])
-    if not isinstance(devices_raw, list) or not devices_raw:
-        raise ValueError(f"disk-spindown.devices must be a non-empty list for {host}")
-
-    devices = tuple(normalize_device(device, host) for device in devices_raw)
     return DiskSpindownConfig(
         idle_seconds=idle_seconds,
         command_type=command_type,
         symlink_policy=symlink_policy,
         wakeup_schedule=wakeup_schedule,
-        devices=devices,
     )
-
-
-def normalize_device(value: object, host: str) -> str:
-    device = require_text(value, f"disk-spindown.devices entries must be non-empty for {host}")
-    if not device.startswith("/dev/"):
-        raise ValueError(f"disk-spindown device must be under /dev for {host}: {device}")
-    if '"' in device or any(char.isspace() for char in device):
-        raise ValueError(
-            f"disk-spindown device paths must not contain whitespace or quotes: {device}"
-        )
-    return device
-
-
-def build_hd_idle_opts(config: DiskSpindownConfig) -> str:
-    parts = [
-        "-i",
-        "0",
-        "-c",
-        config.command_type,
-        "-s",
-        str(config.symlink_policy),
-    ]
-    for device in config.devices:
-        parts.extend(["-a", device, "-i", str(config.idle_seconds)])
-    return " ".join(parts)
 
 
 def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
@@ -169,7 +137,11 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
         )
     write_env_file(
         build_dir / "homelab-disk-spindown.defaults",
-        {"HD_IDLE_OPTS": build_hd_idle_opts(config)},
+        {
+            "HD_IDLE_IDLE_SECONDS": config.idle_seconds,
+            "HD_IDLE_COMMAND_TYPE": config.command_type,
+            "HD_IDLE_SYMLINK_POLICY": config.symlink_policy,
+        },
     )
     write_file_map(build_dir, FILE_SPECS)
     return HostArtifacts(build_dir=build_dir, file_specs=FILE_SPECS)

@@ -47,8 +47,7 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
 
     build_dir = root / "apt-upgrade" / "build" / host
     prepare_build_dir(build_dir)
-    restart_docker_stacks = registry.has(host, "docker")
-    write_service(build_dir, cleanup=False, restart_docker_stacks=restart_docker_stacks)
+    write_service(build_dir, cleanup=False)
     if autoupgrade == "true":
         write_timer(build_dir, schedule)
     write_env(build_dir, autoupgrade=autoupgrade, schedule=schedule)
@@ -81,7 +80,7 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
     stage_and_install(root, build_dir, connection, force=force)
 
 
-def write_service(build_dir: Path, cleanup: bool, restart_docker_stacks: bool) -> None:
+def write_service(build_dir: Path, cleanup: bool) -> None:
     lines = [
         "[Unit]",
         "Description=Homelab daily apt update and dist-upgrade",
@@ -102,12 +101,6 @@ def write_service(build_dir: Path, cleanup: bool, restart_docker_stacks: bool) -
                 ),
                 "ExecStart=/usr/bin/apt-get -y autoclean",
             ]
-        )
-    if restart_docker_stacks:
-        lines.append(
-            "ExecStartPost=/bin/bash -lc 'if [[ -x /mnt/cache/appdata/start.sh ]]; "
-            "then sleep 90; /mnt/cache/appdata/start.sh --no-pull || "
-            "{ sleep 60; /mnt/cache/appdata/start.sh --no-pull; }; fi'"
         )
     (build_dir / "service").write_text("\n".join(lines) + "\n", encoding="utf-8")
 

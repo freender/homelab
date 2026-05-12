@@ -50,6 +50,8 @@ tower:
 
 Docker auto-update is handled by `homelab-docker-update.timer`, rendered from `hosts.conf` via `docker.update_schedule`. The timer runs `start.sh`, which pulls images before `docker compose up -d` by default.
 
+Docker boot/start orchestration is intentionally not managed here. Containers should use native Docker restart policies for boot, reboot, and HA migration recovery.
+
 ## Traefik Sync
 
 - `tower` runs `traefik-sync-tower` in source mode on `net_overlay`

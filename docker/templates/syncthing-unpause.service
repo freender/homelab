@@ -1,9 +1,0 @@
-[Unit]
-Description=Syncthing unpause Cottonwood and Cinci devices
-After=network.target
-
-[Service]
-Type=oneshot
-ExecStart=/mnt/cache/appdata/scripts/syncthing-schedule.sh unpause
-StandardOutput=journal
-StandardError=journal
