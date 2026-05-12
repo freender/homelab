@@ -1,0 +1,7 @@
+[Unit]
+Description=Wake HDDs before scheduled Proxmox replication
+After=local-fs.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/homelab-disk-wakeup

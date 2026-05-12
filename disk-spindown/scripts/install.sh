@@ -1,0 +1,87 @@
+#!/bin/bash
+
+set -euo pipefail
+
+if [[ "$(id -u)" -ne 0 ]]; then
+    exec sudo -n env FORCE_UPDATE="${FORCE_UPDATE:-false}" bash "$0" "$@"
+fi
+
+HOST=${1:-$(hostname)}
+SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+BUILD_DIR="$SCRIPT_DIR/build/$HOST"
+
+if [[ -f "$SCRIPT_DIR/lib/utils.sh" ]]; then
+    # shellcheck source=/dev/null
+    source "$SCRIPT_DIR/lib/utils.sh"
+else
+    echo "Error: Missing shared utils at $SCRIPT_DIR/lib/utils.sh" >&2
+    exit 1
+fi
+
+require_dir "$BUILD_DIR" "$BUILD_DIR" || exit 1
+require_file "$BUILD_DIR/file-map.conf" "$BUILD_DIR/file-map.conf" || exit 1
+load_file_map
+
+print_header "Disk Spindown"
+
+print_action "Package"
+if ! command -v hd-idle >/dev/null 2>&1; then
+    apt-get update -q
+    apt-get install -y -q hd-idle
+    print_ok "hd-idle installed"
+else
+    print_sub "hd-idle already installed"
+fi
+
+config_changed=false
+units_changed=false
+
+for file_name in \
+    homelab-disk-spindown.defaults \
+    homelab-disk-spindown.service \
+    homelab-disk-wakeup \
+    homelab-disk-wakeup.service \
+    homelab-disk-wakeup.timer; do
+    rc=0
+    install_build_file "$file_name" || rc=$?
+    [[ $rc -eq 0 ]] && config_changed=true
+    if [[ $rc -eq 0 ]]; then
+        case "$file_name" in
+            *.service | *.timer) units_changed=true ;;
+        esac
+    fi
+done
+
+if [[ "$units_changed" == "true" ]]; then
+    systemctl daemon-reload
+fi
+
+systemctl disable --now hd-idle.service 2>/dev/null || true
+
+if ! systemctl is-enabled --quiet homelab-disk-wakeup.timer 2>/dev/null; then
+    systemctl enable --now homelab-disk-wakeup.timer
+    print_ok "homelab-disk-wakeup.timer enabled"
+elif [[ "$config_changed" == "true" ]]; then
+    systemctl restart homelab-disk-wakeup.timer
+    print_ok "homelab-disk-wakeup.timer restarted"
+elif ! systemctl is-active --quiet homelab-disk-wakeup.timer 2>/dev/null; then
+    systemctl start homelab-disk-wakeup.timer
+    print_ok "homelab-disk-wakeup.timer started"
+else
+    print_sub "homelab-disk-wakeup.timer already enabled"
+fi
+
+if ! systemctl is-enabled --quiet homelab-disk-spindown.service 2>/dev/null; then
+    systemctl enable --now homelab-disk-spindown.service
+    print_ok "homelab-disk-spindown.service enabled"
+elif [[ "$config_changed" == "true" ]]; then
+    systemctl restart homelab-disk-spindown.service
+    print_ok "homelab-disk-spindown.service restarted"
+elif ! systemctl is-active --quiet homelab-disk-spindown.service 2>/dev/null; then
+    systemctl start homelab-disk-spindown.service
+    print_ok "homelab-disk-spindown.service started"
+else
+    print_sub "homelab-disk-spindown.service already enabled"
+fi
+
+print_header "Disk Spindown Complete"

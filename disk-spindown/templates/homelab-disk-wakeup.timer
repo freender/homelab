@@ -1,0 +1,11 @@
+[Unit]
+Description=Wake HDDs before scheduled Proxmox replication
+
+[Timer]
+OnCalendar={{ WAKEUP_SCHEDULE }}
+AccuracySec=1min
+Persistent=true
+Unit=homelab-disk-wakeup.service
+
+[Install]
+WantedBy=timers.target

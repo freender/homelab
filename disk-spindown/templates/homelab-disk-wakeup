@@ -1,0 +1,23 @@
+#!/bin/sh
+set -eu
+
+CONFIG=/etc/default/homelab-disk-spindown
+[ -r "$CONFIG" ] || exit 0
+
+# shellcheck disable=SC1090
+. "$CONFIG"
+
+set -- ${HD_IDLE_OPTS:-}
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        -a)
+            shift
+            [ "$#" -gt 0 ] || break
+            disk=$1
+            if [ -b "$disk" ]; then
+                timeout 60 dd if="$disk" of=/dev/null bs=1M count=1 iflag=direct status=none || true
+            fi
+            ;;
+    esac
+    shift || break
+done
