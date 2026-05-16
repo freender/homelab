@@ -41,13 +41,10 @@ list_stack_dirs() {
 
 get_priority_stacks() {
     local root="$1"
-    local stack
 
-    for stack in traefik traefik-helm traefik-neo; do
-        if has_compose_file "$root/$stack"; then
-            printf '%s\n' "$stack"
-        fi
-    done
+    if has_compose_file "$root/traefik"; then
+        printf '%s\n' traefik
+    fi
 }
 
 stack_in_list() {
