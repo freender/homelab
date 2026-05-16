@@ -1,0 +1,67 @@
+#!/bin/bash
+
+set -euo pipefail
+
+HOST="${HOSTNAME_OVERRIDE:-$(hostname -s)}"
+OUT_DIR="/var/lib/prometheus/node-exporter"
+OUT_FILE="$OUT_DIR/zfs-pools.prom"
+
+mkdir -p "$OUT_DIR"
+TMP_FILE="$(mktemp "$OUT_DIR/.zfs-pools.prom.XXXXXX")"
+
+cleanup() {
+    rm -f "$TMP_FILE"
+}
+trap cleanup EXIT
+
+pool_tier() {
+    case "$1" in
+        vault-disks) printf 'hdd' ;;
+        *) printf 'ssd' ;;
+    esac
+}
+
+pool_role() {
+    case "$1" in
+        vault-disks) printf 'media' ;;
+        vm-disks) printf 'vm' ;;
+        rpool) printf 'boot' ;;
+        cache) printf 'cache' ;;
+        *) printf 'general' ;;
+    esac
+}
+
+write_metric() {
+    local metric="$1"
+    local pool="$2"
+    local value="$3"
+    local tier role
+    tier="$(pool_tier "$pool")"
+    role="$(pool_role "$pool")"
+    printf '%s{host="%s",zpool="%s",tier="%s",role="%s"} %s\n' \
+        "$metric" "$HOST" "$pool" "$tier" "$role" "$value"
+}
+
+{
+    printf '# HELP homelab_zpool_size_bytes ZFS pool total size in bytes.\n'
+    printf '# TYPE homelab_zpool_size_bytes gauge\n'
+    printf '# HELP homelab_zpool_allocated_bytes ZFS pool allocated bytes.\n'
+    printf '# TYPE homelab_zpool_allocated_bytes gauge\n'
+    printf '# HELP homelab_zpool_free_bytes ZFS pool free bytes.\n'
+    printf '# TYPE homelab_zpool_free_bytes gauge\n'
+    printf '# HELP homelab_zpool_used_percent ZFS pool allocated percentage.\n'
+    printf '# TYPE homelab_zpool_used_percent gauge\n'
+
+    zpool list -Hp -o name,size,alloc,free | while IFS=$'\t' read -r pool size alloc free; do
+        [[ -n "$pool" ]] || continue
+        used_percent="$(awk -v alloc="$alloc" -v size="$size" 'BEGIN { if (size > 0) printf "%.6f", (alloc / size) * 100; else printf "0" }')"
+        write_metric homelab_zpool_size_bytes "$pool" "$size"
+        write_metric homelab_zpool_allocated_bytes "$pool" "$alloc"
+        write_metric homelab_zpool_free_bytes "$pool" "$free"
+        write_metric homelab_zpool_used_percent "$pool" "$used_percent"
+    done
+} > "$TMP_FILE"
+
+chmod 0644 "$TMP_FILE"
+mv "$TMP_FILE" "$OUT_FILE"
+trap - EXIT

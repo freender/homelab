@@ -8,6 +8,7 @@ HOST=${1:-$(hostname)}
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD_DIR="$SCRIPT_DIR/build/$HOST"
 FORCE_UPDATE=${FORCE_UPDATE:-false}
+EXPORTER_RUNTIME=${EXPORTER_RUNTIME:-native}
 TMP_DIR=""
 IGPU_TMP_DIR=""
 NODE_EXPORTER_CHANGED=false
@@ -31,6 +32,9 @@ require_dir "$BUILD_DIR/configs" "$BUILD_DIR/configs" || exit 1
 NODE_ENV_SRC="$BUILD_DIR/configs/node-exporter.defaults"
 SMART_ENV_SRC="$BUILD_DIR/configs/smartctl-exporter.defaults"
 SMART_SVC_SRC="$BUILD_DIR/configs/smartctl-exporter.service"
+ZFS_POOL_BIN_SRC="$BUILD_DIR/configs/zfs-pool-textfile-exporter"
+ZFS_POOL_SVC_SRC="$BUILD_DIR/configs/zfs-pool-textfile-exporter.service"
+ZFS_POOL_TIMER_SRC="$BUILD_DIR/configs/zfs-pool-textfile-exporter.timer"
 APC_BIN_SRC="$BUILD_DIR/configs/apcupsd-exporter.py"
 APC_ENV_SRC="$BUILD_DIR/configs/apcupsd-exporter.env"
 APC_SVC_SRC="$BUILD_DIR/configs/apcupsd-exporter.service"
@@ -39,8 +43,10 @@ IGPU_SVC_SRC="$BUILD_DIR/configs/igpu-exporter.service"
 
 # Install packages only when missing
 missing_pkgs=()
-command -v prometheus-node-exporter &>/dev/null || missing_pkgs+=(prometheus-node-exporter)
-command -v smartctl &>/dev/null              || missing_pkgs+=(smartmontools)
+if [[ "$EXPORTER_RUNTIME" != "docker" ]]; then
+    command -v prometheus-node-exporter &>/dev/null || missing_pkgs+=(prometheus-node-exporter)
+    command -v smartctl &>/dev/null              || missing_pkgs+=(smartmontools)
+fi
 command -v python3 &>/dev/null               || missing_pkgs+=(python3)
 command -v curl &>/dev/null                  || missing_pkgs+=(curl)
 command -v tar &>/dev/null                   || missing_pkgs+=(tar)
@@ -57,6 +63,7 @@ else
 fi
 
 mkdir -p /etc/default
+mkdir -p /var/lib/prometheus/node-exporter
 rc=0
 backup_and_copy_if_changed "$NODE_ENV_SRC" /etc/default/prometheus-node-exporter || rc=$?
 [[ $rc -eq 1 ]] || [[ $rc -eq 0 ]] || exit "$rc"
@@ -68,6 +75,28 @@ backup_and_copy_if_changed "$SMART_ENV_SRC" /etc/default/smartctl-exporter || rc
 
 rc=0
 backup_and_copy_if_changed "$SMART_SVC_SRC" /etc/systemd/system/smartctl-exporter.service || rc=$?
+[[ $rc -eq 1 ]] || [[ $rc -eq 0 ]] || exit "$rc"
+
+if [[ "$EXPORTER_RUNTIME" == "docker" ]]; then
+    systemctl disable --now prometheus-node-exporter smartctl-exporter 2>/dev/null || true
+    systemctl stop prometheus-node-exporter smartctl-exporter 2>/dev/null || true
+    systemctl reset-failed prometheus-node-exporter.service smartctl-exporter.service 2>/dev/null || true
+fi
+
+if file_needs_update "$ZFS_POOL_BIN_SRC" /usr/local/bin/zfs-pool-textfile-exporter; then
+    backup_config /usr/local/bin/zfs-pool-textfile-exporter
+    install -m 755 "$ZFS_POOL_BIN_SRC" /usr/local/bin/zfs-pool-textfile-exporter
+    print_sub "Updated zfs-pool-textfile-exporter"
+else
+    print_sub "zfs-pool-textfile-exporter unchanged; skipping update"
+fi
+
+rc=0
+backup_and_copy_if_changed "$ZFS_POOL_SVC_SRC" /etc/systemd/system/zfs-pool-textfile-exporter.service || rc=$?
+[[ $rc -eq 1 ]] || [[ $rc -eq 0 ]] || exit "$rc"
+
+rc=0
+backup_and_copy_if_changed "$ZFS_POOL_TIMER_SRC" /etc/systemd/system/zfs-pool-textfile-exporter.timer || rc=$?
 [[ $rc -eq 1 ]] || [[ $rc -eq 0 ]] || exit "$rc"
 
 if [[ -f "$APC_BIN_SRC" && -f "$APC_ENV_SRC" && -f "$APC_SVC_SRC" ]]; then
@@ -126,44 +155,95 @@ else
     rm -f /etc/systemd/system/igpu-exporter.service /etc/default/igpu-exporter /usr/local/bin/igpu-exporter
 fi
 
-# Install smartctl_exporter binary (version-aware)
-# shellcheck source=/etc/default/smartctl-exporter
-source /etc/default/smartctl-exporter
-ARCH="$(dpkg --print-architecture)"
-case "$ARCH" in
-    amd64) ARCH_TAG="amd64" ;;
-    arm64) ARCH_TAG="arm64" ;;
-    *) echo "Unsupported architecture: $ARCH" >&2; exit 1 ;;
-esac
+if [[ "$EXPORTER_RUNTIME" != "docker" ]]; then
+    # Install smartctl_exporter binary (version-aware)
+    # shellcheck source=/etc/default/smartctl-exporter
+    source /etc/default/smartctl-exporter
+    ARCH="$(dpkg --print-architecture)"
+    case "$ARCH" in
+        amd64) ARCH_TAG="amd64" ;;
+        arm64) ARCH_TAG="arm64" ;;
+        *) echo "Unsupported architecture: $ARCH" >&2; exit 1 ;;
+    esac
 
-SMART_BIN="/usr/local/bin/smartctl_exporter"
-SMART_URL="https://github.com/prometheus-community/smartctl_exporter/releases/download/v${SMARTCTL_EXPORTER_VERSION}/smartctl_exporter-${SMARTCTL_EXPORTER_VERSION}.linux-${ARCH_TAG}.tar.gz"
-TMP_DIR="$(mktemp -d)"
+    SMART_BIN="/usr/local/bin/smartctl_exporter"
+    SMART_URL="https://github.com/prometheus-community/smartctl_exporter/releases/download/v${SMARTCTL_EXPORTER_VERSION}/smartctl_exporter-${SMARTCTL_EXPORTER_VERSION}.linux-${ARCH_TAG}.tar.gz"
+    TMP_DIR="$(mktemp -d)"
 
-# Detect installed version
-installed_version=""
-if [[ -x "$SMART_BIN" ]]; then
-    installed_version=$("$SMART_BIN" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)
+    # Detect installed version
+    installed_version=""
+    if [[ -x "$SMART_BIN" ]]; then
+        installed_version=$("$SMART_BIN" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)
+    fi
+
+    if [[ "$FORCE_UPDATE" == "true" ]] || [[ ! -x "$SMART_BIN" ]] || [[ "$installed_version" != "$SMARTCTL_EXPORTER_VERSION" ]]; then
+        print_sub "Installing smartctl_exporter v${SMARTCTL_EXPORTER_VERSION} (was: ${installed_version:-none})"
+        curl -fsSL "$SMART_URL" -o "$TMP_DIR/smartctl-exporter.tar.gz"
+        tar -xzf "$TMP_DIR/smartctl-exporter.tar.gz" -C "$TMP_DIR"
+        # Stop service before replacing binary to avoid "Text file busy"
+        systemctl stop smartctl-exporter 2>/dev/null || true
+        cp "$TMP_DIR/smartctl_exporter-${SMARTCTL_EXPORTER_VERSION}.linux-${ARCH_TAG}/smartctl_exporter" "$SMART_BIN"
+        chmod 755 "$SMART_BIN"
+    else
+        print_sub "smartctl_exporter v${SMARTCTL_EXPORTER_VERSION} already installed"
+    fi
 fi
 
-if [[ "$FORCE_UPDATE" == "true" ]] || [[ ! -x "$SMART_BIN" ]] || [[ "$installed_version" != "$SMARTCTL_EXPORTER_VERSION" ]]; then
-    print_sub "Installing smartctl_exporter v${SMARTCTL_EXPORTER_VERSION} (was: ${installed_version:-none})"
-    curl -fsSL "$SMART_URL" -o "$TMP_DIR/smartctl-exporter.tar.gz"
-    tar -xzf "$TMP_DIR/smartctl-exporter.tar.gz" -C "$TMP_DIR"
-    # Stop service before replacing binary to avoid "Text file busy"
-    systemctl stop smartctl-exporter 2>/dev/null || true
-    cp "$TMP_DIR/smartctl_exporter-${SMARTCTL_EXPORTER_VERSION}.linux-${ARCH_TAG}/smartctl_exporter" "$SMART_BIN"
-    chmod 755 "$SMART_BIN"
-else
-    print_sub "smartctl_exporter v${SMARTCTL_EXPORTER_VERSION} already installed"
+if [[ "$EXPORTER_RUNTIME" == "docker" ]]; then
+    compose_file="/mnt/cache/appdata/exporters/compose.yml"
+    if [[ ! -f "$compose_file" && -f "/mnt/cache/appdata/${HOST}-exporters/compose.yml" ]]; then
+        compose_file="/mnt/cache/appdata/${HOST}-exporters/compose.yml"
+    fi
+    if [[ -f "$compose_file" ]]; then
+        python3 - "$compose_file" <<'PY'
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+text = path.read_text(encoding="utf-8")
+if "--collector.textfile.directory=/host/var/lib/prometheus/node-exporter" not in text:
+    lines = text.splitlines(keepends=True)
+    updated = []
+    inserted = False
+    for line in lines:
+        updated.append(line)
+        if not inserted and ("--collector.zfs" in line or "--collector.filesystem" in line):
+            prefix = line.split("-")[0]
+            stripped = line.strip()
+            quote = stripped[2] if len(stripped) > 2 and stripped[2] in {"'", '"'} else ""
+            updated.append(f"{prefix}- {quote}--collector.textfile{quote}\n")
+            updated.append(
+                f"{prefix}- {quote}--collector.textfile.directory=/host/var/lib/prometheus/node-exporter{quote}\n"
+            )
+            inserted = True
+    text = "".join(updated)
+    path.write_text(text, encoding="utf-8")
+PY
+        node_service="$(cd "$(dirname "$compose_file")" && docker compose config --services | grep -E '^node-exporter(-.*)?$' | head -1)"
+        if [[ -z "$node_service" ]]; then
+            echo "Could not find node-exporter service in $compose_file" >&2
+            exit 1
+        fi
+        (cd "$(dirname "$compose_file")" && docker compose up -d "$node_service")
+    else
+        print_sub "Docker exporter compose not found: $compose_file"
+    fi
 fi
 
 systemctl daemon-reload
-systemctl enable --now prometheus-node-exporter
-if [[ "$FORCE_UPDATE" == "true" || "$NODE_EXPORTER_CHANGED" == "true" ]]; then
-    systemctl restart prometheus-node-exporter
+if [[ "$EXPORTER_RUNTIME" != "docker" ]]; then
+    systemctl enable --now prometheus-node-exporter
+    if [[ "$FORCE_UPDATE" == "true" || "$NODE_EXPORTER_CHANGED" == "true" ]]; then
+        systemctl restart prometheus-node-exporter
+    fi
 fi
-systemctl enable --now smartctl-exporter
+systemctl enable --now zfs-pool-textfile-exporter.timer
+systemctl start zfs-pool-textfile-exporter.service
+if [[ "$EXPORTER_RUNTIME" != "docker" ]]; then
+    systemctl enable --now smartctl-exporter
+fi
 if [[ -f "$IGPU_ENV_SRC" && -f "$IGPU_SVC_SRC" ]]; then
     systemctl enable --now igpu-exporter
     systemctl is-active --quiet igpu-exporter
@@ -172,5 +252,10 @@ if [[ -f "$APC_BIN_SRC" && -f "$APC_ENV_SRC" && -f "$APC_SVC_SRC" ]]; then
     systemctl enable --now apcupsd-exporter
     systemctl is-active --quiet apcupsd-exporter
 fi
-systemctl is-active --quiet prometheus-node-exporter
-systemctl is-active --quiet smartctl-exporter
+if [[ "$EXPORTER_RUNTIME" != "docker" ]]; then
+    systemctl is-active --quiet prometheus-node-exporter
+fi
+systemctl is-active --quiet zfs-pool-textfile-exporter.timer
+if [[ "$EXPORTER_RUNTIME" != "docker" ]]; then
+    systemctl is-active --quiet smartctl-exporter
+fi

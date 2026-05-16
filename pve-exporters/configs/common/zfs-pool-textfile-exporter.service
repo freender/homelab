@@ -1,0 +1,6 @@
+[Unit]
+Description=Write ZFS pool metrics for node_exporter textfile collector
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/zfs-pool-textfile-exporter

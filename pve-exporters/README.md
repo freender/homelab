@@ -1,15 +1,18 @@
 # homelab/pve-exporters
 
-Prometheus-native host metrics exporters for Proxmox nodes.
+Prometheus-native host metrics exporters for Proxmox and ZFS storage hosts.
 
 ## Hosts
 - ace (Proxmox)
 - bray (Proxmox)
 - clovis (Proxmox)
 - osiris (Proxmox)
+- cinci (Ubuntu/ZFS)
+- cottonwood (Ubuntu/ZFS)
 
 ## What It Collects
 - Host metrics via node_exporter (CPU, memory, load, uptime, disk, network, hwmon, ZFS)
+- ZFS pool capacity metrics via node_exporter textfile collector (`homelab_zpool_*`)
 - SMART metrics via smartctl_exporter
 - UPS metrics via apcupsd exporter on `master` / `master-standalone` UPS hosts
 - Intel GPU metrics via `igpu-exporter` on selected PVE hosts
@@ -24,6 +27,9 @@ Prometheus-native host metrics exporters for Proxmox nodes.
 
 **On target hosts:**
 - `/etc/default/prometheus-node-exporter`
+- `/usr/local/bin/zfs-pool-textfile-exporter`
+- `/etc/systemd/system/zfs-pool-textfile-exporter.service`
+- `/etc/systemd/system/zfs-pool-textfile-exporter.timer`
 - `/etc/systemd/system/smartctl-exporter.service`
 - `/etc/default/smartctl-exporter`
 - `/usr/local/bin/apcupsd-exporter`
@@ -35,6 +41,9 @@ Prometheus-native host metrics exporters for Proxmox nodes.
 
 **In this repo:**
 - `configs/common/node-exporter.defaults`
+- `configs/common/zfs-pool-textfile-exporter`
+- `configs/common/zfs-pool-textfile-exporter.service`
+- `configs/common/zfs-pool-textfile-exporter.timer`
 - `configs/common/smartctl-exporter.defaults`
 - `configs/common/smartctl-exporter.service`
 - `configs/common/apcupsd-exporter.py`

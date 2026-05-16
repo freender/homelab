@@ -13,6 +13,9 @@ REQUIRED = [
     "node-exporter.defaults",
     "smartctl-exporter.defaults",
     "smartctl-exporter.service",
+    "zfs-pool-textfile-exporter",
+    "zfs-pool-textfile-exporter.service",
+    "zfs-pool-textfile-exporter.timer",
     "apcupsd-exporter.service",
     "apcupsd-exporter.py",
     "igpu-exporter.defaults",
@@ -77,9 +80,16 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
         "node-exporter.defaults",
         "smartctl-exporter.defaults",
         "smartctl-exporter.service",
+        "zfs-pool-textfile-exporter",
+        "zfs-pool-textfile-exporter.service",
+        "zfs-pool-textfile-exporter.timer",
     ])
 
-    connection = HostConnection(host)
+    connection = HostConnection(
+        host,
+        user=str(registry.get(host, "config.user")),
+        hostname=str(registry.get(host, "config.hostname")),
+    )
     if has_apcupsd_exporter(root, host):
         try:
             upsname = str(registry.get(host, "apcupsd.name"))
@@ -145,12 +155,24 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
             configs_dir / "smartctl-exporter.service",
             "/etc/systemd/system/smartctl-exporter.service",
         ),
+        (configs_dir / "zfs-pool-textfile-exporter", "/usr/local/bin/zfs-pool-textfile-exporter"),
+        (
+            configs_dir / "zfs-pool-textfile-exporter.service",
+            "/etc/systemd/system/zfs-pool-textfile-exporter.service",
+        ),
+        (
+            configs_dir / "zfs-pool-textfile-exporter.timer",
+            "/etc/systemd/system/zfs-pool-textfile-exporter.timer",
+        ),
     ]):
         print_sub(message)
 
     if dry_run:
         print_sub(f"[DRY-RUN] Would deploy to {host}:{REMOTE_ROOT}/")
         return
+
+    env = force_env(force)
+    env["EXPORTER_RUNTIME"] = str(registry.get(host, "pve-exporters.runtime", "native"))
 
     stage_and_run_remote_installer(
         root,
@@ -162,7 +184,7 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
         ],
         "scripts/install.sh",
         host,
-        env=force_env(force),
+        env=env,
         require_root=True,
         remote_subdirs=("build", "lib"),
     )

@@ -1,0 +1,11 @@
+[Unit]
+Description=Refresh ZFS pool textfile metrics
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=1min
+AccuracySec=10s
+Unit=zfs-pool-textfile-exporter.service
+
+[Install]
+WantedBy=timers.target
