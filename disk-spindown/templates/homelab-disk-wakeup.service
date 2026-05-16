@@ -5,3 +5,4 @@ After=local-fs.target
 [Service]
 Type=oneshot
 ExecStart=/usr/local/sbin/homelab-disk-wakeup
+ExecStartPost=-/bin/systemctl try-restart smartctl-exporter.service
