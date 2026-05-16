@@ -57,6 +57,11 @@ def validate(root: Path, hosts: list[str]) -> None:
             raise ValueError(f"{host}: {exc}") from exc
         if not secret_file.is_file():
             raise ValueError(f"{host}: missing secret file for profile '{secret_profile}'")
+        secret_values = op_secrets.parse_env_file(secret_file)
+        if not secret_values.get("PBS_PASSWORD", "").strip():
+            raise ValueError(
+                f"{host}: secret_profile '{secret_profile}' resolved empty PBS_PASSWORD"
+            )
 
 
 def secret_path(root: Path, profile: str) -> Path:
