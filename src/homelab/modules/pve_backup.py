@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from .. import op_secrets
+from .. import backup_excludes, op_secrets
 from ..deploy import DeploySession, force_env, prepare_build_dir, stage_and_run_remote_installer
 from ..hosts import default_registry
 from ..output import print_action, print_sub
@@ -218,6 +218,35 @@ def build_standalone_backup_plans(root: Path, host: str, build_dir: Path) -> Non
             merged.get("exclude_path", []),
             f"exclude_path for standalone backup job at index {index} for {host} must be a list",
         )
+        exclude_profiles = backup_excludes.normalize_profile_names(
+            merged.get("exclude_profiles", []),
+            "exclude_profiles for standalone backup job at index "
+            f"{index} for {host} must be a list",
+        )
+        exclude_paths = [
+            *backup_excludes.load_profiles(root, exclude_profiles),
+            *exclude_paths,
+        ]
+        mount_profiles = merged.get("mount_exclude_profiles", {})
+        if mount_profiles in (None, ""):
+            mount_profiles = {}
+        if not isinstance(mount_profiles, dict):
+            raise ValueError(
+                "mount_exclude_profiles for standalone backup job at index "
+                f"{index} for {host} must be a mapping"
+            )
+        for mountpoint, profiles_value in mount_profiles.items():
+            mountpoint_text = str(mountpoint).strip()
+            if not mountpoint_text:
+                continue
+            profiles = backup_excludes.normalize_profile_names(
+                profiles_value,
+                "mount_exclude_profiles entries for standalone backup job at index "
+                f"{index} for {host} must be lists",
+            )
+            for entry in backup_excludes.load_profiles(root, profiles):
+                exclude_paths.append(backup_excludes.join_mount_prefix(mountpoint_text, entry))
+        exclude_paths = backup_excludes.dedupe_preserve_order(exclude_paths)
         for key in [
             "schedule",
             "storage",

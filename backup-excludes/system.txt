@@ -1,0 +1,7 @@
+/var/log/journal
+/var/cache/apt/archives
+/var/cache/man
+/var/tmp
+/tmp
+/root/.cache
+/home/*/.cache

@@ -1,0 +1,39 @@
+/seerr/cache
+/plex/Library/Application Support/Plex Media Server/Cache
+/plex/Library/Application Support/Plex Media Server/Metadata
+/plex/Library/Application Support/Plex Media Server/Media
+/jellyfin/library/data/metadata
+/jellyfin/library/cache
+/radarr/MediaCover
+/radarr4k/MediaCover
+/sonarr/MediaCover
+/sonarr4k/MediaCover
+/tautulli/cache
+/victoria-metrics/data
+/victoria-metrics/indexdb
+/victoria-metrics/cache
+/victoria-metrics/tmp
+/victoria-logs/data
+/grafana/plugins
+/homeassistant/.cache
+/homeassistant/tts
+/traefik/logs
+/traefik/plugins-storage
+/scripts/logs
+/alloy/data
+/geoipupdate
+/immich/encoded-video
+/immich/thumbs
+/immich/machine-learning
+/immich/typesense
+/syncthing/index-v2
+/vmagent/data
+/immich/log
+/crowdsec/data/GeoLite2-City.mmdb
+/crowdsec/data/GeoLite2-ASN.mmdb
+/crowdsec/data/GeoLite2-Country.mmdb
+/crowdsec/logs
+/pbs/logs
+/pbs/lib/rrdb
+/*/logs
+/*/log

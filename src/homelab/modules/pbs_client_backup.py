@@ -4,7 +4,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from .. import op_secrets
+from .. import backup_excludes, op_secrets
 from ..deploy import DeploySession, force_env, prepare_build_dir, stage_and_run_remote_installer
 from ..hosts import default_registry
 from ..module_support import FileSpec, require_text, write_file_map
@@ -91,7 +91,7 @@ def validate(root: Path, hosts: list[str]) -> None:
 
     registry = default_registry(root)
     for host in hosts:
-        plan = normalize_backup_plan(registry, host)
+        plan = normalize_backup_plan(root, registry, host)
         if not plan.enabled:
             continue
         try:
@@ -133,7 +133,7 @@ def normalize_string_list(value: object, message: str) -> list[str]:
     return normalized
 
 
-def normalize_backup_plan(registry, host: str) -> BackupPlan:
+def normalize_backup_plan(root: Path, registry, host: str) -> BackupPlan:
     prefix = MODULE_DIR
     archives_config = registry.get(host, f"{prefix}.archives", [])
     if not isinstance(archives_config, list) or not archives_config:
@@ -159,10 +159,18 @@ def normalize_backup_plan(registry, host: str) -> BackupPlan:
             raise ValueError(
                 f"archive {name!r} for {host} must specify exactly one of dataset or path"
             )
+        exclude_profiles = backup_excludes.normalize_profile_names(
+            archive.get("exclude_profiles", []),
+            f"archive exclude_profiles for {host} must be a list",
+        )
         excludes = normalize_string_list(
             archive.get("exclude", []),
             f"archive excludes for {host} must be a list",
         )
+        excludes = backup_excludes.dedupe_preserve_order([
+            *backup_excludes.load_profiles(root, exclude_profiles),
+            *excludes,
+        ])
         archives.append(
             ArchivePlan(name=name, dataset=dataset, path=path, excludes=tuple(excludes))
         )
@@ -213,7 +221,7 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
     if str(registry.get(host, "config.type")) != "ubuntu":
         raise ValueError(f"{MODULE_DIR} supports Ubuntu hosts only")
 
-    plan = normalize_backup_plan(registry, host)
+    plan = normalize_backup_plan(root, registry, host)
     if not plan.enabled:
         print_sub(f"{MODULE_DIR} disabled for {host}; skipping")
         return
