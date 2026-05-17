@@ -396,9 +396,9 @@ case "$HOST_TYPE" in
         ;;
 esac
 
-print_sub "Disabling postfix service..."
+print_sub "Configuring local postfix service..."
 if systemctl list-unit-files postfix.service >/dev/null 2>&1; then
-    systemctl disable --now postfix || print_warn "failed to disable postfix"
+    systemctl enable --now postfix || print_warn "failed to enable postfix"
 else
     print_sub "postfix service not present; skipping"
 fi
