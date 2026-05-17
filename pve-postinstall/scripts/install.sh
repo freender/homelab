@@ -398,6 +398,9 @@ esac
 
 print_sub "Configuring local postfix service..."
 if systemctl list-unit-files postfix.service >/dev/null 2>&1; then
+    if command -v newaliases >/dev/null 2>&1 && [[ -f /etc/aliases ]]; then
+        newaliases || print_warn "failed to rebuild postfix aliases"
+    fi
     systemctl enable --now postfix || print_warn "failed to enable postfix"
 else
     print_sub "postfix service not present; skipping"
