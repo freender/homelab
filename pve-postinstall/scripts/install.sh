@@ -402,6 +402,7 @@ if systemctl list-unit-files postfix.service >/dev/null 2>&1; then
         newaliases || print_warn "failed to rebuild postfix aliases"
     fi
     systemctl enable --now postfix || print_warn "failed to enable postfix"
+    systemctl reload postfix || print_warn "failed to reload postfix"
 else
     print_sub "postfix service not present; skipping"
 fi
