@@ -92,7 +92,7 @@ Proxmox GPU passthrough configs
 ### [pve-postinstall](pve-postinstall/)
 PVE post-install configuration
 - No-subscription repo sources, nag removal
-- Timezone, local-zfs storage, Ceph reconciliation
+- Timezone, Ceph reconciliation
 - Subfeatures (configured in `hosts.conf` under `pve-postinstall`):
   - `interfaces`: per-node `/etc/network/interfaces` rendering
 

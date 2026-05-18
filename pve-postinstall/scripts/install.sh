@@ -159,15 +159,8 @@ ensure_local_zfs_storage() {
     fi
 
     if ! zpool list rpool >/dev/null 2>&1; then
-        print_warn "rpool not found; skipping local-zfs reconciliation"
+        print_warn "rpool not found; skipping zfs storage reconciliation"
         return 0
-    fi
-
-    if pvesm status --storage local-zfs >/dev/null 2>&1; then
-        print_sub "local-zfs storage already configured"
-    else
-        print_sub "Creating local-zfs storage on rpool..."
-        pvesm add zfspool local-zfs --pool rpool --content images,rootdir --sparse 0 || print_warn "failed to create local-zfs storage"
     fi
 
     current_node="$(hostname -s)"
