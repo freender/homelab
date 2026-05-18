@@ -145,6 +145,9 @@ import_zfs_pools() {
 }
 
 ensure_local_zfs_storage() {
+    local current_node
+    local pool
+
     if ! command -v pvesm >/dev/null 2>&1; then
         print_warn "pvesm not found; skipping zfs storage reconciliation"
         return 0
@@ -167,25 +170,36 @@ ensure_local_zfs_storage() {
         pvesm add zfspool local-zfs --pool rpool --content images,rootdir --sparse 0 || print_warn "failed to create local-zfs storage"
     fi
 
-    if zpool list vm-disks >/dev/null 2>&1; then
-        local current_node
-        local existing_nodes
-        current_node="$(hostname -s)"
-        if pvesm status --storage vm-disks >/dev/null 2>&1; then
-            print_sub "vm-disks storage already configured"
-            existing_nodes="$(storage_nodes vm-disks)"
-            if [[ -n "$existing_nodes" ]] && ! node_in_csv "$current_node" "$existing_nodes"; then
-                print_sub "Adding $current_node to vm-disks storage node list"
-                pvesm set vm-disks --nodes "${existing_nodes},${current_node}" || print_warn "failed to update vm-disks storage nodes"
-            fi
-        else
-            print_sub "Creating vm-disks storage on vm-disks..."
-            if [[ -f /etc/pve/corosync.conf ]]; then
-                pvesm add zfspool vm-disks --pool vm-disks --content images,rootdir --sparse 0 --nodes "$current_node" || print_warn "failed to create vm-disks storage"
-            else
-                pvesm add zfspool vm-disks --pool vm-disks --content images,rootdir --sparse 0 || print_warn "failed to create vm-disks storage"
-            fi
+    current_node="$(hostname -s)"
+    for pool in vm-disks vm-flash vault-disks vault-hdd; do
+        ensure_zfspool_storage "$pool" "$current_node"
+    done
+}
+
+ensure_zfspool_storage() {
+    local pool="$1"
+    local current_node="$2"
+    local existing_nodes
+
+    if ! zpool list "$pool" >/dev/null 2>&1; then
+        return 0
+    fi
+
+    if pvesm status --storage "$pool" >/dev/null 2>&1; then
+        print_sub "$pool storage already configured"
+        existing_nodes="$(storage_nodes "$pool")"
+        if [[ -n "$existing_nodes" ]] && ! node_in_csv "$current_node" "$existing_nodes"; then
+            print_sub "Adding $current_node to $pool storage node list"
+            pvesm set "$pool" --nodes "${existing_nodes},${current_node}" || print_warn "failed to update $pool storage nodes"
         fi
+        return 0
+    fi
+
+    print_sub "Creating $pool storage on $pool..."
+    if [[ -f /etc/pve/corosync.conf ]]; then
+        pvesm add zfspool "$pool" --pool "$pool" --content images,rootdir --sparse 0 --nodes "$current_node" || print_warn "failed to create $pool storage"
+    else
+        pvesm add zfspool "$pool" --pool "$pool" --content images,rootdir --sparse 0 || print_warn "failed to create $pool storage"
     fi
 }
 
