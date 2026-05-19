@@ -24,10 +24,6 @@ source "$BUILD_DIR/env"
 
 HOMELAB_STATE_DIR="${HOMELAB_STATE_DIR:-/var/lib/homelab}"
 MANAGED_DIR="${HOMELAB_STATE_DIR}/zfs-automation-managed"
-REBUILD_BUNDLE_ROOT="${REBUILD_BUNDLE_ROOT:-${HOMELAB_STATE_DIR}/zfs-automation}"
-REBUILD_BUNDLE_BUILD_DIR="${REBUILD_BUNDLE_ROOT}/build/${HOST}"
-REBUILD_BUNDLE_SCRIPTS_DIR="${REBUILD_BUNDLE_ROOT}/scripts"
-REBUILD_BUNDLE_LIB_DIR="${REBUILD_BUNDLE_ROOT}/lib"
 
 cleanup_legacy_replication_units() {
     local path
@@ -67,10 +63,7 @@ cleanup_obsolete_replication_units() {
         /usr/local/bin/homelab-zfs-replication-* \
         "$MANAGED_DIR"/homelab-zfs-replication-*.service \
         "$MANAGED_DIR"/homelab-zfs-replication-*.timer \
-        "$MANAGED_DIR"/homelab-zfs-replication-*.sh \
-        "$REBUILD_BUNDLE_BUILD_DIR"/homelab-zfs-replication-*.service \
-        "$REBUILD_BUNDLE_BUILD_DIR"/homelab-zfs-replication-*.timer \
-        "$REBUILD_BUNDLE_BUILD_DIR"/homelab-zfs-replication-*.sh; do
+        "$MANAGED_DIR"/homelab-zfs-replication-*.sh; do
         unit_name="$(basename "$path")"
         helper_name="$unit_name"
         if [[ -n "${FILE_MAP_DEST[$helper_name]:-}" ]]; then
@@ -92,44 +85,12 @@ cleanup_obsolete_replication_units() {
     shopt -u nullglob
 }
 
-sync_rebuild_bundle() {
-    local changed=false
-    local file
-    local file_name
-    local rc
+cleanup_legacy_rebuild_bundle() {
+    local legacy_root="${HOMELAB_STATE_DIR}/zfs-automation"
 
-    mkdir -p "$REBUILD_BUNDLE_BUILD_DIR" "$REBUILD_BUNDLE_SCRIPTS_DIR" "$REBUILD_BUNDLE_LIB_DIR"
-
-    shopt -s nullglob
-    for file in "$BUILD_DIR"/*; do
-        file_name="$(basename "$file")"
-        rc=0
-        install_if_changed "$file" "$REBUILD_BUNDLE_BUILD_DIR/$file_name" "644" "$REBUILD_BUNDLE_BUILD_DIR/$file_name" || rc=$?
-        [[ $rc -eq 0 || $rc -eq 1 ]] || return "$rc"
-        [[ $rc -eq 0 ]] && changed=true
-    done
-    shopt -u nullglob
-
-    rc=0
-    install_if_changed "$SCRIPT_DIR/scripts/install.sh" "$REBUILD_BUNDLE_SCRIPTS_DIR/install.sh" "755" "$REBUILD_BUNDLE_SCRIPTS_DIR/install.sh" || rc=$?
-    [[ $rc -eq 0 || $rc -eq 1 ]] || return "$rc"
-    [[ $rc -eq 0 ]] && changed=true
-
-    for file_name in utils.sh print.sh; do
-        rc=0
-        install_if_changed "$SCRIPT_DIR/lib/$file_name" "$REBUILD_BUNDLE_LIB_DIR/$file_name" "644" "$REBUILD_BUNDLE_LIB_DIR/$file_name" || rc=$?
-        [[ $rc -eq 0 || $rc -eq 1 ]] || return "$rc"
-        [[ $rc -eq 0 ]] && changed=true
-    done
-
-    if [[ -n "$DEPLOY_USER" ]] && id "$DEPLOY_USER" >/dev/null 2>&1; then
-        chown -R "$DEPLOY_USER:$DEPLOY_USER" "$REBUILD_BUNDLE_ROOT"
-    fi
-
-    if [[ "$changed" == true ]]; then
-        print_ok "Rebuild bundle synced to $REBUILD_BUNDLE_ROOT"
-    else
-        print_sub "Rebuild bundle already up to date"
+    if [[ -d "$legacy_root" ]]; then
+        rm -rf "$legacy_root"
+        print_ok "Removed legacy local rebuild bundle at $legacy_root"
     fi
 }
 
@@ -161,10 +122,7 @@ cleanup_zfs_pull_source_access() {
         "$ZFS_PULL_SOURCE_HOME/.ssh/authorized_keys" \
         "$MANAGED_DIR/homelab-zfs-send-only.sh" \
         "$MANAGED_DIR/zfs-pull-authorized-keys" \
-        "$MANAGED_DIR/zfs-pull-datasets.conf" \
-        "$REBUILD_BUNDLE_BUILD_DIR/homelab-zfs-send-only.sh" \
-        "$REBUILD_BUNDLE_BUILD_DIR/zfs-pull-authorized-keys" \
-        "$REBUILD_BUNDLE_BUILD_DIR/zfs-pull-datasets.conf"; do
+        "$MANAGED_DIR/zfs-pull-datasets.conf"; do
         [[ -e "$path" ]] || continue
         rm -f "$path"
         print_ok "Removed obsolete $(basename "$path")"
@@ -219,6 +177,9 @@ grant_zfs_pull_source_dataset() {
 load_file_map
 
 print_header "ZFS Automation"
+
+print_action "Legacy local rebuild bundle"
+cleanup_legacy_rebuild_bundle
 
 print_action "TRIM"
 if ! systemctl is-enabled --quiet fstrim.timer 2>/dev/null; then
@@ -293,8 +254,5 @@ done
 
 ensure_timer_state zfs-scrub.timer "$ENABLE_ZFS_SCRUB" "$units_changed"
 ensure_timer_state homelab-zfs-health-check.timer "$ENABLE_ZFS_HEALTH_CHECK" "$units_changed"
-
-print_action "Rebuild bundle"
-sync_rebuild_bundle
 
 print_header "ZFS Automation Complete"

@@ -3,18 +3,14 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from .. import backup_excludes, op_secrets
+from .. import backup_excludes
 from ..deploy import DeploySession, force_env, prepare_build_dir, stage_and_run_remote_installer
 from ..hosts import default_registry
 from ..output import print_action, print_sub
 from ..ssh import HostConnection, build_files
-from ..templates import render_template
+from . import pbs_client_backup
 
 REMOTE_ROOT = "/tmp/homelab-pve-backup"
-PROFILE_TO_SECRET = {
-    "backup-main": "pbs-backup-main",
-    "backup-cinci": "pbs-backup-cinci",
-}
 
 
 def deploy(
@@ -37,40 +33,9 @@ def deploy(
 
 def validate(root: Path, hosts: list[str]) -> None:
     config_dir = root / "pve-backup" / "configs"
-    template_dir = root / "pve-backup" / "templates"
-    for name in ["pve-config-backup.sh.tpl", "pbs-tokens.env.example"]:
+    for name in ["pbs-tokens.env.example"]:
         if not (config_dir / name).is_file():
             raise ValueError(f"missing config file: {config_dir / name}")
-    for name in ["homelab-pve-config-backup.service", "homelab-pve-config-backup.timer"]:
-        if not (template_dir / name).is_file():
-            raise ValueError(f"missing template: {template_dir / name}")
-    registry = default_registry(root)
-    for host in hosts:
-        secret_profile = str(
-            registry.get(host, "pve-backup.proxmox_backup_client.secret_profile", "")
-        )
-        if not secret_profile:
-            continue
-        try:
-            secret_file = secret_path(root, secret_profile)
-        except (ValueError, op_secrets.OpSecretsError) as exc:
-            raise ValueError(f"{host}: {exc}") from exc
-        if not secret_file.is_file():
-            raise ValueError(f"{host}: missing secret file for profile '{secret_profile}'")
-        secret_values = op_secrets.parse_env_file(secret_file)
-        if not secret_values.get("PBS_PASSWORD", "").strip():
-            raise ValueError(
-                f"{host}: secret_profile '{secret_profile}' resolved empty PBS_PASSWORD"
-            )
-
-
-def secret_path(root: Path, profile: str) -> Path:
-    if profile not in PROFILE_TO_SECRET:
-        raise ValueError(f"invalid secret_profile '{profile}'")
-    try:
-        return op_secrets.secret_file(root, PROFILE_TO_SECRET[profile])
-    except op_secrets.OpSecretsError as exc:
-        raise ValueError(str(exc)) from exc
 
 
 def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
@@ -82,26 +47,7 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
     build_dir = root / "pve-backup" / "build" / host
     prepare_build_dir(build_dir)
     build_standalone_backup_plans(root, host, build_dir)
-    build_cluster_config_backup_bundle(root, host, build_dir)
-
-    connection = HostConnection(host)
-    print_sub("Comparing with remote configs...")
-    for local_name, remote_path in [
-        ("pve-config-backup.sh", "/root/pve-config-backup.sh"),
-        (
-            "homelab-pve-config-backup.service",
-            "/etc/systemd/system/homelab-pve-config-backup.service",
-        ),
-        (
-            "homelab-pve-config-backup.timer",
-            "/etc/systemd/system/homelab-pve-config-backup.timer",
-        ),
-        ("pbs.env", "/etc/homelab/pve-config-backup.env"),
-    ]:
-        local_path = build_dir / local_name
-        if local_path.is_file():
-            _, message = connection.remote_diff(local_path, remote_path)
-            print_sub(message)
+    build_config_restore_plan(root, host, build_dir)
 
     if dry_run:
         print_sub(f"[DRY-RUN] Would deploy to {host}:{REMOTE_ROOT}/")
@@ -115,12 +61,13 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
             else "Standalone backup subfeature: disabled"
         )
         print_sub(
-            "Cluster config backup subfeature: enabled"
-            if (build_dir / "homelab-pve-config-backup.timer").is_file()
-            else "Cluster config backup subfeature: disabled"
+            "Config restore plan: enabled"
+            if (build_dir / "restore-plan.conf").is_file()
+            else "Config restore plan: disabled"
         )
         return
 
+    connection = HostConnection(host)
     stage_and_run_remote_installer(
         root,
         connection,
@@ -272,51 +219,23 @@ def build_standalone_backup_plans(root: Path, host: str, build_dir: Path) -> Non
     )
 
 
-def build_cluster_config_backup_bundle(root: Path, host: str, build_dir: Path) -> None:
+def build_config_restore_plan(root: Path, host: str, build_dir: Path) -> None:
     registry = default_registry(root)
-    repository = str(registry.get(host, "pve-backup.proxmox_backup_client.repository", ""))
-    if not repository:
+    if not registry.has(host, "pbs-client-backup"):
         return
-    schedule = str(
-        registry.get(host, "pve-backup.proxmox_backup_client.schedule", "*-*-* 00:30:00")
-    )
-    backup_id = str(
-        registry.get(host, "pve-backup.proxmox_backup_client.backup_id", "pve-config")
-    )
-    archive_name = str(
-        registry.get(host, "pve-backup.proxmox_backup_client.archive_name", "etc-pve")
-    )
-    ceph_enabled = "true" if registry.has(host, "ceph") else "false"
-    profile = str(
-        registry.get(host, "pve-backup.proxmox_backup_client.secret_profile", "")
-    )
-    if not profile:
-        print_sub(
-            f"proxmox_backup_client.secret_profile not set for {host}; "
-            "skipping config backup bundle"
-        )
+    plan = pbs_client_backup.normalize_backup_plan(root, registry, host)
+    if not plan.enabled:
         return
-    env_source = secret_path(root, profile)
-    render_template(
-        root / "pve-backup" / "configs" / "pve-config-backup.sh.tpl",
-        build_dir / "pve-config-backup.sh",
-        REPOSITORY=repository,
-        BACKUP_ID=backup_id,
-        ARCHIVE_NAME=archive_name,
-        CEPH_ENABLED=ceph_enabled,
+    pve_archive = next(
+        (archive for archive in plan.archives if archive.path == "/etc/pve"),
+        None,
     )
-    (build_dir / "pve-config-backup.sh").chmod(0o700)
-    (build_dir / "homelab-pve-config-backup.service").write_text(
-        (root / "pve-backup" / "templates" / "homelab-pve-config-backup.service").read_text(
-            encoding="utf-8"
-        ),
-        encoding="utf-8",
-    )
-    render_template(
-        root / "pve-backup" / "templates" / "homelab-pve-config-backup.timer",
-        build_dir / "homelab-pve-config-backup.timer",
-        SCHEDULE=schedule,
-    )
+    if pve_archive is None:
+        return
+    ceph_enabled = "true" if any(
+        archive.path == "/etc/ceph" for archive in plan.archives
+    ) else "false"
+    env_source = pbs_client_backup.secret_path(root, plan.secret_profile)
     (build_dir / "pbs.env").write_text(
         env_source.read_text(encoding="utf-8"),
         encoding="utf-8",
@@ -324,9 +243,10 @@ def build_cluster_config_backup_bundle(root: Path, host: str, build_dir: Path) -
     (build_dir / "restore-plan.conf").write_text(
         "\n".join(
             [
-                f"REPOSITORY='{shell_quote(repository)}'",
-                f"BACKUP_ID='{shell_quote(backup_id)}'",
-                f"ARCHIVE_NAME='{shell_quote(archive_name)}'",
+                f"REPOSITORY='{shell_quote(plan.repository)}'",
+                f"NAMESPACE='{shell_quote(plan.namespace)}'",
+                f"BACKUP_ID='{shell_quote(plan.backup_id)}'",
+                f"ARCHIVE_NAME='{shell_quote(pve_archive.name)}'",
                 f"CEPH_ENABLED='{shell_quote(ceph_enabled)}'",
                 "",
             ]

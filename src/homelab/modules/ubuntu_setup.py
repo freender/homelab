@@ -28,8 +28,6 @@ class FileSpec:
 @dataclass(frozen=True)
 class HostArtifacts:
     build_dir: Path
-    homelab_state_dir: str
-    storage_mountpoint: str
     deploy_user: str
     samba_enabled: bool
     wireguard_enabled: bool
@@ -40,25 +38,9 @@ class HostArtifacts:
 FILE_SPECS = (
     FileSpec("sudoers", "/etc/sudoers.d/99-{deploy_user}-homelab", mode="440"),
     FileSpec("10-network-names.rules", "/etc/udev/rules.d/10-network-names.rules"),
-    FileSpec("sshd-hardening.conf", "/etc/ssh/sshd_config.d/99-disable-password-auth.conf"),
+    FileSpec("sshd-hardening.conf", "/etc/ssh/sshd_config.d/01-disable-password-auth.conf"),
     FileSpec("zfs.conf", "/etc/modprobe.d/zfs.conf"),
     FileSpec("99-inotify.conf", "/etc/sysctl.d/99-inotify.conf"),
-    FileSpec("rebuild.sh", "{homelab_state_dir}/ubuntu-setup/rebuild.sh", mode="755"),
-    FileSpec(
-        "docker-install.sh",
-        "{homelab_state_dir}/ubuntu-setup/docker-install.sh",
-        mode="755",
-    ),
-    FileSpec(
-        "fix_backup_permissions.sh",
-        "{homelab_state_dir}/ubuntu-setup/fix_backup_permissions.sh",
-        mode="755",
-    ),
-    FileSpec(
-        "pin-primary-nic.sh",
-        "{homelab_state_dir}/ubuntu-setup/pin-primary-nic.sh",
-        mode="755",
-    ),
     FileSpec("notify-failure.sh", "/usr/local/bin/homelab-notify-failure", mode="755"),
     FileSpec(
         "homelab-notify-failure@.service",
@@ -102,7 +84,6 @@ def validate(root: Path, hosts: list[str]) -> None:
         scripts_dir / "notify-failure.sh",
         scripts_dir / "pin-primary-nic.sh",
         templates_dir / "homelab-notify-failure@.service",
-        templates_dir / "rebuild.sh",
         templates_dir / "10-network-names.rules",
         templates_dir / "sudoers",
         templates_dir / "zfs.conf",
@@ -140,16 +121,12 @@ def load_network_mac(root: Path, host: str) -> str:
 def resolve_remote_path(spec: FileSpec, artifacts: HostArtifacts) -> str:
     return spec.remote_path.format(
         deploy_user=artifacts.deploy_user,
-        homelab_state_dir=artifacts.homelab_state_dir,
     )
 
 
 def source_path_for_spec(module_dir: Path, artifacts: HostArtifacts, spec: FileSpec) -> Path:
     script_specs = {
-        "docker-install.sh",
-        "fix_backup_permissions.sh",
         "notify-failure.sh",
-        "pin-primary-nic.sh",
     }
     if spec.build_name in script_specs:
         return module_dir / "scripts" / spec.build_name
@@ -242,11 +219,6 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
     primary_interface_mac = load_network_mac(root, host)
     samba_enabled = str(registry.get(host, "ubuntu-setup.samba", "false")).lower() == "true"
     wireguard_enabled = str(registry.get(host, "ubuntu-setup.wireguard", "false")).lower() == "true"
-    zfs_pool = str(registry.get(host, "ubuntu-setup.zfs_pool", "cache"))
-    storage_mountpoint = str(
-        registry.get(host, "ubuntu-setup.storage_mountpoint", f"/mnt/{zfs_pool}")
-    )
-    homelab_state_dir = str(registry.get(host, "config.homelab_state_dir", "/var/lib/homelab"))
     zfs_arc_max = str(registry.get(host, "ubuntu-setup.zfs_arc_max", "8589934592"))
     notifications_enabled = False
     telegram_path: Path | None = None
@@ -267,17 +239,6 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
         build_dir / "10-network-names.rules",
         INTERFACE_NAME=primary_interface_name,
         INTERFACE_MAC=primary_interface_mac,
-    )
-    render_file(
-        templates_dir / "rebuild.sh",
-        build_dir / "rebuild.sh",
-        PRIMARY_INTERFACE_NAME=primary_interface_name,
-        PRIMARY_INTERFACE_MAC=primary_interface_mac,
-        SYSTEM_HOSTNAME=system_hostname,
-        SYSTEM_TIMEZONE=system_timezone,
-        ZFS_POOL=zfs_pool,
-        HOMELAB_STATE_DIR=homelab_state_dir,
-        STORAGE_MOUNTPOINT=storage_mountpoint,
     )
     render_file(
         templates_dir / "homelab-notify-failure@.service",
@@ -304,18 +265,13 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
             "WIREGUARD_ENABLED": "true" if wireguard_enabled else "false",
             "NOTIFICATIONS_ENABLED": "true" if notifications_enabled else "false",
             "ZFS_ARC_MAX": zfs_arc_max,
-            "HOMELAB_STATE_DIR": homelab_state_dir,
-            "STORAGE_MOUNTPOINT": storage_mountpoint,
             "NOTIFY_SCRIPT_DEST": "/usr/local/bin/homelab-notify-failure",
             "TELEGRAM_ENV_DEST": "/etc/homelab/telegram.env",
-            "REBUILD_BUNDLE_ROOT": f"{homelab_state_dir}/ubuntu-setup",
         },
     )
 
     artifacts = HostArtifacts(
         build_dir=build_dir,
-        homelab_state_dir=homelab_state_dir,
-        storage_mountpoint=storage_mountpoint,
         deploy_user=user,
         samba_enabled=samba_enabled,
         wireguard_enabled=wireguard_enabled,
@@ -325,8 +281,6 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
     file_specs = build_file_specs(artifacts)
     artifacts = HostArtifacts(
         build_dir=build_dir,
-        homelab_state_dir=homelab_state_dir,
-        storage_mountpoint=storage_mountpoint,
         deploy_user=user,
         samba_enabled=samba_enabled,
         wireguard_enabled=wireguard_enabled,

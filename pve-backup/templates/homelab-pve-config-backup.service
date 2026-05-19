@@ -1,9 +1,0 @@
-[Unit]
-Description=Homelab PVE cluster config backup to PBS
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=oneshot
-EnvironmentFile=/etc/homelab/pve-config-backup.env
-ExecStart=/root/pve-config-backup.sh

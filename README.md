@@ -66,14 +66,13 @@ Docker management scripts
 
 ### [pve-backup](pve-backup/)
 PVE backup configuration
-- Cluster config backup of `/etc/pve` to PBS with systemd timer
 - Standalone PBS storage definitions and backup jobs
 - Subfeatures (configured in `hosts.conf` under `pve-backup`):
-  - `proxmox_backup_client`: `/etc/pve` backup to PBS (`secret_profile` selects the local secret file)
   - `pbs_setup`: standalone PBS storage definitions and backup jobs
 - Requires:
-  - `secrets/pbs-backup-main.env` and/or `secrets/pbs-backup-cinci.env` for cluster config backup credentials
   - `/etc/homelab/pbs-tokens.env` on target host (see `pve-backup/configs/pbs-tokens.env.example`) for standalone PBS storage auth
+
+PVE `/etc/pve` config backups are configured through `pbs-client-backup`.
 
 ```bash
 ./deploy pve-backup all

@@ -1,5 +1,5 @@
 #!/bin/bash
-# install.sh - Ubuntu OS setup: Docker, sudoers, SSH hardening, ZFS tuning, and rebuild helpers.
+# install.sh - Ubuntu OS setup: Docker, sudoers, SSH hardening, and ZFS tuning.
 
 set -e
 
@@ -22,7 +22,6 @@ require_file "$BUILD_DIR/file-map.conf" "$BUILD_DIR/file-map.conf" || exit 1
 require_file "$SCRIPT_DIR/lib/utils.sh" "$SCRIPT_DIR/lib/utils.sh" || exit 1
 require_file "$SCRIPT_DIR/lib/print.sh" "$SCRIPT_DIR/lib/print.sh" || exit 1
 require_file "$SCRIPT_DIR/scripts/docker-install.sh" "$SCRIPT_DIR/scripts/docker-install.sh" || exit 1
-require_file "$SCRIPT_DIR/scripts/fix_backup_permissions.sh" "$SCRIPT_DIR/scripts/fix_backup_permissions.sh" || exit 1
 require_file "$SCRIPT_DIR/scripts/notify-failure.sh" "$SCRIPT_DIR/scripts/notify-failure.sh" || exit 1
 require_file "$SCRIPT_DIR/scripts/pin-primary-nic.sh" "$SCRIPT_DIR/scripts/pin-primary-nic.sh" || exit 1
 
@@ -32,14 +31,6 @@ source "$BUILD_DIR/env"
 source "$SCRIPT_DIR/scripts/docker-install.sh"
 # shellcheck source=/dev/null
 source "$SCRIPT_DIR/scripts/pin-primary-nic.sh"
-
-HOMELAB_STATE_DIR="${HOMELAB_STATE_DIR:-/var/lib/homelab}"
-REBUILD_BUNDLE_ROOT="${REBUILD_BUNDLE_ROOT:-${HOMELAB_STATE_DIR}/ubuntu-setup}"
-REBUILD_BUNDLE_BUILD_DIR="${REBUILD_BUNDLE_ROOT}/build/${HOST}"
-REBUILD_BUNDLE_SCRIPTS_DIR="${REBUILD_BUNDLE_ROOT}/scripts"
-REBUILD_BUNDLE_LIB_DIR="${REBUILD_BUNDLE_ROOT}/lib"
-
-mkdir -p "$HOMELAB_STATE_DIR" "$REBUILD_BUNDLE_ROOT"
 
 load_file_map() {
     local map_file="$BUILD_DIR/file-map.conf"
@@ -83,63 +74,19 @@ install_script_file() {
 
 load_file_map
 
-sync_rebuild_bundle() {
-    local changed=false
-    local file
-    local file_name
-    local mode
-    local rc
+cleanup_legacy_rebuild_bundle() {
+    local legacy_root="${HOMELAB_STATE_DIR:-/var/lib/homelab}/ubuntu-setup"
 
-    mkdir -p "$REBUILD_BUNDLE_BUILD_DIR" "$REBUILD_BUNDLE_SCRIPTS_DIR" "$REBUILD_BUNDLE_LIB_DIR"
-
-    shopt -s nullglob
-    for file in "$BUILD_DIR"/*; do
-        file_name="$(basename "$file")"
-        mode="644"
-        if [[ "$file_name" == "rebuild.sh" ]]; then
-            mode="755"
-        fi
-        rc=0
-        install_if_changed "$file" "$REBUILD_BUNDLE_BUILD_DIR/$file_name" "$mode" "$REBUILD_BUNDLE_BUILD_DIR/$file_name" || rc=$?
-        [[ $rc -eq 0 || $rc -eq 1 ]] || return "$rc"
-        [[ $rc -eq 0 ]] && changed=true
-    done
-    shopt -u nullglob
-
-    for file_name in install.sh docker-install.sh fix_backup_permissions.sh notify-failure.sh pin-primary-nic.sh; do
-        rc=0
-        install_if_changed \
-            "$SCRIPT_DIR/scripts/$file_name" \
-            "$REBUILD_BUNDLE_SCRIPTS_DIR/$file_name" \
-            "755" \
-            "$REBUILD_BUNDLE_SCRIPTS_DIR/$file_name" || rc=$?
-        [[ $rc -eq 0 || $rc -eq 1 ]] || return "$rc"
-        [[ $rc -eq 0 ]] && changed=true
-    done
-
-    for file_name in utils.sh print.sh; do
-        rc=0
-        install_if_changed \
-            "$SCRIPT_DIR/lib/$file_name" \
-            "$REBUILD_BUNDLE_LIB_DIR/$file_name" \
-            "644" \
-            "$REBUILD_BUNDLE_LIB_DIR/$file_name" || rc=$?
-        [[ $rc -eq 0 || $rc -eq 1 ]] || return "$rc"
-        [[ $rc -eq 0 ]] && changed=true
-    done
-
-    if [[ -n "$DEPLOY_USER" ]] && id "$DEPLOY_USER" >/dev/null 2>&1; then
-        chown -R "$DEPLOY_USER:$DEPLOY_USER" "$REBUILD_BUNDLE_ROOT"
-    fi
-
-    if [[ "$changed" == true ]]; then
-        print_ok "Rebuild bundle synced to $REBUILD_BUNDLE_ROOT"
-    else
-        print_sub "Rebuild bundle already up to date"
+    if [[ -d "$legacy_root" ]]; then
+        rm -rf "$legacy_root"
+        print_ok "Removed legacy local rebuild bundle at $legacy_root"
     fi
 }
 
 print_header "Ubuntu Setup"
+
+print_action "Legacy local rebuild bundle"
+cleanup_legacy_rebuild_bundle
 
 print_action "Hostname and timezone"
 if [[ "$(hostnamectl status --static)" != "$SYSTEM_HOSTNAME" ]]; then
@@ -176,17 +123,8 @@ else
     print_warn "Could not determine a primary ethernet interface to pin"
 fi
 
-rc=0
-install_script_file "pin-primary-nic.sh" || rc=$?
-
 print_action "Docker CE"
 ensure_docker_installed
-
-rc=0
-install_script_file "docker-install.sh" || rc=$?
-
-rc=0
-install_script_file "fix_backup_permissions.sh" || rc=$?
 
 if [[ -n "$DEPLOY_USER" ]]; then
     if ! id -nG "$DEPLOY_USER" | grep -qw docker; then
@@ -205,9 +143,17 @@ if [[ $rc -eq 0 ]]; then
 fi
 
 print_action "SSH hardening"
+sshd_changed=false
+legacy_sshd_hardening="/etc/ssh/sshd_config.d/99-disable-password-auth.conf"
+if [[ "$(mapped_dest "sshd-hardening.conf")" != "$legacy_sshd_hardening" && -e "$legacy_sshd_hardening" ]]; then
+    rm -f "$legacy_sshd_hardening"
+    sshd_changed=true
+    print_ok "Removed legacy $(basename "$legacy_sshd_hardening")"
+fi
 rc=0
 install_build_file "sshd-hardening.conf" || rc=$?
-if [[ $rc -eq 0 ]]; then
+[[ $rc -eq 0 ]] && sshd_changed=true
+if [[ "$sshd_changed" == true ]]; then
     sshd -t
     systemctl reload ssh
     print_ok "SSH reloaded"
@@ -309,15 +255,5 @@ if [[ "$NOTIFICATIONS_ENABLED" == "true" ]]; then
 else
     print_sub "No telegram.env in secrets; notifications disabled"
 fi
-
-print_action "Rebuild helpers"
-rc=0
-install_build_file "rebuild.sh" || rc=$?
-if [[ $rc -eq 0 ]]; then
-    print_ok "rebuild.sh deployed"
-fi
-
-print_action "Rebuild bundle"
-sync_rebuild_bundle
 
 print_header "Ubuntu Setup Complete"

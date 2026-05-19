@@ -31,11 +31,6 @@ for required in \
     require_file "$BUILD_DIR/$required" "$BUILD_DIR/$required" || exit 1
 done
 
-if ! command -v zfs >/dev/null 2>&1; then
-    print_error "zfs command not found"
-    exit 1
-fi
-
 if ! command -v docker >/dev/null 2>&1 && ! command -v proxmox-backup-client >/dev/null 2>&1; then
     print_error "neither docker nor proxmox-backup-client found"
     exit 1
@@ -50,6 +45,34 @@ for file_name in "${!FILE_MAP_DEST[@]}"; do
 done
 
 if [[ "$changed" == true ]]; then
+    systemctl daemon-reload
+fi
+
+retired_changed=false
+for timer in pve-config-backup.timer homelab-pve-config-backup.timer; do
+    if systemctl is-enabled --quiet "$timer" 2>/dev/null; then
+        systemctl disable --now "$timer" >/dev/null
+        print_sub "Retired $timer disabled"
+        retired_changed=true
+    elif systemctl is-active --quiet "$timer" 2>/dev/null; then
+        systemctl stop "$timer" >/dev/null
+        print_sub "Retired $timer stopped"
+        retired_changed=true
+    fi
+done
+for retired_file in \
+    /root/pve-config-backup.sh \
+    /etc/homelab/pve-config-backup.env \
+    /etc/systemd/system/pve-config-backup.service \
+    /etc/systemd/system/pve-config-backup.timer \
+    /etc/systemd/system/homelab-pve-config-backup.service \
+    /etc/systemd/system/homelab-pve-config-backup.timer; do
+    if [[ -e "$retired_file" ]]; then
+        rm -f "$retired_file"
+        retired_changed=true
+    fi
+done
+if [[ "$retired_changed" == true ]]; then
     systemctl daemon-reload
 fi
 

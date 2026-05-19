@@ -1,5 +1,5 @@
 [Unit]
-Description=Homelab PBS client backup from latest ZFS snapshot
+Description=Homelab PBS client backup
 Wants=network-online.target
 After=network-online.target
 

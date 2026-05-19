@@ -36,8 +36,6 @@ class FileSpec:
 @dataclass(frozen=True)
 class HostArtifacts:
     build_dir: Path
-    homelab_state_dir: str
-    deploy_user: str
     file_specs: tuple[FileSpec, ...]
 
 
@@ -1495,13 +1493,13 @@ def build_health_check_script(pools: list[str]) -> str:
     return "\n".join(lines)
 
 
-def resolve_remote_path(spec: FileSpec, artifacts: HostArtifacts) -> str:
-    return spec.remote_path.format(homelab_state_dir=artifacts.homelab_state_dir)
+def resolve_remote_path(spec: FileSpec) -> str:
+    return spec.remote_path
 
 
 def write_file_map(build_dir: Path, artifacts: HostArtifacts) -> None:
     lines = [
-        f"{spec.build_name}|{resolve_remote_path(spec, artifacts)}|{spec.mode}"
+        f"{spec.build_name}|{resolve_remote_path(spec)}|{spec.mode}"
         for spec in artifacts.file_specs
     ]
     (build_dir / "file-map.conf").write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -1518,7 +1516,7 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
 
     print_sub("Comparing with remote configs...")
     diff_pairs = [
-        (artifacts.build_dir / spec.build_name, resolve_remote_path(spec, artifacts))
+        (artifacts.build_dir / spec.build_name, resolve_remote_path(spec))
         for spec in artifacts.file_specs
     ]
     for message in diff_many(connection, diff_pairs):
@@ -1553,9 +1551,6 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
     config_dir = module_dir / "configs"
     templates_dir = module_dir / "templates"
 
-    deploy_user = str(
-        registry.get(host, "ubuntu-setup.deploy_user", registry.get(host, "config.user"))
-    )
     homelab_state_dir = str(registry.get(host, "config.homelab_state_dir", "/var/lib/homelab"))
     snapshot_schedule = str(
         registry.get(host, "zfs-automation.snapshot_schedule", "*-*-* 00:00:00")
@@ -1716,7 +1711,6 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
     write_env_file(
         build_dir / "env",
         {
-            "DEPLOY_USER": deploy_user,
             "HOMELAB_STATE_DIR": homelab_state_dir,
             "ENABLE_ZFS_SNAPSHOTS": "true" if snapshot_plans and manage_snapshots else "false",
             "ENABLE_ZFS_REPLICATION": (
@@ -1727,14 +1721,11 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
             "ENABLE_ZFS_PULL_SOURCE": "true" if pull_source_access is not None else "false",
             "ZFS_PULL_SOURCE_USER": pull_source_access.user if pull_source_access else "zfs-pull",
             "ZFS_PULL_SOURCE_HOME": "/var/lib/homelab-zfs-pull",
-            "REBUILD_BUNDLE_ROOT": f"{homelab_state_dir}/zfs-automation",
         },
     )
 
     artifacts = HostArtifacts(
         build_dir=build_dir,
-        homelab_state_dir=homelab_state_dir,
-        deploy_user=deploy_user,
         file_specs=tuple(file_specs),
     )
     write_file_map(build_dir, artifacts)

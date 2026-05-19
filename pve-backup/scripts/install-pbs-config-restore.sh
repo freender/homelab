@@ -79,8 +79,13 @@ if [[ -z "${PBS_FINGERPRINT:-}" ]]; then
     print_warn "PBS_FINGERPRINT missing in $ENV_FILE_SOURCE; proceeding without fingerprint pin check"
 fi
 
+namespace_args=()
+if [[ -n "${NAMESPACE:-}" ]]; then
+    namespace_args=(--ns "$NAMESPACE")
+fi
+
 print_sub "Searching PBS snapshots for backup id '$BACKUP_ID'..."
-snapshot=$(proxmox-backup-client snapshots --repository "$REPOSITORY" 2>/dev/null | awk -F'│' -v backup_id="$BACKUP_ID" '
+snapshot=$(proxmox-backup-client snapshots --repository "$REPOSITORY" "${namespace_args[@]}" 2>/dev/null | awk -F'│' -v backup_id="$BACKUP_ID" '
     NF >= 2 {
         snap=$2
         gsub(/^[[:space:]]+|[[:space:]]+$/, "", snap)
@@ -100,7 +105,7 @@ rm -rf "$RESTORE_ROOT"
 mkdir -p "$RESTORE_ROOT/etc-pve" "$RESTORE_ROOT/etc-ceph"
 mkdir -p "$RESTORE_OUTPUT_DIR"
 
-proxmox-backup-client restore "$snapshot" "${ARCHIVE_NAME}.pxar" "$RESTORE_ROOT/etc-pve" --repository "$REPOSITORY"
+proxmox-backup-client restore "$snapshot" "${ARCHIVE_NAME}.pxar" "$RESTORE_ROOT/etc-pve" --repository "$REPOSITORY" "${namespace_args[@]}"
 
 if [[ -d "$RESTORE_ROOT/etc-pve/etc/pve" ]]; then
     src_pve="$RESTORE_ROOT/etc-pve/etc/pve"
@@ -118,7 +123,7 @@ print_sub "Fetched /etc/pve backup to $RESTORE_OUTPUT_DIR/latest"
 apply_restored_notifications "$RESTORE_OUTPUT_DIR/latest"
 
 if [[ "${CEPH_ENABLED:-false}" == "true" ]]; then
-    if proxmox-backup-client restore "$snapshot" "etc-ceph.pxar" "$RESTORE_ROOT/etc-ceph" --repository "$REPOSITORY" >/dev/null 2>&1; then
+    if proxmox-backup-client restore "$snapshot" "etc-ceph.pxar" "$RESTORE_ROOT/etc-ceph" --repository "$REPOSITORY" "${namespace_args[@]}" >/dev/null 2>&1; then
         if [[ -d "$RESTORE_ROOT/etc-ceph/etc/ceph" ]]; then
             src_ceph="$RESTORE_ROOT/etc-ceph/etc/ceph"
         else

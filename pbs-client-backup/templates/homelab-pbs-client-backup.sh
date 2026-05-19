@@ -178,7 +178,7 @@ for ((i = 0; i < archive_count; i++)); do
 done
 
 case "${RUNNER:-host}" in
-    host)
+    host|native)
         backup_with_host_client
         ;;
     docker)

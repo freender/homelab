@@ -176,8 +176,10 @@ def normalize_backup_plan(root: Path, registry, host: str) -> BackupPlan:
         )
 
     runner = str(registry.get(host, f"{prefix}.runner", "host")).strip().lower()
-    if runner not in {"host", "docker"}:
-        raise ValueError(f"{prefix}.runner for {host} must be 'host' or 'docker'")
+    if runner not in {"host", "native", "docker"}:
+        raise ValueError(
+            f"{prefix}.runner for {host} must be 'host', 'native', or 'docker'"
+        )
 
     return BackupPlan(
         enabled=normalize_bool(
@@ -218,8 +220,9 @@ def secret_path(root: Path, profile: str) -> Path:
 
 def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
     registry = default_registry(root)
-    if str(registry.get(host, "config.type")) != "ubuntu":
-        raise ValueError(f"{MODULE_DIR} supports Ubuntu hosts only")
+    host_type = str(registry.get(host, "config.type"))
+    if host_type not in {"ubuntu", "pve"}:
+        raise ValueError(f"{MODULE_DIR} supports Ubuntu and PVE hosts only")
 
     plan = normalize_backup_plan(root, registry, host)
     if not plan.enabled:
