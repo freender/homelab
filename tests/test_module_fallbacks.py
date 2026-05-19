@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from homelab.modules import apcupsd, pve_backup, pve_exporters
+from homelab.modules import apcupsd, pbs_client_backup, pve_exporters
 
 
 def write_secret_catalog(
@@ -48,7 +48,7 @@ def test_apcupsd_requires_real_secret_outside_offline_mode(monkeypatch, tmp_path
         apcupsd.telegram_env_path(tmp_path)
 
 
-def test_pve_backup_uses_example_secret_in_offline_mode(
+def test_pbs_client_backup_uses_example_secret_in_offline_mode(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
@@ -61,7 +61,7 @@ def test_pve_backup_uses_example_secret_in_offline_mode(
 
     monkeypatch.setenv("HOMELAB_OFFLINE", "true")
 
-    assert pve_backup.secret_path(tmp_path, "backup-main") == example
+    assert pbs_client_backup.secret_path(tmp_path, "backup-main") == example
 
 
 def test_pve_exporters_uses_module_template(tmp_path: Path) -> None:
