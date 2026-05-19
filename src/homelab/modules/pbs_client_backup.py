@@ -269,6 +269,9 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
 
 
 def build_host_bundle(root: Path, host: str, plan: BackupPlan, build_dir: Path) -> None:
+    registry = default_registry(root)
+    host_type = str(registry.get(host, "config.type"))
+
     render_template(
         root / MODULE_DIR / "templates" / "homelab-pbs-client-backup.sh",
         build_dir / "homelab-pbs-client-backup",
@@ -283,7 +286,11 @@ def build_host_bundle(root: Path, host: str, plan: BackupPlan, build_dir: Path) 
         build_dir / TIMER_NAME,
         SCHEDULE=plan.schedule,
     )
-    write_config(build_dir / "homelab-pbs-client-backup.conf", plan)
+    write_config(
+        build_dir / "homelab-pbs-client-backup.conf",
+        plan,
+        retire_pve_config_backup=host_type == "pve",
+    )
     secret = secret_path(root, plan.secret_profile)
     (build_dir / "homelab-pbs-client-backup.env").write_text(
         secret.read_text(encoding="utf-8"),
@@ -292,7 +299,7 @@ def build_host_bundle(root: Path, host: str, plan: BackupPlan, build_dir: Path) 
     write_file_map(build_dir, FILE_SPECS)
 
 
-def write_config(path: Path, plan: BackupPlan) -> None:
+def write_config(path: Path, plan: BackupPlan, retire_pve_config_backup: bool) -> None:
     lines = [
         f'REPOSITORY="{plan.repository}"',
         f'NAMESPACE="{plan.namespace}"',
@@ -301,6 +308,7 @@ def write_config(path: Path, plan: BackupPlan) -> None:
         f'RUNNER="{plan.runner}"',
         f'DOCKER_IMAGE="{plan.docker_image}"',
         f'DOCKER_NETWORK="{plan.docker_network}"',
+        f'RETIRE_PVE_CONFIG_BACKUP="{str(retire_pve_config_backup).lower()}"',
         f'ARCHIVE_COUNT="{len(plan.archives)}"',
     ]
     for index, archive in enumerate(plan.archives):

@@ -31,9 +31,37 @@ for required in \
     require_file "$BUILD_DIR/$required" "$BUILD_DIR/$required" || exit 1
 done
 
-if ! command -v docker >/dev/null 2>&1 && ! command -v proxmox-backup-client >/dev/null 2>&1; then
-    print_error "neither docker nor proxmox-backup-client found"
-    exit 1
+# shellcheck source=/dev/null
+source "$BUILD_DIR/homelab-pbs-client-backup.conf"
+
+case "${RUNNER:-host}" in
+    host|native)
+        if ! command -v proxmox-backup-client >/dev/null 2>&1; then
+            print_error "proxmox-backup-client not found"
+            exit 1
+        fi
+        ;;
+    docker)
+        if ! command -v docker >/dev/null 2>&1; then
+            print_error "docker not found"
+            exit 1
+        fi
+        ;;
+    *)
+        print_error "Unsupported RUNNER: ${RUNNER:-}"
+        exit 1
+        ;;
+esac
+
+archive_count="${ARCHIVE_COUNT:-0}"
+if [[ "$archive_count" =~ ^[0-9]+$ ]]; then
+    for ((i = 0; i < archive_count; i++)); do
+        dataset_var="ARCHIVE_${i}_DATASET"
+        if [[ -n "${!dataset_var:-}" ]] && ! command -v zfs >/dev/null 2>&1; then
+            print_error "zfs command not found"
+            exit 1
+        fi
+    done
 fi
 
 changed=false
@@ -48,32 +76,34 @@ if [[ "$changed" == true ]]; then
     systemctl daemon-reload
 fi
 
-retired_changed=false
-for timer in pve-config-backup.timer homelab-pve-config-backup.timer; do
-    if systemctl is-enabled --quiet "$timer" 2>/dev/null; then
-        systemctl disable --now "$timer" >/dev/null
-        print_sub "Retired $timer disabled"
-        retired_changed=true
-    elif systemctl is-active --quiet "$timer" 2>/dev/null; then
-        systemctl stop "$timer" >/dev/null
-        print_sub "Retired $timer stopped"
-        retired_changed=true
+if [[ "${RETIRE_PVE_CONFIG_BACKUP:-false}" == "true" ]]; then
+    retired_changed=false
+    for timer in pve-config-backup.timer homelab-pve-config-backup.timer; do
+        if systemctl is-enabled --quiet "$timer" 2>/dev/null; then
+            systemctl disable --now "$timer" >/dev/null
+            print_sub "Retired $timer disabled"
+            retired_changed=true
+        elif systemctl is-active --quiet "$timer" 2>/dev/null; then
+            systemctl stop "$timer" >/dev/null
+            print_sub "Retired $timer stopped"
+            retired_changed=true
+        fi
+    done
+    for retired_file in \
+        /root/pve-config-backup.sh \
+        /etc/homelab/pve-config-backup.env \
+        /etc/systemd/system/pve-config-backup.service \
+        /etc/systemd/system/pve-config-backup.timer \
+        /etc/systemd/system/homelab-pve-config-backup.service \
+        /etc/systemd/system/homelab-pve-config-backup.timer; do
+        if [[ -e "$retired_file" ]]; then
+            rm -f "$retired_file"
+            retired_changed=true
+        fi
+    done
+    if [[ "$retired_changed" == true ]]; then
+        systemctl daemon-reload
     fi
-done
-for retired_file in \
-    /root/pve-config-backup.sh \
-    /etc/homelab/pve-config-backup.env \
-    /etc/systemd/system/pve-config-backup.service \
-    /etc/systemd/system/pve-config-backup.timer \
-    /etc/systemd/system/homelab-pve-config-backup.service \
-    /etc/systemd/system/homelab-pve-config-backup.timer; do
-    if [[ -e "$retired_file" ]]; then
-        rm -f "$retired_file"
-        retired_changed=true
-    fi
-done
-if [[ "$retired_changed" == true ]]; then
-    systemctl daemon-reload
 fi
 
 systemctl enable --now homelab-pbs-client-backup.timer >/dev/null

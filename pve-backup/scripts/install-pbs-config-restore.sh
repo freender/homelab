@@ -71,9 +71,21 @@ if [[ -z "${REPOSITORY:-}" || -z "${BACKUP_ID:-}" || -z "${ARCHIVE_NAME:-}" ]]; 
 fi
 
 if [[ -z "${PBS_PASSWORD:-}" ]]; then
+    if [[ "${REPOSITORY:-}" == *'!'* && -n "${PBS_TOKEN_SECRET:-}" ]]; then
+        PBS_PASSWORD="$PBS_TOKEN_SECRET"
+    fi
+fi
+
+if [[ -z "${PBS_PASSWORD:-}" ]]; then
     print_warn "PBS_PASSWORD missing in $ENV_FILE_SOURCE; skipping"
     exit 0
 fi
+
+if [[ "${REPOSITORY:-}" == *'!'* && -z "${PBS_TOKEN_SECRET:-}" ]]; then
+    PBS_TOKEN_SECRET="$PBS_PASSWORD"
+fi
+
+export PBS_PASSWORD PBS_TOKEN_SECRET PBS_FINGERPRINT
 
 if [[ -z "${PBS_FINGERPRINT:-}" ]]; then
     print_warn "PBS_FINGERPRINT missing in $ENV_FILE_SOURCE; proceeding without fingerprint pin check"
