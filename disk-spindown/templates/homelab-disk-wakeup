@@ -7,17 +7,27 @@ CONFIG=/etc/default/homelab-disk-spindown
 # shellcheck disable=SC1090
 . "$CONFIG"
 
-set -- ${HD_IDLE_OPTS:-}
-while [ "$#" -gt 0 ]; do
-    case "$1" in
-        -a)
-            shift
-            [ "$#" -gt 0 ] || break
-            disk=$1
-            if [ -b "$disk" ]; then
-                timeout 60 dd if="$disk" of=/dev/null bs=1M count=1 iflag=direct status=none || true
-            fi
-            ;;
-    esac
-    shift || break
+wakeup_disks() {
+    set -- ${HD_IDLE_OPTS:-}
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            -a)
+                shift
+                [ "$#" -gt 0 ] || break
+                disk=$1
+                if [ -b "$disk" ]; then
+                    timeout 60 dd if="$disk" of=/dev/null bs=1M count=32 iflag=direct status=none || true
+                fi
+                ;;
+        esac
+        shift || break
+    done
+}
+
+# Repeat reads long enough for hd-idle's diskstats poller to register I/O and
+# reset idle timers before scheduled replication.
+end=$(( $(date +%s) + 20 ))
+while [ "$(date +%s)" -lt "$end" ]; do
+    wakeup_disks
+    sleep 2
 done
