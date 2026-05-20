@@ -12,3 +12,7 @@ This is required for PVE replication of datasets with large blocks, such as
 patch is active so the receiver activates `feature@large_blocks` correctly.
 
 Remove this module when Proxmox ships equivalent upstream behavior.
+
+Deployment also installs `/usr/local/sbin/homelab-pve-zfs-large-block-patch`
+and an apt `DPkg::Post-Invoke` hook so `libpve-storage-perl` package upgrades
+that replace `ZFSPoolPlugin.pm` are patched again automatically.
