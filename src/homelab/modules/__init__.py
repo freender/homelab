@@ -15,6 +15,7 @@ from .pve_backup import deploy as deploy_pve_backup
 from .pve_exporters import deploy as deploy_pve_exporters
 from .pve_gpu_passthrough import deploy as deploy_pve_gpu_passthrough
 from .pve_postinstall import deploy as deploy_pve_postinstall
+from .pve_zfs_large_block_patch import deploy as deploy_pve_zfs_large_block_patch
 from .ssh_config import deploy as deploy_ssh_config
 from .ubuntu_setup import deploy as deploy_ubuntu_setup
 from .zfs_automation import deploy as deploy_zfs_automation
@@ -67,6 +68,10 @@ MODULES: dict[str, ModuleDefinition] = {
         name="GPU Passthrough Configs",
         deploy=deploy_pve_gpu_passthrough,
     ),
+    "pve-zfs-large-block-patch": ModuleDefinition(
+        name="PVE ZFS Large-Block Patch",
+        deploy=deploy_pve_zfs_large_block_patch,
+    ),
     "ssh-config": ModuleDefinition(name="SSH Config", deploy=deploy_ssh_config),
     "ubuntu-setup": ModuleDefinition(name="Ubuntu OS Setup", deploy=deploy_ubuntu_setup),
     "zfs-automation": ModuleDefinition(name="ZFS Automation", deploy=deploy_zfs_automation),
@@ -77,6 +82,7 @@ MODULE_ORDER = [
     "pve-backup",
     "apcupsd",
     "pve-exporters",
+    "pve-zfs-large-block-patch",
     "disk-spindown",
     "pve-gpu-passthrough",
     "keepalived",
