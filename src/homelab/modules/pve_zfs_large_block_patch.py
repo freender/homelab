@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ..deploy import DeploySession, force_env, stage_and_run_remote_installer
+from ..deploy import DeploySession, stage_and_run_remote_installer
 from ..hosts import default_registry
 from ..output import print_action
 from ..ssh import HostConnection
@@ -35,6 +35,7 @@ def validate(root: Path) -> None:
 
 
 def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
+    del force  # The patcher is self-idempotent; there is no force mode to apply.
     registry = default_registry(root)
     connection = HostConnection(
         host,
@@ -54,7 +55,6 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
         ],
         "scripts/install.sh",
         host,
-        env=force_env(force),
         require_root=True,
         remote_subdirs=("lib",),
     )

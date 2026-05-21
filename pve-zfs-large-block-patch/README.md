@@ -16,3 +16,10 @@ Remove this module when Proxmox ships equivalent upstream behavior.
 Deployment also installs `/usr/local/sbin/homelab-pve-zfs-large-block-patch`
 and an apt `DPkg::Post-Invoke` hook so `libpve-storage-perl` package upgrades
 that replace `ZFSPoolPlugin.pm` are patched again automatically.
+
+Operational files:
+
+- Script: `/usr/local/sbin/homelab-pve-zfs-large-block-patch`
+- Apt hook: `/etc/apt/apt.conf.d/99-homelab-pve-zfs-large-block-patch`
+- Status: `/var/lib/homelab/pve-zfs-large-block-patch/status`
+- Backups: `/var/backups/homelab/pve-zfs-large-block-patch/`
