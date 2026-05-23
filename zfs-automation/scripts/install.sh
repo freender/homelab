@@ -109,6 +109,21 @@ prepare_zfs_pull_source_user() {
     chown -R "$ZFS_PULL_SOURCE_USER:$ZFS_PULL_SOURCE_USER" "$ZFS_PULL_SOURCE_HOME"
 }
 
+prepare_zfs_push_target_user() {
+    if [[ "${ENABLE_ZFS_PUSH_TARGET:-false}" != "true" ]]; then
+        return 0
+    fi
+
+    if ! id "$ZFS_PUSH_TARGET_USER" >/dev/null 2>&1; then
+        useradd --system --home-dir "$ZFS_PUSH_TARGET_HOME" --create-home --shell /bin/bash "$ZFS_PUSH_TARGET_USER"
+        print_ok "Created $ZFS_PUSH_TARGET_USER user"
+    fi
+
+    mkdir -p "$ZFS_PUSH_TARGET_HOME/.ssh" /etc/homelab
+    chmod 700 "$ZFS_PUSH_TARGET_HOME/.ssh"
+    chown -R "$ZFS_PUSH_TARGET_USER:$ZFS_PUSH_TARGET_USER" "$ZFS_PUSH_TARGET_HOME"
+}
+
 cleanup_zfs_pull_source_access() {
     local path
 
@@ -123,6 +138,26 @@ cleanup_zfs_pull_source_access() {
         "$MANAGED_DIR/homelab-zfs-send-only.sh" \
         "$MANAGED_DIR/zfs-pull-authorized-keys" \
         "$MANAGED_DIR/zfs-pull-datasets.conf"; do
+        [[ -e "$path" ]] || continue
+        rm -f "$path"
+        print_ok "Removed obsolete $(basename "$path")"
+    done
+}
+
+cleanup_zfs_push_target_access() {
+    local path
+
+    if [[ "${ENABLE_ZFS_PUSH_TARGET:-false}" == "true" ]]; then
+        return 0
+    fi
+
+    for path in \
+        /etc/homelab/zfs-push-datasets.conf \
+        /usr/local/sbin/homelab-zfs-receive-only \
+        "$ZFS_PUSH_TARGET_HOME/.ssh/authorized_keys" \
+        "$MANAGED_DIR/homelab-zfs-receive-only.sh" \
+        "$MANAGED_DIR/zfs-push-authorized-keys" \
+        "$MANAGED_DIR/zfs-push-datasets.conf"; do
         [[ -e "$path" ]] || continue
         rm -f "$path"
         print_ok "Removed obsolete $(basename "$path")"
@@ -151,6 +186,28 @@ configure_zfs_pull_source_access() {
     done < /etc/homelab/zfs-pull-datasets.conf
 }
 
+configure_zfs_push_target_access() {
+    local dataset
+
+    if [[ "${ENABLE_ZFS_PUSH_TARGET:-false}" != "true" ]]; then
+        return 0
+    fi
+
+    require_file /etc/homelab/zfs-push-datasets.conf /etc/homelab/zfs-push-datasets.conf || exit 1
+    require_file "$ZFS_PUSH_TARGET_HOME/.ssh/authorized_keys" "$ZFS_PUSH_TARGET_HOME/.ssh/authorized_keys" || exit 1
+    require_file /usr/local/sbin/homelab-zfs-receive-only /usr/local/sbin/homelab-zfs-receive-only || exit 1
+
+    chown -R "$ZFS_PUSH_TARGET_USER:$ZFS_PUSH_TARGET_USER" "$ZFS_PUSH_TARGET_HOME"
+    chmod 700 "$ZFS_PUSH_TARGET_HOME/.ssh"
+    chmod 600 "$ZFS_PUSH_TARGET_HOME/.ssh/authorized_keys"
+    chmod 755 /usr/local/sbin/homelab-zfs-receive-only
+
+    while IFS= read -r dataset; do
+        [[ -n "$dataset" ]] || continue
+        grant_zfs_push_target_dataset "$dataset"
+    done < /etc/homelab/zfs-push-datasets.conf
+}
+
 grant_zfs_pull_source_dataset() {
     local dataset="$1"
     local parent="$dataset"
@@ -171,6 +228,29 @@ grant_zfs_pull_source_dataset() {
     done
 
     print_error "ZFS pull source dataset parent not found: $dataset"
+    exit 1
+}
+
+grant_zfs_push_target_dataset() {
+    local dataset="$1"
+    local parent="$dataset"
+
+    if zfs list -H -o name "$dataset" >/dev/null 2>&1; then
+        zfs allow -u "$ZFS_PUSH_TARGET_USER" create,mount,receive,hold,release "$dataset"
+        print_ok "Granted receive target access for $dataset"
+        return 0
+    fi
+
+    while [[ "$parent" == */* ]]; do
+        parent="${parent%/*}"
+        if zfs list -H -o name "$parent" >/dev/null 2>&1; then
+            zfs allow -d -u "$ZFS_PUSH_TARGET_USER" create,mount,receive,hold,release "$parent"
+            print_warn "ZFS push target dataset not present yet: $dataset; granted future descendant access at $parent"
+            return 0
+        fi
+    done
+
+    print_error "ZFS push target dataset parent not found: $dataset"
     exit 1
 }
 
@@ -203,7 +283,9 @@ fi
 
 mkdir -p /etc/sanoid "$HOMELAB_STATE_DIR" "$MANAGED_DIR"
 prepare_zfs_pull_source_user
+prepare_zfs_push_target_user
 cleanup_zfs_pull_source_access
+cleanup_zfs_push_target_access
 
 cleanup_legacy_replication_units
 cleanup_obsolete_replication_units
@@ -234,6 +316,7 @@ for unit in "${!FILE_MAP_DEST[@]}"; do
 done
 
 configure_zfs_pull_source_access
+configure_zfs_push_target_access
 
 if systemctl is-enabled --quiet sanoid.timer 2>/dev/null; then
     systemctl disable --now sanoid.timer

@@ -120,6 +120,21 @@ class ZfsPullSourceAccess:
     pullers: tuple[ZfsPuller, ...]
 
 
+@dataclass(frozen=True)
+class ZfsPusher:
+    name: str
+    from_address: str
+    public_key: str
+
+
+@dataclass(frozen=True)
+class ZfsPushTargetAccess:
+    enabled: bool
+    user: str
+    datasets: tuple[str, ...]
+    pushers: tuple[ZfsPusher, ...]
+
+
 BASE_FILE_SPECS = (
     FileSpec("sanoid.conf", "/etc/sanoid/sanoid.conf"),
     FileSpec(
@@ -847,6 +862,71 @@ def normalize_pull_source_access(
     )
 
 
+def normalize_push_target_access(
+    registry,
+    host: str,
+    *,
+    include_disabled: bool = False,
+) -> ZfsPushTargetAccess | None:
+    config = registry.get(host, "zfs-automation.push_target_access", None)
+    if config is None:
+        return None
+    if not isinstance(config, dict):
+        raise ValueError(f"zfs-automation.push_target_access must be a mapping for {host}")
+
+    enabled = normalize_bool(
+        config.get("enabled"),
+        True,
+        f"zfs-automation.push_target_access.enabled must be true or false for {host}",
+    )
+    if not enabled and not include_disabled:
+        return None
+
+    user = require_safe_authorized_key_option(
+        config.get("user", "zfs-push"),
+        f"zfs-automation.push_target_access.user is invalid for {host}",
+    )
+    datasets = normalize_string_list(
+        config.get("datasets", []),
+        f"zfs-automation.push_target_access.datasets must be a list for {host}",
+    )
+    if not datasets:
+        raise ValueError(f"zfs-automation.push_target_access.datasets is required for {host}")
+
+    pusher_configs = config.get("allowed_pushers", [])
+    if not isinstance(pusher_configs, list) or not pusher_configs:
+        raise ValueError(
+            f"zfs-automation.push_target_access.allowed_pushers must be a non-empty list"
+            f" for {host}"
+        )
+    pushers: list[ZfsPusher] = []
+    for index, pusher_config in enumerate(pusher_configs):
+        if not isinstance(pusher_config, dict):
+            raise ValueError(f"invalid push target allowed_pusher at index {index} for {host}")
+        name = require_safe_authorized_key_option(
+            pusher_config.get("name", ""),
+            f"pusher name required at index {index} for {host}",
+        )
+        from_address = require_safe_authorized_key_option(
+            pusher_config.get("from", ""),
+            f"pusher from address required at index {index} for {host}",
+        )
+        public_key = require_string(
+            pusher_config.get("public_key", ""),
+            f"pusher public_key required at index {index} for {host}",
+        )
+        if not public_key.startswith(("ssh-ed25519 ", "sk-ssh-ed25519@openssh.com ")):
+            raise ValueError(f"pusher public_key at index {index} for {host} must be ed25519")
+        pushers.append(ZfsPusher(name=name, from_address=from_address, public_key=public_key))
+
+    return ZfsPushTargetAccess(
+        enabled=enabled,
+        user=user,
+        datasets=tuple(datasets),
+        pushers=tuple(pushers),
+    )
+
+
 def resolve_pools(registry, host: str) -> list[str]:
     explicit = registry.get(host, "zfs-automation.pools", None)
     if explicit is not None:
@@ -1303,6 +1383,19 @@ def build_zfs_pull_source_authorized_keys(access: ZfsPullSourceAccess) -> str:
     return "\n".join(lines) + "\n"
 
 
+def build_zfs_push_target_authorized_keys(access: ZfsPushTargetAccess) -> str:
+    allowed_roots = " ".join(access.datasets)
+    lines = []
+    for pusher in access.pushers:
+        options = [
+            f'from="{pusher.from_address}"',
+            "restrict",
+            f'command="/usr/local/sbin/homelab-zfs-receive-only {allowed_roots}"',
+        ]
+        lines.append(f"{','.join(options)} {pusher.public_key}")
+    return "\n".join(lines) + "\n"
+
+
 def build_zfs_pull_source_wrapper() -> str:
     return r"""#!/bin/bash
 
@@ -1477,6 +1570,172 @@ fi
 """
 
 
+def build_zfs_push_target_wrapper() -> str:
+    return r"""#!/bin/bash
+
+set -euo pipefail
+
+deny() {
+    printf 'Denied ZFS push command: %s\n' "${SSH_ORIGINAL_COMMAND:-}" >&2
+    exit 1
+}
+
+ALLOWED_ROOTS=("$@")
+COMMAND="${SSH_ORIGINAL_COMMAND:-}"
+
+[[ ${#ALLOWED_ROOTS[@]} -gt 0 ]] || deny
+[[ -n "$COMMAND" ]] || deny
+
+case "$COMMAND" in
+    "exit") exit 0 ;;
+    "echo -n") printf '' ; exit 0 ;;
+    "ps -Ao args=") exec /bin/ps -Ao args= ;;
+    "command -v mbuffer"|"command -v lzop"|"command -v pv")
+        command -v "${COMMAND##* }" || exit 1
+        exit 0
+        ;;
+esac
+
+case "$COMMAND" in
+    *'`'*|*'$'*|*'<'*|*$'\n'*|*$'\r'*) deny ;;
+esac
+
+trim() {
+    local text="$1"
+    text="${text#"${text%%[![:space:]]*}"}"
+    text="${text%"${text##*[![:space:]]}"}"
+    printf '%s' "$text"
+}
+
+split_args() {
+    local segment="$1"
+    local -n out_ref="$2"
+    read -r -a out_ref <<< "$segment"
+    for index in "${!out_ref[@]}"; do
+        out_ref[$index]="${out_ref[$index]//\'/}"
+        out_ref[$index]="${out_ref[$index]//\"/}"
+    done
+}
+
+dataset_allowed() {
+    local dataset="$1"
+    local root
+    for root in "${ALLOWED_ROOTS[@]}"; do
+        if [[ "$dataset" == "$root" || "$dataset" == "$root/"* ]]; then
+            return 0
+        fi
+    done
+    return 1
+}
+
+split_args "$COMMAND" ARGV
+
+if [[ "${ARGV[0]:-}" == "zpool" \
+    || "${ARGV[0]:-}" == "/sbin/zpool" \
+    || "${ARGV[0]:-}" == "/usr/sbin/zpool" ]]; then
+    [[ "${ARGV[1]:-}" == "get" ]] || deny
+    [[ "${ARGV[2]:-}" == "-o" && "${ARGV[3]:-}" == "value" ]] || deny
+    [[ "${ARGV[4]:-}" == "-H" && "${ARGV[5]:-}" == "feature@extensible_dataset" ]] || deny
+    [[ ${#ARGV[@]} -eq 7 ]] || deny
+    requested_pool="${ARGV[6]:-}"
+    pool_allowed=false
+    for root in "${ALLOWED_ROOTS[@]}"; do
+        if [[ "${root%%/*}" == "$requested_pool" ]]; then
+            pool_allowed=true
+            break
+        fi
+    done
+    [[ "$pool_allowed" == true ]] || deny
+    exec /usr/sbin/zpool get -o value -H feature@extensible_dataset "$requested_pool"
+fi
+
+if [[ "${ARGV[0]:-}" == "zfs" \
+    || "${ARGV[0]:-}" == "/sbin/zfs" \
+    || "${ARGV[0]:-}" == "/usr/sbin/zfs" ]]; then
+    case "${ARGV[1]:-}" in
+        list|get|hold|release)
+            FOUND_DATASET=false
+            for token in "${ARGV[@]:2}"; do
+                [[ "$token" == -* ]] && continue
+                dataset="${token%%[@#]*}"
+                if dataset_allowed "$dataset"; then
+                    FOUND_DATASET=true
+                    break
+                fi
+            done
+            [[ "$FOUND_DATASET" == true ]] || deny
+            exec /usr/sbin/zfs "${ARGV[@]:1}"
+            ;;
+    esac
+fi
+
+IFS='|' read -r -a PIPE_SEGMENTS <<< "$COMMAND"
+[[ ${#PIPE_SEGMENTS[@]} -ge 1 && ${#PIPE_SEGMENTS[@]} -le 3 ]] || deny
+
+ZFS_SEGMENT="$(trim "${PIPE_SEGMENTS[-1]}")"
+split_args "$ZFS_SEGMENT" ZFS_ARGV
+
+case "${ZFS_ARGV[0]:-}" in
+    zfs|/sbin/zfs|/usr/sbin/zfs) ;;
+    *) deny ;;
+esac
+
+case "${ZFS_ARGV[1]:-}" in
+    receive|recv) ;;
+    *) deny ;;
+esac
+
+TARGET_DATASET="${ZFS_ARGV[-1]:-}"
+[[ -n "$TARGET_DATASET" ]] || deny
+dataset_allowed "$TARGET_DATASET" || deny
+
+RUN_LZOP=false
+RUN_MBUFFER=false
+MBUFFER_ARGS=()
+LEADING_COUNT=$((${#PIPE_SEGMENTS[@]} - 1))
+for ((segment_index = 0; segment_index < LEADING_COUNT; segment_index++)); do
+    segment="$(trim "${PIPE_SEGMENTS[$segment_index]}")"
+    split_args "$segment" PIPE_ARGV
+    case "${PIPE_ARGV[0]:-}" in
+        lzop|/usr/bin/lzop)
+            [[ "${PIPE_ARGV[1]:-}" == "-dfc" ]] || deny
+            RUN_LZOP=true
+            ;;
+        mbuffer|/usr/bin/mbuffer)
+            RUN_MBUFFER=true
+            MBUFFER_ARGS=("${PIPE_ARGV[@]:1}")
+            ;;
+        *) deny ;;
+    esac
+done
+
+if [[ "$RUN_MBUFFER" == true ]]; then
+    index=0
+    while [[ $index -lt ${#MBUFFER_ARGS[@]} ]]; do
+        case "${MBUFFER_ARGS[$index]}" in
+            -q) index=$((index + 1)) ;;
+            -s|-m)
+                [[ $((index + 1)) -lt ${#MBUFFER_ARGS[@]} ]] || deny
+                [[ "${MBUFFER_ARGS[$((index + 1))]}" =~ ^[0-9]+[kKmMgG]?$ ]] || deny
+                index=$((index + 2))
+                ;;
+            *) deny ;;
+        esac
+    done
+fi
+
+if [[ "$RUN_MBUFFER" == true && "$RUN_LZOP" == true ]]; then
+    /usr/bin/mbuffer "${MBUFFER_ARGS[@]}" | /usr/bin/lzop -dfc | /usr/sbin/zfs "${ZFS_ARGV[@]:1}"
+elif [[ "$RUN_MBUFFER" == true ]]; then
+    /usr/bin/mbuffer "${MBUFFER_ARGS[@]}" | /usr/sbin/zfs "${ZFS_ARGV[@]:1}"
+elif [[ "$RUN_LZOP" == true ]]; then
+    /usr/bin/lzop -dfc | /usr/sbin/zfs "${ZFS_ARGV[@]:1}"
+else
+    /usr/sbin/zfs "${ZFS_ARGV[@]:1}"
+fi
+"""
+
+
 def build_health_check_script(pools: list[str]) -> str:
     lines = [
         "#!/bin/bash",
@@ -1590,6 +1849,7 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
         include_disabled=True,
     )
     pull_source_access = normalize_pull_source_access(registry, host)
+    push_target_access = normalize_push_target_access(registry, host)
 
     build_dir = module_dir / "build" / host
     prepare_build_dir(build_dir)
@@ -1685,6 +1945,35 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
             ]
         )
 
+    if push_target_access is not None:
+        (build_dir / "homelab-zfs-receive-only.sh").write_text(
+            build_zfs_push_target_wrapper(),
+            encoding="utf-8",
+        )
+        (build_dir / "zfs-push-datasets.conf").write_text(
+            "\n".join(push_target_access.datasets) + "\n",
+            encoding="utf-8",
+        )
+        (build_dir / "zfs-push-authorized-keys").write_text(
+            build_zfs_push_target_authorized_keys(push_target_access),
+            encoding="utf-8",
+        )
+        file_specs.extend(
+            [
+                FileSpec(
+                    "homelab-zfs-receive-only.sh",
+                    "/usr/local/sbin/homelab-zfs-receive-only",
+                    mode="755",
+                ),
+                FileSpec("zfs-push-datasets.conf", "/etc/homelab/zfs-push-datasets.conf"),
+                FileSpec(
+                    "zfs-push-authorized-keys",
+                    "/var/lib/homelab-zfs-push/.ssh/authorized_keys",
+                    mode="600",
+                ),
+            ]
+        )
+
     render_file(
         templates_dir / "homelab-zfs-scrub.sh",
         build_dir / "homelab-zfs-scrub.sh",
@@ -1721,6 +2010,9 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
             "ENABLE_ZFS_PULL_SOURCE": "true" if pull_source_access is not None else "false",
             "ZFS_PULL_SOURCE_USER": pull_source_access.user if pull_source_access else "zfs-pull",
             "ZFS_PULL_SOURCE_HOME": "/var/lib/homelab-zfs-pull",
+            "ENABLE_ZFS_PUSH_TARGET": "true" if push_target_access is not None else "false",
+            "ZFS_PUSH_TARGET_USER": push_target_access.user if push_target_access else "zfs-push",
+            "ZFS_PUSH_TARGET_HOME": "/var/lib/homelab-zfs-push",
         },
     )
 
