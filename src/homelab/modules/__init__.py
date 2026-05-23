@@ -15,6 +15,7 @@ from .pve_backup import deploy as deploy_pve_backup
 from .pve_exporters import deploy as deploy_pve_exporters
 from .pve_gpu_passthrough import deploy as deploy_pve_gpu_passthrough
 from .pve_postinstall import deploy as deploy_pve_postinstall
+from .pve_sdn import deploy as deploy_pve_sdn
 from .pve_zfs_large_block_patch import deploy as deploy_pve_zfs_large_block_patch
 from .ssh_config import deploy as deploy_ssh_config
 from .ubuntu_setup import deploy as deploy_ubuntu_setup
@@ -64,6 +65,10 @@ MODULES: dict[str, ModuleDefinition] = {
         name="PVE Post-Install Configs",
         deploy=deploy_pve_postinstall,
     ),
+    "pve-sdn": ModuleDefinition(
+        name="PVE SDN",
+        deploy=deploy_pve_sdn,
+    ),
     "pve-gpu-passthrough": ModuleDefinition(
         name="GPU Passthrough Configs",
         deploy=deploy_pve_gpu_passthrough,
@@ -79,6 +84,7 @@ MODULES: dict[str, ModuleDefinition] = {
 
 MODULE_ORDER = [
     "pve-postinstall",
+    "pve-sdn",
     "pve-backup",
     "apcupsd",
     "pve-exporters",

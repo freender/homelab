@@ -21,6 +21,7 @@ PROFILE_TO_SECRET = {
     "backup-main": "pbs-backup-main",
     "backup-cinci": "pbs-backup-cinci",
     "backup-cinci-hosts": "pbs-backup-cinci-hosts",
+    "backup-cottonwood-hosts": "pbs-backup-cottonwood-hosts",
     "backup-xur-cinci": "pbs-backup-xur-cinci",
     "backup-xur-cottonwood": "pbs-backup-xur-cottonwood",
 }
