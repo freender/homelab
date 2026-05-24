@@ -1028,6 +1028,30 @@ def normalize_pull_source_access(
         return None
     if not isinstance(config, dict):
         raise ValueError(f"zfs-automation.pull_source_access must be a mapping for {host}")
+    template_ref = config.get("template", config.get("pull_source_access_template"))
+    if template_ref is not None:
+        source_host, template_name = parse_migratable_lxc_group_ref(
+            template_ref,
+            host,
+            "pull_source_access template",
+        )
+        templates = registry.get(source_host, "zfs-automation.pull_source_access_templates", None)
+        if not isinstance(templates, dict):
+            raise ValueError(
+                f"zfs-automation.pull_source_access_templates must be a dict for {source_host}"
+            )
+        template = templates.get(template_name)
+        if not isinstance(template, dict):
+            raise ValueError(
+                f"pull_source_access template {source_host}:{template_name} not found for {host}"
+            )
+        expanded_config = dict(template)
+        expanded_config.update(
+            (key, value)
+            for key, value in config.items()
+            if key not in {"template", "pull_source_access_template"}
+        )
+        config = expanded_config
 
     enabled = normalize_bool(
         config.get("enabled"),
