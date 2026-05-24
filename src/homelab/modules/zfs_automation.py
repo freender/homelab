@@ -757,13 +757,32 @@ def expand_migratable_lxc_snapshot_group(
 
 
 def normalize_snapshot_plans(registry, host: str) -> list[SnapshotPlan]:
-    defaults = registry.get(host, "zfs-automation.snapshot_defaults", {})
+    snapshot_template = registry.get(host, "zfs-automation.snapshot_template", None)
+    if snapshot_template is not None:
+        source_host, template_name = parse_migratable_lxc_group_ref(
+            snapshot_template,
+            host,
+            "snapshot_template",
+        )
+        templates = registry.get(source_host, "zfs-automation.snapshot_templates", None)
+        if not isinstance(templates, dict):
+            raise ValueError(f"zfs-automation.snapshot_templates must be a dict for {source_host}")
+        template = templates.get(template_name)
+        if not isinstance(template, dict):
+            raise ValueError(
+                f"snapshot_template {source_host}:{template_name} not found for {host}"
+            )
+        defaults = template.get("snapshot_defaults", {})
+        explicit = template.get("snapshot_plans", None)
+    else:
+        defaults = registry.get(host, "zfs-automation.snapshot_defaults", {})
+        explicit = registry.get(host, "zfs-automation.snapshot_plans", None)
+
     if defaults is None:
         defaults = {}
     if not isinstance(defaults, dict):
         raise ValueError(f"zfs-automation.snapshot_defaults must be a mapping for {host}")
 
-    explicit = registry.get(host, "zfs-automation.snapshot_plans", None)
     if explicit is not None:
         if not isinstance(explicit, list):
             raise ValueError(f"zfs-automation.snapshot_plans must be a list for {host}")
@@ -1117,6 +1136,30 @@ def normalize_push_target_access(
         return None
     if not isinstance(config, dict):
         raise ValueError(f"zfs-automation.push_target_access must be a mapping for {host}")
+    template_ref = config.get("template", config.get("push_target_access_template"))
+    if template_ref is not None:
+        source_host, template_name = parse_migratable_lxc_group_ref(
+            template_ref,
+            host,
+            "push_target_access template",
+        )
+        templates = registry.get(source_host, "zfs-automation.push_target_access_templates", None)
+        if not isinstance(templates, dict):
+            raise ValueError(
+                f"zfs-automation.push_target_access_templates must be a dict for {source_host}"
+            )
+        template = templates.get(template_name)
+        if not isinstance(template, dict):
+            raise ValueError(
+                f"push_target_access template {source_host}:{template_name} not found for {host}"
+            )
+        expanded_config = dict(template)
+        expanded_config.update(
+            (key, value)
+            for key, value in config.items()
+            if key not in {"template", "push_target_access_template"}
+        )
+        config = expanded_config
 
     enabled = normalize_bool(
         config.get("enabled"),
