@@ -69,15 +69,17 @@ class DynamicLxcSource:
 
 
 @dataclass(frozen=True)
-class MigratableLxcSnapshotPlan:
+class MigratableLxcPlan:
+    name: str
     vmid: int
     dataset: str
 
 
 @dataclass(frozen=True)
-class MigratableLxcSnapshotGroup:
+class MigratableLxcGroup:
     name: str
-    plans: tuple[MigratableLxcSnapshotPlan, ...]
+    nodes: tuple[str, ...]
+    plans: tuple[MigratableLxcPlan, ...]
 
 
 @dataclass(frozen=True)
@@ -244,11 +246,11 @@ def normalize_replication_job_name(value: object, host: str) -> str:
     return name
 
 
-def normalize_migratable_lxc_snapshot_group_name(value: object, host: str) -> str:
-    name = require_string(value, f"migratable LXC snapshot group name required for {host}")
+def normalize_migratable_lxc_group_name(value: object, host: str) -> str:
+    name = require_string(value, f"migratable LXC group name required for {host}")
     if not REPLICATION_JOB_NAME_PATTERN.fullmatch(name):
         raise ValueError(
-            f"migratable LXC snapshot group '{name}' for {host} must use only letters, "
+            f"migratable LXC group '{name}' for {host} must use only letters, "
             "numbers, underscores, or hyphens and must start with a letter or number"
         )
     return name
@@ -423,6 +425,128 @@ def normalize_dynamic_lxc_source_from_candidates(
     return DynamicLxcSource(vmid=vmid, candidates=tuple(candidates))
 
 
+def normalize_string_map(value: object, message: str) -> dict[str, str]:
+    if value in (None, ""):
+        return {}
+    if not isinstance(value, dict):
+        raise ValueError(message)
+    return {
+        require_safe_authorized_key_option(key, message): require_string(item, message)
+        for key, item in value.items()
+    }
+
+
+def normalize_dynamic_lxc_source_from_group(
+    registry,
+    group: MigratableLxcGroup,
+    group_plan: MigratableLxcPlan,
+    candidate_names: list[str],
+    candidate_addresses: dict[str, str],
+    candidate_sshkeys: dict[str, str],
+    host: str,
+    job_name: str,
+) -> DynamicLxcSource:
+    candidates = []
+    seen_names: set[str] = set()
+    for candidate_name in candidate_names:
+        name = require_safe_authorized_key_option(
+            candidate_name,
+            f"dynamic LXC candidate node is invalid for job '{job_name}' on {host}",
+        )
+        if name in seen_names:
+            raise ValueError(
+                f"duplicate dynamic LXC candidate '{name}' for job '{job_name}' on {host}"
+            )
+        seen_names.add(name)
+        address = candidate_addresses.get(name, node_mgmt_ip(registry, name))
+        sshkey = candidate_sshkeys.get(name, f"/root/.ssh/homelab-zfs-pull_{name}_ed25519")
+        source = f"zfs-pull@{address}:{group_plan.dataset}"
+        candidates.append(
+            DynamicLxcSourceCandidate(
+                name=name,
+                source=source,
+                sshkey=sshkey,
+                syncoid_options=(f"--identifier={name}",),
+            )
+        )
+
+    if not candidates:
+        raise ValueError(f"migratable LXC group '{group.name}' has no candidates for {host}")
+    return DynamicLxcSource(vmid=group_plan.vmid, candidates=tuple(candidates))
+
+
+def expand_migratable_lxc_replication_plans(
+    registry,
+    job_config: dict,
+    explicit_plans: list,
+    host: str,
+    job_name: str,
+) -> list[ReplicationPlan]:
+    group = resolve_migratable_lxc_group(
+        registry,
+        job_config.get("migratable_lxc_group"),
+        host,
+        "migratable_lxc_group",
+    )
+    target_root = require_string(
+        job_config.get("target_root", ""),
+        f"target_root required for migratable LXC replication job '{job_name}' on {host}",
+    ).rstrip("/")
+    candidate_names = normalize_string_list(
+        job_config.get("dynamic_lxc_candidates", list(group.nodes)),
+        f"dynamic_lxc_candidates for job '{job_name}' must be a list for {host}",
+    )
+    candidate_addresses = normalize_string_map(
+        job_config.get("dynamic_lxc_candidate_addresses", {}),
+        f"dynamic_lxc_candidate_addresses for job '{job_name}' must be a mapping for {host}",
+    )
+    candidate_sshkeys = normalize_string_map(
+        job_config.get("dynamic_lxc_candidate_sshkeys", {}),
+        f"dynamic_lxc_candidate_sshkeys for job '{job_name}' must be a mapping for {host}",
+    )
+    group_plans = {plan.name: plan for plan in group.plans}
+    plans: list[ReplicationPlan] = []
+    seen_targets: set[str] = set()
+    for index, plan in enumerate(explicit_plans):
+        if not isinstance(plan, dict):
+            raise ValueError(f"invalid plan at index {index} in job '{job_name}' for {host}")
+        name = require_safe_authorized_key_option(
+            plan.get("name", ""),
+            f"plan name required at index {index} in job '{job_name}' for {host}",
+        )
+        group_plan = group_plans.get(name)
+        if group_plan is None:
+            raise ValueError(
+                f"plan '{name}' in job '{job_name}' does not exist in group {group.name}"
+            )
+        target = require_string(
+            plan.get("target", ""),
+            f"plan target required at index {index} in job '{job_name}' for {host}",
+        )
+        if ":" not in target and not target.startswith("/"):
+            target = f"{target_root}/{target.lstrip('/')}"
+        if target in seen_targets:
+            raise ValueError(f"duplicate target {target} in job '{job_name}' for {host}")
+        seen_targets.add(target)
+        plans.append(
+            ReplicationPlan(
+                target=target,
+                dynamic_lxc_source=normalize_dynamic_lxc_source_from_group(
+                    registry,
+                    group,
+                    group_plan,
+                    candidate_names,
+                    candidate_addresses,
+                    candidate_sshkeys,
+                    host,
+                    job_name,
+                ),
+                post_hook=str(plan.get("post_hook", "")).strip(),
+            )
+        )
+    return plans
+
+
 def require_safe_authorized_key_option(value: object, message: str) -> str:
     text = require_string(value, message)
     if any(char in text for char in ['"', "'", ",", " ", "\t", "\n", "\r"]):
@@ -491,65 +615,105 @@ def snapshot_plan_from_config(
     )
 
 
-def normalize_migratable_lxc_snapshot_groups(
+def normalize_migratable_lxc_groups(
     registry,
     host: str,
-) -> dict[str, MigratableLxcSnapshotGroup]:
-    groups_config = registry.get(host, "zfs-automation.migratable_lxc_snapshot_groups", None)
+) -> dict[str, MigratableLxcGroup]:
+    groups_config = registry.get(host, "zfs-automation.migratable_lxc_groups", None)
     if groups_config is None:
         return {}
     if not isinstance(groups_config, dict):
-        raise ValueError(
-            f"zfs-automation.migratable_lxc_snapshot_groups must be a dict for {host}"
-        )
+        raise ValueError(f"zfs-automation.migratable_lxc_groups must be a dict for {host}")
 
-    groups: dict[str, MigratableLxcSnapshotGroup] = {}
+    groups: dict[str, MigratableLxcGroup] = {}
     for group_name, group_config in groups_config.items():
         if not isinstance(group_config, dict):
-            raise ValueError(f"invalid migratable LXC snapshot group '{group_name}' for {host}")
-        normalized_group_name = normalize_migratable_lxc_snapshot_group_name(group_name, host)
+            raise ValueError(f"invalid migratable LXC group '{group_name}' for {host}")
+        normalized_group_name = normalize_migratable_lxc_group_name(group_name, host)
         if normalized_group_name in groups:
             raise ValueError(
-                f"duplicate migratable LXC snapshot group '{normalized_group_name}' for {host}"
+                f"duplicate migratable LXC group '{normalized_group_name}' for {host}"
             )
+        nodes = normalize_string_list(
+            group_config.get("nodes", []),
+            f"migratable LXC group '{normalized_group_name}' nodes must be a list for {host}",
+        )
 
         explicit_plans = group_config.get("plans", [])
         if not isinstance(explicit_plans, list) or not explicit_plans:
             raise ValueError(
-                "migratable LXC snapshot group "
+                "migratable LXC group "
                 f"'{normalized_group_name}' plans must be a non-empty list for {host}"
             )
-        plans: list[MigratableLxcSnapshotPlan] = []
+        plans: list[MigratableLxcPlan] = []
+        seen_names: set[str] = set()
         seen_datasets: set[str] = set()
         for index, plan in enumerate(explicit_plans):
             if not isinstance(plan, dict):
                 raise ValueError(
-                    "invalid migratable LXC snapshot plan at index "
+                    "invalid migratable LXC plan at index "
                     f"{index} in group '{normalized_group_name}' for {host}"
                 )
+            name = require_safe_authorized_key_option(
+                plan.get("name", f"plan-{index}"),
+                "name must be safe for migratable LXC plan "
+                f"{index} in group '{normalized_group_name}' for {host}",
+            )
+            if name in seen_names:
+                raise ValueError(
+                    f"duplicate plan name {name} in migratable LXC group "
+                    f"'{normalized_group_name}' for {host}"
+                )
+            seen_names.add(name)
             vmid = normalize_positive_int(
                 plan.get("vmid"),
-                "vmid must be a positive integer for migratable LXC snapshot plan "
+                "vmid must be a positive integer for migratable LXC plan "
                 f"{index} in group '{normalized_group_name}' for {host}",
             )
             dataset = require_string(
                 plan.get("dataset", ""),
-                "dataset required for migratable LXC snapshot plan "
+                "dataset required for migratable LXC plan "
                 f"{index} in group '{normalized_group_name}' for {host}",
             )
             if dataset in seen_datasets:
                 raise ValueError(
-                    f"duplicate dataset {dataset} in migratable LXC snapshot group "
+                    f"duplicate dataset {dataset} in migratable LXC group "
                     f"'{normalized_group_name}' for {host}"
                 )
             seen_datasets.add(dataset)
-            plans.append(MigratableLxcSnapshotPlan(vmid=vmid, dataset=dataset))
+            plans.append(MigratableLxcPlan(name=name, vmid=vmid, dataset=dataset))
 
-        groups[normalized_group_name] = MigratableLxcSnapshotGroup(
+        groups[normalized_group_name] = MigratableLxcGroup(
             name=normalized_group_name,
+            nodes=tuple(nodes),
             plans=tuple(plans),
         )
     return groups
+
+
+def parse_migratable_lxc_group_ref(value: object, host: str, key: str) -> tuple[str, str]:
+    ref = require_string(value, f"{key} must be set for {host}")
+    if ":" in ref:
+        source_host, group_name = ref.split(":", 1)
+        return source_host, group_name
+    if "." in ref:
+        source_host, group_name = ref.split(".", 1)
+        return source_host, group_name
+    raise ValueError(f"{key} for {host} must use host:group format")
+
+
+def resolve_migratable_lxc_group(
+    registry,
+    value: object,
+    host: str,
+    key: str,
+) -> MigratableLxcGroup:
+    source_host, group_name = parse_migratable_lxc_group_ref(value, host, key)
+    groups = normalize_migratable_lxc_groups(registry, source_host)
+    group = groups.get(group_name)
+    if group is None:
+        raise ValueError(f"{key} {source_host}:{group_name} not found for {host}")
+    return group
 
 
 def expand_migratable_lxc_snapshot_group(
@@ -558,20 +722,7 @@ def expand_migratable_lxc_snapshot_group(
     defaults: dict,
     host: str,
 ) -> list[SnapshotPlan]:
-    ref = require_string(value, f"migratable_lxc_snapshot_group must be set for {host}")
-    if ":" in ref:
-        source_host, group_name = ref.split(":", 1)
-    elif "." in ref:
-        source_host, group_name = ref.split(".", 1)
-    else:
-        raise ValueError(
-            f"migratable_lxc_snapshot_group for {host} must use host:group format"
-        )
-
-    groups = normalize_migratable_lxc_snapshot_groups(registry, source_host)
-    group = groups.get(group_name)
-    if group is None:
-        raise ValueError(f"migratable_lxc_snapshot_group {ref} not found for {host}")
+    group = resolve_migratable_lxc_group(registry, value, host, "migratable_lxc_group")
 
     return [
         snapshot_plan_from_config(
@@ -603,11 +754,11 @@ def normalize_snapshot_plans(registry, host: str) -> list[SnapshotPlan]:
             expanded_plans = (
                 expand_migratable_lxc_snapshot_group(
                     registry,
-                    plan.get("migratable_lxc_snapshot_group"),
+                    plan.get("migratable_lxc_group"),
                     defaults,
                     host,
                 )
-                if "migratable_lxc_snapshot_group" in plan
+                if "migratable_lxc_group" in plan
                 else [
                     snapshot_plan_from_config(
                         plan,
@@ -698,59 +849,69 @@ def normalize_replication_config(
             continue
 
         schedule = str(job_config.get("schedule", defaults.get("schedule", "*-*-* 02:30:00")))
-        plans: list[ReplicationPlan] = []
         explicit_plans = job_config.get("plans", [])
         if not isinstance(explicit_plans, list):
             raise ValueError(
                 f"plans for replication job '{normalized_job_name}' must be a list for {host}"
             )
-        dynamic_lxc_candidates = normalize_string_list(
-            job_config.get("dynamic_lxc_candidates", []),
-            f"dynamic_lxc_candidates for job '{normalized_job_name}' must be a list for {host}",
-        )
+        if "migratable_lxc_group" in job_config:
+            plans = expand_migratable_lxc_replication_plans(
+                registry,
+                job_config,
+                explicit_plans,
+                host,
+                normalized_job_name,
+            )
+        else:
+            plans = []
+            dynamic_lxc_candidates = normalize_string_list(
+                job_config.get("dynamic_lxc_candidates", []),
+                f"dynamic_lxc_candidates for job '{normalized_job_name}' must be a list for {host}",
+            )
 
-        for index, plan in enumerate(explicit_plans):
-            if not isinstance(plan, dict):
-                raise ValueError(
-                    f"invalid plan at index {index} in job '{normalized_job_name}' for {host}"
+            for index, plan in enumerate(explicit_plans):
+                if not isinstance(plan, dict):
+                    raise ValueError(
+                        f"invalid plan at index {index} in job '{normalized_job_name}' for {host}"
+                    )
+                dynamic_lxc_source = (
+                    normalize_dynamic_lxc_source(
+                        plan.get("dynamic_lxc_source"),
+                        host,
+                        normalized_job_name,
+                        index,
+                    )
+                    if "dynamic_lxc_source" in plan
+                    else normalize_dynamic_lxc_source_from_candidates(
+                        registry,
+                        plan,
+                        dynamic_lxc_candidates,
+                        host,
+                        normalized_job_name,
+                        index,
+                    )
+                    if dynamic_lxc_candidates and "vmid" in plan and "dataset" in plan
+                    else None
                 )
-            dynamic_lxc_source = (
-                normalize_dynamic_lxc_source(
-                    plan.get("dynamic_lxc_source"),
-                    host,
-                    normalized_job_name,
-                    index,
+                source = str(plan.get("source", "")).strip()
+                if bool(source) == bool(dynamic_lxc_source):
+                    raise ValueError(
+                        f"plan at index {index} in job '{normalized_job_name}' for {host} "
+                        "must specify "
+                        "exactly one of source or dynamic_lxc_source"
+                    )
+                plans.append(
+                    ReplicationPlan(
+                        target=require_string(
+                            plan.get("target", ""),
+                            f"plan target required at index {index} in job"
+                            f" '{normalized_job_name}' for {host}",
+                        ),
+                        source=source,
+                        dynamic_lxc_source=dynamic_lxc_source,
+                        post_hook=str(plan.get("post_hook", "")).strip(),
+                    )
                 )
-                if "dynamic_lxc_source" in plan
-                else normalize_dynamic_lxc_source_from_candidates(
-                    registry,
-                    plan,
-                    dynamic_lxc_candidates,
-                    host,
-                    normalized_job_name,
-                    index,
-                )
-                if dynamic_lxc_candidates and "vmid" in plan and "dataset" in plan
-                else None
-            )
-            source = str(plan.get("source", "")).strip()
-            if bool(source) == bool(dynamic_lxc_source):
-                raise ValueError(
-                    f"plan at index {index} in job '{normalized_job_name}' for {host} must specify "
-                    "exactly one of source or dynamic_lxc_source"
-                )
-            plans.append(
-                ReplicationPlan(
-                    target=require_string(
-                        plan.get("target", ""),
-                        f"plan target required at index {index} in job"
-                        f" '{normalized_job_name}' for {host}",
-                    ),
-                    source=source,
-                    dynamic_lxc_source=dynamic_lxc_source,
-                    post_hook=str(plan.get("post_hook", "")).strip(),
-                )
-            )
 
         after_commands = [
             *default_after_commands,
