@@ -809,6 +809,43 @@ def normalize_snapshot_plans(registry, host: str) -> list[SnapshotPlan]:
     return []
 
 
+def resolve_replication_job_template(
+    registry,
+    value: object,
+    host: str,
+    job_name: str,
+) -> dict:
+    source_host, template_name = parse_migratable_lxc_group_ref(
+        value,
+        host,
+        f"template for replication job '{job_name}'",
+    )
+    templates = registry.get(source_host, "zfs-automation.replication_job_templates", None)
+    if not isinstance(templates, dict):
+        raise ValueError(
+            f"zfs-automation.replication_job_templates must be a dict for {source_host}"
+        )
+    template = templates.get(template_name)
+    if not isinstance(template, dict):
+        raise ValueError(
+            f"replication job template {source_host}:{template_name} not found for {host}"
+        )
+    return dict(template)
+
+
+def expand_replication_job_config(registry, host: str, job_name: str, job_config: dict) -> dict:
+    template_ref = job_config.get("template", job_config.get("replication_job_template"))
+    if template_ref is None:
+        return job_config
+    config = resolve_replication_job_template(registry, template_ref, host, job_name)
+    config.update(
+        (key, value)
+        for key, value in job_config.items()
+        if key not in {"template", "replication_job_template"}
+    )
+    return config
+
+
 def normalize_replication_config(
     registry, host: str, *, include_disabled: bool = False
 ) -> list[ReplicationJob]:
@@ -857,6 +894,7 @@ def normalize_replication_config(
             raise ValueError(f"invalid replication job '{job_name}' for {host}")
 
         normalized_job_name = normalize_replication_job_name(job_name, host)
+        job_config = expand_replication_job_config(registry, host, normalized_job_name, job_config)
         if normalized_job_name in seen_job_names:
             raise ValueError(f"duplicate replication job name '{normalized_job_name}' for {host}")
         seen_job_names.add(normalized_job_name)
