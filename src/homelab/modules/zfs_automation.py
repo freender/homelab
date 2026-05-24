@@ -865,6 +865,64 @@ def expand_replication_job_config(registry, host: str, job_name: str, job_config
     return config
 
 
+def resolve_replication_job_set(
+    registry,
+    value: object,
+    host: str,
+    job_name: object,
+) -> list[object]:
+    source_host, set_name = parse_migratable_lxc_group_ref(
+        value,
+        host,
+        f"replication job set '{job_name}'",
+    )
+    job_sets = registry.get(source_host, "zfs-automation.replication_job_sets", None)
+    if not isinstance(job_sets, dict):
+        raise ValueError(f"zfs-automation.replication_job_sets must be a dict for {source_host}")
+    refs = job_sets.get(set_name)
+    if not isinstance(refs, list):
+        raise ValueError(f"replication job set {source_host}:{set_name} must be a list for {host}")
+    return refs
+
+
+def expand_replication_jobs(registry, host: str, jobs: dict) -> list[tuple[str, dict]]:
+    expanded_jobs: list[tuple[str, dict]] = []
+    for job_name, job_config in jobs.items():
+        if isinstance(job_config, dict):
+            expanded_jobs.append((str(job_name), job_config))
+            continue
+        job_refs = resolve_replication_job_set(registry, job_config, host, job_name)
+        for index, job_ref in enumerate(job_refs):
+            if isinstance(job_ref, str):
+                _, template_name = parse_migratable_lxc_group_ref(
+                    job_ref,
+                    host,
+                    f"replication job set entry for '{job_name}'",
+                )
+                expanded_jobs.append((template_name, {"template": job_ref}))
+                continue
+            if not isinstance(job_ref, dict):
+                raise ValueError(
+                    f"invalid replication job set entry at index {index} for '{job_name}' on {host}"
+                )
+            name = normalize_replication_job_name(
+                job_ref.get("name", ""),
+                host,
+            )
+            template_ref = require_string(
+                job_ref.get("template", job_ref.get("replication_job_template", "")),
+                f"template required for replication job set entry '{name}' on {host}",
+            )
+            config = {"template": template_ref}
+            config.update(
+                (key, value)
+                for key, value in job_ref.items()
+                if key not in {"name", "template", "replication_job_template"}
+            )
+            expanded_jobs.append((name, config))
+    return expanded_jobs
+
+
 def normalize_replication_config(
     registry, host: str, *, include_disabled: bool = False
 ) -> list[ReplicationJob]:
@@ -908,10 +966,7 @@ def normalize_replication_config(
 
     parsed_jobs: list[ReplicationJob] = []
     seen_job_names: set[str] = set()
-    for job_name, job_config in jobs.items():
-        if not isinstance(job_config, dict):
-            raise ValueError(f"invalid replication job '{job_name}' for {host}")
-
+    for job_name, job_config in expand_replication_jobs(registry, host, jobs):
         normalized_job_name = normalize_replication_job_name(job_name, host)
         job_config = expand_replication_job_config(registry, host, normalized_job_name, job_config)
         if normalized_job_name in seen_job_names:
@@ -1887,6 +1942,7 @@ deny() {
 
 ALLOWED_ROOTS=("$@")
 COMMAND="${SSH_ORIGINAL_COMMAND:-}"
+COMMAND="${COMMAND% 2>&1}"
 
 [[ ${#ALLOWED_ROOTS[@]} -gt 0 ]] || deny
 [[ -n "$COMMAND" ]] || deny
