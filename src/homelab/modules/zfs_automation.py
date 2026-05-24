@@ -87,6 +87,7 @@ class ReplicationPlan:
     target: str
     source: str = ""
     dynamic_lxc_source: DynamicLxcSource | None = None
+    require_active_lxc: int | None = None
     post_hook: str = ""
 
 
@@ -504,6 +505,15 @@ def expand_migratable_lxc_replication_plans(
         job_config.get("dynamic_lxc_candidate_sshkeys", {}),
         f"dynamic_lxc_candidate_sshkeys for job '{job_name}' must be a mapping for {host}",
     )
+    active_lxc_source = str(job_config.get("active_lxc_source", "dynamic")).strip()
+    if active_lxc_source not in {"dynamic", "local"}:
+        raise ValueError(
+            f"active_lxc_source for job '{job_name}' must be 'dynamic' or 'local' for {host}"
+        )
+    if active_lxc_source == "local":
+        candidate_names = []
+        candidate_addresses = {}
+        candidate_sshkeys = {}
     group_plans = {plan.name: plan for plan in group.plans}
     plans: list[ReplicationPlan] = []
     seen_targets: set[str] = set()
@@ -528,6 +538,17 @@ def expand_migratable_lxc_replication_plans(
         if target in seen_targets:
             raise ValueError(f"duplicate target {target} in job '{job_name}' for {host}")
         seen_targets.add(target)
+        if active_lxc_source == "local":
+            plans.append(
+                ReplicationPlan(
+                    target=target,
+                    source=group_plan.dataset,
+                    require_active_lxc=group_plan.vmid,
+                    post_hook=str(plan.get("post_hook", "")).strip(),
+                )
+            )
+            continue
+
         plans.append(
             ReplicationPlan(
                 target=target,
@@ -1443,6 +1464,7 @@ def build_replication_script(
         lines.extend(["echo 'No replication plans configured; nothing to do'", ""])
     else:
         for plan in replication_plans:
+            inactive_message = ""
             if plan.dynamic_lxc_source:
                 resolve_message = (
                     f"Resolving active LXC {plan.dynamic_lxc_source.vmid} source for {plan.target}"
@@ -1494,6 +1516,21 @@ def build_replication_script(
                     plan.target,
                 ]
             else:
+                if plan.require_active_lxc is not None:
+                    unit_name = f"pve-container@{plan.require_active_lxc}.service"
+                    inactive_message = (
+                        f"Skipping {plan.source}; LXC {plan.require_active_lxc} "
+                        "is not active locally"
+                    )
+                    active_message = (
+                        f"Active LXC {plan.require_active_lxc}; replicating {plan.source}"
+                    )
+                    lines.extend(
+                        [
+                            f"if systemctl is-active --quiet {quote(unit_name)}; then",
+                            f"  echo {quote(active_message)}",
+                        ]
+                    )
                 lines.append(
                     f"require_common_snapshot_lineage {quote(plan.source)} {quote(plan.target)}"
                 )
@@ -1523,6 +1560,8 @@ def build_replication_script(
                 lines.append(plan.post_hook)
             if target_snapshot_prune and not is_remote_dataset(plan.target):
                 lines.append(f"prune_target_snapshots {quote(plan.target)}")
+            if inactive_message:
+                lines.extend(["else", f"  echo {quote(inactive_message)}", "fi"])
             lines.append("")
 
     for command in after_commands:
