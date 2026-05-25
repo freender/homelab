@@ -25,6 +25,7 @@ class KeepalivedConfig:
     virtual_router_id: int
     priority: int
     advert_interval: int
+    preempt_delay: int
     unicast_src_ip: str
     unicast_peers: tuple[str, ...]
     virtual_ips: tuple[str, ...]
@@ -118,12 +119,15 @@ def normalize_config(root: Path, registry, host: str) -> KeepalivedConfig:
     virtual_router_id = int(registry.get(host, "keepalived.virtual_router_id", 0))
     priority = int(registry.get(host, "keepalived.priority", 0))
     advert_interval = int(registry.get(host, "keepalived.advert_interval", 1))
+    preempt_delay = int(registry.get(host, "keepalived.preempt_delay", 0))
     if virtual_router_id < 1:
         raise ValueError(f"keepalived.virtual_router_id must be >= 1 for {host}")
     if priority < 1:
         raise ValueError(f"keepalived.priority must be >= 1 for {host}")
     if advert_interval < 1:
         raise ValueError(f"keepalived.advert_interval must be >= 1 for {host}")
+    if preempt_delay < 0 or preempt_delay > 1000:
+        raise ValueError(f"keepalived.preempt_delay must be between 0 and 1000 for {host}")
 
     peers_raw = registry.get(host, "keepalived.unicast_peers", [])
     if not isinstance(peers_raw, list) or not peers_raw:
@@ -149,6 +153,7 @@ def normalize_config(root: Path, registry, host: str) -> KeepalivedConfig:
         virtual_router_id=virtual_router_id,
         priority=priority,
         advert_interval=advert_interval,
+        preempt_delay=preempt_delay,
         unicast_src_ip=unicast_src_ip,
         unicast_peers=unicast_peers,
         virtual_ips=virtual_ips,
@@ -176,6 +181,7 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
         VIRTUAL_ROUTER_ID=str(config.virtual_router_id),
         PRIORITY=str(config.priority),
         ADVERT_INTERVAL=str(config.advert_interval),
+        PREEMPT_DELAY=str(config.preempt_delay),
         UNICAST_SRC_IP=config.unicast_src_ip,
         UNICAST_PEERS="\n".join(f"        {peer}" for peer in config.unicast_peers),
         VIRTUAL_IPS="\n".join(f"        {vip}" for vip in config.virtual_ips),
