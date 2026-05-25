@@ -24,7 +24,7 @@
 /geoipupdate
 /immich/encoded-video
 /immich/thumbs
-/immich/machine-learning
+/immich/cache
 /immich/typesense
 /syncthing/index-v2
 /vmagent/data
