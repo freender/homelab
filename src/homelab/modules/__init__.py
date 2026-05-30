@@ -14,6 +14,7 @@ from .pbs_client_backup import deploy as deploy_pbs_client_backup
 from .pve_backup import deploy as deploy_pve_backup
 from .pve_exporters import deploy as deploy_pve_exporters
 from .pve_gpu_passthrough import deploy as deploy_pve_gpu_passthrough
+from .pve_interface_pinning import deploy as deploy_pve_interface_pinning
 from .pve_postinstall import deploy as deploy_pve_postinstall
 from .pve_sdn import deploy as deploy_pve_sdn
 from .pve_zfs_large_block_patch import deploy as deploy_pve_zfs_large_block_patch
@@ -65,6 +66,10 @@ MODULES: dict[str, ModuleDefinition] = {
         name="PVE Post-Install Configs",
         deploy=deploy_pve_postinstall,
     ),
+    "pve-interface-pinning": ModuleDefinition(
+        name="PVE Interface Pinning",
+        deploy=deploy_pve_interface_pinning,
+    ),
     "pve-sdn": ModuleDefinition(
         name="PVE SDN",
         deploy=deploy_pve_sdn,
@@ -83,6 +88,7 @@ MODULES: dict[str, ModuleDefinition] = {
 }
 
 MODULE_ORDER = [
+    "pve-interface-pinning",
     "pve-postinstall",
     "pve-sdn",
     "pve-backup",

@@ -100,6 +100,15 @@ PVE post-install configuration
 ./deploy pve-postinstall all
 ```
 
+### [pve-interface-pinning](pve-interface-pinning/)
+PVE physical NIC naming and Wake-on-LAN configuration
+- Installs systemd `.link` files for repo-owned `nicN` names by MAC address
+- Enables WOL on configured wired interfaces without modeling Wi-Fi devices
+
+```bash
+./deploy pve-interface-pinning all
+```
+
 ### [ssh-config](ssh-config/)
 SSH config auto-deployment
 - Uses `*.freender.internal` DNS for home
