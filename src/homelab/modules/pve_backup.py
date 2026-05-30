@@ -108,6 +108,20 @@ def normalize_string_list(value: object, message: str) -> list[str]:
     return normalized
 
 
+def normalize_bool(value: object, default: bool, message: str) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "yes", "1", "on"}:
+            return True
+        if normalized in {"false", "no", "0", "off"}:
+            return False
+    raise ValueError(message)
+
+
 def build_standalone_backup_plans(root: Path, host: str, build_dir: Path) -> None:
     registry = default_registry(root)
     storages = registry.get(host, "pve-backup.pbs_setup.storages", [])
@@ -235,6 +249,30 @@ def build_config_restore_plan(root: Path, host: str, build_dir: Path) -> None:
     ceph_enabled = "true" if any(
         archive.path == "/etc/ceph" for archive in plan.archives
     ) else "false"
+    restore_lxc_configs = registry.get(host, "pve-backup.restore_lxc_configs", {})
+    if restore_lxc_configs in (None, ""):
+        restore_lxc_configs = {}
+    if not isinstance(restore_lxc_configs, dict):
+        raise ValueError(f"pve-backup.restore_lxc_configs must be a mapping for {host}")
+    restore_lxc_enabled = normalize_bool(
+        restore_lxc_configs.get("enabled", False),
+        False,
+        f"pve-backup.restore_lxc_configs.enabled must be boolean for {host}",
+    )
+    restore_lxc_autostart = normalize_bool(
+        restore_lxc_configs.get("autostart", False),
+        False,
+        f"pve-backup.restore_lxc_configs.autostart must be boolean for {host}",
+    )
+    restore_lxc_vmids = normalize_string_list(
+        restore_lxc_configs.get("vmids", []),
+        f"pve-backup.restore_lxc_configs.vmids must be a list for {host}",
+    )
+    for vmid in restore_lxc_vmids:
+        if not re.fullmatch(r"[1-9][0-9]{0,8}", vmid):
+            raise ValueError(
+                f"Invalid LXC VMID in pve-backup.restore_lxc_configs.vmids for {host}: {vmid}"
+            )
     env_source = pbs_client_backup.secret_path(root, plan.secret_profile)
     (build_dir / "pbs.env").write_text(
         env_source.read_text(encoding="utf-8"),
@@ -248,6 +286,13 @@ def build_config_restore_plan(root: Path, host: str, build_dir: Path) -> None:
                 f"BACKUP_ID='{shell_quote(plan.backup_id)}'",
                 f"ARCHIVE_NAME='{shell_quote(pve_archive.name)}'",
                 f"CEPH_ENABLED='{shell_quote(ceph_enabled)}'",
+                f"RESTORE_LXC_CONFIGS_ENABLED='{str(restore_lxc_enabled).lower()}'",
+                f"RESTORE_LXC_AUTOSTART='{str(restore_lxc_autostart).lower()}'",
+                f"RESTORE_LXC_CONFIG_COUNT='{len(restore_lxc_vmids)}'",
+                *[
+                    f"RESTORE_LXC_CONFIG_{index}_VMID='{shell_quote(vmid)}'"
+                    for index, vmid in enumerate(restore_lxc_vmids)
+                ],
                 "",
             ]
         ),

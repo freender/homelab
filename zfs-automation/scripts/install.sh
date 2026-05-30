@@ -298,6 +298,9 @@ if [[ $rc -eq 0 ]]; then
 fi
 
 for helper in "${!FILE_MAP_DEST[@]}"; do
+    if [[ "$helper" == source-private-key-* ]]; then
+        continue
+    fi
     rc=0
     install_if_changed "$BUILD_DIR/$helper" "$MANAGED_DIR/$helper" "$(mapped_mode "$helper")" "$MANAGED_DIR/$helper" || rc=$?
     [[ $rc -eq 0 || $rc -eq 1 ]] || exit "$rc"

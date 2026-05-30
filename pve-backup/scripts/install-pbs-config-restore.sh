@@ -35,6 +35,119 @@ apply_restored_notifications() {
     print_sub "Auto-applied restored notifications config"
 }
 
+restore_lxc_configs() {
+    local restored_root="$1"
+    local count="${RESTORE_LXC_CONFIG_COUNT:-0}"
+    local live_lxc_dir="/etc/pve/nodes/$HOST/lxc"
+    local source_lxc_dir="$restored_root/nodes/$HOST/lxc"
+    local index
+    local vmid_var
+    local vmid
+    local source_config
+    local live_config
+    local desired_config
+
+    if [[ "${RESTORE_LXC_CONFIGS_ENABLED:-false}" != "true" ]]; then
+        print_sub "LXC config restore not enabled; skipping"
+        return 0
+    fi
+
+    if [[ ! "$count" =~ ^[0-9]+$ || "$count" -eq 0 ]]; then
+        print_sub "No LXC configs listed for restore; skipping"
+        return 0
+    fi
+
+    if [[ ! -d "$source_lxc_dir" ]]; then
+        print_warn "No restored LXC config directory found: $source_lxc_dir"
+        return 0
+    fi
+
+    mkdir -p "$live_lxc_dir"
+
+    for (( index=0; index<count; index++ )); do
+        vmid_var="RESTORE_LXC_CONFIG_${index}_VMID"
+        vmid="${!vmid_var:-}"
+        if [[ ! "$vmid" =~ ^[1-9][0-9]{0,8}$ ]]; then
+            print_warn "Invalid LXC VMID in restore plan at index $index; skipping"
+            continue
+        fi
+
+        source_config="$source_lxc_dir/$vmid.conf"
+        live_config="$live_lxc_dir/$vmid.conf"
+        if [[ ! -f "$source_config" ]]; then
+            print_warn "Restored LXC config missing: $source_config"
+            continue
+        fi
+
+        desired_config="$(prepare_lxc_config "$source_config")"
+
+        if [[ -f "$live_config" && "$FORCE_UPDATE" != "true" ]]; then
+            if cmp -s "$desired_config" "$live_config"; then
+                print_sub "LXC $vmid config already restored"
+            else
+                print_warn "LXC $vmid config exists; rerun with --force to overwrite"
+            fi
+            rm -f "$desired_config"
+            continue
+        fi
+
+        warn_missing_lxc_volumes "$desired_config" "$vmid"
+        copy_lxc_config "$desired_config" "$live_config"
+        rm -f "$desired_config"
+        print_sub "Restored LXC $vmid config"
+
+        if [[ "${RESTORE_LXC_AUTOSTART:-false}" == "true" ]]; then
+            pct start "$vmid" || print_warn "failed to start LXC $vmid"
+        fi
+    done
+}
+
+warn_missing_lxc_volumes() {
+    local config="$1"
+    local vmid="$2"
+    local key
+    local value
+    local volume
+
+    while IFS=: read -r key value; do
+        case "$key" in
+            rootfs|mp[0-9]*) ;;
+            *) continue ;;
+        esac
+        value="${value# }"
+        volume="${value%%,*}"
+        if [[ "$volume" == *":"* ]] && ! pvesm path "$volume" >/dev/null 2>&1; then
+            print_warn "LXC $vmid references missing volume: $volume"
+        fi
+    done < "$config"
+}
+
+prepare_lxc_config() {
+    local source_config="$1"
+    local tmp_config
+
+    tmp_config="$(mktemp)"
+    cp "$source_config" "$tmp_config"
+    if [[ "${RESTORE_LXC_AUTOSTART:-false}" != "true" ]]; then
+        if grep -q '^onboot:' "$tmp_config"; then
+            sed -i 's/^onboot:.*/onboot: 0/' "$tmp_config"
+        else
+            printf '\nonboot: 0\n' >> "$tmp_config"
+        fi
+    fi
+
+    printf '%s\n' "$tmp_config"
+}
+
+copy_lxc_config() {
+    local source_config="$1"
+    local live_config="$2"
+
+    cp "$source_config" "$live_config"
+    chown root:www-data "$live_config" 2>/dev/null || chown root:root "$live_config"
+    chmod 640 "$live_config"
+}
+
 if [[ -f "$SCRIPT_DIR/lib/utils.sh" ]]; then
     source "$SCRIPT_DIR/lib/utils.sh"
 else
@@ -133,6 +246,7 @@ cp -r "$src_pve" "$RESTORE_OUTPUT_DIR/latest"
 print_sub "Fetched /etc/pve backup to $RESTORE_OUTPUT_DIR/latest"
 
 apply_restored_notifications "$RESTORE_OUTPUT_DIR/latest"
+restore_lxc_configs "$RESTORE_OUTPUT_DIR/latest"
 
 if [[ "${CEPH_ENABLED:-false}" == "true" ]]; then
     if proxmox-backup-client restore "$snapshot" "etc-ceph.pxar" "$RESTORE_ROOT/etc-ceph" --repository "$REPOSITORY" "${namespace_args[@]}" >/dev/null 2>&1; then

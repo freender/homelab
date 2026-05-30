@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from shlex import quote
 
+from .. import op_secrets
 from ..build import copy_files, render_file, write_env_file
 from ..deploy import DeploySession, force_env, prepare_build_dir, stage_and_run_remote_installer
 from ..hosts import default_registry
@@ -138,6 +139,12 @@ class ZfsPushTargetAccess:
     pushers: tuple[ZfsPusher, ...]
 
 
+@dataclass(frozen=True)
+class SourcePrivateKey:
+    secret: str
+    path: str
+
+
 BASE_FILE_SPECS = (
     FileSpec("sanoid.conf", "/etc/sanoid/sanoid.conf"),
     FileSpec(
@@ -201,6 +208,11 @@ def validate(root: Path, hosts: list[str]) -> None:
         normalize_replication_config(registry, host, include_disabled=True)
         normalize_pull_source_access(registry, host)
         normalize_pull_source_access(registry, host, include_disabled=True)
+        for private_key in normalize_source_private_keys(registry, host):
+            try:
+                op_secrets.secret_file(root, private_key.secret)
+            except op_secrets.OpSecretsError as exc:
+                raise ValueError(f"{host}: {exc}") from exc
         pools = resolve_pools(registry, host)
         if not pools:
             raise ValueError(f"zfs-automation requires at least one managed pool for {host}")
@@ -221,6 +233,57 @@ def normalize_string_list(value: object, message: str) -> list[str]:
     if not isinstance(value, list):
         raise ValueError(message)
     return [require_string(item, message) for item in value]
+
+
+def normalize_source_private_keys(registry, host: str) -> tuple[SourcePrivateKey, ...]:
+    raw = registry.get(host, "zfs-automation.source_private_keys", [])
+    if raw in (None, ""):
+        return ()
+    if not isinstance(raw, list):
+        raise ValueError(f"zfs-automation.source_private_keys must be a list for {host}")
+
+    keys: list[SourcePrivateKey] = []
+    seen_paths: set[str] = set()
+    for index, item in enumerate(raw):
+        if not isinstance(item, dict):
+            raise ValueError(
+                f"zfs-automation.source_private_keys[{index}] must be a mapping for {host}"
+            )
+        secret = require_safe_authorized_key_option(
+            item.get("secret", ""),
+            f"zfs-automation.source_private_keys[{index}].secret must be safe for {host}",
+        )
+        path = require_string(
+            item.get("path", ""),
+            f"zfs-automation.source_private_keys[{index}].path required for {host}",
+        )
+        if not path.startswith("/root/.ssh/") or path.endswith("/"):
+            raise ValueError(
+                f"zfs-automation.source_private_keys[{index}].path must be under "
+                f"/root/.ssh/ for {host}"
+            )
+        if any(char in path for char in ["\0", "\n", "\r"]):
+            raise ValueError(f"zfs-automation.source_private_keys[{index}].path invalid for {host}")
+        if path in seen_paths:
+            raise ValueError(f"duplicate source private key path {path} for {host}")
+        seen_paths.add(path)
+        keys.append(SourcePrivateKey(secret=secret, path=path))
+    return tuple(keys)
+
+
+def rendered_private_key(root: Path, secret: str) -> str:
+    text = op_secrets.secret_file(root, secret).read_text(encoding="utf-8")
+    prefix = "ZFS_PUSH_PRIVATE_KEY="
+    if text.startswith(prefix):
+        text = text[len(prefix) :]
+    text = text.strip()
+    if (text.startswith('"') and text.endswith('"')) or (
+        text.startswith("'") and text.endswith("'")
+    ):
+        text = text[1:-1]
+    if not text.startswith("-----BEGIN ") or "PRIVATE KEY-----" not in text.splitlines()[0]:
+        raise ValueError(f"secret '{secret}' did not render a private key")
+    return text.rstrip("\n") + "\n"
 
 
 def normalize_bool(value: object, default: bool, message: str) -> bool:
@@ -2211,6 +2274,7 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
     )
     pull_source_access = normalize_pull_source_access(registry, host)
     push_target_access = normalize_push_target_access(registry, host)
+    source_private_keys = normalize_source_private_keys(registry, host)
 
     build_dir = module_dir / "build" / host
     prepare_build_dir(build_dir)
@@ -2334,6 +2398,14 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
                 ),
             ]
         )
+
+    for index, private_key in enumerate(source_private_keys):
+        build_name = f"source-private-key-{index}"
+        (build_dir / build_name).write_text(
+            rendered_private_key(root, private_key.secret),
+            encoding="utf-8",
+        )
+        file_specs.append(FileSpec(build_name, private_key.path, mode="600"))
 
     render_file(
         templates_dir / "homelab-zfs-scrub.sh",

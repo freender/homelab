@@ -69,6 +69,7 @@ PVE backup configuration
 - Standalone PBS storage definitions and backup jobs
 - Subfeatures (configured in `hosts.conf` under `pve-backup`):
   - `pbs_setup`: standalone PBS storage definitions and backup jobs
+  - `restore_lxc_configs`: opt-in restore of selected standalone LXC configs from the staged `/etc/pve` PBS backup; autostart defaults to disabled
 - Requires:
   - `/etc/homelab/pbs-tokens.env` on target host (see `pve-backup/configs/pbs-tokens.env.example`) for standalone PBS storage auth
 
