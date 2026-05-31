@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily auto-update of the Proxmox VE PXE payload
+
+[Timer]
+OnCalendar={{ AUTOUPDATE_SCHEDULE }}
+RandomizedDelaySec=1800
+Persistent=true
+
+[Install]
+WantedBy=timers.target

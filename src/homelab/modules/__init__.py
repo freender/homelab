@@ -17,6 +17,7 @@ from .pve_gpu_passthrough import deploy as deploy_pve_gpu_passthrough
 from .pve_interface_pinning import deploy as deploy_pve_interface_pinning
 from .pve_lxc_docker_hooks import deploy as deploy_pve_lxc_docker_hooks
 from .pve_postinstall import deploy as deploy_pve_postinstall
+from .pve_pxe import deploy as deploy_pve_pxe
 from .pve_sdn import deploy as deploy_pve_sdn
 from .pve_zfs_large_block_patch import deploy as deploy_pve_zfs_large_block_patch
 from .ssh_config import deploy as deploy_ssh_config
@@ -67,6 +68,10 @@ MODULES: dict[str, ModuleDefinition] = {
         name="PVE Post-Install Configs",
         deploy=deploy_pve_postinstall,
     ),
+    "pve-pxe": ModuleDefinition(
+        name="PVE PXE Boot (saint)",
+        deploy=deploy_pve_pxe,
+    ),
     "pve-interface-pinning": ModuleDefinition(
         name="PVE Interface Pinning",
         deploy=deploy_pve_interface_pinning,
@@ -95,6 +100,7 @@ MODULES: dict[str, ModuleDefinition] = {
 MODULE_ORDER = [
     "pve-interface-pinning",
     "pve-postinstall",
+    "pve-pxe",
     "pve-sdn",
     "pve-backup",
     "apcupsd",

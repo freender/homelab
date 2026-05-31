@@ -1,0 +1,4 @@
+#!ipxe
+# pdm-auto.ipxe - Proxmox VE automated install via PDM
+# The ISO filename here is updated by pxe-autoupdate when a new version is promoted.
+chain http://${next-server}/pve-load.ipxe

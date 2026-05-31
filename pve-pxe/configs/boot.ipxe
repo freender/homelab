@@ -1,0 +1,46 @@
+#!ipxe
+# boot.ipxe - Safe top-level Homelab PXE menu
+# Defaults to local disk after 10 seconds.
+
+set menu-timeout 10000
+set menu-default local
+
+:menu
+menu Homelab PXE
+item --gap           --- Boot ---
+item local           Boot local disk (default ${menu-timeout/1000}s)
+item shell           iPXE shell
+item reboot          Reboot
+item --gap           --- Proxmox VE ---
+item pdm-auto        Proxmox VE automated install via PDM
+item pve-tui         Proxmox VE terminal installer
+item pve-gui         Proxmox VE graphical installer
+item pve-debug       Proxmox VE debug installer
+item pve-serial      Proxmox VE serial terminal installer
+choose --timeout ${menu-timeout} --default ${menu-default} selected || goto local
+goto ${selected}
+
+:local
+sanboot --no-describe --drive 0x80 || exit
+
+:shell
+shell
+goto menu
+
+:reboot
+reboot
+
+:pdm-auto
+chain http://${next-server}/pdm-auto-warning.ipxe
+
+:pve-tui
+chain http://${next-server}/pve-tui.ipxe
+
+:pve-gui
+chain http://${next-server}/pve-gui.ipxe
+
+:pve-debug
+chain http://${next-server}/pve-debug.ipxe
+
+:pve-serial
+chain http://${next-server}/pve-serial.ipxe

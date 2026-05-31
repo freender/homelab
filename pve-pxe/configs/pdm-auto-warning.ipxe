@@ -1,0 +1,19 @@
+#!ipxe
+# pdm-auto-warning.ipxe - Destructive install confirmation menu
+# Defaults to Cancel after 15 seconds.
+
+set menu-timeout 15000
+set menu-default cancel
+
+:menu
+menu WARNING: PDM automated Proxmox install is DESTRUCTIVE
+item cancel          Cancel and return to Homelab PXE menu (default ${menu-timeout/1000}s)
+item confirm         START automated install via PDM
+choose --timeout ${menu-timeout} --default ${menu-default} selected || goto cancel
+goto ${selected}
+
+:cancel
+chain http://${next-server}/boot.ipxe
+
+:confirm
+chain http://${next-server}/pdm-auto.ipxe

@@ -133,10 +133,6 @@ if [[ $PHASE == post-stop ]]; then
     for sync_path in "${sync_paths[@]}"; do
         sync -f "$sync_path" 2>/dev/null || sync
     done
-    if command -v zpool >/dev/null 2>&1; then
-        pool_name=${rootfs_ref%%:*}
-        zpool sync "$pool_name" 2>/dev/null || true
-    fi
     log "sync=done mode=filesystem elapsed=$(( $(date +%s) - start_sync ))s fs_count=${#sync_paths[@]} db_count=${#dbs[@]} sync_paths=\"${sync_paths[*]}\" containerd_root=$containerd_root"
 fi
 

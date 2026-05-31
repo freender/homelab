@@ -1,0 +1,8 @@
+#!ipxe
+# pve-load.ipxe - Shared initrd/ISO loader for Proxmox VE PXE installs.
+# The proxmox-ve_* ISO filename is updated by pxe-autoupdate on each version bump.
+
+:load
+initrd --name initrd.img http://${next-server}/initrd.img
+initrd http://${next-server}/proxmox-ve_PLACEHOLDER.iso proxmox.iso
+boot

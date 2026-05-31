@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# pxe-disable - Stop nginx and dnsmasq PXE services on saint.
+# Safe to run multiple times; idempotent.
+set -euo pipefail
+
+systemctl stop nginx  2>/dev/null || true
+systemctl stop dnsmasq 2>/dev/null || true
+
+echo "pxe-disable: nginx and dnsmasq stopped"

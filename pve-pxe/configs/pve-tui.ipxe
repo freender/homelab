@@ -1,0 +1,6 @@
+#!ipxe
+# pve-tui.ipxe - Proxmox VE terminal (TUI) installer
+
+kernel http://${next-server}/vmlinuz initrd=initrd.img vga=791 video=vesafb:ywrap,mtrr ramdisk_size=16777216 rw quiet splash=silent
+initrd http://${next-server}/initrd.img
+boot
