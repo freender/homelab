@@ -20,6 +20,7 @@ from .pve_postinstall import deploy as deploy_pve_postinstall
 from .pve_pxe import deploy as deploy_pve_pxe
 from .pve_sdn import deploy as deploy_pve_sdn
 from .pve_zfs_large_block_patch import deploy as deploy_pve_zfs_large_block_patch
+from .pve_zfs_migration_sync_patch import deploy as deploy_pve_zfs_migration_sync_patch
 from .ssh_config import deploy as deploy_ssh_config
 from .ubuntu_setup import deploy as deploy_ubuntu_setup
 from .zfs_automation import deploy as deploy_zfs_automation
@@ -92,6 +93,10 @@ MODULES: dict[str, ModuleDefinition] = {
         name="PVE ZFS Large-Block Patch",
         deploy=deploy_pve_zfs_large_block_patch,
     ),
+    "pve-zfs-migration-sync-patch": ModuleDefinition(
+        name="PVE ZFS Migration Sync Patch",
+        deploy=deploy_pve_zfs_migration_sync_patch,
+    ),
     "ssh-config": ModuleDefinition(name="SSH Config", deploy=deploy_ssh_config),
     "ubuntu-setup": ModuleDefinition(name="Ubuntu OS Setup", deploy=deploy_ubuntu_setup),
     "zfs-automation": ModuleDefinition(name="ZFS Automation", deploy=deploy_zfs_automation),
@@ -106,6 +111,7 @@ MODULE_ORDER = [
     "apcupsd",
     "pve-exporters",
     "pve-zfs-large-block-patch",
+    "pve-zfs-migration-sync-patch",
     "disk-spindown",
     "pve-gpu-passthrough",
     "pve-lxc-docker-hooks",

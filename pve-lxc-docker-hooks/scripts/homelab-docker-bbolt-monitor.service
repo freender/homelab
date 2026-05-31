@@ -1,0 +1,9 @@
+[Unit]
+Description=containerd bbolt DB health check (single run)
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/homelab-docker-bbolt-monitor.sh
+StandardOutput=journal
+StandardError=journal

@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
+from .. import op_secrets
 from ..build import write_env_file
 from ..deploy import DeploySession, force_env, prepare_build_dir, stage_and_run_remote_installer
 from ..hosts import default_registry
-from ..output import print_action, print_sub
+from ..output import print_action, print_sub, print_warn
 from ..ssh import HostConnection, build_files, diff_many
 
 REMOTE_ROOT = "/tmp/homelab-pve-lxc-docker-hooks"
@@ -34,7 +36,11 @@ def deploy(
 def validate(root: Path, hosts: list[str]) -> None:
     installer = root / "pve-lxc-docker-hooks" / "scripts" / "install.sh"
     hook = root / "pve-lxc-docker-hooks" / "scripts" / "homelab-docker-bbolt-sync-hook.sh"
-    for path in (installer, hook):
+    monitor = root / "pve-lxc-docker-hooks" / "scripts" / "homelab-docker-bbolt-monitor.sh"
+    monitor_svc = root / "pve-lxc-docker-hooks" / "scripts" / "homelab-docker-bbolt-monitor.service"
+    monitor_timer = root / "pve-lxc-docker-hooks" / "scripts" / "homelab-docker-bbolt-monitor.timer"
+    bbolt = root / "pve-lxc-docker-hooks" / "configs" / "bbolt"
+    for path in (installer, hook, monitor, monitor_svc, monitor_timer, bbolt):
         if not path.is_file():
             raise ValueError(f"missing required file: {path}")
 
@@ -66,12 +72,37 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
         },
     )
 
+    telegram_src: Path | None = None
+    try:
+        telegram_src = op_secrets.secret_file(root, "telegram")
+        shutil.copy2(telegram_src, build_dir / "telegram.env")
+    except op_secrets.OpSecretsError:
+        print_warn(f"{host}: telegram secret unavailable; Telegram notifications will be disabled")
+
     diff_pairs = [
         (
             root / "pve-lxc-docker-hooks" / "scripts" / "homelab-docker-bbolt-sync-hook.sh",
             "/var/lib/vz/snippets/homelab-docker-bbolt-sync-hook.sh",
         ),
+        (
+            root / "pve-lxc-docker-hooks" / "configs" / "bbolt",
+            "/usr/local/bin/bbolt",
+        ),
+        (
+            root / "pve-lxc-docker-hooks" / "scripts" / "homelab-docker-bbolt-monitor.sh",
+            "/usr/local/sbin/homelab-docker-bbolt-monitor.sh",
+        ),
+        (
+            root / "pve-lxc-docker-hooks" / "scripts" / "homelab-docker-bbolt-monitor.service",
+            "/etc/systemd/system/homelab-docker-bbolt-monitor.service",
+        ),
+        (
+            root / "pve-lxc-docker-hooks" / "scripts" / "homelab-docker-bbolt-monitor.timer",
+            "/etc/systemd/system/homelab-docker-bbolt-monitor.timer",
+        ),
     ]
+    if telegram_src is not None:
+        diff_pairs.append((telegram_src, "/etc/homelab/telegram.env"))
     for message in diff_many(connection, diff_pairs):
         print_sub(message)
 
@@ -89,6 +120,7 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
         [
             (build_dir, f"{REMOTE_ROOT}/build/{host}"),
             (root / "pve-lxc-docker-hooks" / "scripts", f"{REMOTE_ROOT}/scripts"),
+            (root / "pve-lxc-docker-hooks" / "configs", f"{REMOTE_ROOT}/configs"),
         ],
         "scripts/install.sh",
         host,
