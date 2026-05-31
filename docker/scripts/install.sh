@@ -71,6 +71,11 @@ fi
 
 cleanup_legacy_backup_unit "homelab-docker-start.timer"
 cleanup_legacy_backup_unit "homelab-docker-start.service"
+cleanup_legacy_backup_unit "homelab-docker-clean-shutdown.service"
+if [[ -e /usr/local/sbin/homelab-docker-clean-shutdown ]]; then
+    rm -f /usr/local/sbin/homelab-docker-clean-shutdown
+    print_ok "homelab-docker-clean-shutdown removed"
+fi
 cleanup_legacy_backup_unit "syncthing-unpause.timer"
 cleanup_legacy_backup_unit "syncthing-unpause.service"
 cleanup_legacy_backup_unit "syncthing-pause.timer"

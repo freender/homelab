@@ -15,6 +15,7 @@ from .pve_backup import deploy as deploy_pve_backup
 from .pve_exporters import deploy as deploy_pve_exporters
 from .pve_gpu_passthrough import deploy as deploy_pve_gpu_passthrough
 from .pve_interface_pinning import deploy as deploy_pve_interface_pinning
+from .pve_lxc_docker_hooks import deploy as deploy_pve_lxc_docker_hooks
 from .pve_postinstall import deploy as deploy_pve_postinstall
 from .pve_sdn import deploy as deploy_pve_sdn
 from .pve_zfs_large_block_patch import deploy as deploy_pve_zfs_large_block_patch
@@ -70,6 +71,10 @@ MODULES: dict[str, ModuleDefinition] = {
         name="PVE Interface Pinning",
         deploy=deploy_pve_interface_pinning,
     ),
+    "pve-lxc-docker-hooks": ModuleDefinition(
+        name="PVE LXC Docker Hooks",
+        deploy=deploy_pve_lxc_docker_hooks,
+    ),
     "pve-sdn": ModuleDefinition(
         name="PVE SDN",
         deploy=deploy_pve_sdn,
@@ -97,6 +102,7 @@ MODULE_ORDER = [
     "pve-zfs-large-block-patch",
     "disk-spindown",
     "pve-gpu-passthrough",
+    "pve-lxc-docker-hooks",
     "keepalived",
     "ssh-config",
     "ubuntu-setup",
