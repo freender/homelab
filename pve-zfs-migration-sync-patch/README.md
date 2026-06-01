@@ -21,17 +21,15 @@ HA-managed CT migration.
 
   The fix applies two operations per ZFS volume before snapshotting:
 
-  1. `syncfs()` via `/usr/bin/sync --file-system <mountpoint>` — flushes all
-     kernel page-cache dirty pages to the ZFS vnode. This is the critical
-     step: mmap writers (bbolt, sqlite WAL, any app using lazy msync) leave
-     pages dirty in the page cache after guest shutdown; ZFS cannot see these
-     pages until they are pushed down to the VFS layer. `zpool sync` alone
-     cannot reach them.
+  `syncfs()` via `/usr/bin/sync --file-system <mountpoint>` — flushes all
+  kernel page-cache dirty pages to the ZFS vnode. `zfs snapshot` is itself
+  a TXG-committed operation that forces a TXG sync, so `zpool sync` is not
+  needed: once the page-cache pages are in ZFS's dirty TXG via `syncfs`,
+  the snapshot commit flushes them to disk atomically.
 
-  2. `zpool sync <pool>` — flushes ZFS dirty TXGs to disk so the snapshot
-     captures the fully committed post-stop state.
+  Complete flush chain: page cache → ZFS vnode (syncfs) → `zfs snapshot`
+  (forces TXG commit → disk + creates snapshot atomically).
 
-  Complete flush chain: page cache → ZFS vnode → disk → `zfs snapshot`.
   This is a general fix requiring no guest-specific hooks or knowledge.
 
 Root cause chain:

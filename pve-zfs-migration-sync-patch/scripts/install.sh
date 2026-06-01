@@ -51,17 +51,15 @@ EOF
 #   and skips storage_migrate() entirely, so the Storage.pm fix is never
 #   reached.  This patch fixes replicate() directly with two steps:
 #
-#   1. syncfs() on each ZFS volume mountpoint via `sync --file-system <path>`
-#      Flushes kernel page-cache dirty pages to the ZFS vnode.  This covers
-#      mmap writers (bbolt, sqlite WAL, etc.) that wrote after guest shutdown
-#      but whose pages have not yet been pushed down to ZFS.  zpool sync alone
-#      cannot reach these pages because ZFS is unaware of them.
+#   syncfs() on each ZFS volume mountpoint via `sync --file-system <path>`.
+#   Flushes kernel page-cache dirty pages to the ZFS vnode.  This covers
+#   mmap writers (bbolt, sqlite WAL, etc.) that wrote after guest shutdown
+#   but whose pages have not yet been pushed down to ZFS.  zpool sync is
+#   not needed: zfs snapshot is itself a TXG-committed operation that forces
+#   a TXG sync, so once syncfs pushes the pages into ZFS's dirty TXG the
+#   snapshot commit flushes them to disk atomically.
 #
-#   2. zpool sync <pool> (once per unique pool)
-#      Flushes ZFS dirty TXGs to disk so the subsequent zfs snapshot captures
-#      the fully committed post-stop state.
-#
-#   Together: page cache -> ZFS vnode -> disk -> snapshot.
+#   Flush chain: page cache -> ZFS vnode (syncfs) -> zfs snapshot (TXG commit).
 #   This is the general fix: no hookscript or guest-specific knowledge needed.
 # ---------------------------------------------------------------------------
 REPLICATION_ORIGINAL=$(cat <<'EOF'
@@ -77,7 +75,6 @@ EOF
 )
 
 REPLICATION_PATCHED=$(cat <<'EOF'
-    my %synced_pools;
     foreach my $volid (@$sorted_volids) {
         my ($storeid) = PVE::Storage::parse_volume_id($volid);
         my $scfg = PVE::Storage::storage_config($storecfg, $storeid);
@@ -86,11 +83,6 @@ REPLICATION_PATCHED=$(cat <<'EOF'
         if (defined($path) && -d $path) {
             $logfunc->("syncfs '$path' before snapshot");
             PVE::Tools::run_command(['/usr/bin/sync', '--file-system', $path]);
-        }
-        if (!$synced_pools{$scfg->{pool}}) {
-            $logfunc->("zpool sync '$scfg->{pool}' before snapshot");
-            PVE::Tools::run_command(['zpool', 'sync', $scfg->{pool}]);
-            $synced_pools{$scfg->{pool}} = 1;
         }
     }
 
