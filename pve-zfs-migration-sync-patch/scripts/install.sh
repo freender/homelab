@@ -19,7 +19,6 @@ set -euo pipefail
 
 TARGET_STORAGE=/usr/share/perl5/PVE/Storage.pm
 TARGET_REPLICATION=/usr/share/perl5/PVE/Replication.pm
-TARGET_MIGRATE=/usr/share/perl5/PVE/LXC/Migrate.pm
 STATE_DIR=/var/lib/homelab/pve-zfs-migration-sync-patch
 BACKUP_DIR=/var/backups/homelab/pve-zfs-migration-sync-patch
 STATUS_FILE=${STATE_DIR}/status
@@ -48,9 +47,17 @@ EOF
 
 # ---------------------------------------------------------------------------
 # Replication.pm patch: replicated migration path
-#   Adds zpool sync per unique pool before volume_snapshot() in replicate() so
-#   that after the dataset is unmounted and kernel page-cache pages are flushed
-#   to ZFS, the pool is also synced to disk before the snapshot is taken.
+#   Adds zpool sync per unique pool before volume_snapshot() in replicate().
+#   For CTs with a PVE replication job, LXC/Migrate.pm calls run_replication()
+#   and skips storage_migrate() entirely, so Storage.pm is never reached.
+#   This patch ensures the replicated path also flushes dirty TXG data.
+#
+#   NOTE: zpool sync flushes data ZFS already knows about but cannot flush
+#   kernel page-cache dirty pages (e.g. bbolt mmap writes) that have not yet
+#   been written down to the ZFS vnode. Full correctness requires unmounting
+#   the dataset before snapshotting (LXC/Migrate.pm ordering fix), which is
+#   tracked as a required upstream change to pve-container. This patch alone
+#   reduces the window but does not eliminate it.
 # ---------------------------------------------------------------------------
 REPLICATION_ORIGINAL=$(cat <<'EOF'
     my $replicate_snapshots = {};
@@ -87,113 +94,31 @@ REPLICATION_PATCHED=$(cat <<'EOF'
 EOF
 )
 
-# ---------------------------------------------------------------------------
-# LXC/Migrate.pm patch: fix snapshot ordering
-#   Moves run_replication() to after umount_all() + deactivate_volumes() so
-#   the ZFS dataset is unmounted before the migration snapshot is taken.
-#   Unmounting flushes all kernel page-cache dirty pages (including bbolt mmap
-#   writes) to the ZFS vnode.  Without this, zpool sync has nothing to flush
-#   for pages that are dirty in the page cache but not yet written to ZFS.
-# ---------------------------------------------------------------------------
-MIGRATE_ORIGINAL=$(cat <<'EOF'
-    if ($remote) {
-        die "cannot remote-migrate replicated VM\n"
-            if $rep_cfg->check_for_existing_jobs($vmid, 1);
-    } elsif (my $jobcfg = $rep_cfg->find_local_replication_job($vmid, $self->{node})) {
-        die "can't live migrate VM with replicated volumes\n" if $self->{running};
-        my $start_time = time();
-        my $logfunc = sub { my ($msg) = @_; $self->log('info', $msg); };
-        $rep_volumes = PVE::Replication::run_replication(
-            'PVE::LXC::Config', $jobcfg, $start_time, $start_time, $logfunc,
-        );
-    }
-
-    my $opts = $self->{opts};
-    foreach my $volid (keys %$volhash) {
-        next if $rep_volumes->{$volid};
-EOF
-)
-
-MIGRATE_PATCHED=$(cat <<'EOF'
-    if ($remote) {
-        die "cannot remote-migrate replicated VM\n"
-            if $rep_cfg->check_for_existing_jobs($vmid, 1);
-    }
-
-    my $opts = $self->{opts};
-    foreach my $volid (keys %$volhash) {
-        next if $rep_volumes && $rep_volumes->{$volid};
-EOF
-)
-
-MIGRATE_UMOUNT_ORIGINAL=$(cat <<'EOF'
-    PVE::LXC::umount_all($vmid, $self->{storecfg}, $conf);
-
-    #to be sure there are no active volumes
-    my $vollist = PVE::LXC::Config->get_vm_volumes($conf);
-    PVE::Storage::deactivate_volumes($self->{storecfg}, $vollist);
-
-    if ($remote) {
-EOF
-)
-
-MIGRATE_UMOUNT_PATCHED=$(cat <<'EOF'
-    PVE::LXC::umount_all($vmid, $self->{storecfg}, $conf);
-
-    #to be sure there are no active volumes
-    my $vollist = PVE::LXC::Config->get_vm_volumes($conf);
-    PVE::Storage::deactivate_volumes($self->{storecfg}, $vollist);
-
-    # Run replication after unmount so all kernel page-cache dirty pages
-    # (including bbolt mmap writes) are flushed to the ZFS vnode before the
-    # migration snapshot is taken.  Previously this ran before umount_all(),
-    # causing the snapshot to capture stale data still in the page cache.
-    if (!$remote) {
-        if (my $jobcfg = $rep_cfg->find_local_replication_job($vmid, $self->{node})) {
-            die "can't live migrate VM with replicated volumes\n" if $self->{running};
-            my $start_time = time();
-            my $logfunc = sub { my ($msg) = @_; $self->log('info', $msg); };
-            $rep_volumes = PVE::Replication::run_replication(
-                'PVE::LXC::Config', $jobcfg, $start_time, $start_time, $logfunc,
-            );
-        }
-    }
-
-    if ($remote) {
-EOF
-)
-
 write_status() {
   local storage_state=$1
   local replication_state=$2
-  local migrate_state=$3
-  local restart_state=${4:-not-run}
-  local storage_ver replication_ver migrate_ver
+  local restart_state=${3:-not-run}
+  local storage_ver replication_ver
   storage_ver=$(dpkg-query -W -f='${Version}' libpve-storage-perl 2>/dev/null || true)
   replication_ver=$(dpkg-query -W -f='${Version}' pve-container 2>/dev/null || true)
-  migrate_ver=${replication_ver}
   {
     printf 'storage_state=%s\n' "${storage_state}"
     printf 'replication_state=%s\n' "${replication_state}"
-    printf 'migrate_state=%s\n' "${migrate_state}"
     printf 'services_restart=%s\n' "${restart_state}"
     printf 'timestamp_utc=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     printf 'storage_target=%s\n' "${TARGET_STORAGE}"
     printf 'replication_target=%s\n' "${TARGET_REPLICATION}"
-    printf 'migrate_target=%s\n' "${TARGET_MIGRATE}"
     printf 'package_libpve_storage=%s\n' "${storage_ver}"
     printf 'package_pve_container=%s\n' "${replication_ver}"
-    printf 'package_pve_container_migrate=%s\n' "${migrate_ver}"
     grep -nF "zpool', 'sync'" "${TARGET_STORAGE}" || true
     grep -nF "zpool sync" "${TARGET_REPLICATION}" || true
-    grep -nF "Run replication after unmount" "${TARGET_MIGRATE}" || true
   } > "${STATUS_FILE}"
 }
 
 restart_pve_services() {
   # Proxmox Perl daemons keep modules loaded in memory; restart them so
-  # Storage.pm, Replication.pm, and LXC/Migrate.pm changes take effect.
-  # pve-ha-lrm drives run_replication() and vzmigrate during HA migrate.
+  # Storage.pm and Replication.pm changes take effect immediately.
+  # pve-ha-lrm is included because it drives run_replication() during HA migrate.
   systemctl try-restart "${PVE_SERVICES[@]}"
 }
 
@@ -204,7 +129,7 @@ mkdir -p "${STATE_DIR}" "${BACKUP_DIR}"
 # ---------------------------------------------------------------------------
 if [[ ! -f ${TARGET_STORAGE} ]]; then
   echo "missing target: ${TARGET_STORAGE}" >&2
-  write_status failed-missing-target skipped skipped not-run
+  write_status failed-missing-target skipped not-run
   exit 1
 fi
 
@@ -221,7 +146,7 @@ elif [[ ${storage_patched_count} -eq 0 && ${storage_original_count} -eq 1 ]]; th
   storage_state=patched
 else
   echo "unexpected migration snapshot stanza in ${TARGET_STORAGE}; refusing to patch" >&2
-  write_status failed-unexpected-line skipped skipped not-run
+  write_status failed-unexpected-line skipped not-run
   exit 1
 fi
 
@@ -230,7 +155,7 @@ fi
 # ---------------------------------------------------------------------------
 if [[ ! -f ${TARGET_REPLICATION} ]]; then
   echo "missing target: ${TARGET_REPLICATION}" >&2
-  write_status "${storage_state}" failed-missing-target skipped not-run
+  write_status "${storage_state}" failed-missing-target not-run
   exit 1
 fi
 
@@ -247,38 +172,7 @@ elif [[ ${replication_patched_count} -eq 0 && ${replication_original_count} -ge 
   replication_state=patched
 else
   echo "unexpected replication snapshot stanza in ${TARGET_REPLICATION}; refusing to patch" >&2
-  write_status "${storage_state}" failed-unexpected-line skipped not-run
-  exit 1
-fi
-
-# ---------------------------------------------------------------------------
-# Patch LXC/Migrate.pm (two substitutions: remove early run_replication,
-# add it back after umount_all + deactivate_volumes)
-# ---------------------------------------------------------------------------
-if [[ ! -f ${TARGET_MIGRATE} ]]; then
-  echo "missing target: ${TARGET_MIGRATE}" >&2
-  write_status "${storage_state}" "${replication_state}" failed-missing-target not-run
-  exit 1
-fi
-
-migrate_patched_count=$(grep -Fc "Run replication after unmount" "${TARGET_MIGRATE}" || true)
-migrate_original_count=$(grep -Fc "find_local_replication_job" "${TARGET_MIGRATE}" || true)
-
-if [[ ${migrate_patched_count} -ge 1 ]]; then
-  migrate_state=already-patched
-elif [[ ${migrate_patched_count} -eq 0 && ${migrate_original_count} -ge 1 ]]; then
-  backup="${BACKUP_DIR}/Migrate.pm.$(date -u +%Y%m%dT%H%M%SZ).bak"
-  cp "${TARGET_MIGRATE}" "${backup}"
-  # First substitution: remove run_replication from before storage_migrate loop
-  PATCHED_BLOCK=${MIGRATE_PATCHED} ORIGINAL_LINE=${MIGRATE_ORIGINAL} \
-    perl -0pi -e 's/\Q$ENV{ORIGINAL_LINE}\E/$ENV{PATCHED_BLOCK}/' "${TARGET_MIGRATE}"
-  # Second substitution: insert run_replication after umount_all + deactivate_volumes
-  PATCHED_BLOCK=${MIGRATE_UMOUNT_PATCHED} ORIGINAL_LINE=${MIGRATE_UMOUNT_ORIGINAL} \
-    perl -0pi -e 's/\Q$ENV{ORIGINAL_LINE}\E/$ENV{PATCHED_BLOCK}/' "${TARGET_MIGRATE}"
-  migrate_state=patched
-else
-  echo "unexpected migrate stanza in ${TARGET_MIGRATE}; refusing to patch" >&2
-  write_status "${storage_state}" "${replication_state}" failed-unexpected-line not-run
+  write_status "${storage_state}" failed-unexpected-line not-run
   exit 1
 fi
 
@@ -288,12 +182,12 @@ fi
 restart_state=restarted
 if ! restart_pve_services; then
   restart_state=failed
-  write_status "${storage_state}" "${replication_state}" "${migrate_state}" "${restart_state}"
+  write_status "${storage_state}" "${replication_state}" "${restart_state}"
   echo "failed to restart Proxmox services: ${PVE_SERVICES[*]}" >&2
   exit 1
 fi
 
-write_status "${storage_state}" "${replication_state}" "${migrate_state}" "${restart_state}"
+write_status "${storage_state}" "${replication_state}" "${restart_state}"
 cat "${STATUS_FILE}"
 SCRIPT
 chmod 0755 "${PATCH_SCRIPT}"
