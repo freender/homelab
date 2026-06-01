@@ -253,8 +253,11 @@ done < <(pct config "$VMID" 2>/dev/null | awk -F': ' '/^mp[0-9]+:/{print $2}' | 
 dbs=()
 for db in \
     "$containerd_root"/io.containerd.metadata.v1.bolt/meta.db \
-    "$containerd_root"/io.containerd.mount-manager.v1.bolt/meta.db \
-    "$containerd_root"/io.containerd.snapshotter.v1.*/metadata.db; do
+    "$containerd_root"/io.containerd.mount-manager.v1.bolt/meta.db; do
+    # io.containerd.snapshotter.v1.overlayfs/metadata.db is excluded: it can
+    # be 2GB+ and bbolt check on it takes 60-120s, blocking CT lifecycle hooks.
+    # It is also not the database that triggers the containerd panic on corrupt
+    # migration snapshots; meta.db (above) is the critical one.
     [[ -f $db ]] || continue
     dbs+=("$db")
 done
