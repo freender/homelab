@@ -18,6 +18,7 @@ from .pve_interface_pinning import deploy as deploy_pve_interface_pinning
 from .pve_lxc_docker_hooks import deploy as deploy_pve_lxc_docker_hooks
 from .pve_postinstall import deploy as deploy_pve_postinstall
 from .pve_pxe import deploy as deploy_pve_pxe
+from .pve_realtek_r8152_dkms import deploy as deploy_pve_realtek_r8152_dkms
 from .pve_sdn import deploy as deploy_pve_sdn
 from .pve_zfs_large_block_patch import deploy as deploy_pve_zfs_large_block_patch
 from .pve_zfs_migration_sync_patch import deploy as deploy_pve_zfs_migration_sync_patch
@@ -73,6 +74,10 @@ MODULES: dict[str, ModuleDefinition] = {
         name="PVE PXE Boot (saint)",
         deploy=deploy_pve_pxe,
     ),
+    "pve-realtek-r8152-dkms": ModuleDefinition(
+        name="PVE Realtek r8152 DKMS Driver",
+        deploy=deploy_pve_realtek_r8152_dkms,
+    ),
     "pve-interface-pinning": ModuleDefinition(
         name="PVE Interface Pinning",
         deploy=deploy_pve_interface_pinning,
@@ -105,6 +110,7 @@ MODULES: dict[str, ModuleDefinition] = {
 MODULE_ORDER = [
     "pve-interface-pinning",
     "pve-postinstall",
+    "pve-realtek-r8152-dkms",
     "pve-pxe",
     "pve-sdn",
     "pve-backup",
