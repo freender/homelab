@@ -22,53 +22,9 @@ finish() {
     exit 0
 }
 
-cluster_nodes() {
-    pvecm nodes 2>/dev/null | awk 'NR > 1 {print $3}' || true
-}
-
-peer_clean_copy() {
-    local db=$1
-    local node remote_cmd peer_out peer_node peer_sha peer_mtime
-
-    for node in $(cluster_nodes); do
-        [[ -n $node ]] || continue
-        [[ $node == "$(hostname -s)" ]] && continue
-
-        remote_cmd=$(cat <<EOF
-DB='$db'
-BBOLT='$BBOLT'
-TMP=\$(mktemp /tmp/homelab-peer-bbolt.XXXXXX.db) || exit 1
-OUT=\$(mktemp /tmp/homelab-peer-bbolt.XXXXXX.out) || { rm -f "\$TMP"; exit 1; }
-[[ -f \$DB ]] || { rm -f "\$TMP" "\$OUT"; exit 2; }
-cp --reflink=auto --sparse=always "\$DB" "\$TMP" 2>/dev/null || { rm -f "\$TMP" "\$OUT"; exit 3; }
-timeout 120 "\$BBOLT" check "\$TMP" >"\$OUT" 2>&1
-RC=\$?
-if [[ \$RC -eq 0 ]]; then
-    SHA=\$(sha256sum "\$DB" 2>/dev/null | awk '{print \$1}')
-    MTIME=\$(stat -c %y "\$DB" 2>/dev/null)
-    printf 'OK %s %s\n' "\$SHA" "\$MTIME"
-fi
-rm -f "\$TMP" "\$OUT"
-exit \$RC
-EOF
-)
-
-        peer_out=$(ssh -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new "$node" "$remote_cmd" 2>/dev/null || true)
-        [[ $peer_out == OK* ]] || continue
-
-        peer_node=$node
-        peer_sha=$(printf '%s\n' "$peer_out" | awk '{print $2}')
-        peer_mtime=$(printf '%s\n' "$peer_out" | cut -d' ' -f3-)
-        printf '%s|%s|%s\n' "$peer_node" "$peer_sha" "$peer_mtime"
-        return 0
-    done
-
-    return 1
-}
-
 notify_corruption() {
     local vmid=$1 phase=$2 db=$3 rc=$4 detail=$5
-    local msg latest_backup restore_cmd peer_copy peer_node peer_sha peer_mtime peer_restore_cmd
+    local msg repair_cmd
 
     local env_locations=("/etc/homelab/telegram.env" "/etc/apcupsd/telegram/telegram.env")
     for f in "${env_locations[@]}"; do
@@ -81,21 +37,7 @@ notify_corruption() {
         return 0
     }
 
-    latest_backup=$(pvesm list backup-main 2>/dev/null \
-        | awk -v vmid="$vmid" '$0 ~ "ct/"vmid"/" {print $1}' \
-        | sort | tail -1 || true)
-    if [[ -n $latest_backup ]]; then
-        restore_cmd="pct restore $vmid $latest_backup --storage vm-flash"
-    else
-        restore_cmd="(no recent PBS snapshot found for CT $vmid)"
-    fi
-
-    peer_copy=$(peer_clean_copy "$rootfs_path/$CONTAINERD_REL/$db" || true)
-    if [[ -n $peer_copy ]]; then
-        IFS='|' read -r peer_node peer_sha peer_mtime <<<"$peer_copy"
-        peer_restore_cmd="pct stop $vmid && scp root@${peer_node}:$rootfs_path/$CONTAINERD_REL/$db $rootfs_path/$CONTAINERD_REL/$db && sync -f $rootfs_path/$CONTAINERD_REL/$db && pct start $vmid"
-        restore_cmd="$(printf 'Peer clean copy on %s\nsha256: %s\nmtime: %s\nRestore DB only:\n%s\n\nPBS full restore:\n%s' "$peer_node" "$peer_sha" "$peer_mtime" "$peer_restore_cmd" "$restore_cmd")"
-    fi
+    repair_cmd="homelab-docker-bbolt-repair.sh $vmid --yes --redeploy"
 
     msg="$(printf \
 '⚠️ *containerd DB corrupt* — CT %s on %s
@@ -106,9 +48,9 @@ bbolt rc: %s
 
 %s
 
-Restore:
+Manual repair:
 `%s`' \
-        "$vmid" "$(hostname -s)" "$phase" "$db" "$rc" "$detail" "Auto-restore: disabled; manual action required." "$restore_cmd")"
+        "$vmid" "$(hostname -s)" "$phase" "$db" "$rc" "$detail" "Auto-restore: disabled; manual action required." "$repair_cmd")"
 
     curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage" \
         --data-urlencode "chat_id=${TELEGRAM_CHATID}" \

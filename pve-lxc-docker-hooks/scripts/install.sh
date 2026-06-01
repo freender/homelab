@@ -78,6 +78,8 @@ fi
 # --- Periodic monitor (every 5 min while CTs are running) ---
 MONITOR_NAME=homelab-docker-bbolt-monitor.sh
 MONITOR_DEST=/usr/local/sbin/$MONITOR_NAME
+REPAIR_NAME=homelab-docker-bbolt-repair.sh
+REPAIR_DEST=/usr/local/sbin/$REPAIR_NAME
 SERVICE_NAME=homelab-docker-bbolt-monitor
 SYSTEMD_DIR=/etc/systemd/system
 VMIDS_FILE=/etc/homelab/docker-lxc-vmids
@@ -86,6 +88,11 @@ rc=0
 copy_if_changed "$SCRIPT_DIR/scripts/$MONITOR_NAME" "$MONITOR_DEST" "$MONITOR_NAME" || rc=$?
 [[ $rc -eq 1 ]] || [[ $rc -eq 0 ]] || exit "$rc"
 chmod 755 "$MONITOR_DEST"
+
+rc=0
+copy_if_changed "$SCRIPT_DIR/scripts/$REPAIR_NAME" "$REPAIR_DEST" "$REPAIR_NAME" || rc=$?
+[[ $rc -eq 1 ]] || [[ $rc -eq 0 ]] || exit "$rc"
+chmod 755 "$REPAIR_DEST"
 
 rc=0
 copy_if_changed "$SCRIPT_DIR/scripts/${SERVICE_NAME}.service" "$SYSTEMD_DIR/${SERVICE_NAME}.service" "${SERVICE_NAME}.service" || rc=$?

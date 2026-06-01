@@ -37,10 +37,11 @@ def validate(root: Path, hosts: list[str]) -> None:
     installer = root / "pve-lxc-docker-hooks" / "scripts" / "install.sh"
     hook = root / "pve-lxc-docker-hooks" / "scripts" / "homelab-docker-bbolt-sync-hook.sh"
     monitor = root / "pve-lxc-docker-hooks" / "scripts" / "homelab-docker-bbolt-monitor.sh"
+    repair = root / "pve-lxc-docker-hooks" / "scripts" / "homelab-docker-bbolt-repair.sh"
     monitor_svc = root / "pve-lxc-docker-hooks" / "scripts" / "homelab-docker-bbolt-monitor.service"
     monitor_timer = root / "pve-lxc-docker-hooks" / "scripts" / "homelab-docker-bbolt-monitor.timer"
     bbolt = root / "pve-lxc-docker-hooks" / "configs" / "bbolt"
-    for path in (installer, hook, monitor, monitor_svc, monitor_timer, bbolt):
+    for path in (installer, hook, monitor, repair, monitor_svc, monitor_timer, bbolt):
         if not path.is_file():
             raise ValueError(f"missing required file: {path}")
 
@@ -91,6 +92,10 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
         (
             root / "pve-lxc-docker-hooks" / "scripts" / "homelab-docker-bbolt-monitor.sh",
             "/usr/local/sbin/homelab-docker-bbolt-monitor.sh",
+        ),
+        (
+            root / "pve-lxc-docker-hooks" / "scripts" / "homelab-docker-bbolt-repair.sh",
+            "/usr/local/sbin/homelab-docker-bbolt-repair.sh",
         ),
         (
             root / "pve-lxc-docker-hooks" / "scripts" / "homelab-docker-bbolt-monitor.service",
