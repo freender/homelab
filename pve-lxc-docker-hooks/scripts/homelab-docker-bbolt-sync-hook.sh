@@ -268,11 +268,11 @@ if [[ ${#dbs[@]} -eq 0 ]]; then
 fi
 
 if [[ $PHASE == post-stop ]]; then
-    start_sync=$(date +%s)
-    for sync_path in "${sync_paths[@]}"; do
-        sync -f "$sync_path" 2>/dev/null || sync
-    done
-    log "sync=done mode=filesystem elapsed=$(( $(date +%s) - start_sync ))s fs_count=${#sync_paths[@]} db_count=${#dbs[@]} sync_paths=\"${sync_paths[*]}\" containerd_root=$containerd_root"
+    # Filesystem sync is intentionally not performed here.
+    # PVE/Replication.pm now calls syncfs() + zpool sync on every ZFS volume
+    # mountpoint before taking the migration snapshot, which flushes both the
+    # kernel page cache and ZFS dirty TXGs without requiring any hookscript.
+    log "sync=skipped reason=handled_by_replication_pm phase=$PHASE db_count=${#dbs[@]}"
 fi
 
 for db in "${dbs[@]}"; do

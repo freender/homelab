@@ -47,17 +47,22 @@ EOF
 
 # ---------------------------------------------------------------------------
 # Replication.pm patch: replicated migration path
-#   Adds zpool sync per unique pool before volume_snapshot() in replicate().
 #   For CTs with a PVE replication job, LXC/Migrate.pm calls run_replication()
-#   and skips storage_migrate() entirely, so Storage.pm is never reached.
-#   This patch ensures the replicated path also flushes dirty TXG data.
+#   and skips storage_migrate() entirely, so the Storage.pm fix is never
+#   reached.  This patch fixes replicate() directly with two steps:
 #
-#   NOTE: zpool sync flushes data ZFS already knows about but cannot flush
-#   kernel page-cache dirty pages (e.g. bbolt mmap writes) that have not yet
-#   been written down to the ZFS vnode. Full correctness requires unmounting
-#   the dataset before snapshotting (LXC/Migrate.pm ordering fix), which is
-#   tracked as a required upstream change to pve-container. This patch alone
-#   reduces the window but does not eliminate it.
+#   1. syncfs() on each ZFS volume mountpoint via `sync --file-system <path>`
+#      Flushes kernel page-cache dirty pages to the ZFS vnode.  This covers
+#      mmap writers (bbolt, sqlite WAL, etc.) that wrote after guest shutdown
+#      but whose pages have not yet been pushed down to ZFS.  zpool sync alone
+#      cannot reach these pages because ZFS is unaware of them.
+#
+#   2. zpool sync <pool> (once per unique pool)
+#      Flushes ZFS dirty TXGs to disk so the subsequent zfs snapshot captures
+#      the fully committed post-stop state.
+#
+#   Together: page cache -> ZFS vnode -> disk -> snapshot.
+#   This is the general fix: no hookscript or guest-specific knowledge needed.
 # ---------------------------------------------------------------------------
 REPLICATION_ORIGINAL=$(cat <<'EOF'
     my $replicate_snapshots = {};
@@ -76,7 +81,13 @@ REPLICATION_PATCHED=$(cat <<'EOF'
     foreach my $volid (@$sorted_volids) {
         my ($storeid) = PVE::Storage::parse_volume_id($volid);
         my $scfg = PVE::Storage::storage_config($storecfg, $storeid);
-        if ($scfg->{type} eq 'zfspool' && !$synced_pools{$scfg->{pool}}) {
+        next if $scfg->{type} ne 'zfspool';
+        my $path = PVE::Storage::path($storecfg, $volid);
+        if (defined($path) && -d $path) {
+            $logfunc->("syncfs '$path' before snapshot");
+            PVE::Tools::run_command(['/usr/bin/sync', '--file-system', $path]);
+        }
+        if (!$synced_pools{$scfg->{pool}}) {
             $logfunc->("zpool sync '$scfg->{pool}' before snapshot");
             PVE::Tools::run_command(['zpool', 'sync', $scfg->{pool}]);
             $synced_pools{$scfg->{pool}} = 1;
@@ -111,7 +122,7 @@ write_status() {
     printf 'package_libpve_storage=%s\n' "${storage_ver}"
     printf 'package_pve_container=%s\n' "${replication_ver}"
     grep -nF "zpool', 'sync'" "${TARGET_STORAGE}" || true
-    grep -nF "zpool sync" "${TARGET_REPLICATION}" || true
+    grep -nF "syncfs" "${TARGET_REPLICATION}" || true
   } > "${STATUS_FILE}"
 }
 
@@ -159,7 +170,7 @@ if [[ ! -f ${TARGET_REPLICATION} ]]; then
   exit 1
 fi
 
-replication_patched_count=$(grep -Fc "zpool sync" "${TARGET_REPLICATION}" || true)
+replication_patched_count=$(grep -Fc "syncfs" "${TARGET_REPLICATION}" || true)
 replication_original_count=$(grep -Fc 'PVE::Storage::volume_snapshot($storecfg, $volid, $sync_snapname);' "${TARGET_REPLICATION}" || true)
 
 if [[ ${replication_patched_count} -ge 1 ]]; then

@@ -11,41 +11,36 @@ HA-managed CT migration.
   data before taking the `__migration__` snapshot.
 
 - `/usr/share/perl5/PVE/Replication.pm` — replicated migration path.
-  Fixes `replicate()` so `run_replication()` during HA migrate also flushes
-  dirty TXG data before taking the `__replicate_*` snapshot.  Without this
-  fix the `Storage.pm` change has no effect for CTs with a PVE replication
-  job: `LXC/Migrate.pm` calls `run_replication()` first, marks those volumes
-  in `$rep_volumes`, and then skips `storage_migrate()` entirely for them
-  (`next if $rep_volumes->{$volid}`), so the `Storage.pm` path is never
-  reached.
+  Fixes `replicate()` so `run_replication()` during HA migrate flushes both
+  the kernel page cache and ZFS dirty TXGs before taking the `__replicate_*`
+  snapshot.  Without this fix the `Storage.pm` change has no effect for CTs
+  with a PVE replication job: `LXC/Migrate.pm` calls `run_replication()`
+  first, marks those volumes in `$rep_volumes`, and then skips
+  `storage_migrate()` entirely (`next if $rep_volumes->{$volid}`), so the
+  `Storage.pm` path is never reached.
 
-**Known limitation — kernel page-cache ordering (requires upstream fix):**
+  The fix applies two operations per ZFS volume before snapshotting:
 
-`zpool sync` flushes data ZFS already knows about, but cannot flush kernel
-page-cache dirty pages that have not yet been written down to the ZFS vnode.
-bbolt uses `mmap` for writes; after CT stop these pages may be dirty in the
-page cache but invisible to ZFS. The snapshot can therefore still capture
-stale data.
+  1. `syncfs()` via `/usr/bin/sync --file-system <mountpoint>` — flushes all
+     kernel page-cache dirty pages to the ZFS vnode. This is the critical
+     step: mmap writers (bbolt, sqlite WAL, any app using lazy msync) leave
+     pages dirty in the page cache after guest shutdown; ZFS cannot see these
+     pages until they are pushed down to the VFS layer. `zpool sync` alone
+     cannot reach them.
 
-The correct fix is to move `run_replication()` in `LXC/Migrate.pm` to after
-`umount_all()` + `deactivate_volumes()` — unmounting guarantees all
-page-cache pages are flushed to ZFS before the snapshot is taken. A local
-patch to `Migrate.pm` was tested but caused volume renaming corruption
-(`allow_rename => 1` in the non-replicated storage_migrate loop ran against
-volumes that should have been skipped by `$rep_volumes`) and was reverted.
-The correct fix requires restructuring `phase1` in `pve-container` to keep
-the `$rep_volumes` guard intact when `run_replication()` is deferred — this
-should be submitted upstream.
+  2. `zpool sync <pool>` — flushes ZFS dirty TXGs to disk so the snapshot
+     captures the fully committed post-stop state.
+
+  Complete flush chain: page cache → ZFS vnode → disk → `zfs snapshot`.
+  This is a general fix requiring no guest-specific hooks or knowledge.
 
 Root cause chain:
-1. CT stops — containerd flushes bbolt writes via `mmap` to the page cache.
-2. `run_replication()` fires before `umount_all()` — `zpool sync` runs but
-   page-cache pages haven't reached ZFS yet; snapshot captures stale data.
-3. `zfs send` ships the snapshot — destination receives stale `meta.db`.
-4. Containerd on destination opens the corrupt bbolt database and panics.
-
-Complete fix sequence: CT stop → `umount_all()` (page-cache → ZFS) →
-`zpool sync` (ZFS → disk) → `zfs snapshot` → `zfs send`.
+1. CT stops — guest writes via `mmap` flush to the kernel page cache only.
+2. `run_replication()` fires (dataset still mounted, page cache not flushed).
+3. Without `syncfs`: page-cache dirty pages are invisible to ZFS; `zpool sync`
+   has nothing to flush for them; snapshot captures stale data.
+4. `zfs send` ships the stale snapshot — destination receives corrupt db.
+5. Containerd opens the corrupt bbolt database and panics.
 
 Upstream tracking: Bug 7653 - LXC migration on zfspool snapshot may contain
 stale data: https://bugzilla.proxmox.com/show_bug.cgi?id=7653
