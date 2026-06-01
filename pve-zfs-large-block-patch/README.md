@@ -26,10 +26,9 @@ upstream behavior for this bug.
 
 Deployment also installs `/usr/local/sbin/homelab-pve-zfs-large-block-patch`
 and an apt `DPkg::Post-Invoke` hook so `libpve-storage-perl` package upgrades
-that replace `ZFSPoolPlugin.pm` are patched again automatically. The patch
-script restarts `pvescheduler`, `pvedaemon`, and `pvestatd` after patch
-verification so long-lived Proxmox Perl daemons reload `ZFSPoolPlugin.pm` before
-scheduled replication or migration uses the code path.
+that replace `ZFSPoolPlugin.pm` are patched again automatically. The next
+forked replication or migration worker loads the patched module from disk; no
+Proxmox service restart is required.
 
 Operational files:
 
@@ -37,4 +36,3 @@ Operational files:
 - Apt hook: `/etc/apt/apt.conf.d/99-homelab-pve-zfs-large-block-patch`
 - Status: `/var/lib/homelab/pve-zfs-large-block-patch/status`
 - Backups: `/var/backups/homelab/pve-zfs-large-block-patch/`
-- Reloaded services: `pvescheduler`, `pvedaemon`, `pvestatd`

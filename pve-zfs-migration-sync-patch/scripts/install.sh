@@ -22,7 +22,6 @@ TARGET_REPLICATION=/usr/share/perl5/PVE/Replication.pm
 STATE_DIR=/var/lib/homelab/pve-zfs-migration-sync-patch
 BACKUP_DIR=/var/backups/homelab/pve-zfs-migration-sync-patch
 STATUS_FILE=${STATE_DIR}/status
-PVE_SERVICES=(pvescheduler pvedaemon pvestatd pve-ha-lrm)
 
 # ---------------------------------------------------------------------------
 # Storage.pm patch: non-replicated migration path
@@ -100,14 +99,12 @@ EOF
 write_status() {
   local storage_state=$1
   local replication_state=$2
-  local restart_state=${3:-not-run}
   local storage_ver replication_ver
   storage_ver=$(dpkg-query -W -f='${Version}' libpve-storage-perl 2>/dev/null || true)
   replication_ver=$(dpkg-query -W -f='${Version}' pve-container 2>/dev/null || true)
   {
     printf 'storage_state=%s\n' "${storage_state}"
     printf 'replication_state=%s\n' "${replication_state}"
-    printf 'services_restart=%s\n' "${restart_state}"
     printf 'timestamp_utc=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     printf 'storage_target=%s\n' "${TARGET_STORAGE}"
     printf 'replication_target=%s\n' "${TARGET_REPLICATION}"
@@ -118,13 +115,6 @@ write_status() {
   } > "${STATUS_FILE}"
 }
 
-restart_pve_services() {
-  # Proxmox Perl daemons keep modules loaded in memory; restart them so
-  # Storage.pm and Replication.pm changes take effect immediately.
-  # pve-ha-lrm is included because it drives run_replication() during HA migrate.
-  systemctl try-restart "${PVE_SERVICES[@]}"
-}
-
 mkdir -p "${STATE_DIR}" "${BACKUP_DIR}"
 
 # ---------------------------------------------------------------------------
@@ -132,7 +122,7 @@ mkdir -p "${STATE_DIR}" "${BACKUP_DIR}"
 # ---------------------------------------------------------------------------
 if [[ ! -f ${TARGET_STORAGE} ]]; then
   echo "missing target: ${TARGET_STORAGE}" >&2
-  write_status failed-missing-target skipped not-run
+  write_status failed-missing-target skipped
   exit 1
 fi
 
@@ -149,7 +139,7 @@ elif [[ ${storage_patched_count} -eq 0 && ${storage_original_count} -eq 1 ]]; th
   storage_state=patched
 else
   echo "unexpected migration snapshot stanza in ${TARGET_STORAGE}; refusing to patch" >&2
-  write_status failed-unexpected-line skipped not-run
+  write_status failed-unexpected-line skipped
   exit 1
 fi
 
@@ -158,39 +148,30 @@ fi
 # ---------------------------------------------------------------------------
 if [[ ! -f ${TARGET_REPLICATION} ]]; then
   echo "missing target: ${TARGET_REPLICATION}" >&2
-  write_status "${storage_state}" failed-missing-target not-run
+  write_status "${storage_state}" failed-missing-target
   exit 1
 fi
 
-replication_patched_count=$(grep -Fc "syncfs" "${TARGET_REPLICATION}" || true)
-replication_original_count=$(grep -Fc 'PVE::Storage::volume_snapshot($storecfg, $volid, $sync_snapname);' "${TARGET_REPLICATION}" || true)
+replication_patched_count=$(grep -Fc "syncfs '\$path' before snapshot" "${TARGET_REPLICATION}" || true)
+replication_original_count=$(grep -Fc "my \$replicate_snapshots = {};" "${TARGET_REPLICATION}" || true)
 
 if [[ ${replication_patched_count} -ge 1 ]]; then
   replication_state=already-patched
-elif [[ ${replication_patched_count} -eq 0 && ${replication_original_count} -ge 1 ]]; then
+elif [[ ${replication_patched_count} -eq 0 && ${replication_original_count} -eq 1 ]]; then
   backup="${BACKUP_DIR}/Replication.pm.$(date -u +%Y%m%dT%H%M%SZ).bak"
   cp "${TARGET_REPLICATION}" "${backup}"
-  PATCHED_BLOCK=${REPLICATION_PATCHED} ORIGINAL_LINE=${REPLICATION_ORIGINAL} \
-    perl -0pi -e 's/\Q$ENV{ORIGINAL_LINE}\E/$ENV{PATCHED_BLOCK}/' "${TARGET_REPLICATION}"
+  PATCHED_BLOCK=${REPLICATION_PATCHED} ORIGINAL_BLOCK=${REPLICATION_ORIGINAL} \
+    perl -0pi -e 's/\Q$ENV{ORIGINAL_BLOCK}\E/$ENV{PATCHED_BLOCK}/' "${TARGET_REPLICATION}"
   replication_state=patched
 else
   echo "unexpected replication snapshot stanza in ${TARGET_REPLICATION}; refusing to patch" >&2
-  write_status "${storage_state}" failed-unexpected-line not-run
+  write_status "${storage_state}" failed-unexpected-line
   exit 1
 fi
 
-# ---------------------------------------------------------------------------
-# Restart services so in-memory modules are replaced
-# ---------------------------------------------------------------------------
-restart_state=restarted
-if ! restart_pve_services; then
-  restart_state=failed
-  write_status "${storage_state}" "${replication_state}" "${restart_state}"
-  echo "failed to restart Proxmox services: ${PVE_SERVICES[*]}" >&2
-  exit 1
-fi
-
-write_status "${storage_state}" "${replication_state}" "${restart_state}"
+# Forked replication and migration workers load these modules from disk on the
+# next job, so no Proxmox service restart is required.
+write_status "${storage_state}" "${replication_state}"
 cat "${STATUS_FILE}"
 SCRIPT
 chmod 0755 "${PATCH_SCRIPT}"

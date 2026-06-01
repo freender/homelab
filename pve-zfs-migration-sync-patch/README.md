@@ -49,9 +49,8 @@ upstream behavior for this bug.
 Deployment also installs `/usr/local/sbin/homelab-pve-zfs-migration-sync-patch`
 and an apt `DPkg::Post-Invoke` hook so `libpve-storage-perl` and `pve-container`
 package upgrades that replace `Storage.pm` or `Replication.pm` are repatched
-automatically. The patch script restarts `pvescheduler`, `pvedaemon`, `pvestatd`,
-and `pve-ha-lrm` after patch verification so long-lived Proxmox Perl daemons
-reload both modules before the next migration.
+automatically. The next forked replication or migration worker loads the patched
+modules from disk; no Proxmox service restart is required.
 
 Operational files:
 
@@ -59,4 +58,3 @@ Operational files:
 - Apt hook: `/etc/apt/apt.conf.d/99-homelab-pve-zfs-migration-sync-patch`
 - Status: `/var/lib/homelab/pve-zfs-migration-sync-patch/status`
 - Backups: `/var/backups/homelab/pve-zfs-migration-sync-patch/`
-- Reloaded services: `pvescheduler`, `pvedaemon`, `pvestatd`, `pve-ha-lrm`

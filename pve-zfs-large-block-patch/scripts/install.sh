@@ -21,31 +21,22 @@ TARGET=/usr/share/perl5/PVE/Storage/ZFSPoolPlugin.pm
 STATE_DIR=/var/lib/homelab/pve-zfs-large-block-patch
 BACKUP_DIR=/var/backups/homelab/pve-zfs-large-block-patch
 STATUS_FILE=${STATE_DIR}/status
-PVE_SERVICES=(pvescheduler pvedaemon pvestatd)
 
 ORIGINAL="    my \$cmd = ['zfs', 'send', '-RpvU'];"
 PATCHED="    my \$cmd = ['zfs', 'send', '-RpvUL'];"
 
 write_status() {
   local state=$1
-  local restart_state=${2:-not-run}
   local package_version
   package_version=$(dpkg-query -W -f='${Version}' libpve-storage-perl 2>/dev/null || true)
   {
     printf 'state=%s\n' "${state}"
-    printf 'services_restart=%s\n' "${restart_state}"
     printf 'timestamp_utc=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     printf 'target=%s\n' "${TARGET}"
     printf 'package=libpve-storage-perl\n'
     printf 'package_version=%s\n' "${package_version}"
     grep -nF "['zfs', 'send'" "${TARGET}" || true
   } > "${STATUS_FILE}"
-}
-
-restart_pve_services() {
-  # Proxmox Perl daemons keep modules loaded; restart them so ZFSPoolPlugin.pm
-  # changes affect scheduled replication/migration immediately after deploy or apt hooks.
-  systemctl try-restart "${PVE_SERVICES[@]}"
 }
 
 mkdir -p "${STATE_DIR}" "${BACKUP_DIR}"
@@ -77,15 +68,9 @@ else
   exit 1
 fi
 
-restart_state=restarted
-if ! restart_pve_services; then
-  restart_state=failed
-  write_status "${state}" "${restart_state}"
-  echo "failed to restart Proxmox services: ${PVE_SERVICES[*]}" >&2
-  exit 1
-fi
-
-write_status "${state}" "${restart_state}"
+# Replication and migration tasks run in forked workers, which load this module
+# from disk on the next job; no Proxmox service restart is required.
+write_status "${state}"
 
 cat "${STATUS_FILE}"
 SCRIPT
