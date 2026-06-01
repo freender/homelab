@@ -67,10 +67,8 @@ EOF
 }
 
 notify_corruption() {
-    local vmid=$1 phase=$2 db=$3 rc=$4 detail=$5 auto_restore_note
+    local vmid=$1 phase=$2 db=$3 rc=$4 detail=$5
     local msg latest_backup restore_cmd peer_copy peer_node peer_sha peer_mtime peer_restore_cmd
-
-    auto_restore_note=${6:-}
 
     local env_locations=("/etc/homelab/telegram.env" "/etc/apcupsd/telegram/telegram.env")
     for f in "${env_locations[@]}"; do
@@ -110,49 +108,13 @@ bbolt rc: %s
 
 Restore:
 `%s`' \
-        "$vmid" "$(hostname -s)" "$phase" "$db" "$rc" "$detail" "$auto_restore_note" "$restore_cmd")"
+        "$vmid" "$(hostname -s)" "$phase" "$db" "$rc" "$detail" "Auto-restore: disabled; manual action required." "$restore_cmd")"
 
     curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage" \
         --data-urlencode "chat_id=${TELEGRAM_CHATID}" \
         --data-urlencode "text=${msg}" \
         --data-urlencode "parse_mode=Markdown" \
         >/dev/null || true
-}
-
-auto_restore_from_peer() {
-    local db=$1
-    local peer_copy peer_node peer_sha peer_mtime tmp_db
-
-    case "$PHASE" in
-        pre-start) ;;
-        *)
-            return 1
-            ;;
-    esac
-
-    peer_copy=$(peer_clean_copy "$db" || true)
-    [[ -n $peer_copy ]] || return 1
-
-    IFS='|' read -r peer_node peer_sha peer_mtime <<<"$peer_copy"
-
-    tmp_db=$(mktemp /tmp/homelab-docker-bbolt-restore.XXXXXX.db) || return 1
-    if ! scp -q -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new \
-        "root@${peer_node}:$db" "$tmp_db"; then
-        rm -f "$tmp_db"
-        return 1
-    fi
-
-    if ! cmp -s "$tmp_db" "$db" 2>/dev/null; then
-        if cp --reflink=auto --sparse=always "$tmp_db" "$db" 2>/dev/null; then
-            sync -f "$db" 2>/dev/null || sync
-            rm -f "$tmp_db"
-            printf 'Auto-restored from peer %s (sha256=%s mtime=%s)' "$peer_node" "$peer_sha" "$peer_mtime"
-            return 0
-        fi
-    fi
-
-    rm -f "$tmp_db"
-    return 1
 }
 
 check_db() {
@@ -191,10 +153,8 @@ check_db() {
         if [[ $rc -eq 0 ]]; then
             log "result=OK rc=$rc elapsed=${elapsed}s label=$label rootfs_ref=$rootfs_ref rootfs_path=$rootfs_path db=$db size=$size mtime=\"$mtime\" sha256=$sha_before copy_sha256=$sha_copy"
         else
-            auto_restore_note=$(auto_restore_from_peer "$db" || true)
             log "result=FAIL rc=$rc elapsed=${elapsed}s label=$label rootfs_ref=$rootfs_ref rootfs_path=$rootfs_path db=$db size=$size mtime=\"$mtime\" sha256=$sha_before copy_sha256=$sha_copy detail=\"$detail\""
-            [[ -n ${auto_restore_note:-} ]] && log "result=RESTORE label=$label db=$db detail=\"$auto_restore_note\""
-            notify_corruption "$VMID" "$PHASE" "$label" "$rc" "$detail" "$auto_restore_note"
+            notify_corruption "$VMID" "$PHASE" "$label" "$rc" "$detail"
         fi
     else
         log "result=SHA_ONLY reason=bbolt_missing label=$label rootfs_ref=$rootfs_ref rootfs_path=$rootfs_path db=$db size=$size mtime=\"$mtime\" sha256=$sha_before copy_sha256=$sha_copy"
