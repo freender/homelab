@@ -109,6 +109,16 @@ PVE physical NIC naming and Wake-on-LAN configuration
 ./deploy pve-interface-pinning all
 ```
 
+### Proxmox Upstream Patches
+Local patches for Proxmox behavior that should be removed when equivalent
+upstream fixes ship:
+
+- [pve-zfs-large-block-patch](pve-zfs-large-block-patch/): Bug 4603 - Add support for migrating ZFS datasets with large_blocks
+- [pve-zfs-migration-sync-patch](pve-zfs-migration-sync-patch/): Bug 7653 - LXC migration on zfspool snapshot may contain stale data
+
+Revert these local patches and remove the modules after the corresponding
+Proxmox fixes are included upstream.
+
 ### [ssh-config](ssh-config/)
 SSH config auto-deployment
 - Uses `*.freender.internal` DNS for home
