@@ -19,7 +19,6 @@ from .pve_lxc_docker_hooks import deploy as deploy_pve_lxc_docker_hooks
 from .pve_postinstall import deploy as deploy_pve_postinstall
 from .pve_pxe import deploy as deploy_pve_pxe
 from .pve_realtek_r8152_dkms import deploy as deploy_pve_realtek_r8152_dkms
-from .pve_sdn import deploy as deploy_pve_sdn
 from .pve_zfs_large_block_patch import deploy as deploy_pve_zfs_large_block_patch
 from .pve_zfs_migration_sync_patch import deploy as deploy_pve_zfs_migration_sync_patch
 from .ssh_config import deploy as deploy_ssh_config
@@ -86,10 +85,6 @@ MODULES: dict[str, ModuleDefinition] = {
         name="PVE LXC Docker Hooks",
         deploy=deploy_pve_lxc_docker_hooks,
     ),
-    "pve-sdn": ModuleDefinition(
-        name="PVE SDN",
-        deploy=deploy_pve_sdn,
-    ),
     "pve-gpu-passthrough": ModuleDefinition(
         name="GPU Passthrough Configs",
         deploy=deploy_pve_gpu_passthrough,
@@ -112,7 +107,6 @@ MODULE_ORDER = [
     "pve-postinstall",
     "pve-realtek-r8152-dkms",
     "pve-pxe",
-    "pve-sdn",
     "pve-backup",
     "apcupsd",
     "pve-exporters",
