@@ -16,8 +16,8 @@ Manually repairs a Docker LXC whose containerd bbolt DB is corrupt by:
   2. Verifying one or more containerd bbolt DB checks fail.
   3. Stopping Docker/containerd inside the CT.
   4. Re-checking stable DB copies after services are stopped.
-  5. Backing up and moving only still-corrupt DBs aside.
-  6. Starting containerd/docker with fresh DBs for the moved paths.
+  5. Deleting only still-corrupt DBs (containerd recreates them fresh).
+  6. Starting containerd/docker with fresh DBs for the deleted paths.
   7. Optionally running rm.sh and start.sh from the redeploy directory.
 
 Options:
@@ -73,19 +73,12 @@ check_db_copy() {
     return "$rc"
 }
 
-backup_and_move_db() {
+remove_corrupt_db() {
     local db=$1
-    local rel backup_copy moved_live
 
-    rel=${db#"$containerd_root"/}
-    backup_copy="$backup_dir/$rel.corrupt-copy"
-    moved_live="$backup_dir/$rel.moved-from-live"
-
-    mkdir -p "$(dirname "$backup_copy")" "$(dirname "$moved_live")"
-    cp -a "$db" "$backup_copy"
-    sha256sum "$backup_copy" | tee "$backup_copy.sha256"
-    mv "$db" "$moved_live"
+    rm -f "$db"
     install -d -m 0711 "$(dirname "$db")"
+    info "removed corrupt db: $(basename "$db")"
 }
 
 vmid=${1:-}
@@ -162,12 +155,6 @@ if [[ ${#failed_dbs[@]} -eq 0 ]]; then
     exit 0
 fi
 
-ts=$(date -u +%Y%m%dT%H%M%SZ)
-backup_dir="$rootfs_path/root/containerd-bbolt-corrupt-$ts"
-info "backup dir inside CT rootfs: $backup_dir"
-mkdir -p "$backup_dir"
-pct config "$vmid" >"$backup_dir/pct-config.txt" 2>&1 || true
-
 info "stopping Docker and containerd inside CT $vmid"
 pct exec "$vmid" -- bash -lc 'systemctl stop docker.service docker.socket containerd.service || true'
 sleep 3
@@ -193,9 +180,9 @@ if [[ ${#still_failed_dbs[@]} -eq 0 ]]; then
     info "all bbolt checks passed after stopping services; leaving DBs in place"
     repaired=false
 else
-    info "moving ${#still_failed_dbs[@]} corrupt bbolt DB(s) out of live containerd paths"
+    info "removing ${#still_failed_dbs[@]} corrupt bbolt DB(s)"
     for db in "${still_failed_dbs[@]}"; do
-        backup_and_move_db "$db"
+        remove_corrupt_db "$db"
     done
     repaired=true
 fi
