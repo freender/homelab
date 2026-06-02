@@ -5,23 +5,25 @@ set -euo pipefail
 
 BBOLT=${BBOLT:-/usr/local/bin/bbolt}
 CONTAINERD_REL=var/lib/containerd
-APPDATA_ROOT=/mnt/cache/appdata
+DEFAULT_REDEPLOY_DIR=/mnt/cache/appdata
 
 usage() {
     cat <<'EOF'
-Usage: homelab-docker-bbolt-repair.sh <vmid> --yes [--redeploy]
+Usage: homelab-docker-bbolt-repair.sh <vmid> --yes [--redeploy] [--redeploy-dir PATH]
 
-Manually repairs a Docker LXC whose containerd metadata DB is corrupt by:
+Manually repairs a Docker LXC whose containerd bbolt DB is corrupt by:
   1. Verifying the CT is running on this PVE node.
-  2. Verifying containerd metadata bbolt check fails.
+  2. Verifying one or more containerd bbolt DB checks fail.
   3. Stopping Docker/containerd inside the CT.
-  4. Backing up and moving the corrupt metadata DB aside.
-  5. Starting containerd/docker with a fresh metadata DB.
-  6. Optionally running /mnt/cache/appdata/rm.sh and start.sh.
+  4. Re-checking stable DB copies after services are stopped.
+  5. Backing up and moving only still-corrupt DBs aside.
+  6. Starting containerd/docker with fresh DBs for the moved paths.
+  7. Optionally running rm.sh and start.sh from the redeploy directory.
 
 Options:
-  --yes       Required. Confirms destructive Docker runtime metadata cleanup.
-  --redeploy  After Docker starts, run appdata rm.sh and start.sh.
+  --yes                Required. Confirms destructive Docker runtime metadata cleanup.
+  --redeploy           After Docker starts, run rm.sh and start.sh when present.
+  --redeploy-dir PATH  Directory containing rm.sh/start.sh. Default: /mnt/cache/appdata.
 EOF
 }
 
@@ -34,12 +36,65 @@ info() {
     printf '>>> %s\n' "$*"
 }
 
+collect_bbolt_dbs() {
+    local db
+
+    dbs=()
+    shopt -s nullglob
+    for db in \
+        "$containerd_root"/io.containerd.*.bolt/*.db \
+        "$containerd_root"/io.containerd.snapshotter.v1.*/*.db; do
+        [[ -f $db ]] || continue
+        dbs+=("$db")
+    done
+    shopt -u nullglob
+}
+
+check_db_copy() {
+    local db=$1
+    local tmp out rc
+
+    CHECK_DETAIL=
+    tmp=$(mktemp /tmp/homelab-bbolt-repair.XXXXXX.db)
+    out=$(mktemp /tmp/homelab-bbolt-repair.XXXXXX.out)
+    if ! cp --reflink=auto --sparse=always "$db" "$tmp" 2>"$out"; then
+        CHECK_DETAIL=$(tr '\n' ' ' <"$out" | cut -c1-700)
+        rm -f "$tmp" "$out"
+        return 125
+    fi
+
+    set +e
+    timeout 120 "$BBOLT" check "$tmp" >"$out" 2>&1
+    rc=$?
+    set -e
+
+    CHECK_DETAIL=$(tr '\n' ' ' <"$out" | cut -c1-700)
+    rm -f "$tmp" "$out"
+    return "$rc"
+}
+
+backup_and_move_db() {
+    local db=$1
+    local rel backup_copy moved_live
+
+    rel=${db#"$containerd_root"/}
+    backup_copy="$backup_dir/$rel.corrupt-copy"
+    moved_live="$backup_dir/$rel.moved-from-live"
+
+    mkdir -p "$(dirname "$backup_copy")" "$(dirname "$moved_live")"
+    cp -a "$db" "$backup_copy"
+    sha256sum "$backup_copy" | tee "$backup_copy.sha256"
+    mv "$db" "$moved_live"
+    install -d -m 0711 "$(dirname "$db")"
+}
+
 vmid=${1:-}
 [[ -n $vmid ]] || { usage; exit 1; }
 shift || true
 
 confirm=false
 redeploy=false
+redeploy_dir=$DEFAULT_REDEPLOY_DIR
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --yes)
@@ -47,6 +102,11 @@ while [[ $# -gt 0 ]]; do
             ;;
         --redeploy)
             redeploy=true
+            ;;
+        --redeploy-dir)
+            shift
+            [[ -n ${1:-} ]] || die "--redeploy-dir requires a path"
+            redeploy_dir=$1
             ;;
         -h|--help)
             usage
@@ -78,32 +138,34 @@ if [[ -z ${rootfs_path:-} || ! -d $rootfs_path ]]; then
 fi
 [[ -d $rootfs_path ]] || die "CT $vmid rootfs path not found: $rootfs_path"
 
-db="$rootfs_path/$CONTAINERD_REL/io.containerd.metadata.v1.bolt/meta.db"
-[[ -f $db ]] || die "containerd metadata DB not found: $db"
+containerd_root="$rootfs_path/$CONTAINERD_REL"
+[[ -d $containerd_root ]] || die "containerd root not found: $containerd_root"
 
-tmp=$(mktemp /tmp/homelab-bbolt-repair.XXXXXX.db)
-out=$(mktemp /tmp/homelab-bbolt-repair.XXXXXX.out)
-cleanup() {
-    rm -f "$tmp" "$out"
-}
-trap cleanup EXIT
+collect_bbolt_dbs
+[[ ${#dbs[@]} -gt 0 ]] || die "no containerd bbolt DBs found under $containerd_root"
 
-info "checking containerd DB copy for CT $vmid"
-cp --reflink=auto --sparse=always "$db" "$tmp"
-if timeout 120 "$BBOLT" check "$tmp" >"$out" 2>&1; then
-    info "bbolt check passed; refusing to repair a healthy DB"
+info "checking ${#dbs[@]} containerd bbolt DB copies for CT $vmid"
+failed_dbs=()
+for db in "${dbs[@]}"; do
+    rel=${db#"$containerd_root"/}
+    if check_db_copy "$db"; then
+        info "ok: $rel"
+    else
+        rc=$?
+        info "failed before stop: $rel rc=$rc detail=$CHECK_DETAIL"
+        failed_dbs+=("$db")
+    fi
+done
+
+if [[ ${#failed_dbs[@]} -eq 0 ]]; then
+    info "all bbolt checks passed; refusing to repair healthy DBs"
     exit 0
 fi
-rc=$?
-detail=$(tr '\n' ' ' <"$out" | cut -c1-700)
-info "bbolt check failed rc=$rc detail=$detail"
 
 ts=$(date -u +%Y%m%dT%H%M%SZ)
 backup_dir="$rootfs_path/root/containerd-bbolt-corrupt-$ts"
 info "backup dir inside CT rootfs: $backup_dir"
 mkdir -p "$backup_dir"
-cp -a "$db" "$backup_dir/meta.db.corrupt-copy"
-sha256sum "$backup_dir/meta.db.corrupt-copy" | tee "$backup_dir/meta.db.corrupt-copy.sha256"
 pct config "$vmid" >"$backup_dir/pct-config.txt" 2>&1 || true
 
 info "stopping Docker and containerd inside CT $vmid"
@@ -113,18 +175,47 @@ pct exec "$vmid" -- bash -lc 'pkill -TERM -x docker-proxy || true; pkill -TERM -
 sleep 3
 pct exec "$vmid" -- bash -lc 'pkill -KILL -x docker-proxy || true; pkill -KILL -x containerd-shim || true'
 
-info "moving corrupt DB out of live containerd path"
-mv "$db" "$backup_dir/meta.db.moved-from-live"
-install -d -m 0711 "$(dirname "$db")"
+info "re-checking stable bbolt DB copies after Docker/containerd stop"
+still_failed_dbs=()
+for db in "${dbs[@]}"; do
+    [[ -f $db ]] || continue
+    rel=${db#"$containerd_root"/}
+    if check_db_copy "$db"; then
+        info "ok after stop: $rel"
+    else
+        rc=$?
+        info "still failed: $rel rc=$rc detail=$CHECK_DETAIL"
+        still_failed_dbs+=("$db")
+    fi
+done
+
+if [[ ${#still_failed_dbs[@]} -eq 0 ]]; then
+    info "all bbolt checks passed after stopping services; leaving DBs in place"
+    repaired=false
+else
+    info "moving ${#still_failed_dbs[@]} corrupt bbolt DB(s) out of live containerd paths"
+    for db in "${still_failed_dbs[@]}"; do
+        backup_and_move_db "$db"
+    done
+    repaired=true
+fi
 
 info "starting containerd and Docker inside CT $vmid"
 pct exec "$vmid" -- bash -lc 'systemctl reset-failed docker.service containerd.service || true; systemctl start containerd; systemctl start docker'
 sleep 5
 pct exec "$vmid" -- bash -lc 'systemctl is-active containerd docker; docker version >/dev/null'
 
-if [[ $redeploy == true ]]; then
-    info "running appdata rm.sh and start.sh inside CT $vmid"
-    pct exec "$vmid" -- bash -lc "cd '$APPDATA_ROOT' && printf 'yes\n' | ./rm.sh && ./start.sh"
+if [[ $redeploy == true && $repaired == true ]]; then
+    info "running redeploy scripts inside CT $vmid when present: $redeploy_dir"
+    pct exec "$vmid" -- bash -lc '
+        redeploy_dir=$1
+        cd "$redeploy_dir"
+        [[ -x ./rm.sh && -x ./start.sh ]] || { printf "redeploy scripts missing or not executable in %s\n" "$redeploy_dir" >&2; exit 1; }
+        printf "yes\n" | ./rm.sh
+        ./start.sh
+    ' bash "$redeploy_dir"
+elif [[ $redeploy == true ]]; then
+    info "skipping redeploy because no DB was moved"
 fi
 
 info "container state after repair"

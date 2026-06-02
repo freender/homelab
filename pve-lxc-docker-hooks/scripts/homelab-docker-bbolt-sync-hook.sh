@@ -6,6 +6,8 @@ PHASE=${2:-unknown}
 BBOLT=/usr/local/bin/bbolt
 LOG=/var/log/homelab-docker-bbolt-sync-hook.log
 CONTAINERD_REL=var/lib/containerd
+COPY_TIMEOUT=${BBOLT_HOOK_COPY_TIMEOUT:-30}
+CHECK_TIMEOUT=${BBOLT_HOOK_CHECK_TIMEOUT:-30}
 
 log() {
     local msg=$*
@@ -48,6 +50,8 @@ bbolt rc: %s
 
 %s
 
+Recommendation: run the manual repair on the current CT host. It stops Docker/containerd, re-checks all containerd bbolt DBs from stable copies, and only moves DBs that still fail.
+
 Manual repair:
 `%s`' \
         "$vmid" "$(hostname -s)" "$phase" "$db" "$rc" "$detail" "Auto-restore: disabled; manual action required." "$repair_cmd")"
@@ -78,9 +82,11 @@ check_db() {
         return 0
     }
 
-    if ! cp --reflink=auto --sparse=always "$db" "$tmp" 2>"$out"; then
+    timeout "$COPY_TIMEOUT" cp --reflink=auto --sparse=always "$db" "$tmp" 2>"$out"
+    rc=$?
+    if [[ $rc -ne 0 ]]; then
         detail=$(tr '\n' ' ' <"$out" | cut -c1-700)
-        log "result=FAIL step=copy label=$label rootfs_ref=$rootfs_ref rootfs_path=$rootfs_path db=$db size=$size mtime=\"$mtime\" sha256=$sha_before detail=\"$detail\""
+        log "result=SKIP step=copy rc=$rc copy_timeout=${COPY_TIMEOUT}s label=$label rootfs_ref=$rootfs_ref rootfs_path=$rootfs_path db=$db size=$size mtime=\"$mtime\" sha256=$sha_before detail=\"$detail\""
         rm -f "$tmp" "$out"
         return 0
     fi
@@ -88,12 +94,14 @@ check_db() {
     sha_copy=$(sha256sum "$tmp" 2>/dev/null | awk '{print $1}' || printf unknown)
     if [[ -x $BBOLT ]]; then
         start=$(date +%s)
-        timeout 120 "$BBOLT" check "$tmp" >"$out" 2>&1
+        timeout "$CHECK_TIMEOUT" "$BBOLT" check "$tmp" >"$out" 2>&1
         rc=$?
         elapsed=$(( $(date +%s) - start ))
         detail=$(tr '\n' ' ' <"$out" | cut -c1-700)
         if [[ $rc -eq 0 ]]; then
             log "result=OK rc=$rc elapsed=${elapsed}s label=$label rootfs_ref=$rootfs_ref rootfs_path=$rootfs_path db=$db size=$size mtime=\"$mtime\" sha256=$sha_before copy_sha256=$sha_copy"
+        elif [[ $rc -eq 124 ]]; then
+            log "result=SKIP reason=check_timeout rc=$rc check_timeout=${CHECK_TIMEOUT}s elapsed=${elapsed}s label=$label rootfs_ref=$rootfs_ref rootfs_path=$rootfs_path db=$db size=$size mtime=\"$mtime\" sha256=$sha_before copy_sha256=$sha_copy detail=\"$detail\""
         else
             log "result=FAIL rc=$rc elapsed=${elapsed}s label=$label rootfs_ref=$rootfs_ref rootfs_path=$rootfs_path db=$db size=$size mtime=\"$mtime\" sha256=$sha_before copy_sha256=$sha_copy detail=\"$detail\""
             notify_corruption "$VMID" "$PHASE" "$label" "$rc" "$detail"
@@ -119,6 +127,20 @@ add_sync_path() {
     sync_paths+=("$path")
 }
 
+collect_bbolt_dbs() {
+    local db
+
+    dbs=()
+    shopt -s nullglob
+    for db in \
+        "$containerd_root"/io.containerd.*.bolt/*.db \
+        "$containerd_root"/io.containerd.snapshotter.v1.*/*.db; do
+        [[ -f $db ]] || continue
+        dbs+=("$db")
+    done
+    shopt -u nullglob
+}
+
 rootfs_ref=$(pct config "$VMID" 2>/dev/null | awk -F': ' '/^rootfs:/{print $2; exit}' | cut -d, -f1)
 if [[ -z ${rootfs_ref:-} ]]; then
     log "result=SKIP reason=rootfs_ref_missing"
@@ -139,6 +161,16 @@ if [[ ! -d $containerd_root ]]; then
     finish
 fi
 
+lock_file=/run/homelab-docker-bbolt-sync-hook.lock
+if ! exec 9>"$lock_file"; then
+    log "result=SKIP reason=lock_open_failed lock=$lock_file"
+    finish
+fi
+if ! flock -n 9; then
+    log "result=SKIP reason=already_running lock=$lock_file"
+    finish
+fi
+
 sync_fsids=()
 sync_paths=()
 add_sync_path "$rootfs_path"
@@ -152,17 +184,7 @@ while IFS= read -r volume_ref; do
     add_sync_path "$volume_path"
 done < <(pct config "$VMID" 2>/dev/null | awk -F': ' '/^mp[0-9]+:/{print $2}' | cut -d, -f1)
 
-dbs=()
-for db in \
-    "$containerd_root"/io.containerd.metadata.v1.bolt/meta.db \
-    "$containerd_root"/io.containerd.mount-manager.v1.bolt/meta.db; do
-    # io.containerd.snapshotter.v1.overlayfs/metadata.db is excluded: it can
-    # be 2GB+ and bbolt check on it takes 60-120s, blocking CT lifecycle hooks.
-    # It is also not the database that triggers the containerd panic on corrupt
-    # migration snapshots; meta.db (above) is the critical one.
-    [[ -f $db ]] || continue
-    dbs+=("$db")
-done
+collect_bbolt_dbs
 
 if [[ ${#dbs[@]} -eq 0 ]]; then
     log "result=SKIP reason=dbs_missing rootfs_ref=$rootfs_ref rootfs_path=$rootfs_path containerd_root=$containerd_root"
