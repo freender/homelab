@@ -25,8 +25,9 @@ STATUS_FILE=${STATE_DIR}/status
 
 # ---------------------------------------------------------------------------
 # Storage.pm patch: non-replicated migration path
-#   Adds zpool sync before volume_snapshot() in $volume_export_prepare so
-#   migration snapshots taken via storage_migrate() flush dirty TXG data first.
+#   Adds syncfs before volume_snapshot() in $volume_export_prepare so migration
+#   snapshots taken via storage_migrate() flush dirty Linux page-cache data into
+#   ZFS before the snapshot TXG commit.
 # ---------------------------------------------------------------------------
 STORAGE_ORIGINAL=$(cat <<'EOF'
     volume_snapshot($cfg, $volid, $snapshot) if $migration_snapshot;
@@ -34,6 +35,21 @@ EOF
 )
 
 STORAGE_PATCHED=$(cat <<'EOF'
+    if ($migration_snapshot) {
+        my ($sid) = parse_volume_id($volid);
+        my $scfg = storage_config($cfg, $sid);
+        if ($scfg->{type} eq 'zfspool') {
+            my $path = path($cfg, $volid);
+            if (defined($path) && -d $path) {
+                PVE::Tools::run_command(['/usr/bin/sync', '--file-system', $path]);
+            }
+        }
+        volume_snapshot($cfg, $volid, $snapshot);
+    }
+EOF
+)
+
+STORAGE_OLD_PATCHED=$(cat <<'EOF'
     if ($migration_snapshot) {
         my ($sid) = parse_volume_id($volid);
         my $scfg = storage_config($cfg, $sid);
@@ -110,7 +126,7 @@ write_status() {
     printf 'replication_target=%s\n' "${TARGET_REPLICATION}"
     printf 'package_libpve_storage=%s\n' "${storage_ver}"
     printf 'package_pve_container=%s\n' "${replication_ver}"
-    grep -nF "zpool', 'sync'" "${TARGET_STORAGE}" || true
+    grep -nF -- "--file-system" "${TARGET_STORAGE}" || true
     grep -nF "syncfs" "${TARGET_REPLICATION}" || true
   } > "${STATUS_FILE}"
 }
@@ -126,11 +142,18 @@ if [[ ! -f ${TARGET_STORAGE} ]]; then
   exit 1
 fi
 
-storage_patched_count=$(grep -Fc "zpool', 'sync'" "${TARGET_STORAGE}" || true)
+storage_patched_count=$(grep -Fc "'/usr/bin/sync', '--file-system'" "${TARGET_STORAGE}" || true)
+storage_old_patched_count=$(grep -Fc "zpool', 'sync'" "${TARGET_STORAGE}" || true)
 storage_original_count=$(grep -Fc "volume_snapshot(\$cfg, \$volid, \$snapshot) if \$migration_snapshot;" "${TARGET_STORAGE}" || true)
 
 if [[ ${storage_patched_count} -ge 1 && ${storage_original_count} -eq 0 ]]; then
   storage_state=already-patched
+elif [[ ${storage_patched_count} -eq 0 && ${storage_old_patched_count} -eq 1 && ${storage_original_count} -eq 0 ]]; then
+  backup="${BACKUP_DIR}/Storage.pm.$(date -u +%Y%m%dT%H%M%SZ).bak"
+  cp "${TARGET_STORAGE}" "${backup}"
+  PATCHED_BLOCK=${STORAGE_PATCHED} OLD_PATCHED_BLOCK=${STORAGE_OLD_PATCHED} \
+    perl -0pi -e 's/\Q$ENV{OLD_PATCHED_BLOCK}\E/$ENV{PATCHED_BLOCK}/' "${TARGET_STORAGE}"
+  storage_state=upgraded-syncfs
 elif [[ ${storage_patched_count} -eq 0 && ${storage_original_count} -eq 1 ]]; then
   backup="${BACKUP_DIR}/Storage.pm.$(date -u +%Y%m%dT%H%M%SZ).bak"
   cp "${TARGET_STORAGE}" "${backup}"
