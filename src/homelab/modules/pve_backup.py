@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from .. import backup_excludes
+from .. import backup_excludes, op_secrets
 from ..deploy import DeploySession, force_env, prepare_build_dir, stage_and_run_remote_installer
 from ..hosts import default_registry
 from ..output import print_action, print_sub
@@ -130,18 +130,22 @@ def build_standalone_backup_plans(root: Path, host: str, build_dir: Path) -> Non
         return
     storage_lines = [f"STORAGE_COUNT='{len(storages)}'"]
     for index, storage in enumerate(storages):
-        for required in ["name", "server", "datastore", "username", "fingerprint"]:
+        for required in ["name", "server", "datastore", "username"]:
             if not storage.get(required):
                 raise ValueError(
                     f"Invalid standalone storage entry at index {index} for {host}"
                 )
+        fingerprint = storage.get("fingerprint") or read_pbs_fingerprint(
+            root,
+            str(storage["name"]),
+        )
         password_var = f"PBS_{normalize_storage_name(storage['name'])}_PASSWORD"
         storage_lines.extend([
             f"STORAGE_{index}_NAME='{shell_quote(storage['name'])}'",
             f"STORAGE_{index}_SERVER='{shell_quote(storage['server'])}'",
             f"STORAGE_{index}_DATASTORE='{shell_quote(storage['datastore'])}'",
             f"STORAGE_{index}_USERNAME='{shell_quote(storage['username'])}'",
-            f"STORAGE_{index}_FINGERPRINT='{shell_quote(storage['fingerprint'])}'",
+            f"STORAGE_{index}_FINGERPRINT='{shell_quote(fingerprint)}'",
             f"STORAGE_{index}_PASSWORD_VAR='{shell_quote(password_var)}'",
         ])
     (build_dir / "storage-plan.conf").write_text(
@@ -231,6 +235,18 @@ def build_standalone_backup_plans(root: Path, host: str, build_dir: Path) -> Non
         "\n".join(job_lines) + "\n",
         encoding="utf-8",
     )
+
+
+def read_pbs_fingerprint(root: Path, storage_name: str) -> str:
+    secret_name = f"pbs-{storage_name}"
+    path = op_secrets.secret_file(root, secret_name)
+    env = op_secrets.parse_env_file(path)
+    fingerprint = env.get("PBS_FINGERPRINT", "").strip()
+    if not fingerprint:
+        raise op_secrets.OpSecretsError(
+            f"PBS_FINGERPRINT is empty in rendered secret '{secret_name}'"
+        )
+    return fingerprint
 
 
 def build_config_restore_plan(root: Path, host: str, build_dir: Path) -> None:

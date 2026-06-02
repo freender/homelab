@@ -78,7 +78,7 @@ def deploy(
         return 1
 
     try:
-        pdm_cfg = _load_pdm_config(registry, pdm_host_name)
+        pdm_cfg = _load_pdm_config(root, registry, pdm_host_name)
     except ValueError as exc:
         print_error(str(exc))
         return 1
@@ -160,7 +160,7 @@ def validate(
             return  # nothing to validate
         pdm_host = pdm_hosts[0]
 
-    _load_pdm_config(registry, pdm_host)
+    _load_pdm_config(root, registry, pdm_host)
 
     if pve_hosts is None:
         pve_hosts = [
@@ -260,9 +260,9 @@ def _is_pdm_host(registry: Any, host: str) -> bool:
         return False
 
 
-def _load_pdm_config(registry: Any, pdm_host: str) -> dict:
+def _load_pdm_config(root: Path, registry: Any, pdm_host: str) -> dict:
     required_keys = (
-        "pdm_host", "pdm_cert_fingerprint", "pdm_token_id",
+        "pdm_host", "pdm_token_id",
         "install_auth_token_name", "root_ssh_key", "mailto", "keyboard", "country",
     )
     cfg: dict = {}
@@ -271,6 +271,14 @@ def _load_pdm_config(registry: Any, pdm_host: str) -> dict:
             cfg[key] = str(registry.get(pdm_host, f"pve-autoinstall.{key}"))
         except HostLookupError:
             raise ValueError(f"pve-autoinstall.{key} missing for PDM host {pdm_host}")
+    try:
+        cfg["pdm_cert_fingerprint"] = _read_secret_field(
+            root,
+            PDM_SECRET_NAME,
+            "PDM_CERT_FINGERPRINT",
+        )
+    except op_secrets.OpSecretsError as exc:
+        raise ValueError(str(exc)) from exc
     cfg["pdm_port"] = int(registry.get(pdm_host, "pve-autoinstall.pdm_port", 8443))
     return cfg
 

@@ -92,12 +92,23 @@ def _read_token(root: Path) -> str:
     return token
 
 
+def _read_pdm_cert_fingerprint(root: Path) -> str:
+    env_path = op_secrets.secret_file(root, SECRET_NAME)
+    env = op_secrets.parse_env_file(env_path)
+    fingerprint = env.get("PDM_CERT_FINGERPRINT", "").strip()
+    if not fingerprint:
+        raise ValueError(
+            f"PDM_CERT_FINGERPRINT is empty in rendered secret '{SECRET_NAME}'"
+        )
+    return fingerprint
+
+
 def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
     registry = default_registry(root)
 
     mgmt_ip = str(registry.get(host, "pve-pxe.mgmt_ip"))
     pdm_url = str(registry.get(host, "pve-pxe.pdm_url"))
-    pdm_cert_fingerprint = str(registry.get(host, "pve-pxe.pdm_cert_fingerprint"))
+    pdm_cert_fingerprint = _read_pdm_cert_fingerprint(root)
     autoupdate_schedule = str(
         registry.get(host, "pve-pxe.autoupdate_schedule", "*-*-* 09:00:00")
     )
