@@ -12,6 +12,7 @@ from .docker import deploy as deploy_docker
 from .keepalived import deploy as deploy_keepalived
 from .pbs_client_backup import deploy as deploy_pbs_client_backup
 from .pve_autoinstall import deploy as deploy_pve_autoinstall
+from .pve_autoinstall_iso import deploy as deploy_pve_autoinstall_iso
 from .pve_backup import deploy as deploy_pve_backup
 from .pve_exporters import deploy as deploy_pve_exporters
 from .pve_gpu_passthrough import deploy as deploy_pve_gpu_passthrough
@@ -70,6 +71,10 @@ MODULES: dict[str, ModuleDefinition] = {
         name="PVE Automated Install (PDM Answers)",
         deploy=deploy_pve_autoinstall,
     ),
+    "pve-autoinstall-iso": ModuleDefinition(
+        name="PVE Automated Install (Baked ISO)",
+        deploy=deploy_pve_autoinstall_iso,
+    ),
     "pve-postinstall": ModuleDefinition(
         name="PVE Post-Install Configs",
         deploy=deploy_pve_postinstall,
@@ -111,6 +116,7 @@ MODULE_ORDER = [
     "pve-interface-pinning",
     "pve-postinstall",
     "pve-autoinstall",
+    "pve-autoinstall-iso",
     "pve-realtek-r8152-dkms",
     "pve-pxe",
     "pve-backup",

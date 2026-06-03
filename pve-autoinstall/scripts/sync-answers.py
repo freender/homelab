@@ -138,11 +138,8 @@ def main() -> None:
             env[k.strip()] = v.strip()
 
     pdm_token_secret = env.get("PDM_DEPLOY_TOKEN", "").strip()
-    root_password = env.get("PVE_ROOT_PASSWORD", "").strip()
     if not pdm_token_secret:
         fail("PDM_DEPLOY_TOKEN empty in token file")
-    if not root_password:
-        fail("PVE_ROOT_PASSWORD empty in token file")
 
     pdm = plan["pdm"]
     client = PdmClient(
@@ -159,10 +156,13 @@ def main() -> None:
             log(f"  {entry['id']}: {entry['fqdn']} cidr={entry['cidr']}")
         return
 
-    pwd_hash = hash_password(root_password)
-
     for entry in plan["answers"]:
         name = entry["id"]
+        host = entry.get("_host", name)
+        root_password = env.get(f"PVE_ROOT_PASSWORD__{host}", "").strip()
+        if not root_password:
+            fail(f"PVE_ROOT_PASSWORD__{host} empty in token file")
+        pwd_hash = hash_password(root_password)
         payload = dict(entry)
         payload["root-password-hashed"] = pwd_hash
         # Remove non-PDM planning fields

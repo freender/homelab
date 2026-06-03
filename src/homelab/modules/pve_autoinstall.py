@@ -32,6 +32,7 @@ from ..ssh import HostConnection, offline_mode
 
 PDM_SECRET_NAME = "pdm-deploy-token"
 PWD_SECRET_NAME = "pve-root-password"
+PWD_ENV_KEY = "PVE_ROOT_PASSWORD"
 REMOTE_ROOT = "/tmp/homelab-pve-autoinstall"
 
 
@@ -126,7 +127,7 @@ def deploy(
     # Resolve secrets.
     try:
         pdm_token_secret = _read_secret_field(root, PDM_SECRET_NAME, "PDM_DEPLOY_TOKEN")
-        root_password = _read_secret_field(root, PWD_SECRET_NAME, "PVE_ROOT_PASSWORD")
+        root_passwords = _read_root_passwords(root, registry, pve_hosts)
     except op_secrets.OpSecretsError as exc:
         print_error(str(exc))
         return 1
@@ -135,7 +136,7 @@ def deploy(
     session.run(
         lambda host: _run_on_pdm_host(
             root, registry, pdm_host_name, plan, pdm_token_secret,
-            root_password, force,
+            root_passwords, force,
         ),
         [pdm_host_name],
     )
@@ -171,7 +172,7 @@ def validate(
     for host in pve_hosts:
         _validate_pve_host(registry, host)
 
-    for secret_name in (PDM_SECRET_NAME, PWD_SECRET_NAME):
+    for secret_name in (PDM_SECRET_NAME,):
         try:
             op_secrets.secret_file(root, secret_name)
         except op_secrets.OpSecretsError as exc:
@@ -188,7 +189,7 @@ def _run_on_pdm_host(
     pdm_host_name: str,
     plan: dict,
     pdm_token_secret: str,
-    root_password: str,
+    root_passwords: dict[str, str],
     force: bool,
 ) -> None:
     connection = HostConnection(
@@ -204,13 +205,12 @@ def _run_on_pdm_host(
         plan_path = tmpdir / "answer-plan.json"
         plan_path.write_text(json.dumps(plan, indent=2), encoding="utf-8")
 
-        # Combined token file (PDM API token + PVE root password).
+        # Combined token file (PDM API token + per-host PVE root passwords).
         token_path = tmpdir / "pdm-api-token"
-        token_path.write_text(
-            f"PDM_DEPLOY_TOKEN={pdm_token_secret}\n"
-            f"PVE_ROOT_PASSWORD={root_password}\n",
-            encoding="utf-8",
-        )
+        lines = [f"PDM_DEPLOY_TOKEN={pdm_token_secret}"]
+        for host, password in sorted(root_passwords.items()):
+            lines.append(f"PVE_ROOT_PASSWORD__{host}={password}")
+        token_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
         token_path.chmod(0o600)
 
         script_src = root / "pve-autoinstall" / "scripts" / "sync-answers.py"
@@ -283,6 +283,24 @@ def _load_pdm_config(root: Path, registry: Any, pdm_host: str) -> dict:
     return cfg
 
 
+def _root_password_secret(registry: Any, host: str) -> str:
+    try:
+        return str(registry.get(host, "pve-autoinstall.root_password_secret"))
+    except HostLookupError:
+        return PWD_SECRET_NAME
+
+
+def _read_root_passwords(root: Path, registry: Any, hosts: list[str]) -> dict[str, str]:
+    passwords: dict[str, str] = {}
+    cache: dict[str, str] = {}
+    for host in hosts:
+        secret_name = _root_password_secret(registry, host)
+        if secret_name not in cache:
+            cache[secret_name] = _read_secret_field(root, secret_name, PWD_ENV_KEY)
+        passwords[host] = cache[secret_name]
+    return passwords
+
+
 def _validate_pve_host(registry: Any, host: str) -> None:
     for key in ("dmi_uuid", "boot_disk_serial", "answer_name"):
         try:
@@ -312,6 +330,13 @@ def _validate_pve_host(registry: Any, host: str) -> None:
 
 
 def _get_mgmt_mac(registry: Any, host: str) -> str:
+    try:
+        mac = str(registry.get(host, "pve-autoinstall.mgmt_mac"))
+        if mac:
+            return mac.replace(":", "").lower()
+    except HostLookupError:
+        pass
+
     try:
         interfaces = registry.get(host, "pve-interface-pinning.interfaces")
     except HostLookupError:
