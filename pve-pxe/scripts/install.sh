@@ -134,11 +134,15 @@ systemctl enable pxe-autoupdate.timer
 systemctl is-active --quiet pxe-autoupdate.timer || systemctl start pxe-autoupdate.timer
 print_ok "pxe-autoupdate.timer enabled"
 
-# ── nginx config test ─────────────────────────────────────────────────────────
-nginx -t 2>/dev/null && print_ok "nginx config valid" || {
+# ── nginx config test + reload ────────────────────────────────────────────────
+if nginx -t 2>/dev/null; then
+    print_ok "nginx config valid"
+    # Use restart (not reload) so new listen directives take effect.
+    systemctl is-active --quiet nginx && systemctl restart nginx || true
+else
     print_warn "nginx config test failed — PXE services not started"
     exit 1
-}
+fi
 
 print_ok "pve-pxe deploy complete"
 print_sub "Run: pxe-enable   (to start serving before a rebuild window)"
