@@ -1,0 +1,22 @@
+[Unit]
+Description=Homelab PVE post-install deploy webhook
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=freender
+Group=freender
+EnvironmentFile=/etc/homelab/pve-deploy-webhook.env
+WorkingDirectory=/home/freender/homelab
+ExecStart=/usr/bin/python3 /usr/local/sbin/homelab-pve-deploy-webhook
+Restart=on-failure
+RestartSec=5s
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=/home/freender/homelab /run /tmp
+
+[Install]
+WantedBy=multi-user.target

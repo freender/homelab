@@ -32,6 +32,7 @@ from ..ssh import HostConnection, offline_mode
 
 PDM_SECRET_NAME = "pdm-deploy-token"
 PWD_SECRET_NAME = "pve-root-password"
+WEBHOOK_SECRET_NAME = "pve-deploy-webhook"
 PWD_ENV_KEY = "PVE_ROOT_PASSWORD"
 REMOTE_ROOT = "/tmp/homelab-pve-autoinstall"
 
@@ -93,7 +94,7 @@ def deploy(
     answer_entries = []
     for host in pve_hosts:
         try:
-            entry = _build_answer_entry(registry, host, pdm_cfg)
+            entry = _build_answer_entry(root, registry, host, pdm_cfg)
             answer_entries.append(entry)
             print_sub(f"  {entry['id']}: {entry['fqdn']} {entry['cidr']}")
         except (ValueError, HostLookupError) as exc:
@@ -172,7 +173,7 @@ def validate(
     for host in pve_hosts:
         _validate_pve_host(registry, host)
 
-    for secret_name in (PDM_SECRET_NAME,):
+    for secret_name in (PDM_SECRET_NAME, WEBHOOK_SECRET_NAME):
         try:
             op_secrets.secret_file(root, secret_name)
         except op_secrets.OpSecretsError as exc:
@@ -352,7 +353,7 @@ def _get_mgmt_mac(registry: Any, host: str) -> str:
     raise ValueError(f"No management interface in pve-interface-pinning for {host}")
 
 
-def _build_answer_entry(registry: Any, host: str, pdm_cfg: dict) -> dict:
+def _build_answer_entry(root: Path, registry: Any, host: str, pdm_cfg: dict) -> dict:
     """Build a single PDM prepared answer dict for inclusion in the plan JSON."""
     answer_name = str(registry.get(host, "pve-autoinstall.answer_name"))
     dmi_uuid = str(registry.get(host, "pve-autoinstall.dmi_uuid"))
@@ -378,7 +379,7 @@ def _build_answer_entry(registry: Any, host: str, pdm_cfg: dict) -> dict:
     fqdn = str(registry.get(host, "config.hostname"))
     mgmt_mac = _get_mgmt_mac(registry, host)
 
-    return {
+    entry = {
         "id": answer_name,
         "_host": host,
         "fqdn": fqdn,
@@ -412,6 +413,33 @@ def _build_answer_entry(registry: Any, host: str, pdm_cfg: dict) -> dict:
         },
         "root-ssh-keys": [pdm_cfg["root_ssh_key"]],
         # root-password-hashed is injected by the remote script at runtime.
+    }
+
+    webhook = _postinstall_webhook(root, registry)
+    if webhook:
+        entry["post-installation-webhook"] = webhook
+
+    return entry
+
+
+def _postinstall_webhook(root: Path, registry: Any) -> dict | None:
+    webhook_hosts = registry.list_hosts(feature="pve-deploy-webhook")
+    if not webhook_hosts:
+        return None
+    if len(webhook_hosts) > 1:
+        raise ValueError(f"pve-deploy-webhook: multiple hosts configured: {webhook_hosts}")
+
+    host = webhook_hosts[0]
+    url = str(registry.get(host, "pve-deploy-webhook.url", "")).strip()
+    if not url:
+        hostname = str(registry.get(host, "config.hostname"))
+        port = str(registry.get(host, "pve-deploy-webhook.listen_port", "8088"))
+        url = f"http://{hostname}:{port}/pve-postinstall"
+
+    token = _read_secret_field(root, WEBHOOK_SECRET_NAME, "PVE_DEPLOY_WEBHOOK_TOKEN")
+    return {
+        "url": url,
+        "auth-token": token,
     }
 
 

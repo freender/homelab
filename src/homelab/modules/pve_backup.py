@@ -47,6 +47,7 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
     build_dir = root / "pve-backup" / "build" / host
     prepare_build_dir(build_dir)
     build_standalone_backup_plans(root, host, build_dir)
+    build_prepared_lxc_restore_plan(root, host, build_dir)
     build_config_restore_plan(root, host, build_dir)
 
     if dry_run:
@@ -64,6 +65,11 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
             "Config restore plan: enabled"
             if (build_dir / "restore-plan.conf").is_file()
             else "Config restore plan: disabled"
+        )
+        print_sub(
+            "Prepared LXC restore plan: enabled"
+            if (build_dir / "restore-ct-plan.conf").is_file()
+            else "Prepared LXC restore plan: disabled"
         )
         return
 
@@ -139,7 +145,9 @@ def build_standalone_backup_plans(root: Path, host: str, build_dir: Path) -> Non
             root,
             str(storage["name"]),
         )
-        password_var = f"PBS_{normalize_storage_name(storage['name'])}_PASSWORD"
+        password_var = storage.get("password_var") or (
+            f"PBS_{normalize_storage_name(storage['name'])}_PASSWORD"
+        )
         storage_lines.extend([
             f"STORAGE_{index}_NAME='{shell_quote(storage['name'])}'",
             f"STORAGE_{index}_SERVER='{shell_quote(storage['server'])}'",
@@ -233,6 +241,63 @@ def build_standalone_backup_plans(root: Path, host: str, build_dir: Path) -> Non
             )
     (build_dir / "jobs-plan.conf").write_text(
         "\n".join(job_lines) + "\n",
+        encoding="utf-8",
+    )
+
+
+def build_prepared_lxc_restore_plan(root: Path, host: str, build_dir: Path) -> None:
+    registry = default_registry(root)
+    entries = registry.get(host, "pve-backup.restore_prepared_lxcs", [])
+    if not entries:
+        return
+    if not isinstance(entries, list):
+        raise ValueError(f"pve-backup.restore_prepared_lxcs must be a list for {host}")
+
+    lines = [f"RESTORE_CT_COUNT='{len(entries)}'"]
+    for index, entry in enumerate(entries):
+        for required in ["vmid", "storage", "target_storage"]:
+            if not entry.get(required):
+                raise ValueError(
+                    f"Invalid prepared LXC restore entry at index {index} for {host}"
+                )
+        vmid = str(entry["vmid"])
+        if not re.fullmatch(r"[1-9][0-9]{0,8}", vmid):
+            raise ValueError(
+                f"Invalid prepared LXC VMID at index {index} for {host}: {vmid}"
+            )
+        net0 = entry.get("net0", "")
+        mounts = entry.get("mounts", [])
+        if mounts in (None, ""):
+            mounts = []
+        if not isinstance(mounts, list):
+            raise ValueError(
+                f"pve-backup.restore_prepared_lxcs[{index}].mounts must be a list for {host}"
+            )
+        start_enabled = normalize_bool(
+            entry.get("start", False),
+            False,
+            f"restore_prepared_lxcs[{index}].start must be boolean for {host}",
+        )
+        lines.extend([
+            f"RESTORE_CT_{index}_VMID='{shell_quote(vmid)}'",
+            f"RESTORE_CT_{index}_STORAGE='{shell_quote(entry['storage'])}'",
+            f"RESTORE_CT_{index}_TARGET_STORAGE='{shell_quote(entry['target_storage'])}'",
+            f"RESTORE_CT_{index}_UNPRIVILEGED='{shell_quote(entry.get('unprivileged', ''))}'",
+            f"RESTORE_CT_{index}_NET0='{shell_quote(net0)}'",
+            f"RESTORE_CT_{index}_START='{str(start_enabled).lower()}'",
+            f"RESTORE_CT_{index}_MOUNT_COUNT='{len(mounts)}'",
+        ])
+        for mount_index, mount in enumerate(mounts):
+            if not isinstance(mount, str) or not mount.strip():
+                raise ValueError(
+                    "Invalid mount entry at index "
+                    f"{mount_index} in prepared LXC restore entry {index} for {host}"
+                )
+            lines.append(
+                f"RESTORE_CT_{index}_MOUNT_{mount_index}='{shell_quote(mount.strip())}'"
+            )
+    (build_dir / "restore-ct-plan.conf").write_text(
+        "\n".join(lines) + "\n",
         encoding="utf-8",
     )
 
