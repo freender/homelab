@@ -32,7 +32,6 @@ from ..ssh import HostConnection, offline_mode
 
 PDM_SECRET_NAME = "pdm-deploy-token"
 PWD_SECRET_NAME = "pve-root-password"
-WEBHOOK_SECRET_NAME = "pve-deploy-webhook"
 PWD_ENV_KEY = "PVE_ROOT_PASSWORD"
 REMOTE_ROOT = "/tmp/homelab-pve-autoinstall"
 
@@ -416,27 +415,6 @@ def _build_answer_entry(root: Path, registry: Any, host: str, pdm_cfg: dict) -> 
     }
 
     return entry
-
-
-def _postinstall_webhook(root: Path, registry: Any) -> dict | None:
-    webhook_hosts = registry.list_hosts(feature="pve-deploy-webhook")
-    if not webhook_hosts:
-        return None
-    if len(webhook_hosts) > 1:
-        raise ValueError(f"pve-deploy-webhook: multiple hosts configured: {webhook_hosts}")
-
-    host = webhook_hosts[0]
-    url = str(registry.get(host, "pve-deploy-webhook.url", "")).strip()
-    if not url:
-        hostname = str(registry.get(host, "config.hostname"))
-        port = str(registry.get(host, "pve-deploy-webhook.listen_port", "8088"))
-        url = f"http://{hostname}:{port}/pve-postinstall"
-
-    token = _read_secret_field(root, WEBHOOK_SECRET_NAME, "PVE_DEPLOY_WEBHOOK_TOKEN")
-    return {
-        "url": url,
-        "auth-token": token,
-    }
 
 
 def _read_secret_field(root: Path, secret_name: str, env_key: str) -> str:
