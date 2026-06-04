@@ -12,19 +12,16 @@
 auto lo
 iface lo inet loopback
 
-iface nic0 inet manual
+iface {{ NET_MGMT_IFACE }} inet manual
 
-auto nic2
-iface nic2 inet manual
-
-iface nic1 inet manual
+iface {{ NET_STORAGE_IFACE }} inet manual
 	mtu 9000
 
 auto vmbr0
 iface vmbr0 inet static
 	address {{ NET_MGMT_IP }}
 	gateway {{ NET_GATEWAY }}
-	bridge-ports nic0
+	bridge-ports {{ NET_MGMT_IFACE }}
 	bridge-stp off
 	bridge-fd 0
 	bridge-vlan-aware yes
@@ -33,7 +30,7 @@ iface vmbr0 inet static
 auto vmbr1
 iface vmbr1 inet static
 	address {{ NET_STORAGE_IP }}
-	bridge-ports nic1
+	bridge-ports {{ NET_STORAGE_IFACE }}
 	bridge-stp off
 	bridge-fd 0
 	mtu 9000

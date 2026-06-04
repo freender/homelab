@@ -115,7 +115,7 @@ def answers_differ(existing: dict, desired: dict) -> bool:
         "use-dhcp-network", "use-dhcp-fqdn", "cidr", "gateway", "dns",
         "netdev-filter", "authorized-tokens", "netif-name-pinning-enabled",
         "reboot-mode", "reboot-on-error", "is-default", "target-filter",
-        "root-ssh-keys", "post-installation-webhook",
+        "root-ssh-keys",
     ]
     return any(existing.get(k) != desired.get(k) for k in comparable)
 

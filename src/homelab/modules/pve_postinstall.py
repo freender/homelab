@@ -203,6 +203,8 @@ def build_network_interfaces_bundle(root: Path, host: str, build_dir: Path) -> N
         mgmt_ip = str(registry.get(host, "pve-postinstall.interfaces.mgmt_ip"))
         gateway = str(registry.get(host, "pve-postinstall.interfaces.gateway"))
         storage_ip = str(registry.get(host, "pve-postinstall.interfaces.storage_ip"))
+        mgmt_iface = str(registry.get(host, "pve-postinstall.interfaces.mgmt_iface", "nic0"))
+        storage_iface = str(registry.get(host, "pve-postinstall.interfaces.storage_iface", "nic1"))
     except HostLookupError as exc:
         raise ValueError(
             f"pve-postinstall.interfaces.{{mgmt_ip,gateway,storage_ip}} required for {host}"
@@ -214,6 +216,8 @@ def build_network_interfaces_bundle(root: Path, host: str, build_dir: Path) -> N
         NET_MGMT_IP=mgmt_ip,
         NET_GATEWAY=gateway,
         NET_STORAGE_IP=storage_ip,
+        NET_MGMT_IFACE=mgmt_iface,
+        NET_STORAGE_IFACE=storage_iface,
     )
 
 

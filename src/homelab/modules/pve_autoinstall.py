@@ -173,7 +173,7 @@ def validate(
     for host in pve_hosts:
         _validate_pve_host(registry, host)
 
-    for secret_name in (PDM_SECRET_NAME, WEBHOOK_SECRET_NAME):
+    for secret_name in (PDM_SECRET_NAME,):
         try:
             op_secrets.secret_file(root, secret_name)
         except op_secrets.OpSecretsError as exc:
@@ -414,10 +414,6 @@ def _build_answer_entry(root: Path, registry: Any, host: str, pdm_cfg: dict) -> 
         "root-ssh-keys": [pdm_cfg["root_ssh_key"]],
         # root-password-hashed is injected by the remote script at runtime.
     }
-
-    webhook = _postinstall_webhook(root, registry)
-    if webhook:
-        entry["post-installation-webhook"] = webhook
 
     return entry
 
