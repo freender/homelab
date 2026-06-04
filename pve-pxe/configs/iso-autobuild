@@ -2,7 +2,7 @@
 # iso-autobuild - Build baked PVE install ISOs for offsite hosts.
 # Reads per-host answer TOML files from /etc/saint/iso-answers/<host>.toml.
 # Outputs /srv/pxe/iso/proxmox-ve-<host>-auto.iso (replaces previous).
-# Run weekly by iso-autobuild.timer; safe to run manually.
+# Called by pxe-autoupdate after a new base ISO is promoted; safe to run manually.
 set -euo pipefail
 
 ANSWER_DIR="/etc/saint/iso-answers"
@@ -39,8 +39,11 @@ log "base ISO: $(basename "$latest_iso")"
 shopt -s nullglob
 answer_files=("$ANSWER_DIR"/*.toml)
 shopt -u nullglob
-[[ ${#answer_files[@]} -gt 0 ]] \
-    || fail "no answer files in $ANSWER_DIR; run: ./deploy pve-autoinstall-iso all"
+if [[ ${#answer_files[@]} -eq 0 ]]; then
+    log "no answer files in $ANSWER_DIR; no baked ISOs to build"
+    metric 0
+    exit 0
+fi
 
 mkdir -p "$ISO_SERVE_DIR"
 
@@ -53,6 +56,7 @@ for answer_file in "${answer_files[@]}"; do
     tmp_iso="${out_iso}.tmp"
 
     log "building ISO for ${host}..."
+    rm -f "$out_iso" "$tmp_iso"
 
     if proxmox-auto-install-assistant prepare-iso "$latest_iso" \
         --fetch-from iso \

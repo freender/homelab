@@ -109,7 +109,14 @@ if [[ "$ok" -ne 1 ]]; then
     fail "rolled back to previous payload"
 fi
 
-# 8. Clean up: keep current + one previous ISO in /root/iso
+# 8. Rebuild baked offsite ISOs from the newly promoted base ISO.
+if command -v iso-autobuild >/dev/null 2>&1; then
+    iso-autobuild || fail "baked ISO rebuild failed"
+else
+    log "WARN: iso-autobuild not installed; baked ISO rebuild skipped"
+fi
+
+# 9. Clean up: keep current + one previous ISO in /root/iso
 ls -1t "$ISO_DIR"/proxmox-ve_*.iso 2>/dev/null | tail -n +3 | xargs -r rm -f
 [[ "$need_disable" -eq 1 ]] && /usr/local/sbin/pxe-disable || true
 

@@ -2,8 +2,8 @@
 # install.sh - Deploy PXE service configs to saint (CT 112 on osiris).
 # Usage: ./scripts/install.sh [hostname]
 # Installs: dnsmasq proxyPXE config, nginx vhost, iPXE menu files, operational
-#           scripts (pxe-enable, pxe-disable, pxe-autoupdate), and the
-#           pxe-autoupdate systemd service + timer.
+#           scripts (pxe-enable, pxe-disable, pxe-autoupdate, iso-autobuild),
+#           pxe-autoupdate systemd service/timer, and baked ISO answer files.
 # Does NOT stage the Proxmox ISO or initrd — those are managed at runtime by pxe-autoupdate.
 
 set -euo pipefail
@@ -25,12 +25,42 @@ require_dir "$BUILD_DIR" "$BUILD_DIR" || exit 1
 
 print_header "PVE PXE (saint)"
 
+bootstrap_pkgs=()
+command -v curl >/dev/null 2>&1 || bootstrap_pkgs+=(curl)
+[[ -f /etc/ssl/certs/ca-certificates.crt ]] || bootstrap_pkgs+=(ca-certificates)
+if [[ ${#bootstrap_pkgs[@]} -gt 0 ]]; then
+    print_sub "Installing bootstrap packages: ${bootstrap_pkgs[*]}"
+    apt-get update -qq
+    apt-get install -y -qq "${bootstrap_pkgs[@]}"
+fi
+
+# ── Proxmox no-subscription repo (needed for proxmox-auto-install-assistant) ──
+PROXMOX_REPO="/etc/apt/sources.list.d/proxmox-pve.list"
+PROXMOX_KEY="/etc/apt/trusted.gpg.d/proxmox-release-trixie.gpg"
+if [[ ! -f "$PROXMOX_REPO" ]]; then
+    print_action "Adding Proxmox no-subscription apt repo"
+    curl -fsSL https://enterprise.proxmox.com/debian/proxmox-release-trixie.gpg \
+        -o "$PROXMOX_KEY" \
+        || { echo "WARN: could not fetch Proxmox GPG key; repo not added" >&2; }
+    if [[ -f "$PROXMOX_KEY" ]]; then
+        echo "deb http://download.proxmox.com/debian/pve trixie pve-no-subscription" \
+            > "$PROXMOX_REPO"
+        apt-get update -qq
+        print_ok "Proxmox repo added"
+    fi
+else
+    print_sub "Proxmox repo already configured"
+fi
+
 # ── Packages ────────────────────────────────────────────────────────────────
 missing_pkgs=()
 command -v nginx    >/dev/null 2>&1 || missing_pkgs+=(nginx)
 command -v dnsmasq  >/dev/null 2>&1 || missing_pkgs+=(dnsmasq)
 command -v rsync    >/dev/null 2>&1 || missing_pkgs+=(rsync)
 command -v flock    >/dev/null 2>&1 || missing_pkgs+=(util-linux)
+command -v xorriso  >/dev/null 2>&1 || missing_pkgs+=(xorriso)
+command -v proxmox-auto-install-assistant >/dev/null 2>&1 \
+    || missing_pkgs+=(proxmox-auto-install-assistant)
 if [[ ${#missing_pkgs[@]} -gt 0 ]]; then
     print_sub "Installing packages: ${missing_pkgs[*]}"
     apt-get update -qq
@@ -40,10 +70,12 @@ else
 fi
 
 # ── Directory layout ─────────────────────────────────────────────────────────
-mkdir -p /srv/pxe /srv/tftp /etc/saint \
+mkdir -p /srv/pxe /srv/tftp /etc/saint /etc/saint/iso-answers /srv/pxe/iso \
          /var/lib/node_exporter/textfile \
          /etc/nginx/sites-available /etc/nginx/sites-enabled \
          /etc/dnsmasq.d /root/iso
+chmod 700 /etc/saint/iso-answers
+chmod 755 /srv/pxe/iso
 
 # install_if_changed returns 0=updated, 1=unchanged, 2=error.
 # Guard each call so set -e does not treat "unchanged" (rc=1) as failure.
@@ -121,6 +153,20 @@ print_action "Installing operational scripts"
 ic "$BUILD_DIR/pxe-enable"     /usr/local/sbin/pxe-enable     755 pxe-enable
 ic "$BUILD_DIR/pxe-disable"    /usr/local/sbin/pxe-disable    755 pxe-disable
 ic "$BUILD_DIR/pxe-autoupdate" /usr/local/sbin/pxe-autoupdate 755 pxe-autoupdate
+ic "$BUILD_DIR/iso-autobuild"  /usr/local/sbin/iso-autobuild  755 iso-autobuild
+
+# ── Baked ISO answer TOML files (0600; staged by Python orchestrator) ─────────
+ANSWERS_SRC="$BUILD_DIR/iso-answers"
+if [[ -d "$ANSWERS_SRC" ]] && [[ -n "$(ls -A "$ANSWERS_SRC" 2>/dev/null)" ]]; then
+    print_action "Installing baked ISO answer TOML files"
+    for f in "$ANSWERS_SRC"/*.toml; do
+        name="$(basename "$f")"
+        install -m 0600 "$f" "/etc/saint/iso-answers/$name"
+        print_sub "  installed $name"
+    done
+else
+    print_sub "No new baked ISO answer files staged"
+fi
 
 # ── pxe-autoupdate systemd service + timer ────────────────────────────────────
 print_action "Installing pxe-autoupdate systemd units"
@@ -128,6 +174,15 @@ ic "$BUILD_DIR/pxe-autoupdate.service" \
     /etc/systemd/system/pxe-autoupdate.service 644 pxe-autoupdate.service
 ic "$BUILD_DIR/pxe-autoupdate.timer" \
     /etc/systemd/system/pxe-autoupdate.timer 644 pxe-autoupdate.timer
+ic "$BUILD_DIR/iso-autobuild.service" \
+    /etc/systemd/system/iso-autobuild.service 644 iso-autobuild.service
+
+if systemctl list-unit-files --no-legend iso-autobuild.timer 2>/dev/null \
+    | grep -q '^iso-autobuild\.timer'; then
+    systemctl disable --now iso-autobuild.timer || true
+    rm -f /etc/systemd/system/iso-autobuild.timer
+    print_sub "Removed legacy iso-autobuild.timer"
+fi
 
 systemctl daemon-reload || true
 systemctl enable pxe-autoupdate.timer
@@ -148,3 +203,4 @@ print_ok "pve-pxe deploy complete"
 print_sub "Run: pxe-enable   (to start serving before a rebuild window)"
 print_sub "Run: pxe-disable  (to stop serving after a window)"
 print_sub "Run: pxe-autoupdate  (to detect and promote a new PVE ISO)"
+print_sub "Run: iso-autobuild   (to manually rebuild baked offsite ISOs)"
