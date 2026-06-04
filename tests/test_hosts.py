@@ -40,6 +40,17 @@ nullbox:
   features:
     docker:
       backup: true
+disabled:
+  config:
+    type: pve
+    hostname: disabled.internal
+    user: root
+    sshkey: infra
+  features:
+    pve-postinstall:
+      enabled: false
+      timezone: UTC
+    docker: false
 """.lstrip(),
         encoding="utf-8",
     )
@@ -49,9 +60,10 @@ nullbox:
 def test_list_hosts_and_feature_filtering(hosts_file: Path) -> None:
     registry = HostRegistry(hosts_file)
 
-    assert registry.list_hosts() == ["ace", "bray", "nullbox"]
+    assert registry.list_hosts() == ["ace", "bray", "nullbox", "disabled"]
     assert registry.list_hosts(feature="docker") == ["ace", "bray", "nullbox"]
     assert registry.list_hosts(feature="ssh-config") == ["ace"]
+    assert registry.list_hosts(feature="pve-postinstall") == []
 
 
 def test_has_and_get_support_top_level_and_feature_keys(hosts_file: Path) -> None:
@@ -62,6 +74,8 @@ def test_has_and_get_support_top_level_and_feature_keys(hosts_file: Path) -> Non
     assert registry.has("bray", "docker") is True
     assert registry.get("ace", "config.type") == "pve"
     assert registry.get("bray", "apt-upgrade.autoupgrade") is True
+    assert registry.has("disabled", "pve-postinstall") is False
+    assert registry.get("disabled", "pve-postinstall.timezone") == "UTC"
 
 
 def test_get_returns_default_for_missing_or_none_values(hosts_file: Path) -> None:

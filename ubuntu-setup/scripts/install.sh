@@ -22,7 +22,6 @@ require_file "$BUILD_DIR/file-map.conf" "$BUILD_DIR/file-map.conf" || exit 1
 require_file "$SCRIPT_DIR/lib/utils.sh" "$SCRIPT_DIR/lib/utils.sh" || exit 1
 require_file "$SCRIPT_DIR/lib/print.sh" "$SCRIPT_DIR/lib/print.sh" || exit 1
 require_file "$SCRIPT_DIR/scripts/docker-install.sh" "$SCRIPT_DIR/scripts/docker-install.sh" || exit 1
-require_file "$SCRIPT_DIR/scripts/notify-failure.sh" "$SCRIPT_DIR/scripts/notify-failure.sh" || exit 1
 require_file "$SCRIPT_DIR/scripts/pin-primary-nic.sh" "$SCRIPT_DIR/scripts/pin-primary-nic.sh" || exit 1
 
 # shellcheck source=/dev/null
@@ -59,15 +58,6 @@ install_build_file() {
     local rc=0
 
     install_if_changed "$BUILD_DIR/$name" "$(mapped_dest "$name")" "$(mapped_mode "$name")" "$(mapped_dest "$name")" || rc=$?
-    [[ $rc -eq 0 || $rc -eq 1 ]] || exit "$rc"
-    return "$rc"
-}
-
-install_script_file() {
-    local name="$1"
-    local rc=0
-
-    install_if_changed "$SCRIPT_DIR/scripts/$name" "$(mapped_dest "$name")" "$(mapped_mode "$name")" "$(mapped_dest "$name")" || rc=$?
     [[ $rc -eq 0 || $rc -eq 1 ]] || exit "$rc"
     return "$rc"
 }
@@ -229,7 +219,7 @@ fi
 
 print_action "Failure notifications"
 rc=0
-install_script_file "notify-failure.sh" || rc=$?
+install_build_file "notify-failure.sh" || rc=$?
 if [[ $rc -eq 0 ]]; then
     print_ok "notify-failure.sh deployed"
 fi

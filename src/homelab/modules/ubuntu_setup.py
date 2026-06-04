@@ -13,6 +13,8 @@ from ..ssh import HostConnection, build_files, diff_many
 
 REMOTE_ROOT = "/tmp/homelab-ubuntu-setup"
 NETWORK_MACS_SECRET = "network-macs"
+NOTIFY_SCRIPT = "notify-failure.sh"
+NOTIFY_SERVICE = "homelab-notify-failure@.service"
 
 STATIC_CONFIG_FILES = ["99-inotify.conf", "sshd-hardening.conf"]
 
@@ -41,9 +43,9 @@ FILE_SPECS = (
     FileSpec("sshd-hardening.conf", "/etc/ssh/sshd_config.d/01-disable-password-auth.conf"),
     FileSpec("zfs.conf", "/etc/modprobe.d/zfs.conf"),
     FileSpec("99-inotify.conf", "/etc/sysctl.d/99-inotify.conf"),
-    FileSpec("notify-failure.sh", "/usr/local/bin/homelab-notify-failure", mode="755"),
+    FileSpec(NOTIFY_SCRIPT, "/usr/local/bin/homelab-notify-failure", mode="755"),
     FileSpec(
-        "homelab-notify-failure@.service",
+        NOTIFY_SERVICE,
         "/etc/systemd/system/homelab-notify-failure@.service",
     ),
     FileSpec("telegram.env", "/etc/homelab/telegram.env", mode="600", feature="notifications"),
@@ -81,9 +83,9 @@ def validate(root: Path, hosts: list[str]) -> None:
     required_files = [
         scripts_dir / "install.sh",
         scripts_dir / "docker-install.sh",
-        scripts_dir / "notify-failure.sh",
         scripts_dir / "pin-primary-nic.sh",
-        templates_dir / "homelab-notify-failure@.service",
+        root / "shared" / "scripts" / NOTIFY_SCRIPT,
+        root / "shared" / "templates" / NOTIFY_SERVICE,
         templates_dir / "10-network-names.rules",
         templates_dir / "sudoers",
         templates_dir / "zfs.conf",
@@ -125,11 +127,6 @@ def resolve_remote_path(spec: FileSpec, artifacts: HostArtifacts) -> str:
 
 
 def source_path_for_spec(module_dir: Path, artifacts: HostArtifacts, spec: FileSpec) -> Path:
-    script_specs = {
-        "notify-failure.sh",
-    }
-    if spec.build_name in script_specs:
-        return module_dir / "scripts" / spec.build_name
     return artifacts.build_dir / spec.build_name
 
 
@@ -241,10 +238,11 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
         INTERFACE_MAC=primary_interface_mac,
     )
     render_file(
-        templates_dir / "homelab-notify-failure@.service",
-        build_dir / "homelab-notify-failure@.service",
+        root / "shared" / "templates" / NOTIFY_SERVICE,
+        build_dir / NOTIFY_SERVICE,
         NOTIFY_SCRIPT="/usr/local/bin/homelab-notify-failure",
     )
+    copy_file(root / "shared" / "scripts" / NOTIFY_SCRIPT, build_dir / NOTIFY_SCRIPT)
 
     if wireguard_enabled:
         copy_file(config_dir / "99-wireguard.conf", build_dir / "99-wireguard.conf")

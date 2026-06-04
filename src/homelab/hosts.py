@@ -49,16 +49,14 @@ class HostRegistry:
         for host, config in hosts.items():
             if not isinstance(config, dict):
                 continue
-            features = config.get("features") or {}
-            if feature in config or (isinstance(features, dict) and feature in features):
+            if _has_enabled_feature(config, feature):
                 matching.append(host)
 
         return matching
 
     def has(self, host: str, feature: str) -> bool:
         config = self._get_host(host)
-        features = config.get("features") or {}
-        return feature in config or (isinstance(features, dict) and feature in features)
+        return _has_enabled_feature(config, feature)
 
     def get(self, host: str, key: str, default: Any = _MISSING) -> Any:
         config = self._get_host(host)
@@ -105,6 +103,26 @@ def _resolve_dotted_key(data: dict[str, Any], key: str) -> Any:
             return _MISSING
         current = current[part]
     return current
+
+
+def _has_enabled_feature(config: dict[str, Any], feature: str) -> bool:
+    if feature in config:
+        return _feature_value_enabled(config[feature])
+
+    features = config.get("features") or {}
+    return (
+        isinstance(features, dict)
+        and feature in features
+        and _feature_value_enabled(features[feature])
+    )
+
+
+def _feature_value_enabled(value: object) -> bool:
+    if value is False:
+        return False
+    if isinstance(value, dict) and value.get("enabled") is False:
+        return False
+    return True
 
 
 def validate_hosts_data(data: object, path: Path) -> None:

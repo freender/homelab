@@ -49,7 +49,7 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
     ssh_hostname = str(registry.get(host, "config.hostname", host))
     update_schedule = str(registry.get(host, "docker.update_schedule", "")).strip()
     update_timer_enabled = "true" if update_schedule else "false"
-    dependency_units = docker_dependency_units(registry, host)
+    dependency_units: tuple[str, ...] = ()
 
     templates_dir = root / "docker" / "templates"
     build_dir = root / "docker" / "build" / host
@@ -119,15 +119,4 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
         require_root=True,
         interpreter="bash",
         remote_subdirs=("build", "lib"),
-    )
-
-
-def docker_dependency_units(registry, host: str) -> tuple[str, ...]:
-    if host not in registry.list_hosts(feature="media-pool"):
-        return ()
-    if str(registry.get(host, "media-pool.enabled", "true")).lower() != "true":
-        return ()
-    return (
-        "homelab-media-pool.service",
-        "homelab-media-pool-hdd-only.service",
     )

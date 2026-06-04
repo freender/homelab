@@ -9,6 +9,8 @@ from ..output import print_action, print_error, print_sub
 from ..ssh import HostConnection, build_files, diff_many
 
 REMOTE_ROOT = "/tmp/homelab-pve-postinstall"
+NOTIFY_SCRIPT = "notify-failure.sh"
+NOTIFY_SERVICE = "homelab-notify-failure@.service"
 PVE_FILES = [
     "proxmox.sources",
     "ceph.sources",
@@ -16,8 +18,8 @@ PVE_FILES = [
     "no-nag-script",
     "pve-remove-nag.sh",
     "sshd-hardening.conf",
-    "notify-failure.sh",
-    "homelab-notify-failure@.service",
+    NOTIFY_SCRIPT,
+    NOTIFY_SERVICE,
 ]
 
 REMOTE_PATHS = {
@@ -27,13 +29,13 @@ REMOTE_PATHS = {
     "no-nag-script": "/etc/apt/apt.conf.d/no-nag-script",
     "pve-remove-nag.sh": "/usr/local/bin/pve-remove-nag.sh",
     "sshd-hardening.conf": "/etc/ssh/sshd_config.d/99-disable-password-auth.conf",
-    "notify-failure.sh": "/usr/local/bin/homelab-notify-failure",
-    "homelab-notify-failure@.service": "/etc/systemd/system/homelab-notify-failure@.service",
+    NOTIFY_SCRIPT: "/usr/local/bin/homelab-notify-failure",
+    NOTIFY_SERVICE: "/etc/systemd/system/homelab-notify-failure@.service",
 }
 
 MODES = {
     "pve-remove-nag.sh": "755",
-    "notify-failure.sh": "755",
+    NOTIFY_SCRIPT: "755",
 }
 
 
@@ -64,11 +66,11 @@ def deploy(
 def validate(root: Path) -> None:
     config_dir = root / "pve-postinstall" / "configs" / "pve"
     interfaces_template = root / "pve-postinstall" / "templates" / "pve-interfaces"
-    notify_script = root / "ubuntu-setup" / "scripts" / "notify-failure.sh"
-    notify_template = root / "ubuntu-setup" / "templates" / "homelab-notify-failure@.service"
+    notify_script = root / "shared" / "scripts" / NOTIFY_SCRIPT
+    notify_template = root / "shared" / "templates" / NOTIFY_SERVICE
 
     for file_name in PVE_FILES:
-        if file_name in {"notify-failure.sh", "homelab-notify-failure@.service"}:
+        if file_name in {NOTIFY_SCRIPT, NOTIFY_SERVICE}:
             continue
         file_path = config_dir / file_name
         if not file_path.is_file():
@@ -116,7 +118,7 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
     prepare_build_dir(build_dir)
 
     for file_name in PVE_FILES:
-        if file_name in {"notify-failure.sh", "homelab-notify-failure@.service"}:
+        if file_name in {NOTIFY_SCRIPT, NOTIFY_SERVICE}:
             continue
         source_path = config_dir / file_name
         if not source_path.is_file():
@@ -127,16 +129,16 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
         [
             file_name
             for file_name in PVE_FILES
-            if file_name not in {"notify-failure.sh", "homelab-notify-failure@.service"}
+            if file_name not in {NOTIFY_SCRIPT, NOTIFY_SERVICE}
         ],
     )
     copy_file(
-        root / "ubuntu-setup" / "scripts" / "notify-failure.sh",
-        build_dir / "notify-failure.sh",
+        root / "shared" / "scripts" / NOTIFY_SCRIPT,
+        build_dir / NOTIFY_SCRIPT,
     )
     render_file(
-        root / "ubuntu-setup" / "templates" / "homelab-notify-failure@.service",
-        build_dir / "homelab-notify-failure@.service",
+        root / "shared" / "templates" / NOTIFY_SERVICE,
+        build_dir / NOTIFY_SERVICE,
         NOTIFY_SCRIPT="/usr/local/bin/homelab-notify-failure",
     )
 

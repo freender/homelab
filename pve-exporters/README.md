@@ -7,8 +7,9 @@ Prometheus-native host metrics exporters for Proxmox and ZFS storage hosts.
 - bray (Proxmox)
 - clovis (Proxmox)
 - osiris (Proxmox)
-- cinci (Ubuntu/ZFS)
-- cottonwood (Ubuntu/ZFS)
+- cinci-ubuntu (legacy Ubuntu/ZFS until conversion)
+- cottonwood-ubuntu (legacy Ubuntu/ZFS until conversion)
+- cinci / cottonwood (future PVE entries, exporter feature disabled until conversion)
 
 ## What It Collects
 - Host metrics via node_exporter (CPU, memory, load, uptime, disk, network, hwmon, ZFS)

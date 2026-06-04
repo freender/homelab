@@ -35,7 +35,7 @@ HOSTNAME=$(hostname -s)
 # Grab last 10 journal lines from the failed unit (best-effort)
 JOURNAL_TAIL=$(journalctl -u "$FAILED_UNIT" --no-pager -n 10 --output=short-monotonic 2>/dev/null || true)
 
-MESSAGE=$(printf "🔴 *%s* — unit failed\n\`%s\`\n\n%s" \
+MESSAGE=$(printf "FAILED: *%s* - unit failed\n\`%s\`\n\n%s" \
     "$HOSTNAME" "$FAILED_UNIT" "$JOURNAL_TAIL")
 
 curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage" \

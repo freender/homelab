@@ -4,11 +4,12 @@ Automation and configuration management for Proxmox-based homelab infrastructure
 
 ## Overview
 
-**Hardware:** Proxmox Ceph cluster, standalone Proxmox node, VMs, remote NAS
+**Hardware:** Proxmox cluster, standalone Proxmox node, LXCs, remote NAS/PVE prep
 
 **Network:**
 - Home: `*.freender.internal`
-- Remote (Ubuntu): `cottonwood.internal`, `cinci.internal`
+- Remote legacy Ubuntu: `cottonwood-ubuntu`, `cinci-ubuntu`
+- Remote PVE prep: `cottonwood`, `cinci` entries stay feature-disabled until conversion
 - VIP for Traefik HA
 
 ## Deploy All
