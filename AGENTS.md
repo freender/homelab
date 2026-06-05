@@ -12,6 +12,19 @@ Use this file to make coding agents consistent with existing patterns.
 - Pattern: Python module builds/stages files, then runs remote `scripts/install.sh`.
 - CI: `.github/workflows/validate.yml`.
 
+## AI Quick Path
+- For host facts, SSH metadata, deploy targets, and feature config, read `hosts.conf` first.
+- For topology, VLANs, storage layout, heavy-path warnings, and cross-host context, read the Obsidian `Infrastructure Overview.md`.
+- For module code changes, read the module orchestrator in `src/homelab/modules/` and the matching `<module>/scripts/install.sh` before editing.
+- For Docker app placement and compose definitions, use the repo copy under `docker/`; do not inspect live `/mnt/cache/appdata` unless an explicit operational task requires a known app path.
+- For unknown infrastructure paths, ask or search the Homelab Obsidian docs; do not discover paths by crawling live filesystems.
+
+## Search and Scan Boundaries
+- Do not run broad recursive scans on any homelab host under `/`, `/mnt/*`, `/mnt/cache`, `/mnt/tank`, `/vm-flash`, `/backup`, or `/srv/timemachine`.
+- Do not adapt repo-local commands like `find .` to remote storage, media, backup, or appdata paths.
+- Prefer repo-local `Glob`/`Grep`, `hosts.conf`, Infrastructure Overview, and linked guides before SSHing or searching remote hosts.
+- If a path is not explicitly known from inventory or documentation, ask before scanning.
+
 ## Build, Lint, and Test Commands
 
 ### Full validation (best pre-PR check)
@@ -25,6 +38,13 @@ Includes Python compile checks, ShellCheck, `hosts.conf` parse validation, and m
 find . -name '*.sh' -not -path './.bin/*' -exec shellcheck -S warning {} +
 yq eval '.' hosts.conf >/dev/null
 ```
+Run `find .` only from the repository root; never adapt this pattern to `/`, `/mnt`, or remote/live storage paths.
+
+### Unit tests
+```bash
+.venv/bin/python -m pytest tests/
+```
+The `tests/` directory covers host parsing, CLI validation, SSH helpers, build/template behavior, and module fallbacks. Add or update tests when changing those areas.
 
 ### Single-file lint (fast targeted check)
 ```bash
@@ -125,6 +145,7 @@ Keep the same flow used across modules:
 - Keep per-host connection metadata in `hosts.conf` under `config` (`type`, `hostname`, `user`, `sshkey`, optional `agent`) instead of duplicating it in static config files.
 - Stage module bundles in `/tmp/homelab-<module>/`.
 - Preserve root-user checks where module logic requires root SSH sessions.
+- For offsite hosts (`cottonwood-root`, `cinci-root`), first check whether a direct 1Password SSH Agent identity named `1Password SSH Key - Offsite` is already loaded/available in the shared agent and use it if present. If unavailable, do not auto-load access; ask the user to intentionally run `addoffsitekey` only when they want offsite access available.
 
 ### Module boundaries
 - Prefer a new module when the capability is independently deployable (`./deploy <module> <host>` makes sense on its own), has its own validation requirements, or has a distinct service/restart/reboot/rebuild boundary.
