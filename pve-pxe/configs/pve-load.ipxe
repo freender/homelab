@@ -3,6 +3,8 @@
 # The proxmox-ve_* ISO filename is updated by pxe-autoupdate on each version bump.
 
 :load
+isset ${pve-kargs} || set pve-kargs vga=791 video=vesafb:ywrap,mtrr ramdisk_size=16777216 rw quiet splash=silent
+kernel http://10.0.0.51/vmlinuz initrd=initrd.img ${pve-kargs}
 initrd --name initrd.img http://10.0.0.51/initrd.img
 initrd http://10.0.0.51/proxmox-ve_9.2-1-auto-from-http-url-fp.iso proxmox.iso
 boot
