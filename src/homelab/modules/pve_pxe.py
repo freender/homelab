@@ -142,11 +142,12 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
         registry.get(host, "pve-pxe.autoupdate_schedule", "*-*-* 09:00:00")
     )
 
-    # Derive the /24 network for dnsmasq dhcp-range from the management IP
+    # Derive the /24 network for dnsmasq proxyDHCP from the management IP.
     ip_parts = mgmt_ip.split(".")
     if len(ip_parts) != 4:
         raise ValueError(f"pve-pxe.mgmt_ip must be a dotted IPv4 address for {host}")
     mgmt_network = f"{ip_parts[0]}.{ip_parts[1]}.{ip_parts[2]}.0/24"
+    mgmt_proxy_network = f"{ip_parts[0]}.{ip_parts[1]}.{ip_parts[2]}.0"
 
     configs_dir = root / "pve-pxe" / "configs"
     templates_dir = root / "pve-pxe" / "templates"
@@ -169,6 +170,7 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
         build_dir / "dnsmasq-pxe.conf",
         MGMT_IP=mgmt_ip,
         MGMT_NETWORK=mgmt_network,
+        MGMT_PROXY_NETWORK=mgmt_proxy_network,
     )
     render_file(
         templates_dir / "nginx-pxe.conf",
