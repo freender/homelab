@@ -1,6 +1,6 @@
 #!ipxe
 # pve-serial.ipxe - Proxmox VE serial terminal installer
 
-kernel http://${next-server}/vmlinuz initrd=initrd.img ramdisk_size=16777216 rw quiet console=ttyS0,115200n8
-initrd http://${next-server}/initrd.img
+kernel http://10.0.0.51/vmlinuz initrd=initrd.img ramdisk_size=16777216 rw quiet console=ttyS0,115200n8
+initrd http://10.0.0.51/initrd.img
 boot

@@ -3,6 +3,6 @@
 # The proxmox-ve_* ISO filename is updated by pxe-autoupdate on each version bump.
 
 :load
-initrd --name initrd.img http://${next-server}/initrd.img
-initrd http://${next-server}/proxmox-ve_PLACEHOLDER.iso proxmox.iso
+initrd --name initrd.img http://10.0.0.51/initrd.img
+initrd http://10.0.0.51/proxmox-ve_9.2-1-auto-from-http-url-fp.iso proxmox.iso
 boot

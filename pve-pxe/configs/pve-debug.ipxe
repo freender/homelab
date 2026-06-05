@@ -1,6 +1,6 @@
 #!ipxe
 # pve-debug.ipxe - Proxmox VE debug installer (system/device info only)
 
-kernel http://${next-server}/vmlinuz initrd=initrd.img vga=791 video=vesafb:ywrap,mtrr ramdisk_size=16777216 rw quiet splash=silent proxmox-debug=1
-initrd http://${next-server}/initrd.img
+kernel http://10.0.0.51/vmlinuz initrd=initrd.img vga=791 video=vesafb:ywrap,mtrr ramdisk_size=16777216 rw quiet splash=silent proxmox-debug=1
+initrd http://10.0.0.51/initrd.img
 boot
