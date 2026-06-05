@@ -74,6 +74,11 @@ else:
 ' "$storage" "$vmid" "$exclude"
 }
 
+storage_active() {
+    local storage="$1"
+    pvesm status --storage "$storage" >/dev/null 2>&1
+}
+
 set_exclude_paths() {
     local job_id="$1"
     local pvesh_args=()
@@ -126,6 +131,11 @@ for (( i=0; i<JOB_COUNT; i++ )); do
     if [[ -z "$schedule" || -z "$storage" ]]; then
         print_error "Job $i is missing required schedule/storage"
         exit 1
+    fi
+
+    if ! storage_active "$storage"; then
+        print_warn "Storage $storage is not active yet; skipping backup job $i until next deploy"
+        continue
     fi
 
     if [[ -n "$vmid" && -n "$exclude" ]]; then

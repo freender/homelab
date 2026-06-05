@@ -39,6 +39,28 @@ write_status() {
   } > "${STATUS_FILE}"
 }
 
+live_driver_state() {
+  local iface driver bad_driver=0 saw_r8152=0
+
+  for iface_path in /sys/class/net/*; do
+    [[ -e ${iface_path} ]] || continue
+    iface=$(basename "${iface_path}")
+    driver=$(ethtool -i "${iface}" 2>/dev/null | awk '/^driver:/ { print $2; exit }' || true)
+    case "${driver}" in
+      r8152) saw_r8152=1 ;;
+      cdc_ncm|cdc_ether|r8153_ecm) bad_driver=1 ;;
+    esac
+  done
+
+  if [[ ${bad_driver} -eq 1 ]]; then
+    printf 'reboot_required\n'
+  elif [[ ${saw_r8152} -eq 1 ]]; then
+    printf 'active\n'
+  else
+    printf 'unknown\n'
+  fi
+}
+
 install_packages() {
   apt-get update
   apt-get install -y git dkms build-essential libdw1 libelf1
@@ -237,7 +259,12 @@ install_dkms_module || result=1
 install_runtime_config
 install_pve_autoinstall_hook
 
-if [[ ${result} -eq 0 ]]; then
+driver_state=$(live_driver_state)
+
+if [[ ${driver_state} == reboot_required ]]; then
+  echo "warning: Realtek USB NIC is still bound to a generic driver; reboot and rerun deploy" >&2
+  write_status reboot_required
+elif [[ ${result} -eq 0 ]]; then
   write_status installed
 else
   write_status partial

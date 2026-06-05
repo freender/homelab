@@ -8,6 +8,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD_DIR="$SCRIPT_DIR/build/$HOST"
 PLAN_FILE="$BUILD_DIR/storage-plan.conf"
 TOKENS_FILE="/etc/homelab/pbs-tokens.env"
+STAGED_TOKENS_FILE="$BUILD_DIR/pbs-tokens.env"
 STATE_DIR="/run/homelab-pve-backup"
 STATE_FILE="$STATE_DIR/backup-state.env"
 
@@ -29,13 +30,38 @@ if [[ -z "${STORAGE_COUNT:-}" ]]; then
     exit 1
 fi
 
+cleanup_staged_tokens() {
+    if [[ -f "$STAGED_TOKENS_FILE" ]]; then
+        if command -v shred >/dev/null 2>&1; then
+            shred -u -n 1 "$STAGED_TOKENS_FILE"
+        else
+            rm -f "$STAGED_TOKENS_FILE"
+        fi
+    fi
+}
+trap cleanup_staged_tokens EXIT
+
 if [[ -f "$TOKENS_FILE" ]]; then
     # shellcheck disable=SC1090
     source "$TOKENS_FILE"
 fi
+if [[ -f "$STAGED_TOKENS_FILE" ]]; then
+    # shellcheck disable=SC1090
+    source "$STAGED_TOKENS_FILE"
+fi
 
 mkdir -p "$STATE_DIR"
 storage_created="false"
+
+storage_defined() {
+    local name="$1"
+    awk -v name="$name" '$1 == "pbs:" && $2 == name { found = 1 } END { exit found ? 0 : 1 }' /etc/pve/storage.cfg 2>/dev/null
+}
+
+pbs_add_is_transient_failure() {
+    local error_file="$1"
+    grep -Eiq "(Can't connect|Connection timed out|No route to host|Network is unreachable|Connection refused|Temporary failure|Name or service not known|could not resolve)" "$error_file"
+}
 
 for (( i=0; i<STORAGE_COUNT; i++ )); do
     name_var="STORAGE_${i}_NAME"
@@ -52,7 +78,7 @@ for (( i=0; i<STORAGE_COUNT; i++ )); do
     fingerprint="${!fingerprint_var}"
     password_var_name="${!password_var_ref}"
 
-    if pvesm status --storage "$name" >/dev/null 2>&1; then
+    if storage_defined "$name"; then
         print_sub "Storage $name already configured"
     else
         if [[ -z "$password_var_name" ]]; then
@@ -62,19 +88,30 @@ for (( i=0; i<STORAGE_COUNT; i++ )); do
 
         password="${!password_var_name:-}"
         if [[ -z "$password" ]]; then
-            print_error "Missing $password_var_name in $TOKENS_FILE"
-            print_sub "Create $TOKENS_FILE from pve-backup/configs/pbs-tokens.env.example"
+            print_error "Missing $password_var_name in staged pve-backup tokens or $TOKENS_FILE"
+            print_sub "Run ./deploy pve-backup $HOST from riven so PBS storage tokens are staged from 1Password"
             exit 1
         fi
 
         print_sub "Adding PBS storage $name..."
-        pvesm add pbs "$name" \
+        add_error_file="$(mktemp)"
+        if ! pvesm add pbs "$name" \
             --server "$server" \
             --datastore "$datastore" \
             --username "$username" \
             --fingerprint "$fingerprint" \
             --password "$password" \
-            --content backup
+            --content backup 2>"$add_error_file"; then
+            cat "$add_error_file" >&2
+            if ! pbs_add_is_transient_failure "$add_error_file"; then
+                rm -f "$add_error_file"
+                exit 1
+            fi
+            rm -f "$add_error_file"
+            print_warn "PBS storage $name is not reachable/configurable yet; skipping until next deploy"
+            continue
+        fi
+        rm -f "$add_error_file"
         storage_created="true"
     fi
 
