@@ -8,6 +8,7 @@ ISO_INDEX="https://enterprise.proxmox.com/iso/"
 ISO_DIR="/root/iso"
 SRV="/srv/pxe"
 STAGE="/srv/pxe.stage"
+PXE_BUILD="$ISO_DIR/pxe-build"
 TOKEN_FILE="/root/homelab-pve-auto-install.token"
 METRIC="/var/lib/node_exporter/textfile/pxe_autoupdate.prom"
 LOCK="/run/pxe-autoupdate.lock"
@@ -24,6 +25,11 @@ metric() {
         "$1" "$(date +%s)" > "$METRIC.tmp" && mv "$METRIC.tmp" "$METRIC"
 }
 fail()   { log "ERROR: $*" >&2; metric 1; exit 1; }
+
+cleanup_temp() {
+    rm -rf "$STAGE" "$PXE_BUILD"
+}
+trap cleanup_temp EXIT
 
 # Prevent overlapping runs
 exec 9>"$LOCK"
@@ -57,7 +63,6 @@ command -v proxmox-auto-install-assistant >/dev/null \
     || apt-get install -y proxmox-auto-install-assistant xorriso >/dev/null
 [[ -s "$TOKEN_FILE" ]] || fail "missing or empty token file $TOKEN_FILE"
 
-PXE_BUILD="$ISO_DIR/pxe-build"
 rm -rf "$PXE_BUILD"
 mkdir -p "$PXE_BUILD"
 proxmox-auto-install-assistant prepare-iso "$ISO_DIR/$latest" \
@@ -74,7 +79,8 @@ proxmox-auto-install-assistant prepare-iso "$ISO_DIR/$latest" \
 ver="${latest%.iso}"
 ver="${ver#proxmox-ve_}"
 rm -rf "$STAGE"
-cp -a "$SRV" "$STAGE"
+mkdir -p "$STAGE"
+rsync -a --exclude '/iso/' "$SRV"/ "$STAGE"/
 rm -f "$STAGE"/proxmox-ve_*.iso
 install -m 0644 "$PXE_BUILD/vmlinuz"    "$STAGE/vmlinuz"
 install -m 0644 "$PXE_BUILD/initrd.img" "$STAGE/initrd.img"
@@ -106,8 +112,9 @@ done
 need_disable=0
 systemctl is-active --quiet nginx || { /usr/local/sbin/pxe-enable; need_disable=1; }
 rm -rf "$SRV.prev"
-cp -a "$SRV" "$SRV.prev"
-rsync -a --delete "$STAGE"/ "$SRV"/
+mkdir -p "$SRV.prev"
+rsync -a --exclude '/iso/' "$SRV"/ "$SRV.prev"/
+rsync -a --delete --exclude '/iso/' "$STAGE"/ "$SRV"/
 systemctl reload nginx 2>/dev/null || systemctl restart nginx
 
 # 7. Post-promote HTTP smoke test
@@ -117,7 +124,7 @@ curl -fsI "http://127.0.0.1/initrd.img" >/dev/null || ok=0
 curl -fsI "http://127.0.0.1/boot.ipxe"  >/dev/null || ok=0
 if [[ "$ok" -ne 1 ]]; then
     log "post-promote check failed; rolling back"
-    rsync -a --delete "$SRV.prev"/ "$SRV"/
+    rsync -a --delete --exclude '/iso/' "$SRV.prev"/ "$SRV"/
     systemctl reload nginx 2>/dev/null || systemctl restart nginx
     [[ "$need_disable" -eq 1 ]] && /usr/local/sbin/pxe-disable || true
     fail "rolled back to previous payload"

@@ -88,3 +88,14 @@ def test_pxe_autoupdate_rewrites_and_validates_promoted_ipxe_payloads() -> None:
     assert r's#proxmox-ve_PLACEHOLDER\.iso#${latest}#g' in updater
     assert r'grep -R "PLACEHOLDER\|\${next-server}" "$STAGE"/*.ipxe' in updater
     assert "staged iPXE scripts still contain placeholder server or ISO references" in updater
+
+
+def test_pxe_autoupdate_does_not_duplicate_baked_iso_dir() -> None:
+    updater = read_config("pxe-autoupdate")
+
+    assert 'trap cleanup_temp EXIT' in updater
+    assert 'rm -rf "$STAGE" "$PXE_BUILD"' in updater
+    assert "rsync -a --exclude '/iso/' \"$SRV\"/ \"$STAGE\"/" in updater
+    assert "rsync -a --exclude '/iso/' \"$SRV\"/ \"$SRV.prev\"/" in updater
+    assert "rsync -a --delete --exclude '/iso/' \"$STAGE\"/ \"$SRV\"/" in updater
+    assert "rsync -a --delete --exclude '/iso/' \"$SRV.prev\"/ \"$SRV\"/" in updater

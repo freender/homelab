@@ -77,6 +77,15 @@ mkdir -p /srv/pxe /srv/tftp /etc/saint /etc/saint/iso-answers /srv/pxe/iso \
 chmod 700 /etc/saint/iso-answers
 chmod 755 /srv/pxe/iso
 
+print_action "Cleaning legacy PXE duplicate artifacts"
+(
+    flock -n 9 || {
+        print_warn "pxe-autoupdate is running; skipping artifact cleanup"
+        exit 0
+    }
+    rm -rf /srv/pxe.stage /root/iso/pxe-build /srv/pxe.prev/iso
+) 9>/run/pxe-autoupdate.lock
+
 # install_if_changed returns 0=updated, 1=unchanged, 2=error.
 # Guard each call so set -e does not treat "unchanged" (rc=1) as failure.
 ic() { local rc=0; install_if_changed "$@" || rc=$?; [[ $rc -le 1 ]] || return "$rc"; }
