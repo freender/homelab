@@ -26,7 +26,7 @@ finish() {
 
 notify_corruption() {
     local vmid=$1 phase=$2 db=$3 rc=$4 detail=$5
-    local msg repair_cmd
+    local msg rebuild_cmd
 
     local env_locations=("/etc/homelab/telegram.env" "/etc/apcupsd/telegram/telegram.env")
     for f in "${env_locations[@]}"; do
@@ -39,7 +39,7 @@ notify_corruption() {
         return 0
     }
 
-    repair_cmd="homelab-docker-bbolt-repair.sh $vmid --yes --redeploy"
+    rebuild_cmd="pct exec $vmid -- /mnt/cache/appdata/rebuild.sh --yes"
 
     msg="$(printf \
 '⚠️ *containerd DB corrupt* — CT %s on %s
@@ -50,11 +50,11 @@ bbolt rc: %s
 
 %s
 
-Recommendation: run the manual repair on the current CT host. It stops Docker/containerd, re-checks all containerd bbolt DBs from stable copies, and only moves DBs that still fail.
+Recommendation: run the Docker runtime rebuild inside the affected CT. It stops Docker/containerd, deletes disposable Docker/containerd runtime state, preserves swarm identity and volumes, then recreates compose stacks.
 
-Manual repair:
+Manual rebuild:
 `%s`' \
-        "$vmid" "$(hostname -s)" "$phase" "$db" "$rc" "$detail" "Auto-restore: disabled; manual action required." "$repair_cmd")"
+        "$vmid" "$(hostname -s)" "$phase" "$db" "$rc" "$detail" "Auto-restore: disabled; manual action required." "$rebuild_cmd")"
 
     curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage" \
         --data-urlencode "chat_id=${TELEGRAM_CHATID}" \
