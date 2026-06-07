@@ -193,9 +193,9 @@ fi
 
 if [[ $PHASE == post-stop ]]; then
     # Filesystem sync is intentionally not performed here.
-    # PVE/Replication.pm now calls syncfs() + zpool sync on every ZFS volume
-    # mountpoint before taking the migration snapshot, which flushes both the
-    # kernel page cache and ZFS dirty TXGs without requiring any hookscript.
+    # PVE/Replication.pm now calls syncfs() on every ZFS volume mountpoint
+    # before taking the migration snapshot. The snapshot commit flushes the
+    # resulting ZFS TXG, so no hookscript-level sync is needed here.
     log "sync=skipped reason=handled_by_replication_pm phase=$PHASE db_count=${#dbs[@]}"
 fi
 

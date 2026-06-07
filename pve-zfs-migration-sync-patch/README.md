@@ -1,8 +1,8 @@
 # PVE ZFS Migration Sync Patch
 
-Adds a `zpool sync <pool>` call before Proxmox creates migration snapshots for
-ZFS-backed storage, covering both code paths that take snapshots during
-HA-managed CT migration.
+Adds a `syncfs()` call via `/usr/bin/sync --file-system <mountpoint>` before
+Proxmox creates migration snapshots for ZFS-backed storage, covering both code
+paths that take snapshots during HA-managed CT migration.
 
 **Patched files:**
 
