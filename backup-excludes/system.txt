@@ -5,3 +5,11 @@
 /tmp
 /root/.cache
 /home/*/.cache
+/var/lib/containerd
+/var/lib/docker/buildkit
+/var/lib/docker/containerd
+/var/lib/docker/containers
+/var/lib/docker/image
+/var/lib/docker/network
+/var/lib/docker/overlay2
+/var/lib/docker/tmp

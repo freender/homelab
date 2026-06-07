@@ -29,7 +29,7 @@ HOMELAB_DOCKER_DIR="${APPDATA_DEST}/.homelab/docker"
 mkdir -p "$APPDATA_DEST"
 mkdir -p "$APPDATA_SCRIPTS_DIR" "$HOMELAB_DOCKER_DIR"
 
-for script in start.sh rm.sh; do
+for script in start.sh rm.sh rebuild.sh; do
     rc=0
     copy_if_changed "$SCRIPT_DIR/scripts/$script" "${APPDATA_DEST}/${script}" "$script" || rc=$?
     [[ $rc -eq 1 ]] || [[ $rc -eq 0 ]] || exit "$rc"

@@ -3,10 +3,13 @@
 # Place this file in /mnt/cache/appdata and execute it.
 # Supports custom startup order for dependencies.
 # Pulls images by default; use `--no-pull` for fast restart-only runs.
+# Pruning is opt-in; use `--prune` after confirming no shared resources are at risk.
 
 set -u
 
 PULL_IMAGES=true
+PRUNE_IMAGES=false
+PRUNE_VOLUMES=false
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -16,8 +19,15 @@ while [[ $# -gt 0 ]]; do
         --no-pull)
             PULL_IMAGES=false
             ;;
+        --prune)
+            PRUNE_IMAGES=true
+            ;;
+        --prune-volumes)
+            PRUNE_IMAGES=true
+            PRUNE_VOLUMES=true
+            ;;
         *)
-            echo "Usage: $0 [--pull|--no-pull]" >&2
+            echo "Usage: $0 [--pull|--no-pull] [--prune] [--prune-volumes]" >&2
             exit 1
             ;;
     esac
@@ -123,12 +133,21 @@ echo ""
 [[ "$found" -eq 0 && ${#ORDERED_STACKS[@]} -eq 0 ]] && echo "No compose stacks found under $ROOT"
 
 echo ""
-echo ">>> Pruning unused Docker images and volumes"
-docker system prune -f --volumes
-code=$?
-if [[ $code -ne 0 ]]; then
-    echo "!! docker system prune failed (exit $code)"
-    prune_failed=true
+if [[ "$PRUNE_IMAGES" == "true" ]]; then
+    if [[ "$PRUNE_VOLUMES" == "true" ]]; then
+        echo ">>> Pruning unused Docker images and volumes"
+        docker system prune -f --volumes
+    else
+        echo ">>> Pruning unused Docker images"
+        docker image prune -af
+    fi
+    code=$?
+    if [[ $code -ne 0 ]]; then
+        echo "!! docker prune failed (exit $code)"
+        prune_failed=true
+    fi
+else
+    echo ">>> Skipping Docker prune (use --prune to opt in)"
 fi
 
 echo ""

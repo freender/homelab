@@ -79,6 +79,7 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
     diff_pairs = [
         (root / "docker" / "scripts" / "start.sh", "/mnt/cache/appdata/start.sh"),
         (root / "docker" / "scripts" / "rm.sh", "/mnt/cache/appdata/rm.sh"),
+        (root / "docker" / "scripts" / "rebuild.sh", "/mnt/cache/appdata/rebuild.sh"),
         (
             root / "docker" / "scripts" / "docker-common.sh",
             "/mnt/cache/appdata/.homelab/docker/docker-common.sh",

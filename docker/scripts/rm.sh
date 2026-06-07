@@ -4,6 +4,21 @@
 
 set -u
 
+CONFIRM=false
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --yes)
+            CONFIRM=true
+            ;;
+        *)
+            echo "Usage: $0 [--yes]" >&2
+            exit 1
+            ;;
+    esac
+    shift
+done
+
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 COMMON_SH=""
 
@@ -44,20 +59,21 @@ stop_stack() {
     return 0
 }
 
-# Ask for confirmation
-printf "This will run 'docker compose down --remove-orphans' in all subdirectories of %s\n" "$ROOT"
-printf "Are you sure you want to continue? (yes/no): "
-read -r response
+if [[ "$CONFIRM" != "true" ]]; then
+    printf "This will run 'docker compose down --remove-orphans' in all subdirectories of %s\n" "$ROOT"
+    printf "Type 'yes' to continue: "
+    read -r response
 
-case "$response" in
-  yes|YES|y|Y)
-    echo "Proceeding..."
-    ;;
-  *)
-    echo "Aborted."
-    exit 0
-    ;;
-esac
+    case "$response" in
+      yes)
+        echo "Proceeding..."
+        ;;
+      *)
+        echo "Aborted."
+        exit 0
+        ;;
+    esac
+fi
 
 if ! acquire_docker_lock "$ROOT" "rm"; then
     exit 1

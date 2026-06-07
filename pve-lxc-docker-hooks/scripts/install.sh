@@ -75,6 +75,12 @@ if [[ -e $legacy_hook ]]; then
     print_ok "legacy ct107-bbolt-hook.sh removed"
 fi
 
+legacy_runtime_repair=/usr/local/sbin/homelab-docker-runtime-repair.sh
+if [[ -e $legacy_runtime_repair ]]; then
+    rm -f "$legacy_runtime_repair"
+    print_ok "legacy homelab-docker-runtime-repair.sh removed"
+fi
+
 # --- Periodic monitor (every 5 min while CTs are running) ---
 MONITOR_NAME=homelab-docker-bbolt-monitor.sh
 MONITOR_DEST=/usr/local/sbin/$MONITOR_NAME
