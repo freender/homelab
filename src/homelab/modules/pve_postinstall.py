@@ -20,7 +20,9 @@ PVE_FILES = [
     "sshd-hardening.conf",
     NOTIFY_SCRIPT,
     NOTIFY_SERVICE,
+    "homelab-pve-cluster-rejoin-helper",
 ]
+GENERATED_FILES = {NOTIFY_SCRIPT, NOTIFY_SERVICE, "homelab-pve-cluster-rejoin-helper"}
 
 REMOTE_PATHS = {
     "proxmox.sources": "/etc/apt/sources.list.d/proxmox.sources",
@@ -31,11 +33,13 @@ REMOTE_PATHS = {
     "sshd-hardening.conf": "/etc/ssh/sshd_config.d/99-disable-password-auth.conf",
     NOTIFY_SCRIPT: "/usr/local/bin/homelab-notify-failure",
     NOTIFY_SERVICE: "/etc/systemd/system/homelab-notify-failure@.service",
+    "homelab-pve-cluster-rejoin-helper": "/usr/local/sbin/homelab-pve-cluster-rejoin-helper",
 }
 
 MODES = {
     "pve-remove-nag.sh": "755",
     NOTIFY_SCRIPT: "755",
+    "homelab-pve-cluster-rejoin-helper": "755",
 }
 
 
@@ -70,7 +74,7 @@ def validate(root: Path) -> None:
     notify_template = root / "shared" / "templates" / NOTIFY_SERVICE
 
     for file_name in PVE_FILES:
-        if file_name in {NOTIFY_SCRIPT, NOTIFY_SERVICE}:
+        if file_name in GENERATED_FILES:
             continue
         file_path = config_dir / file_name
         if not file_path.is_file():
@@ -118,7 +122,7 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
     prepare_build_dir(build_dir)
 
     for file_name in PVE_FILES:
-        if file_name in {NOTIFY_SCRIPT, NOTIFY_SERVICE}:
+        if file_name in GENERATED_FILES:
             continue
         source_path = config_dir / file_name
         if not source_path.is_file():
@@ -129,7 +133,7 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
         [
             file_name
             for file_name in PVE_FILES
-            if file_name not in {NOTIFY_SCRIPT, NOTIFY_SERVICE}
+            if file_name not in GENERATED_FILES
         ],
     )
     copy_file(
@@ -141,6 +145,7 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
         build_dir / NOTIFY_SERVICE,
         NOTIFY_SCRIPT="/usr/local/bin/homelab-notify-failure",
     )
+    build_cluster_rejoin_helper(root, build_dir)
 
     write_file_map(build_dir)
     build_network_interfaces_bundle(root, host, build_dir)
@@ -220,6 +225,136 @@ def build_network_interfaces_bundle(root: Path, host: str, build_dir: Path) -> N
         NET_STORAGE_IP=storage_ip,
         NET_MGMT_IFACE=mgmt_iface,
         NET_STORAGE_IFACE=storage_iface,
+    )
+
+
+def build_cluster_rejoin_helper(root: Path, build_dir: Path) -> None:
+    registry = default_registry(root)
+    pve_hosts = registry.list_hosts(feature="pve-postinstall")
+    lines = [
+        "#!/bin/bash",
+        "# Safe PVE rebuild helper. Does not execute pvecm add.",
+        "set -euo pipefail",
+        "",
+        "usage() {",
+        "    cat <<'EOF'",
+        "Usage: homelab-pve-cluster-rejoin-helper <node> [cluster-peer]",
+        "",
+        "Runs safe cluster-side cleanup/readiness checks and prints the manual join command.",
+        "Run this on an existing cluster node after rebuilding <node> but before manual pvecm add.",
+        "",
+        "This helper may run pvecm delnode and remove stale known_hosts entries.",
+        "It never runs pvecm add.",
+        "EOF",
+        "}",
+        "",
+        "node=${1:-}",
+        "cluster_peer=${2:-}",
+        "if [[ -z \"$node\" || \"$node\" == \"-h\" || \"$node\" == \"--help\" ]]; then",
+        "    usage",
+        "    exit 0",
+        "fi",
+        "",
+        "case \"$node\" in",
+    ]
+    for pve_host in pve_hosts:
+        hostname = str(registry.get(pve_host, "config.hostname"))
+        mgmt_ip = str(registry.get(pve_host, "pve-postinstall.interfaces.mgmt_ip", ""))
+        link0 = mgmt_ip.split("/", 1)[0] if mgmt_ip else hostname
+        standalone = bool(registry.get(pve_host, "config.standalone", False))
+        lines.extend(
+            [
+                f"    {pve_host})",
+                f"        node_fqdn='{hostname}'",
+                f"        node_link0='{link0}'",
+                f"        node_standalone='{str(standalone).lower()}'",
+                "        ;;",
+            ]
+        )
+    lines.extend(
+        [
+            "    *)",
+            "        echo \"Unknown PVE node: $node\" >&2",
+            f"        echo \"Known nodes: {' '.join(pve_hosts)}\" >&2",
+            "        exit 1",
+            "        ;;",
+            "esac",
+            "",
+            "if [[ \"$node_standalone\" == \"true\" ]]; then",
+            "    echo \"$node is marked standalone; cluster join is not expected.\" >&2",
+            "    exit 1",
+            "fi",
+            "",
+            "local_node=$(hostname -s)",
+            "if [[ \"$node\" == \"$local_node\" ]]; then",
+            "    echo \"Refusing to clean up local node $node from itself.\" >&2",
+            "    echo \"Run this on another cluster node.\" >&2",
+            "    exit 1",
+            "fi",
+            "",
+            "if [[ -z \"$cluster_peer\" ]]; then",
+            "    cluster_peer=$local_node.freender.internal",
+            "fi",
+            "",
+            "echo \"==> Cleaning stale cluster state for $node\"",
+            "if pvecm nodes 2>/dev/null | awk '{print $3}' | grep -Fxq \"$node\"; then",
+            "    pvecm delnode \"$node\"",
+            "else",
+            "    echo \"$node is not listed in pvecm nodes; skipping pvecm delnode\"",
+            "fi",
+            "",
+            "if [[ -d \"/etc/pve/nodes/$node\" ]]; then",
+            "    rm -rf \"/etc/pve/nodes/$node\"",
+            "    echo \"Removed /etc/pve/nodes/$node\"",
+            "else",
+            "    echo \"/etc/pve/nodes/$node absent; skipping\"",
+            "fi",
+            "",
+            "echo \"==> Removing stale SSH known_hosts entries\"",
+            "for host in \"$node\" \"$node_fqdn\" \"$node_link0\"; do",
+            "    ssh-keygen -R \"$host\" >/dev/null 2>&1 || true",
+            "done",
+            "",
+            "echo \"==> Waiting for rebuilt node readiness\"",
+            "for attempt in $(seq 1 60); do",
+            "    if timeout 3 bash -c \"</dev/tcp/$node_link0/22\" >/dev/null 2>&1; then",
+            "        echo \"SSH is reachable on $node_link0\"",
+            "        break",
+            "    fi",
+            "    if [[ \"$attempt\" -eq 60 ]]; then",
+            "        echo \"SSH did not become reachable on $node_link0\" >&2",
+            "        exit 1",
+            "    fi",
+            "    sleep 10",
+            "done",
+            "",
+            "if timeout 3 bash -c \"</dev/tcp/$node_link0/8006\" >/dev/null 2>&1; then",
+            "    echo \"PVE API port is reachable on $node_link0\"",
+            "else",
+            "    echo \"PVE API port 8006 is not reachable yet on $node_link0\" >&2",
+            "fi",
+            "",
+            "fingerprint=",
+            "if command -v openssl >/dev/null 2>&1; then",
+            "    fingerprint=$(openssl s_client -connect \"$cluster_peer:8006\" \\",
+            "        -servername \"$cluster_peer\" </dev/null 2>/dev/null \\",
+            "        | openssl x509 -noout -fingerprint -sha256 2>/dev/null \\",
+            "        | cut -d= -f2 || true)",
+            "fi",
+            "",
+            "echo \"==> Manual join command\"",
+            "echo \"Run on rebuilt node $node after confirming hostname/IP are correct:\"",
+            "if [[ -n \"$fingerprint\" ]]; then",
+            "    echo \"pvecm add $cluster_peer --fingerprint $fingerprint --link0 $node_link0\"",
+            "else",
+            "    echo \"pvecm add $cluster_peer --link0 $node_link0\"",
+            "    echo \"Fingerprint lookup failed; verify it manually.\" >&2",
+            "fi",
+        ]
+    )
+    (build_dir / "homelab-pve-cluster-rejoin-helper").write_text(
+        "\n".join(lines) + "\n",
+        encoding="utf-8",
     )
 
 
