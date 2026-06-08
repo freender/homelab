@@ -32,7 +32,7 @@ required_files_for_type() {
     local host_type="$1"
     case "$host_type" in
         pve)
-            printf '%s\n' proxmox.sources ceph.sources pve-test.sources no-nag-script pve-remove-nag.sh sshd-hardening.conf notify-failure.sh homelab-notify-failure@.service
+            printf '%s\n' proxmox.sources ceph.sources pve-test.sources no-nag-script pve-remove-nag.sh sshd-hardening.conf notify-failure.sh homelab-notify-failure@.service homelab-pve-cluster-rejoin-helper
             ;;
         *)
             return 1
@@ -378,6 +378,9 @@ case "$HOST_TYPE" in
         if [[ "$notify_unit_changed" == "true" ]]; then
             systemctl daemon-reload
         fi
+
+        print_sub "Deploying cluster rejoin helper..."
+        install_file homelab-pve-cluster-rejoin-helper || exit 1
 
         print_sub "Installing required packages..."
         ensure_required_packages || exit 1
