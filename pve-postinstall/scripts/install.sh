@@ -1,6 +1,6 @@
 #!/bin/bash
 # install.sh - Install PVE post-install configs
-# Usage: ./scripts/install.sh [hostname] [pve] [timezone] [import_pools] [mounts] [expected_clustered]
+# Usage: ./scripts/install.sh [hostname] [pve] [timezone] [import_pools] [mounts] [expected_clustered] [cluster_link0]
 
 set -e
 
@@ -10,10 +10,19 @@ TIMEZONE=${3:-UTC}
 IMPORT_POOLS=${4:-}
 MOUNTS=${5:-}
 EXPECTED_CLUSTERED=${6:-false}
+CLUSTER_LINK0=${7:-}
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD_DIR="$SCRIPT_DIR/build/$HOST"
 BACKUP_DIR="/var/backups/homelab/pve-postinstall"
 INSTALL_FILE_CHANGED="false"
+JOIN_SECRET_FILE="$BUILD_DIR/pve-cluster-join.env"
+
+cleanup_join_secret() {
+    if [[ -f "$JOIN_SECRET_FILE" ]]; then
+        shred -u "$JOIN_SECRET_FILE" 2>/dev/null || rm -f "$JOIN_SECRET_FILE"
+    fi
+}
+trap cleanup_join_secret EXIT
 
 if [[ -f "$SCRIPT_DIR/lib/utils.sh" ]]; then
     # shellcheck source=/dev/null
@@ -226,7 +235,7 @@ ensure_required_packages() {
     local missing_pkgs=()
     local package
 
-    for package in mbuffer vim mc; do
+    for package in mbuffer vim mc expect; do
         if ! dpkg -s "$package" >/dev/null 2>&1; then
             missing_pkgs+=("$package")
         fi
@@ -295,6 +304,7 @@ report_cluster_join_if_needed() {
     local local_node
     local peer_hint
     local peer
+    local fingerprint
 
     [[ "$EXPECTED_CLUSTERED" == "true" ]] || return 0
 
@@ -315,12 +325,68 @@ report_cluster_join_if_needed() {
         [[ "$peer" != "$local_node.freender.internal" ]] || continue
         if ssh -o BatchMode=yes -o ConnectTimeout=10 "root@$peer" \
             "test -x /usr/local/sbin/homelab-pve-cluster-rejoin-helper && /usr/local/sbin/homelab-pve-cluster-rejoin-helper '$local_node' '$peer'"; then
+            fingerprint="$(cluster_peer_fingerprint "$peer")"
+            run_cluster_join "$peer" "$fingerprint"
             return 0
         fi
     done
 
     print_warn "Automatic cluster cleanup failed; run from an existing cluster node:"
     print_sub "homelab-pve-cluster-rejoin-helper $local_node $peer_hint"
+}
+
+cluster_peer_fingerprint() {
+    local peer="$1"
+
+    openssl s_client -connect "$peer:8006" -servername "$peer" </dev/null 2>/dev/null \
+        | openssl x509 -noout -fingerprint -sha256 2>/dev/null \
+        | cut -d= -f2 || true
+}
+
+run_cluster_join() {
+    local peer="$1"
+    local fingerprint="$2"
+    local link0="${CLUSTER_LINK0:-$(hostname -I | awk '{print $1}')}"
+
+    if [[ -f /etc/pve/corosync.conf ]]; then
+        print_sub "Cluster config appeared after cleanup; skipping pvecm add"
+        return 0
+    fi
+    if [[ ! -f "$JOIN_SECRET_FILE" ]]; then
+        print_warn "Cluster join secret missing; run manually: pvecm add $peer --link0 $link0"
+        return 1
+    fi
+    if [[ -z "$fingerprint" ]]; then
+        print_warn "Cluster peer fingerprint unavailable; refusing unattended pvecm add"
+        print_sub "Manual command: pvecm add $peer --link0 $link0"
+        return 1
+    fi
+    if ! command -v expect >/dev/null 2>&1; then
+        print_warn "expect is not installed; refusing unattended pvecm add"
+        print_sub "Manual command: pvecm add $peer --fingerprint $fingerprint --link0 $link0"
+        return 1
+    fi
+
+    # shellcheck source=/dev/null
+    source "$JOIN_SECRET_FILE"
+    if [[ -z "${PVE_ROOT_PASSWORD:-}" ]]; then
+        print_warn "PVE_ROOT_PASSWORD missing; refusing unattended pvecm add"
+        return 1
+    fi
+
+    print_sub "Running pvecm add against $peer with explicit fingerprint/link0"
+    PVE_JOIN_PASSWORD="$PVE_ROOT_PASSWORD" expect <<EOF
+set timeout 600
+set password \$env(PVE_JOIN_PASSWORD)
+spawn pvecm add "$peer" --fingerprint "$fingerprint" --link0 "$link0"
+expect {
+    -re "(?i).*password.*" { send -- "\$password\r"; exp_continue }
+    -re "(?i).*fingerprint.*" { send -- "yes\r"; exp_continue }
+    eof
+}
+catch wait result
+exit [lindex \$result 3]
+EOF
 }
 
 if [[ -z "$HOST_TYPE" ]]; then
