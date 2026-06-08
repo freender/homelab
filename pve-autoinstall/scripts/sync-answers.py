@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""sync-answers.py - Run on rasputin to sync PDM prepared answers from answer plan.
+"""sync-answers.py - Run on the PDM host to sync prepared answers from answer plan.
 
 Reads answer-plan.json from the same directory, calls PDM API on localhost,
 creates or updates each prepared answer entry. Never logs secret values.

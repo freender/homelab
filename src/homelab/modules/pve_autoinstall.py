@@ -1,16 +1,16 @@
 """pve-autoinstall - Manage PDM prepared answer configurations from hosts.conf.
 
-Stages a JSON answer plan and a remote Python sync script to rasputin, then
+Stages a JSON answer plan and a remote Python sync script to the PDM host, then
 executes the script over SSH so the PDM API calls happen from localhost (where
-rasputin can reach 10.0.0.50:8443 directly).
+the PDM host can reach 10.0.0.50:8443 directly).
 
 Architecture:
-  - rasputin: the PDM host. Configured with pve-autoinstall.pdm_host and
+  - arc: the PDM host. Configured with pve-autoinstall.pdm_host and
     related fields. The module SSHes here to run sync-answers.py.
   - PVE nodes (ace, bray, clovis, osiris): each has pve-autoinstall.dmi_uuid,
     boot_disk_serial, answer_name. Network/tz/fqdn are derived from existing
     pve-postinstall.interfaces and pve-postinstall.timezone fields.
-  - root-ssh-keys and mailto come from rasputin's pve-autoinstall config.
+  - root-ssh-keys and mailto come from the PDM host's pve-autoinstall config.
   - root-password-hashed is generated at deploy time by the remote script
     using the plaintext password from 1Password.
 """
@@ -111,7 +111,7 @@ def deploy(
     }
 
     if dry_run:
-        print_sub("[DRY-RUN] Would stage answer plan and run sync-answers.py on rasputin")
+        print_sub(f"[DRY-RUN] Would stage answer plan and run sync-answers.py on {pdm_host_name}")
         for entry in answer_entries:
             print_sub(
                 f"  {entry['id']}: fqdn={entry['fqdn']} cidr={entry['cidr']}"
@@ -132,7 +132,7 @@ def deploy(
         print_error(str(exc))
         return 1
 
-    # Stage + execute on rasputin.
+    # Stage + execute on the PDM host.
     session.run(
         lambda host: _run_on_pdm_host(
             root, registry, pdm_host_name, plan, pdm_token_secret,
@@ -215,14 +215,14 @@ def _run_on_pdm_host(
 
         script_src = root / "pve-autoinstall" / "scripts" / "sync-answers.py"
 
-        print_sub("Staging bundle to rasputin...")
+        print_sub(f"Staging bundle to {pdm_host_name}...")
         connection.prepare_remote_dir(REMOTE_ROOT)
         connection.upload(plan_path, f"{REMOTE_ROOT}/answer-plan.json")
         connection.upload(token_path, f"{REMOTE_ROOT}/pdm-api-token")
         connection.upload(script_src, f"{REMOTE_ROOT}/sync-answers.py")
 
         force_flag = " --force" if force else ""
-        print_sub("Running sync-answers.py on rasputin...")
+        print_sub(f"Running sync-answers.py on {pdm_host_name}...")
         connection.connection.run(
             f'chmod +x "{REMOTE_ROOT}/sync-answers.py" && '
             f'python3 "{REMOTE_ROOT}/sync-answers.py"{force_flag}',

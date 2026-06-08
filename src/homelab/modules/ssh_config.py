@@ -93,6 +93,7 @@ def validate(root: Path, supported_hosts: list[str]) -> None:
 
 
 def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
+    registry = default_registry(root)
     module_dir = root / "ssh-config"
     configs_dir = module_dir / "configs"
     build_dir = module_dir / "build" / host
@@ -102,10 +103,11 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
     build_config(root, host, build_dir / "config", common_config)
 
     print_sub("Comparing with remote config...")
+    connection = deploy_connection(registry, host)
     if dry_run:
-        status, message = dry_run_remote_diff(host, build_dir / "config")
+        status, message = dry_run_remote_diff(connection, build_dir / "config")
     else:
-        status, message = HostConnection(host).remote_diff(build_dir / "config", ".ssh/config")
+        status, message = connection.remote_diff(build_dir / "config", ".ssh/config")
     del status
     print_sub(message)
 
@@ -116,7 +118,15 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
             print_sub(f"    {file_name}")
         return
 
-    stage_and_install(root, host, build_dir, force=force)
+    stage_and_install(root, connection, host, build_dir, force=force)
+
+
+def deploy_connection(registry, host: str) -> HostConnection:
+    hostname = str(
+        registry.get(host, "config.ssh_config.hostname", registry.get(host, "config.hostname"))
+    )
+    user = str(registry.get(host, "config.ssh_config.user", registry.get(host, "config.user")))
+    return HostConnection(host, user=user, hostname=hostname)
 
 
 def build_config(root: Path, deploy_host: str, output_path: Path, common_config: Path) -> None:
@@ -174,11 +184,10 @@ def render_identities_config(registry, deploy_host: str, ssh_entries: list[dict[
     return "\n\n".join(blocks)
 
 
-def dry_run_remote_diff(host: str, local_file: Path) -> tuple[int, str]:
+def dry_run_remote_diff(connection: HostConnection, local_file: Path) -> tuple[int, str]:
     if offline_mode():
         return offline_diff("$HOME/.ssh/config")
 
-    connection = HostConnection(host)
     transfer = Transfer(connection.connection)
     remote_path = ".ssh/config"
     temp_dir = Path(tempfile.mkdtemp(prefix="homelab-ssh-config-diff-"))
@@ -198,8 +207,13 @@ def dry_run_remote_diff(host: str, local_file: Path) -> tuple[int, str]:
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
-def stage_and_install(root: Path, host: str, build_dir: Path, force: bool) -> None:
-    connection = HostConnection(host)
+def stage_and_install(
+    root: Path,
+    connection: HostConnection,
+    host: str,
+    build_dir: Path,
+    force: bool,
+) -> None:
     stage_and_run_remote_installer(
         root,
         connection,
