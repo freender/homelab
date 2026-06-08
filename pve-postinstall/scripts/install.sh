@@ -15,14 +15,6 @@ SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD_DIR="$SCRIPT_DIR/build/$HOST"
 BACKUP_DIR="/var/backups/homelab/pve-postinstall"
 INSTALL_FILE_CHANGED="false"
-JOIN_SECRET_FILE="$BUILD_DIR/pve-cluster-join.env"
-
-cleanup_join_secret() {
-    if [[ -f "$JOIN_SECRET_FILE" ]]; then
-        shred -u "$JOIN_SECRET_FILE" 2>/dev/null || rm -f "$JOIN_SECRET_FILE"
-    fi
-}
-trap cleanup_join_secret EXIT
 
 if [[ -f "$SCRIPT_DIR/lib/utils.sh" ]]; then
     # shellcheck source=/dev/null
@@ -235,7 +227,7 @@ ensure_required_packages() {
     local missing_pkgs=()
     local package
 
-    for package in mbuffer vim mc expect; do
+    for package in mbuffer vim mc; do
         if ! dpkg -s "$package" >/dev/null 2>&1; then
             missing_pkgs+=("$package")
         fi
@@ -325,14 +317,14 @@ report_cluster_join_if_needed() {
         [[ "$peer" != "$local_node.freender.internal" ]] || continue
         if ssh -o BatchMode=yes -o ConnectTimeout=10 "root@$peer" \
             "test -x /usr/local/sbin/homelab-pve-cluster-rejoin-helper && /usr/local/sbin/homelab-pve-cluster-rejoin-helper '$local_node' '$peer'"; then
-            fingerprint="$(cluster_peer_fingerprint "$peer")"
-            run_cluster_join "$peer" "$fingerprint"
+            print_manual_cluster_join "$peer"
             return 0
         fi
     done
 
     print_warn "Automatic cluster cleanup failed; run from an existing cluster node:"
     print_sub "homelab-pve-cluster-rejoin-helper $local_node $peer_hint"
+    print_manual_cluster_join "$peer_hint"
 }
 
 cluster_peer_fingerprint() {
@@ -343,54 +335,24 @@ cluster_peer_fingerprint() {
         | cut -d= -f2 || true
 }
 
-run_cluster_join() {
+print_manual_cluster_join() {
     local peer="$1"
-    local fingerprint="$2"
     local link0="${CLUSTER_LINK0:-$(hostname -I | awk '{print $1}')}"
+    local fingerprint
 
     if [[ -f /etc/pve/corosync.conf ]]; then
-        print_sub "Cluster config appeared after cleanup; skipping pvecm add"
+        print_sub "Cluster config appeared after cleanup; manual pvecm add not needed"
         return 0
     fi
-    if [[ ! -f "$JOIN_SECRET_FILE" ]]; then
-        print_warn "Cluster join secret missing; run manually: pvecm add $peer --link0 $link0"
-        return 1
-    fi
-    if [[ -z "$fingerprint" ]]; then
-        print_warn "Cluster peer fingerprint unavailable; refusing unattended pvecm add"
-        print_sub "Manual command: pvecm add $peer --link0 $link0"
-        return 1
-    fi
-    if ! command -v expect >/dev/null 2>&1; then
-        print_warn "expect is not installed; refusing unattended pvecm add"
+    fingerprint="$(cluster_peer_fingerprint "$peer")"
+
+    print_warn "Cluster join is a manual step"
+    if [[ -n "$fingerprint" ]]; then
         print_sub "Manual command: pvecm add $peer --fingerprint $fingerprint --link0 $link0"
-        return 1
+    else
+        print_warn "Cluster peer fingerprint unavailable; verify it manually"
+        print_sub "Manual command: pvecm add $peer --link0 $link0"
     fi
-
-    # shellcheck source=/dev/null
-    source "$JOIN_SECRET_FILE"
-    if [[ -z "${PVE_ROOT_PASSWORD:-}" ]]; then
-        print_warn "PVE_ROOT_PASSWORD missing; refusing unattended pvecm add"
-        return 1
-    fi
-
-    print_sub "Running pvecm add against $peer with explicit fingerprint/link0"
-    PVE_JOIN_PASSWORD="$PVE_ROOT_PASSWORD" expect <<EOF
-set timeout 600
-set password \$env(PVE_JOIN_PASSWORD)
-spawn pvecm add "$peer" --fingerprint "$fingerprint" --link0 "$link0"
-expect {
-    -re "(?i).*(otp|tfa|two.?factor|verification).*" {
-        puts stderr "TFA/OTP prompt detected; refusing unattended pvecm add"
-        exit 2
-    }
-    -re "(?i).*password.*" { send -- "\$password\r"; exp_continue }
-    -re "(?i).*fingerprint.*" { send -- "yes\r"; exp_continue }
-    eof
-}
-catch wait result
-exit [lindex \$result 3]
-EOF
 }
 
 if [[ -z "$HOST_TYPE" ]]; then

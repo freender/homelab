@@ -1,10 +1,7 @@
 from __future__ import annotations
 
-import shlex
-import tempfile
 from pathlib import Path
 
-from .. import op_secrets
 from ..build import copy_file, copy_files, render_file
 from ..deploy import DeploySession, force_env, prepare_build_dir, stage_and_run_remote_installer
 from ..hosts import HostLookupError, default_registry
@@ -14,8 +11,6 @@ from ..ssh import HostConnection, build_files, diff_many
 REMOTE_ROOT = "/tmp/homelab-pve-postinstall"
 NOTIFY_SCRIPT = "notify-failure.sh"
 NOTIFY_SERVICE = "homelab-notify-failure@.service"
-JOIN_SECRET = "pve-root-password"
-JOIN_SECRET_FILE = "pve-cluster-join.env"
 PVE_FILES = [
     "proxmox.sources",
     "ceph.sources",
@@ -376,46 +371,6 @@ def build_cluster_rejoin_helper(root: Path, build_dir: Path) -> None:
     )
 
 
-def build_cluster_join_secret(root: Path) -> Path:
-    handle = tempfile.NamedTemporaryFile(
-        mode="w",
-        encoding="utf-8",
-        prefix="homelab-pve-cluster-join.",
-        suffix=".env",
-        dir="/dev/shm",
-        delete=False,
-    )
-    secret_path = Path(handle.name)
-    secret_path.chmod(0o600)
-    try:
-        env_path = op_secrets.secret_file(root, JOIN_SECRET)
-        env = op_secrets.parse_env_file(env_path)
-        password = env.get("PVE_ROOT_PASSWORD", "").strip()
-        if not password:
-            raise ValueError(f"{JOIN_SECRET} missing PVE_ROOT_PASSWORD")
-        handle.write(f"PVE_ROOT_PASSWORD={shlex.quote(password)}\n")
-    except op_secrets.OpSecretsError as exc:
-        raise ValueError(f"missing {JOIN_SECRET} secret for cluster auto-join: {exc}") from exc
-    finally:
-        handle.close()
-    return secret_path
-
-
-def cleanup_local_secret(path: Path | None) -> None:
-    if path is None or not path.exists():
-        return
-    try:
-        path.unlink()
-    except OSError:
-        pass
-
-
-def maybe_build_cluster_join_secret(root: Path, expected_clustered: str) -> Path | None:
-    if expected_clustered != "true":
-        return None
-    return build_cluster_join_secret(root)
-
-
 def stage_and_install(
     root: Path,
     host: str,
@@ -429,30 +384,24 @@ def stage_and_install(
     connection: HostConnection,
     force: bool,
 ) -> None:
-    secret_path = maybe_build_cluster_join_secret(root, expected_clustered)
     upload_paths = [
         (build_dir, f"{REMOTE_ROOT}/build/{host}"),
         (root / "pve-postinstall" / "scripts", f"{REMOTE_ROOT}/scripts"),
     ]
-    if secret_path is not None:
-        upload_paths.append((secret_path, f"{REMOTE_ROOT}/build/{host}/{JOIN_SECRET_FILE}"))
-    try:
-        stage_and_run_remote_installer(
-            root,
-            connection,
-            REMOTE_ROOT,
-            upload_paths,
-            "scripts/install.sh",
-            host,
-            host_type,
-            timezone,
-            import_pools,
-            mounts,
-            expected_clustered,
-            cluster_link0,
-            env=force_env(force),
-            require_root=True,
-            remote_subdirs=("build", "lib"),
-        )
-    finally:
-        cleanup_local_secret(secret_path)
+    stage_and_run_remote_installer(
+        root,
+        connection,
+        REMOTE_ROOT,
+        upload_paths,
+        "scripts/install.sh",
+        host,
+        host_type,
+        timezone,
+        import_pools,
+        mounts,
+        expected_clustered,
+        cluster_link0,
+        env=force_env(force),
+        require_root=True,
+        remote_subdirs=("build", "lib"),
+    )
