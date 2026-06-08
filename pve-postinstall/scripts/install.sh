@@ -380,6 +380,10 @@ set timeout 600
 set password \$env(PVE_JOIN_PASSWORD)
 spawn pvecm add "$peer" --fingerprint "$fingerprint" --link0 "$link0"
 expect {
+    -re "(?i).*(otp|tfa|two.?factor|verification).*" {
+        puts stderr "TFA/OTP prompt detected; refusing unattended pvecm add"
+        exit 2
+    }
     -re "(?i).*password.*" { send -- "\$password\r"; exp_continue }
     -re "(?i).*fingerprint.*" { send -- "yes\r"; exp_continue }
     eof
