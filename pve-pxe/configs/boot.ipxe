@@ -4,7 +4,7 @@
 
 set menu-timeout 10000
 set menu-default local
-set pxe-server 10.0.0.51
+set pxe-server 10.0.0.50
 
 :menu
 menu Homelab PXE

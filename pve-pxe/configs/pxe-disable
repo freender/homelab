@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# pxe-disable - Stop dnsmasq PXE service on saint.
+# pxe-disable - Stop dnsmasq PXE service.
 # nginx is kept running to serve baked ISOs via /iso/ at all times.
 # Safe to run multiple times; idempotent.
 set -euo pipefail

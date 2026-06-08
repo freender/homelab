@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# pxe-enable - Start nginx and dnsmasq PXE services on saint.
+# pxe-enable - Start nginx and dnsmasq PXE services.
 # Safe to run multiple times; idempotent.
 set -euo pipefail
 

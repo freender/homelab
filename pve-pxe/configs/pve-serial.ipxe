@@ -2,4 +2,4 @@
 # pve-serial.ipxe - Proxmox VE serial terminal installer
 
 set pve-kargs ro ramdisk_size=16777216 rw splash=verbose proxtui console=ttyS0,115200
-chain http://10.0.0.51/pve-load.ipxe
+chain http://10.0.0.50/pve-load.ipxe

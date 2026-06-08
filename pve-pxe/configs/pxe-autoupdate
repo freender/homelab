@@ -14,8 +14,8 @@ METRIC="/var/lib/node_exporter/textfile/pxe_autoupdate.prom"
 LOCK="/run/pxe-autoupdate.lock"
 
 # PDM connection details (written by homelab deploy; do not edit here)
-# shellcheck source=/etc/saint/pxe-mgmt.conf
-source /etc/saint/pxe-mgmt.conf
+# shellcheck source=/etc/homelab-pxe/pxe-mgmt.conf
+source /etc/homelab-pxe/pxe-mgmt.conf
 PXE_HTTP_BASE="http://${PXE_MGMT_IP}"
 
 log()    { echo "pxe-autoupdate: $*"; }
@@ -39,7 +39,12 @@ flock -n 9 || { log "another run is active"; exit 0; }
 latest="$(curl -fsSL "$ISO_INDEX" | grep -oE "proxmox-ve_[0-9]+\.[0-9]+-[0-9]+\.iso" | sort -V | tail -1)"
 [[ -n "$latest" ]] || fail "could not determine latest upstream ISO"
 
-staged="$(find "$SRV" -maxdepth 1 -name 'proxmox-ve_*.iso' -printf '%f\n' 2>/dev/null | sort -V | tail -1)"
+staged="$(
+    find "$SRV" -maxdepth 1 -name 'proxmox-ve_*.iso' -printf '%f\n' 2>/dev/null \
+        | sed -E 's/-auto-[^.]+\.iso$/.iso/' \
+        | sort -V \
+        | tail -1
+)"
 if [[ "$latest" == "$staged" ]]; then
     log "up to date ($staged)"
     metric 0
@@ -74,6 +79,9 @@ proxmox-auto-install-assistant prepare-iso "$ISO_DIR/$latest" \
 
 [[ -s "$PXE_BUILD/vmlinuz" && -s "$PXE_BUILD/initrd.img" ]] \
     || fail "prepare-iso did not produce vmlinuz/initrd.img"
+prepared_iso="$(find "$PXE_BUILD" -maxdepth 1 -name 'proxmox-ve_*.iso' -printf '%f\n' 2>/dev/null | sort -V | tail -1)"
+[[ -n "$prepared_iso" && -s "$PXE_BUILD/$prepared_iso" ]] \
+    || fail "prepare-iso did not produce prepared Proxmox ISO"
 
 # 4. Assemble staging copy with new payload + version-bumped loaders
 ver="${latest%.iso}"
@@ -84,27 +92,27 @@ rsync -a --exclude '/iso/' "$SRV"/ "$STAGE"/
 rm -f "$STAGE"/proxmox-ve_*.iso
 install -m 0644 "$PXE_BUILD/vmlinuz"    "$STAGE/vmlinuz"
 install -m 0644 "$PXE_BUILD/initrd.img" "$STAGE/initrd.img"
-install -m 0644 "$ISO_DIR/$latest"      "$STAGE/$latest"
+install -m 0644 "$PXE_BUILD/$prepared_iso" "$STAGE/$prepared_iso"
 sed -i \
     -e "s#http://\${next-server}#${PXE_HTTP_BASE}#g" \
     -e "s#http:///##g" \
     "$STAGE"/*.ipxe
 sed -i -E \
     -e "s#http://[^/]+/initrd\.img#${PXE_HTTP_BASE}/initrd.img#g" \
-    -e "s#http://[^/]+/proxmox-ve_[^[:space:]]+\.iso#${PXE_HTTP_BASE}/${latest}#g" \
-    -e "s#proxmox-ve_PLACEHOLDER\.iso#${latest}#g" \
+    -e "s#http://[^/]+/proxmox-ve_[^[:space:]]+\.iso#${PXE_HTTP_BASE}/${prepared_iso}#g" \
+    -e "s#proxmox-ve_PLACEHOLDER\.iso#${prepared_iso}#g" \
     "$STAGE/pve-load.ipxe"
 sed -i -E \
     -e "s#http://[^/]+/pve-load\.ipxe#${PXE_HTTP_BASE}/pve-load.ipxe#g" \
     "$STAGE/pdm-auto.ipxe"
 
 # 5. Validate staged payload consistency
-grep -q "${latest}" "$STAGE/pve-load.ipxe" \
-    || fail "pve-load.ipxe not pointing at ${latest}"
+grep -q "${prepared_iso}" "$STAGE/pve-load.ipxe" \
+    || fail "pve-load.ipxe not pointing at ${prepared_iso}"
 if grep -R "PLACEHOLDER\|\${next-server}" "$STAGE"/*.ipxe >/dev/null; then
     fail "staged iPXE scripts still contain placeholder server or ISO references"
 fi
-for f in vmlinuz initrd.img "$latest" boot.ipxe pve-load.ipxe pdm-auto.ipxe; do
+for f in vmlinuz initrd.img "$prepared_iso" boot.ipxe pve-load.ipxe pdm-auto.ipxe; do
     [[ -s "$STAGE/$f" ]] || fail "staged payload missing $f"
 done
 
@@ -119,7 +127,7 @@ systemctl reload nginx 2>/dev/null || systemctl restart nginx
 
 # 7. Post-promote HTTP smoke test
 ok=1
-curl -fsI "http://127.0.0.1/$latest"    >/dev/null || ok=0
+curl -fsI "http://127.0.0.1/$prepared_iso" >/dev/null || ok=0
 curl -fsI "http://127.0.0.1/initrd.img" >/dev/null || ok=0
 curl -fsI "http://127.0.0.1/boot.ipxe"  >/dev/null || ok=0
 if [[ "$ok" -ne 1 ]]; then

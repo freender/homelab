@@ -5,4 +5,4 @@
 
 dhcp
 ifopen
-chain http://10.0.0.51/boot.ipxe
+chain http://10.0.0.50/boot.ipxe

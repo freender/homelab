@@ -2,4 +2,4 @@
 # pve-gui.ipxe - Proxmox VE graphical installer
 
 set pve-kargs ro ramdisk_size=16777216 rw quiet splash=silent
-chain http://10.0.0.51/pve-load.ipxe
+chain http://10.0.0.50/pve-load.ipxe

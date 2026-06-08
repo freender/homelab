@@ -1,0 +1,173 @@
+from __future__ import annotations
+
+import shlex
+from pathlib import Path
+
+from .. import op_secrets
+from ..deploy import DeploySession, force_env, prepare_build_dir, stage_and_run_remote_installer
+from ..hosts import default_registry
+from ..output import print_action, print_error, print_sub
+from ..ssh import HostConnection, diff_many, offline_mode
+
+REMOTE_ROOT = "/tmp/homelab-pve-postinstall-webhook"
+FEATURE = "pve-postinstall-webhook"
+SECRET_NAME = "pve-postinstall-webhook"
+TOKEN_ENV_KEY = "PVE_POSTINSTALL_WEBHOOK_TOKEN"
+
+REQUIRED_SCRIPTS = [
+    "homelab-postinstall-webhook.py",
+    "homelab-pdm-installation-watch.py",
+    "homelab-postinstall-deploy.sh",
+    "homelab-postinstall-webhook.service",
+    "homelab-pdm-installation-watch.service",
+    "homelab-pdm-installation-watch.timer",
+    "install.sh",
+]
+
+
+def deploy(
+    root: Path,
+    requested_host: str,
+    dry_run: bool,
+    force: bool,
+    session: DeploySession,
+) -> int:
+    registry = default_registry(root)
+    supported_hosts = registry.list_hosts(feature=FEATURE)
+    hosts = registry.filter_hosts(requested_host, supported_hosts)
+    if not hosts:
+        print_action(f"Skipping {FEATURE} (not applicable to {requested_host})")
+        return 0
+
+    try:
+        validate(root)
+    except ValueError as exc:
+        print_error(str(exc))
+        return 1
+
+    session.run(lambda host: deploy_host(root, host, dry_run=dry_run, force=force), hosts)
+    return 0 if session.finish() else 1
+
+
+def validate(root: Path) -> None:
+    scripts_dir = root / "pve-postinstall-webhook" / "scripts"
+    for name in REQUIRED_SCRIPTS:
+        path = scripts_dir / name
+        if not path.is_file():
+            raise ValueError(f"missing required script: {path}")
+
+    try:
+        op_secrets.secret_file(root, SECRET_NAME)
+    except op_secrets.OpSecretsError as exc:
+        raise ValueError(str(exc)) from exc
+
+
+def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
+    registry = default_registry(root)
+    listen_host = str(registry.get(host, f"{FEATURE}.listen_host", "0.0.0.0"))
+    listen_port = str(registry.get(host, f"{FEATURE}.listen_port", "9443"))
+    repo_dir = str(registry.get(host, f"{FEATURE}.repo_dir", "/root/homelab"))
+    webhook_dry_run = str(registry.get(host, f"{FEATURE}.dry_run", "true")).lower()
+    ssh_timeout = str(registry.get(host, f"{FEATURE}.ssh_timeout_seconds", "1200"))
+    deploy_timeout = str(registry.get(host, f"{FEATURE}.deploy_timeout_seconds", "3600"))
+
+    token = "<offline>"
+    if not offline_mode():
+        token = _read_token(root)
+
+    build_dir = root / "pve-postinstall-webhook" / "build" / host
+    prepare_build_dir(build_dir)
+    _write_env(
+        build_dir / "env",
+        {
+            "LISTEN_HOST": listen_host,
+            "LISTEN_PORT": listen_port,
+            "REPO_DIR": repo_dir,
+            "WEBHOOK_TOKEN": token,
+            "DRY_RUN": webhook_dry_run,
+            "SSH_TIMEOUT_SECONDS": ssh_timeout,
+            "DEPLOY_TIMEOUT_SECONDS": deploy_timeout,
+            "SSH_AUTH_SOCK": "/root/.ssh/agent.sock",
+            "PDM_BASE_URL": "https://127.0.0.1:8443",
+            "PDM_TOKEN_ID": "root@pam!homelab-deploy",
+            "PDM_TOKEN_REF": "op://Homelab/PDM Deploy API Token/password",
+            "OP_BIN": "/root/.local/bin/op",
+            "OP_SERVICE_ACCOUNT_TOKEN_FILE": "/root/.config/op/service-account-token",
+        },
+    )
+
+    connection = HostConnection(
+        host,
+        user=str(registry.get(host, "config.user")),
+        hostname=str(registry.get(host, "config.hostname")),
+    )
+
+    scripts_dir = root / "pve-postinstall-webhook" / "scripts"
+    print_sub("Comparing with remote configs...")
+    for message in diff_many(
+        connection,
+        [
+            (
+                scripts_dir / "homelab-postinstall-webhook.py",
+                "/usr/local/sbin/homelab-postinstall-webhook",
+            ),
+            (
+                scripts_dir / "homelab-postinstall-deploy.sh",
+                "/usr/local/sbin/homelab-postinstall-deploy",
+            ),
+            (
+                scripts_dir / "homelab-pdm-installation-watch.py",
+                "/usr/local/sbin/homelab-pdm-installation-watch",
+            ),
+            (
+                scripts_dir / "homelab-postinstall-webhook.service",
+                "/etc/systemd/system/homelab-postinstall-webhook.service",
+            ),
+            (
+                scripts_dir / "homelab-pdm-installation-watch.service",
+                "/etc/systemd/system/homelab-pdm-installation-watch.service",
+            ),
+            (
+                scripts_dir / "homelab-pdm-installation-watch.timer",
+                "/etc/systemd/system/homelab-pdm-installation-watch.timer",
+            ),
+        ],
+    ):
+        print_sub(message)
+
+    if dry_run:
+        print_sub(f"[DRY-RUN] Would install post-install webhook listener on {host}:{listen_port}")
+        mode = "dry-run" if webhook_dry_run == "true" else "real deploy"
+        print_sub(f"[DRY-RUN] Webhook deploy mode: {mode}")
+        return
+
+    stage_and_run_remote_installer(
+        root,
+        connection,
+        REMOTE_ROOT,
+        [
+            (scripts_dir, f"{REMOTE_ROOT}/scripts"),
+            (build_dir, f"{REMOTE_ROOT}/build/{host}"),
+        ],
+        "scripts/install.sh",
+        host,
+        env=force_env(force),
+        require_root=True,
+        remote_subdirs=("build", "lib", "scripts"),
+    )
+
+
+def _read_token(root: Path) -> str:
+    path = op_secrets.secret_file(root, SECRET_NAME)
+    env = op_secrets.parse_env_file(path)
+    token = env.get(TOKEN_ENV_KEY, "").strip()
+    if not token:
+        raise ValueError(f"{TOKEN_ENV_KEY} is empty in rendered secret '{SECRET_NAME}'")
+    return token
+
+
+def _write_env(path: Path, values: dict[str, str]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lines = [f"{key}={shlex.quote(value)}" for key, value in values.items()]
+    path.write_text("\n".join([*lines, ""]), encoding="utf-8")
+    path.chmod(0o600)

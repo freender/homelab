@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # iso-autobuild - Build baked PVE install ISOs for offsite hosts.
-# Reads per-host answer TOML files from /etc/saint/iso-answers/<host>.toml.
+# Reads per-host answer TOML files from /etc/homelab-pxe/iso-answers/<host>.toml.
 # Outputs /srv/pxe/iso/proxmox-ve-<host>-auto.iso (replaces previous).
 # Called by pxe-autoupdate after a new base ISO is promoted; safe to run manually.
 set -euo pipefail
 
-ANSWER_DIR="/etc/saint/iso-answers"
+ANSWER_DIR="/etc/homelab-pxe/iso-answers"
 ISO_BASE_DIR="/root/iso"
 ISO_SERVE_DIR="/srv/pxe/iso"
 METRIC="/var/lib/node_exporter/textfile/iso_autobuild.prom"

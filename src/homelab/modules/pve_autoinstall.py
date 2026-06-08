@@ -280,6 +280,12 @@ def _load_pdm_config(root: Path, registry: Any, pdm_host: str) -> dict:
     except op_secrets.OpSecretsError as exc:
         raise ValueError(str(exc)) from exc
     cfg["pdm_port"] = int(registry.get(pdm_host, "pve-autoinstall.pdm_port", 8443))
+    try:
+        cfg["post_hook_base_url"] = str(
+            registry.get(pdm_host, "pve-autoinstall.post_hook_base_url")
+        )
+    except HostLookupError:
+        pass
     return cfg
 
 
@@ -413,6 +419,11 @@ def _build_answer_entry(root: Path, registry: Any, host: str, pdm_cfg: dict) -> 
         "root-ssh-keys": [pdm_cfg["root_ssh_key"]],
         # root-password-hashed is injected by the remote script at runtime.
     }
+
+    post_hook_base_url = pdm_cfg.get("post_hook_base_url")
+    if post_hook_base_url:
+        entry["post-hook-base-url"] = post_hook_base_url
+        entry["post-hook-cert-fp"] = pdm_cfg["pdm_cert_fingerprint"]
 
     return entry
 

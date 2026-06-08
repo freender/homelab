@@ -1,5 +1,5 @@
 #!/bin/bash
-# install.sh - Deploy PXE service configs to saint (CT 112 on osiris).
+# install.sh - Deploy PXE service configs.
 # Usage: ./scripts/install.sh [hostname]
 # Installs: dnsmasq proxyPXE config, nginx vhost, iPXE menu files, operational
 #           scripts (pxe-enable, pxe-disable, pxe-autoupdate, iso-autobuild),
@@ -23,7 +23,7 @@ fi
 
 require_dir "$BUILD_DIR" "$BUILD_DIR" || exit 1
 
-print_header "PVE PXE (saint)"
+print_header "PVE PXE"
 
 bootstrap_pkgs=()
 command -v curl >/dev/null 2>&1 || bootstrap_pkgs+=(curl)
@@ -59,6 +59,7 @@ command -v dnsmasq  >/dev/null 2>&1 || missing_pkgs+=(dnsmasq)
 command -v rsync    >/dev/null 2>&1 || missing_pkgs+=(rsync)
 command -v flock    >/dev/null 2>&1 || missing_pkgs+=(util-linux)
 command -v xorriso  >/dev/null 2>&1 || missing_pkgs+=(xorriso)
+[[ -f /usr/lib/ipxe/snponly.efi ]] || missing_pkgs+=(ipxe)
 command -v proxmox-auto-install-assistant >/dev/null 2>&1 \
     || missing_pkgs+=(proxmox-auto-install-assistant)
 if [[ ${#missing_pkgs[@]} -gt 0 ]]; then
@@ -70,11 +71,11 @@ else
 fi
 
 # ── Directory layout ─────────────────────────────────────────────────────────
-mkdir -p /srv/pxe /srv/tftp /etc/saint /etc/saint/iso-answers /srv/pxe/iso \
+mkdir -p /srv/pxe /srv/tftp /etc/homelab-pxe /etc/homelab-pxe/iso-answers /srv/pxe/iso \
          /var/lib/node_exporter/textfile \
          /etc/nginx/sites-available /etc/nginx/sites-enabled \
          /etc/dnsmasq.d /root/iso
-chmod 700 /etc/saint/iso-answers
+chmod 700 /etc/homelab-pxe/iso-answers
 chmod 755 /srv/pxe/iso
 
 print_action "Cleaning legacy PXE duplicate artifacts"
@@ -92,7 +93,7 @@ ic() { local rc=0; install_if_changed "$@" || rc=$?; [[ $rc -le 1 ]] || return "
 
 # ── Management config (PDM URL + fingerprint) ────────────────────────────────
 print_action "Installing management config"
-ic "$BUILD_DIR/pxe-mgmt.conf" /etc/saint/pxe-mgmt.conf 600 /etc/saint/pxe-mgmt.conf
+ic "$BUILD_DIR/pxe-mgmt.conf" /etc/homelab-pxe/pxe-mgmt.conf 600 /etc/homelab-pxe/pxe-mgmt.conf
 
 # ── dnsmasq proxyPXE ─────────────────────────────────────────────────────────
 print_action "Installing dnsmasq proxyPXE config"
@@ -135,11 +136,40 @@ for f in "${ipxe_files[@]}"; do
     ic "$BUILD_DIR/$f" "/srv/pxe/$f" 644 "/srv/pxe/$f"
 done
 
+if [[ -r /etc/homelab-pxe/pxe-mgmt.conf ]]; then
+    # shellcheck source=/dev/null
+    source /etc/homelab-pxe/pxe-mgmt.conf
+fi
+current_iso="$(find /srv/pxe -maxdepth 1 -name 'proxmox-ve_*auto*.iso' -printf '%f\n' 2>/dev/null | sort -V | tail -1)"
+if [[ -z "$current_iso" ]]; then
+    current_iso="$(find /srv/pxe -maxdepth 1 -name 'proxmox-ve_*.iso' -printf '%f\n' 2>/dev/null | sort -V | tail -1)"
+fi
+if [[ -n "$current_iso" ]]; then
+    sed -i -E \
+        -e "s#http://[^/]+/proxmox-ve_[^[:space:]]+\.iso#http://${PXE_MGMT_IP:-10.0.0.50}/${current_iso}#g" \
+        -e "s#proxmox-ve_PLACEHOLDER\.iso#${current_iso}#g" \
+        /srv/pxe/pve-load.ipxe
+    print_sub "pve-load.ipxe points at $current_iso"
+else
+    print_warn "no proxmox-ve_*.iso found under /srv/pxe; pve-load.ipxe left unchanged"
+fi
+
 # ── TFTP autoexec (dnsmasq:nogroup for tftp-secure) ──────────────────────────
 print_action "Installing TFTP autoexec"
 ic "$BUILD_DIR/autoexec.ipxe" /srv/tftp/autoexec.ipxe 644 /srv/tftp/autoexec.ipxe
 chown dnsmasq:nogroup /srv/tftp/autoexec.ipxe
 print_sub "autoexec.ipxe ownership: dnsmasq:nogroup"
+
+print_action "Installing iPXE TFTP binaries"
+for binary in snponly.efi ipxe.efi undionly.kpxe; do
+    src="/usr/lib/ipxe/$binary"
+    if [[ -f "$src" ]]; then
+        install -m 0644 -o dnsmasq -g nogroup "$src" "/srv/tftp/$binary"
+        print_sub "  installed $binary"
+    else
+        print_warn "missing packaged iPXE binary: $src"
+    fi
+done
 
 # ── PDM answer-auth token ─────────────────────────────────────────────────────
 # Staged by the Python orchestrator from 1Password; mode 600; never logged.
@@ -170,7 +200,7 @@ if [[ -d "$ANSWERS_SRC" ]] && [[ -n "$(ls -A "$ANSWERS_SRC" 2>/dev/null)" ]]; th
     print_action "Installing baked ISO answer TOML files"
     for f in "$ANSWERS_SRC"/*.toml; do
         name="$(basename "$f")"
-        install -m 0600 "$f" "/etc/saint/iso-answers/$name"
+        install -m 0600 "$f" "/etc/homelab-pxe/iso-answers/$name"
         print_sub "  installed $name"
     done
 else
@@ -197,6 +227,11 @@ systemctl daemon-reload || true
 systemctl enable pxe-autoupdate.timer
 systemctl is-active --quiet pxe-autoupdate.timer || systemctl start pxe-autoupdate.timer
 print_ok "pxe-autoupdate.timer enabled"
+
+if systemctl is-active --quiet dnsmasq; then
+    systemctl restart dnsmasq
+    print_sub "dnsmasq restarted for updated PXE/TFTP config"
+fi
 
 # ── nginx config test + reload ────────────────────────────────────────────────
 if nginx -t 2>/dev/null; then

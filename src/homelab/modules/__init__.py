@@ -17,6 +17,7 @@ from .pve_exporters import deploy as deploy_pve_exporters
 from .pve_gpu_passthrough import deploy as deploy_pve_gpu_passthrough
 from .pve_interface_pinning import deploy as deploy_pve_interface_pinning
 from .pve_lxc_docker_hooks import deploy as deploy_pve_lxc_docker_hooks
+from .pve_postinstall_webhook import deploy as deploy_pve_postinstall_webhook
 from .pve_postinstall import deploy as deploy_pve_postinstall
 from .pve_pxe import deploy as deploy_pve_pxe
 from .pve_realtek_r8152_dkms import deploy as deploy_pve_realtek_r8152_dkms
@@ -74,8 +75,12 @@ MODULES: dict[str, ModuleDefinition] = {
         name="PVE Post-Install Configs",
         deploy=deploy_pve_postinstall,
     ),
+    "pve-postinstall-webhook": ModuleDefinition(
+        name="PVE Post-Install Webhook",
+        deploy=deploy_pve_postinstall_webhook,
+    ),
     "pve-pxe": ModuleDefinition(
-        name="PVE PXE Boot (saint)",
+        name="PVE PXE Boot",
         deploy=deploy_pve_pxe,
     ),
     "pve-realtek-r8152-dkms": ModuleDefinition(
@@ -110,6 +115,7 @@ MODULES: dict[str, ModuleDefinition] = {
 MODULE_ORDER = [
     "pve-interface-pinning",
     "pve-postinstall",
+    "pve-postinstall-webhook",
     "pve-autoinstall",
     "pve-realtek-r8152-dkms",
     "pve-pxe",

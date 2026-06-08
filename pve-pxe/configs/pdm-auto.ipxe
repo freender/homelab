@@ -2,4 +2,4 @@
 # pdm-auto.ipxe - Proxmox VE automated install via PDM
 # The ISO filename here is updated by pxe-autoupdate when a new version is promoted.
 set pve-kargs ro ramdisk_size=16777216 rw quiet splash=silent ip=dhcp proxmox-start-auto-installer
-chain http://10.0.0.51/pve-load.ipxe
+chain http://10.0.0.50/pve-load.ipxe
