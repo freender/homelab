@@ -112,6 +112,9 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
             raise ValueError(f"pve-postinstall.mounts entry must have label and path for {host}")
         mounts.append(f"{m['label']}:{m['path']}")
     mounts_str = " ".join(mounts)
+    expected_clustered = str(
+        host_type == "pve" and not bool(registry.get(host, "config.standalone", False))
+    ).lower()
 
     if host_type != "pve":
         raise ValueError(f"Unsupported host type for {host}: {host_type}")
@@ -181,6 +184,7 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
         timezone,
         import_pools,
         mounts_str,
+        expected_clustered,
         build_dir,
         connection,
         force=force,
@@ -365,6 +369,7 @@ def stage_and_install(
     timezone: str,
     import_pools: str,
     mounts: str,
+    expected_clustered: str,
     build_dir: Path,
     connection: HostConnection,
     force: bool,
@@ -383,6 +388,7 @@ def stage_and_install(
         timezone,
         import_pools,
         mounts,
+        expected_clustered,
         env=force_env(force),
         require_root=True,
         remote_subdirs=("build", "lib"),

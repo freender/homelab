@@ -1,6 +1,6 @@
 #!/bin/bash
 # install.sh - Install PVE post-install configs
-# Usage: ./scripts/install.sh [hostname] [pve] [timezone] [import_pools] [mounts]
+# Usage: ./scripts/install.sh [hostname] [pve] [timezone] [import_pools] [mounts] [expected_clustered]
 
 set -e
 
@@ -9,6 +9,7 @@ HOST_TYPE=${2:-}
 TIMEZONE=${3:-UTC}
 IMPORT_POOLS=${4:-}
 MOUNTS=${5:-}
+EXPECTED_CLUSTERED=${6:-false}
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD_DIR="$SCRIPT_DIR/build/$HOST"
 BACKUP_DIR="/var/backups/homelab/pve-postinstall"
@@ -290,6 +291,38 @@ install_other_subfeatures() {
     fi
 }
 
+report_cluster_join_if_needed() {
+    local local_node
+    local peer_hint
+    local peer
+
+    [[ "$EXPECTED_CLUSTERED" == "true" ]] || return 0
+
+    if [[ -f /etc/pve/corosync.conf ]] && pvecm status >/dev/null 2>&1; then
+        print_sub "Cluster membership detected"
+        return 0
+    fi
+
+    local_node="$(hostname -s)"
+    peer_hint="ace.freender.internal"
+    if [[ "$local_node" == "ace" ]]; then
+        peer_hint="bray.freender.internal"
+    fi
+
+    print_warn "$local_node is expected to be clustered, but currently appears standalone"
+    print_sub "Attempting safe cleanup/readiness from cluster peer $peer_hint"
+    for peer in "$peer_hint" ace.freender.internal bray.freender.internal clovis.freender.internal; do
+        [[ "$peer" != "$local_node.freender.internal" ]] || continue
+        if ssh -o BatchMode=yes -o ConnectTimeout=10 "root@$peer" \
+            "test -x /usr/local/sbin/homelab-pve-cluster-rejoin-helper && /usr/local/sbin/homelab-pve-cluster-rejoin-helper '$local_node' '$peer'"; then
+            return 0
+        fi
+    done
+
+    print_warn "Automatic cluster cleanup failed; run from an existing cluster node:"
+    print_sub "homelab-pve-cluster-rejoin-helper $local_node $peer_hint"
+}
+
 if [[ -z "$HOST_TYPE" ]]; then
     print_error "host type not provided and could not be detected"
     exit 1
@@ -399,6 +432,8 @@ case "$HOST_TYPE" in
 
         print_sub "Configuring disk mounts..."
         bash "$SCRIPT_DIR/scripts/install-mounts.sh" "$MOUNTS" || exit 1
+
+        report_cluster_join_if_needed
         ;;
     *)
         print_warn "Unsupported host type: $HOST_TYPE"
