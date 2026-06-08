@@ -47,6 +47,7 @@ cfg = data[host]["config"]
 print(cfg["type"])
 print(cfg.get("hostname", host))
 print(cfg.get("user", "root"))
+print("true" if cfg.get("type") == "pve" and cfg.get("standalone") is True else "false")
 PY
 }
 
@@ -54,6 +55,7 @@ mapfile -t host_info < <(read_host_info)
 host_type=${host_info[0]}
 ssh_hostname=${host_info[1]}
 ssh_user=${host_info[2]}
+standalone_pve=${host_info[3]}
 
 ssh_opts=(
     -o BatchMode=yes
@@ -67,37 +69,86 @@ if [[ "$host_type" == "pve" ]]; then
     ready_command='systemctl is-active --quiet pve-cluster && pvesh get /version >/dev/null'
 fi
 
-log "event=$EVENT_FILE"
-log "waiting for SSH readiness on $ssh_user@$ssh_hostname (type=$host_type)"
-ssh-keygen -R "$ssh_hostname" >/dev/null 2>&1 || true
-ssh-keygen -R "$HOST" >/dev/null 2>&1 || true
+wait_for_ready() {
+    log "waiting for SSH readiness on $ssh_user@$ssh_hostname (type=$host_type)"
+    ssh-keygen -R "$ssh_hostname" >/dev/null 2>&1 || true
+    ssh-keygen -R "$HOST" >/dev/null 2>&1 || true
 
-deadline=$(( $(date +%s) + SSH_TIMEOUT_SECONDS ))
-ready=false
-while [[ $(date +%s) -lt $deadline ]]; do
-    if ssh "${ssh_opts[@]}" "$ssh_user@$ssh_hostname" "$ready_command" >/dev/null 2>&1; then
-        ready=true
-        break
+    local deadline ready
+    deadline=$(( $(date +%s) + SSH_TIMEOUT_SECONDS ))
+    ready=false
+    while [[ $(date +%s) -lt $deadline ]]; do
+        if ssh "${ssh_opts[@]}" "$ssh_user@$ssh_hostname" "$ready_command" >/dev/null 2>&1; then
+            ready=true
+            break
+        fi
+        sleep 10
+    done
+
+    if [[ "$ready" != true ]]; then
+        log "ERROR: $HOST did not become ready within ${SSH_TIMEOUT_SECONDS}s"
+        exit 1
     fi
-    sleep 10
-done
 
-if [[ "$ready" != true ]]; then
-    log "ERROR: $HOST did not become ready within ${SSH_TIMEOUT_SECONDS}s"
-    exit 1
-fi
+    log "$HOST is ready"
+}
 
-log "$HOST is ready; starting deploy"
+run_deploy() {
+    local module=$1
+    local -a args
+
+    args=()
+    if [[ "$DRY_RUN" == "true" ]]; then
+        args+=(--dry-run)
+        log "running dry-run deploy: $module $HOST"
+    else
+        log "running deploy: $module $HOST"
+    fi
+
+    timeout "$DEPLOY_TIMEOUT_SECONDS" ./deploy "${args[@]}" "$module" "$HOST"
+}
+
+reboot_host() {
+    local reason=$1
+
+    if [[ "$DRY_RUN" == "true" ]]; then
+        log "dry-run: skipping reboot ($reason)"
+        return
+    fi
+
+    log "rebooting $HOST ($reason)"
+    ssh "${ssh_opts[@]}" "$ssh_user@$ssh_hostname" 'systemctl reboot' >/dev/null 2>&1 || true
+    sleep 20
+}
+
+run_default_deploy() {
+    if [[ "$host_type" == "pve" && "$standalone_pve" != "true" ]]; then
+        log "cluster host detected; post-reinstall delete/rejoin and second deploy remain manual"
+    fi
+    run_deploy all
+}
+
+run_standalone_pve_gated_deploy() {
+    log "running gated standalone PVE post-install deploy: pass 1"
+    run_deploy all
+    reboot_host "apply first-pass post-install changes"
+    wait_for_ready
+
+    log "running gated standalone PVE post-install deploy: pass 2"
+    run_deploy all
+}
+
+log "event=$EVENT_FILE"
+wait_for_ready
+log "starting deploy"
 (
     flock -x 9
     cd "$REPO_DIR"
     git pull --ff-only
-    if [[ "$DRY_RUN" == "true" ]]; then
-        log "running dry-run deploy"
-        timeout "$DEPLOY_TIMEOUT_SECONDS" ./deploy --dry-run all "$HOST"
+    if [[ "$standalone_pve" == "true" ]]; then
+        run_standalone_pve_gated_deploy
     else
-        log "running deploy"
-        timeout "$DEPLOY_TIMEOUT_SECONDS" ./deploy all "$HOST"
+        run_default_deploy
     fi
 ) 9>/run/homelab-postinstall-deploy.lock
 

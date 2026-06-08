@@ -8,7 +8,7 @@ from typing import Any
 import yaml
 
 REQUIRED_CONFIG_KEYS = {"type", "hostname", "user", "sshkey"}
-OPTIONAL_CONFIG_KEYS = {"agent", "homelab_state_dir", "ssh_config"}
+OPTIONAL_CONFIG_KEYS = {"agent", "homelab_state_dir", "ssh_config", "standalone"}
 ALLOWED_CONFIG_KEYS = REQUIRED_CONFIG_KEYS | OPTIONAL_CONFIG_KEYS
 ALLOWED_HOST_KEYS = {"config", "features"}
 ALLOWED_SSH_CONFIG_KEYS = {"hostname", "user", "sshkey"}
@@ -156,6 +156,9 @@ def validate_host_config(host: str, config: dict[str, Any]) -> None:
     if unknown_keys:
         keys = ", ".join(unknown_keys)
         raise ValueError(f"unknown config key(s) for {host}: {keys}")
+
+    if "standalone" in host_config and not isinstance(host_config["standalone"], bool):
+        raise ValueError(f"config.standalone must be a boolean for {host}")
 
     ssh_config = host_config.get("ssh_config")
     if ssh_config is None:
