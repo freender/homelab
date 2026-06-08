@@ -108,6 +108,23 @@ run_deploy() {
     timeout "$DEPLOY_TIMEOUT_SECONDS" ./deploy "${args[@]}" "$module" "$HOST"
 }
 
+refresh_pdm_remote() {
+    if [[ "$DRY_RUN" == "true" ]]; then
+        log "dry-run: skipping PDM remote refresh"
+        return
+    fi
+    if [[ "$host_type" != "pve" || "$standalone_pve" != "true" ]]; then
+        return
+    fi
+
+    log "refreshing PDM remote trust/token for $HOST"
+    if /usr/local/sbin/homelab-pdm-refresh-remote "$HOST"; then
+        log "PDM remote refresh complete"
+    else
+        log "WARNING: PDM remote refresh failed; continuing post-install deploy"
+    fi
+}
+
 reboot_host() {
     local reason=$1
 
@@ -145,6 +162,7 @@ log "starting deploy"
     flock -x 9
     cd "$REPO_DIR"
     git pull --ff-only
+    refresh_pdm_remote
     if [[ "$standalone_pve" == "true" ]]; then
         run_standalone_pve_gated_deploy
     else

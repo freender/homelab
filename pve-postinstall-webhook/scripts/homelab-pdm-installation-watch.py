@@ -41,6 +41,7 @@ ENV = {**load_env_file(CONFIG_FILE), **os.environ}
 REPO_DIR = Path(ENV.get("REPO_DIR", "/root/homelab"))
 PDM_BASE_URL = ENV.get("PDM_BASE_URL", "https://127.0.0.1:8443").rstrip("/")
 PDM_TOKEN_ID = ENV.get("PDM_TOKEN_ID", "root@pam!homelab-deploy")
+PDM_TOKEN_SECRET = ENV.get("PDM_TOKEN_SECRET", "")
 PDM_TOKEN_REF = ENV.get("PDM_TOKEN_REF", "op://Homelab/PDM Deploy API Token/password")
 OP_BIN = ENV.get("OP_BIN", "/root/.local/bin/op")
 OP_TOKEN_FILE = ENV.get("OP_SERVICE_ACCOUNT_TOKEN_FILE", "/root/.config/op/service-account-token")
@@ -61,7 +62,7 @@ def op_read(ref: str) -> str:
 
 
 def pdm_get(path: str) -> Any:
-    token = op_read(PDM_TOKEN_REF)
+    token = PDM_TOKEN_SECRET or op_read(PDM_TOKEN_REF)
     req = urllib.request.Request(f"{PDM_BASE_URL}{path}")
     req.add_header("Authorization", f"PDMAPIToken {PDM_TOKEN_ID}:{token}")
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)

@@ -13,10 +13,12 @@ REMOTE_ROOT = "/tmp/homelab-pve-postinstall-webhook"
 FEATURE = "pve-postinstall-webhook"
 SECRET_NAME = "pve-postinstall-webhook"
 TOKEN_ENV_KEY = "PVE_POSTINSTALL_WEBHOOK_TOKEN"
+PDM_TOKEN_ENV_KEY = "PDM_DEPLOY_TOKEN"
 
 REQUIRED_SCRIPTS = [
     "homelab-postinstall-webhook.py",
     "homelab-pdm-installation-watch.py",
+    "homelab-pdm-refresh-remote.py",
     "homelab-postinstall-deploy.sh",
     "homelab-postinstall-webhook.service",
     "homelab-pdm-installation-watch.service",
@@ -72,8 +74,9 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
     deploy_timeout = str(registry.get(host, f"{FEATURE}.deploy_timeout_seconds", "3600"))
 
     token = "<offline>"
+    pdm_token = "<offline>"
     if not offline_mode():
-        token = _read_token(root)
+        token, pdm_token = _read_tokens(root)
 
     build_dir = root / "pve-postinstall-webhook" / "build" / host
     prepare_build_dir(build_dir)
@@ -90,7 +93,11 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
             "SSH_AUTH_SOCK": "/root/.ssh/agent.sock",
             "PDM_BASE_URL": "https://127.0.0.1:8443",
             "PDM_TOKEN_ID": "root@pam!homelab-deploy",
+            "PDM_TOKEN_SECRET": pdm_token,
             "PDM_TOKEN_REF": "op://Homelab/PDM Deploy API Token/password",
+            "PDM_REMOTE_REFRESH": "true",
+            "PDM_REMOTE_AUTHID": "root@pam!pdm-rasputin",
+            "PDM_REMOTE_TOKEN_COMMENT": "PDM on arc",
             "OP_BIN": "/root/.local/bin/op",
             "OP_SERVICE_ACCOUNT_TOKEN_FILE": "/root/.config/op/service-account-token",
         },
@@ -114,6 +121,10 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
             (
                 scripts_dir / "homelab-postinstall-deploy.sh",
                 "/usr/local/sbin/homelab-postinstall-deploy",
+            ),
+            (
+                scripts_dir / "homelab-pdm-refresh-remote.py",
+                "/usr/local/sbin/homelab-pdm-refresh-remote",
             ),
             (
                 scripts_dir / "homelab-pdm-installation-watch.py",
@@ -157,13 +168,16 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
     )
 
 
-def _read_token(root: Path) -> str:
+def _read_tokens(root: Path) -> tuple[str, str]:
     path = op_secrets.secret_file(root, SECRET_NAME)
     env = op_secrets.parse_env_file(path)
     token = env.get(TOKEN_ENV_KEY, "").strip()
     if not token:
         raise ValueError(f"{TOKEN_ENV_KEY} is empty in rendered secret '{SECRET_NAME}'")
-    return token
+    pdm_token = env.get(PDM_TOKEN_ENV_KEY, "").strip()
+    if not pdm_token:
+        raise ValueError(f"{PDM_TOKEN_ENV_KEY} is empty in rendered secret '{SECRET_NAME}'")
+    return token, pdm_token
 
 
 def _write_env(path: Path, values: dict[str, str]) -> None:

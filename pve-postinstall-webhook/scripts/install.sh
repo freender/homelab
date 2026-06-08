@@ -44,6 +44,7 @@ ic() { local rc=0; install_if_changed "$@" || rc=$?; [[ $rc -le 1 ]] || return "
 print_action "Installing webhook scripts"
 ic "$SCRIPT_DIR/scripts/homelab-postinstall-webhook.py" /usr/local/sbin/homelab-postinstall-webhook 755 homelab-postinstall-webhook
 ic "$SCRIPT_DIR/scripts/homelab-pdm-installation-watch.py" /usr/local/sbin/homelab-pdm-installation-watch 755 homelab-pdm-installation-watch
+ic "$SCRIPT_DIR/scripts/homelab-pdm-refresh-remote.py" /usr/local/sbin/homelab-pdm-refresh-remote 755 homelab-pdm-refresh-remote
 ic "$SCRIPT_DIR/scripts/homelab-postinstall-deploy.sh" /usr/local/sbin/homelab-postinstall-deploy 755 homelab-postinstall-deploy
 
 print_action "Installing webhook config"
