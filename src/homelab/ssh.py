@@ -8,12 +8,25 @@ from pathlib import Path
 from fabric import Connection
 from invoke.exceptions import UnexpectedExit
 
+from homelab.hosts import HostLookupError, default_registry
+
 
 class HostConnection:
     def __init__(self, host: str, user: str | None = None, hostname: str | None = None) -> None:
         self.host = host
-        connect_target = hostname or host
-        self.connection = Connection(connect_target, user=user)
+        resolved_user = user
+        resolved_hostname = hostname
+
+        if resolved_user is None or resolved_hostname is None:
+            try:
+                registry = default_registry(Path.cwd())
+                resolved_user = resolved_user or str(registry.get(host, "config.user"))
+                resolved_hostname = resolved_hostname or str(registry.get(host, "config.hostname"))
+            except HostLookupError:
+                pass
+
+        connect_target = resolved_hostname or host
+        self.connection = Connection(connect_target, user=resolved_user)
 
     def remote_diff(self, local_file: Path, remote_path: str) -> tuple[int, str]:
         if offline_mode():

@@ -321,6 +321,11 @@ done
 configure_zfs_pull_source_access
 configure_zfs_push_target_access
 
+if [[ -x /usr/local/sbin/homelab-zfs-refresh-known-hosts ]]; then
+    print_action "SSH known_hosts refresh"
+    /usr/local/sbin/homelab-zfs-refresh-known-hosts
+fi
+
 if systemctl is-enabled --quiet sanoid.timer 2>/dev/null; then
     systemctl disable --now sanoid.timer
     print_ok "Disabled packaged sanoid.timer"
@@ -337,6 +342,17 @@ for unit in "${!FILE_MAP_DEST[@]}"; do
         ensure_timer_state "$unit" "$ENABLE_ZFS_REPLICATION" "$units_changed"
     fi
 done
+
+if [[ "${ZFS_REPLICATION_RECOVERY_START_FAILED:-false}" == "true" && "$ENABLE_ZFS_REPLICATION" == "true" ]]; then
+    print_action "ZFS replication recovery"
+    for unit in "${!FILE_MAP_DEST[@]}"; do
+        if [[ "$unit" == homelab-zfs-replication-*.service ]] && systemctl is-failed --quiet "$unit"; then
+            print_sub "Restarting failed $unit"
+            systemctl reset-failed "$unit"
+            systemctl start "$unit"
+        fi
+    done
+fi
 
 ensure_timer_state zfs-scrub.timer "$ENABLE_ZFS_SCRUB" "$units_changed"
 ensure_timer_state homelab-zfs-health-check.timer "$ENABLE_ZFS_HEALTH_CHECK" "$units_changed"

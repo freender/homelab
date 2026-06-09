@@ -34,25 +34,54 @@ find_latest_backup_volume() {
         | tail -n 1
 }
 
+install_root_authorized_keys() {
+    local vmid="$1"
+    local key_count="$2"
+    local key_index key_var public_key
+
+    if [[ -z "$key_count" || "$key_count" == "0" ]]; then
+        return 0
+    fi
+    if ! pct status "$vmid" | grep -q "status: running"; then
+        print_warn "LXC $vmid is not running; cannot install root SSH keys"
+        return 0
+    fi
+
+    print_sub "Installing root SSH keys in LXC $vmid"
+    pct exec "$vmid" -- mkdir -p /root/.ssh
+    pct exec "$vmid" -- chmod 700 /root/.ssh
+    pct exec "$vmid" -- touch /root/.ssh/authorized_keys
+    pct exec "$vmid" -- chmod 600 /root/.ssh/authorized_keys
+
+    for (( key_index=0; key_index<key_count; key_index++ )); do
+        key_var="RESTORE_CT_${index}_ROOT_AUTHORIZED_KEY_${key_index}"
+        public_key="${!key_var:-}"
+        if [[ -n "$public_key" ]]; then
+            pct exec "$vmid" -- grep -qxF "$public_key" /root/.ssh/authorized_keys \
+                || pct exec "$vmid" -- sh -c 'printf "%s\n" "$1" >> /root/.ssh/authorized_keys' sh "$public_key"
+        fi
+    done
+}
+
 restore_one_ct() {
     local index="$1"
-    local vmid storage target_storage unprivileged net0 start mount_count backup_volume mount_index mount_var mount_value
+    local vmid storage target_storage unprivileged ignore_unpack_errors start root_authorized_key_count backup_volume
 
     vmid_var="RESTORE_CT_${index}_VMID"
     storage_var="RESTORE_CT_${index}_STORAGE"
     target_storage_var="RESTORE_CT_${index}_TARGET_STORAGE"
     unprivileged_var="RESTORE_CT_${index}_UNPRIVILEGED"
-    net0_var="RESTORE_CT_${index}_NET0"
+    ignore_unpack_errors_var="RESTORE_CT_${index}_IGNORE_UNPACK_ERRORS"
     start_var="RESTORE_CT_${index}_START"
-    mount_count_var="RESTORE_CT_${index}_MOUNT_COUNT"
+    root_authorized_key_count_var="RESTORE_CT_${index}_ROOT_AUTHORIZED_KEY_COUNT"
 
     vmid="${!vmid_var:-}"
     storage="${!storage_var:-}"
     target_storage="${!target_storage_var:-}"
     unprivileged="${!unprivileged_var:-}"
-    net0="${!net0_var:-}"
+    ignore_unpack_errors="${!ignore_unpack_errors_var:-false}"
     start="${!start_var:-false}"
-    mount_count="${!mount_count_var:-0}"
+    root_authorized_key_count="${!root_authorized_key_count_var:-0}"
 
     if pct status "$vmid" >/dev/null 2>&1; then
         print_sub "LXC $vmid already exists; skipping restore"
@@ -67,27 +96,22 @@ restore_one_ct() {
         if [[ -n "$unprivileged" ]]; then
             restore_args+=(--unprivileged "$unprivileged")
         fi
+        if [[ "$ignore_unpack_errors" == "true" ]]; then
+            restore_args+=(--ignore-unpack-errors 1)
+        fi
         "${restore_args[@]}"
     fi
 
-    if [[ -n "$net0" ]]; then
-        print_sub "Setting LXC $vmid net0"
-        pct set "$vmid" --net0 "$net0"
-    fi
-
-    for (( mount_index=0; mount_index<mount_count; mount_index++ )); do
-        mount_var="RESTORE_CT_${index}_MOUNT_${mount_index}"
-        mount_value="${!mount_var:-}"
-        if [[ -n "$mount_value" ]]; then
-            print_sub "Setting LXC $vmid mp${mount_index}"
-            pct set "$vmid" "-mp${mount_index}" "$mount_value"
-        fi
-    done
-
     if [[ "$start" == "true" ]]; then
-        print_sub "Starting LXC $vmid"
-        pct start "$vmid" || print_warn "failed to start LXC $vmid"
+        if pct status "$vmid" | grep -q "status: running"; then
+            print_sub "LXC $vmid already running"
+        else
+            print_sub "Starting LXC $vmid"
+            pct start "$vmid" || print_warn "failed to start LXC $vmid"
+        fi
     fi
+
+    install_root_authorized_keys "$vmid" "$root_authorized_key_count"
 }
 
 count="${RESTORE_CT_COUNT:-0}"

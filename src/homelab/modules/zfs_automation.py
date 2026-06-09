@@ -145,6 +145,13 @@ class SourcePrivateKey:
     path: str
 
 
+@dataclass(frozen=True)
+class KnownHostRefresh:
+    host: str
+    known_hosts: str = "/root/.ssh/known_hosts"
+    port: int = 22
+
+
 BASE_FILE_SPECS = (
     FileSpec("sanoid.conf", "/etc/sanoid/sanoid.conf"),
     FileSpec(
@@ -206,6 +213,12 @@ def validate(root: Path, hosts: list[str]) -> None:
         normalize_snapshot_plans(registry, host)
         normalize_replication_config(registry, host)
         normalize_replication_config(registry, host, include_disabled=True)
+        normalize_known_host_refresh(registry, host)
+        normalize_bool(
+            registry.get(host, "zfs-automation.replication_recovery.start_failed", None),
+            False,
+            f"zfs-automation.replication_recovery.start_failed must be true or false for {host}",
+        )
         normalize_pull_source_access(registry, host)
         normalize_pull_source_access(registry, host, include_disabled=True)
         for private_key in normalize_source_private_keys(registry, host):
@@ -269,6 +282,53 @@ def normalize_source_private_keys(registry, host: str) -> tuple[SourcePrivateKey
         seen_paths.add(path)
         keys.append(SourcePrivateKey(secret=secret, path=path))
     return tuple(keys)
+
+
+def normalize_known_host_refresh(registry, host: str) -> tuple[KnownHostRefresh, ...]:
+    raw = registry.get(host, "zfs-automation.known_host_refresh", [])
+    if raw in (None, ""):
+        return ()
+    if not isinstance(raw, list):
+        raise ValueError(f"zfs-automation.known_host_refresh must be a list for {host}")
+
+    entries: list[KnownHostRefresh] = []
+    seen: set[tuple[str, str, int]] = set()
+    for index, item in enumerate(raw):
+        if not isinstance(item, dict):
+            raise ValueError(
+                f"zfs-automation.known_host_refresh[{index}] must be a mapping for {host}"
+            )
+        hostname = require_string(
+            item.get("host", ""),
+            f"zfs-automation.known_host_refresh[{index}].host required for {host}",
+        )
+        if not re.fullmatch(r"[A-Za-z0-9_.-]+", hostname):
+            raise ValueError(
+                f"zfs-automation.known_host_refresh[{index}].host is invalid for {host}"
+            )
+        known_hosts = str(item.get("known_hosts", "/root/.ssh/known_hosts")).strip()
+        if not known_hosts.startswith("/root/.ssh/") or known_hosts.endswith("/"):
+            raise ValueError(
+                "zfs-automation.known_host_refresh known_hosts must be a root .ssh file "
+                f"for {host}"
+            )
+        port_raw = item.get("port", 22)
+        try:
+            port = int(port_raw)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"zfs-automation.known_host_refresh[{index}].port is invalid for {host}"
+            ) from exc
+        if port < 1 or port > 65535:
+            raise ValueError(
+                f"zfs-automation.known_host_refresh[{index}].port is invalid for {host}"
+            )
+        key = (hostname, known_hosts, port)
+        if key in seen:
+            raise ValueError(f"duplicate known_host_refresh entry {key} for {host}")
+        seen.add(key)
+        entries.append(KnownHostRefresh(host=hostname, known_hosts=known_hosts, port=port))
+    return tuple(entries)
 
 
 def rendered_private_key(root: Path, secret: str) -> str:
@@ -1806,6 +1866,45 @@ def build_zfs_pull_source_authorized_keys(access: ZfsPullSourceAccess) -> str:
     return "\n".join(lines) + "\n"
 
 
+def build_known_host_refresh_script(entries: tuple[KnownHostRefresh, ...]) -> str:
+    lines = [
+        "#!/bin/bash",
+        "set -euo pipefail",
+        "",
+        "refresh_known_host() {",
+        "  local host=\"$1\"",
+        "  local known_hosts=\"$2\"",
+        "  local port=\"$3\"",
+        "  local known_hosts_dir",
+        "",
+        "  known_hosts_dir=\"$(dirname \"$known_hosts\")\"",
+        "  mkdir -p \"$known_hosts_dir\"",
+        "  chmod 700 \"$known_hosts_dir\"",
+        "  touch \"$known_hosts\"",
+        "  chmod 600 \"$known_hosts\"",
+        "",
+        "  echo \"Refreshing SSH host key for $host in $known_hosts\"",
+        "  ssh-keygen -R \"$host\" -f \"$known_hosts\" >/dev/null 2>&1 || true",
+        "  if [[ \"$port\" == \"22\" ]]; then",
+        "    ssh-keyscan -H \"$host\" >> \"$known_hosts\" 2>/dev/null",
+        "  else",
+        "    ssh-keyscan -H -p \"$port\" \"$host\" >> \"$known_hosts\" 2>/dev/null",
+        "  fi",
+        "  ssh-keygen -F \"$host\" -f \"$known_hosts\" >/dev/null",
+        "}",
+        "",
+    ]
+    if not entries:
+        lines.append("echo 'No known hosts configured for refresh'")
+    else:
+        for entry in entries:
+            lines.append(
+                "refresh_known_host "
+                f"{quote(entry.host)} {quote(entry.known_hosts)} {quote(str(entry.port))}"
+            )
+    return "\n".join(lines) + "\n"
+
+
 def build_zfs_push_target_authorized_keys(access: ZfsPushTargetAccess) -> str:
     allowed_roots = " ".join(access.datasets)
     lines = []
@@ -2251,6 +2350,11 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
         True,
         f"zfs-automation.manage_replication must be true or false for {host}",
     )
+    replication_recovery_start_failed = normalize_bool(
+        registry.get(host, "zfs-automation.replication_recovery.start_failed", None),
+        False,
+        f"zfs-automation.replication_recovery.start_failed must be true or false for {host}",
+    )
     manage_scrub = normalize_bool(
         registry.get(host, "zfs-automation.manage_scrub", None),
         True,
@@ -2272,6 +2376,7 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
         host,
         include_disabled=True,
     )
+    known_host_refresh = normalize_known_host_refresh(registry, host)
     pull_source_access = normalize_pull_source_access(registry, host)
     push_target_access = normalize_push_target_access(registry, host)
     source_private_keys = normalize_source_private_keys(registry, host)
@@ -2298,6 +2403,18 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
     )
 
     file_specs = list(BASE_FILE_SPECS)
+    if known_host_refresh:
+        (build_dir / "homelab-zfs-refresh-known-hosts.sh").write_text(
+            build_known_host_refresh_script(known_host_refresh),
+            encoding="utf-8",
+        )
+        file_specs.append(
+            FileSpec(
+                "homelab-zfs-refresh-known-hosts.sh",
+                "/usr/local/sbin/homelab-zfs-refresh-known-hosts",
+                mode="755",
+            )
+        )
     for job in replication_jobs:
         script_name = f"homelab-zfs-replication-{job.name}.sh"
         service_name = f"homelab-zfs-replication-{job.name}.service"
@@ -2437,6 +2554,9 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
             "ENABLE_ZFS_SNAPSHOTS": "true" if snapshot_plans and manage_snapshots else "false",
             "ENABLE_ZFS_REPLICATION": (
                 "true" if replication_jobs and manage_replication else "false"
+            ),
+            "ZFS_REPLICATION_RECOVERY_START_FAILED": (
+                "true" if replication_recovery_start_failed else "false"
             ),
             "ENABLE_ZFS_SCRUB": "true" if pools and manage_scrub else "false",
             "ENABLE_ZFS_HEALTH_CHECK": "true" if pools and manage_health_check else "false",

@@ -38,6 +38,58 @@ def validate(root: Path, hosts: list[str]) -> None:
     for name in ["pbs-tokens.env.example"]:
         if not (config_dir / name).is_file():
             raise ValueError(f"missing config file: {config_dir / name}")
+    for host in hosts:
+        validate_standalone_backup_config(root, host)
+
+
+def validate_standalone_backup_config(root: Path, host: str) -> None:
+    registry = default_registry(root)
+    storages = registry.get(host, "pve-backup.pbs_setup.storages", [])
+    existing_storages = normalize_string_list(
+        registry.get(host, "pve-backup.pbs_setup.existing_storages", []),
+        f"pve-backup.pbs_setup.existing_storages must be a list for {host}",
+    )
+    jobs = registry.get(host, "pve-backup.pbs_setup.jobs", [])
+    if not storages and not jobs:
+        return
+    if not isinstance(storages, list):
+        raise ValueError(f"pve-backup.pbs_setup.storages must be a list for {host}")
+    if not isinstance(jobs, list):
+        raise ValueError(f"pve-backup.pbs_setup.jobs must be a list for {host}")
+
+    storage_names: set[str] = set(existing_storages)
+    for index, storage in enumerate(storages):
+        if not isinstance(storage, dict):
+            raise ValueError(f"pve-backup.pbs_setup.storages[{index}] must be a mapping for {host}")
+        name = str(storage.get("name", "")).strip()
+        if not name:
+            raise ValueError(f"pve-backup.pbs_setup.storages[{index}].name required for {host}")
+        if name in storage_names:
+            raise ValueError(f"duplicate PVE backup storage {name!r} for {host}")
+        storage_names.add(name)
+        username = str(storage.get("username", "")).strip()
+        password_var = str(storage.get("password_var", "")).strip()
+        if password_var == "PBS_BACKUP_XUR_CINCI_PASSWORD" and "!" not in username:
+            raise ValueError(
+                f"{host}: Xur Cinci PBS storage {name!r} must use an API token username"
+            )
+
+    seen_jobs: set[tuple[str, str, str, str]] = set()
+    for index, job in enumerate(jobs):
+        if not isinstance(job, dict):
+            raise ValueError(f"pve-backup.pbs_setup.jobs[{index}] must be a mapping for {host}")
+        storage = str(job.get("storage", "")).strip()
+        schedule = str(job.get("schedule", "")).strip()
+        vmid = str(job.get("vmid", "")).strip()
+        exclude = str(job.get("exclude", "")).strip()
+        if storage not in storage_names:
+            raise ValueError(
+                f"{host}: backup job {index} references unknown storage {storage!r}"
+            )
+        key = (storage, schedule, vmid, exclude)
+        if key in seen_jobs:
+            raise ValueError(f"{host}: duplicate PVE backup job for storage/schedule/vmid/exclude {key}")
+        seen_jobs.add(key)
 
 
 def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
@@ -285,36 +337,33 @@ def build_prepared_lxc_restore_plan(root: Path, host: str, build_dir: Path) -> N
             raise ValueError(
                 f"Invalid prepared LXC VMID at index {index} for {host}: {vmid}"
             )
-        net0 = entry.get("net0", "")
-        mounts = entry.get("mounts", [])
-        if mounts in (None, ""):
-            mounts = []
-        if not isinstance(mounts, list):
-            raise ValueError(
-                f"pve-backup.restore_prepared_lxcs[{index}].mounts must be a list for {host}"
-            )
+        root_authorized_keys = normalize_string_list(
+            entry.get("root_authorized_keys", []),
+            "root_authorized_keys for prepared LXC restore entry "
+            f"{index} for {host} must be a list",
+        )
         start_enabled = normalize_bool(
             entry.get("start", False),
             False,
             f"restore_prepared_lxcs[{index}].start must be boolean for {host}",
+        )
+        ignore_unpack_errors = normalize_bool(
+            entry.get("ignore_unpack_errors", False),
+            False,
+            f"restore_prepared_lxcs[{index}].ignore_unpack_errors must be boolean for {host}",
         )
         lines.extend([
             f"RESTORE_CT_{index}_VMID='{shell_quote(vmid)}'",
             f"RESTORE_CT_{index}_STORAGE='{shell_quote(entry['storage'])}'",
             f"RESTORE_CT_{index}_TARGET_STORAGE='{shell_quote(entry['target_storage'])}'",
             f"RESTORE_CT_{index}_UNPRIVILEGED='{shell_quote(entry.get('unprivileged', ''))}'",
-            f"RESTORE_CT_{index}_NET0='{shell_quote(net0)}'",
+            f"RESTORE_CT_{index}_IGNORE_UNPACK_ERRORS='{str(ignore_unpack_errors).lower()}'",
             f"RESTORE_CT_{index}_START='{str(start_enabled).lower()}'",
-            f"RESTORE_CT_{index}_MOUNT_COUNT='{len(mounts)}'",
+            f"RESTORE_CT_{index}_ROOT_AUTHORIZED_KEY_COUNT='{len(root_authorized_keys)}'",
         ])
-        for mount_index, mount in enumerate(mounts):
-            if not isinstance(mount, str) or not mount.strip():
-                raise ValueError(
-                    "Invalid mount entry at index "
-                    f"{mount_index} in prepared LXC restore entry {index} for {host}"
-                )
+        for key_index, public_key in enumerate(root_authorized_keys):
             lines.append(
-                f"RESTORE_CT_{index}_MOUNT_{mount_index}='{shell_quote(mount.strip())}'"
+                f"RESTORE_CT_{index}_ROOT_AUTHORIZED_KEY_{key_index}='{shell_quote(public_key)}'"
             )
     (build_dir / "restore-ct-plan.conf").write_text(
         "\n".join(lines) + "\n",

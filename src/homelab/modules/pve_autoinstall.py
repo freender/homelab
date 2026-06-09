@@ -423,7 +423,8 @@ def _build_answer_entry(root: Path, registry: Any, host: str, pdm_cfg: dict) -> 
     post_hook_base_url = pdm_cfg.get("post_hook_base_url")
     if post_hook_base_url:
         entry["post-hook-base-url"] = post_hook_base_url
-        entry["post-hook-cert-fp"] = pdm_cfg["pdm_cert_fingerprint"]
+        if post_hook_base_url.startswith("https://"):
+            entry["post-hook-cert-fp"] = pdm_cfg["pdm_cert_fingerprint"]
 
     return entry
 

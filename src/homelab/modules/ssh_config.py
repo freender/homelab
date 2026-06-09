@@ -31,12 +31,14 @@ def collect_ssh_entries(registry) -> list[dict[str, str]]:
             continue
 
         ssh_hostname = str(registry.get(host, "config.ssh_config.hostname", hostname))
+        proxy_jump = str(registry.get(host, "config.ssh_config.proxy_jump", ""))
         user = str(registry.get(host, "config.ssh_config.user", default_user))
         sshkey = str(registry.get(host, "config.ssh_config.sshkey", default_sshkey))
         entries.append(
             {
                 "name": host,
                 "hostname": ssh_hostname,
+                "proxy_jump": proxy_jump,
                 "user": user,
                 "sshkey": sshkey,
             }
@@ -47,6 +49,7 @@ def collect_ssh_entries(registry) -> list[dict[str, str]]:
                 {
                     "name": f"{host}-root",
                     "hostname": hostname,
+                    "proxy_jump": proxy_jump,
                     "user": default_user,
                     "sshkey": default_sshkey,
                 }
@@ -145,15 +148,14 @@ def build_config(root: Path, deploy_host: str, output_path: Path, common_config:
 def render_host_config(ssh_entries: list[dict[str, str]]) -> str:
     blocks: list[str] = []
     for entry in ssh_entries:
-        blocks.append(
-            "\n".join(
-                [
-                    f"Host {entry['name']}",
-                    f"  HostName {entry['hostname']}",
-                    f"  User {entry['user']}",
-                ]
-            )
-        )
+        lines = [
+            f"Host {entry['name']}",
+            f"  HostName {entry['hostname']}",
+            f"  User {entry['user']}",
+        ]
+        if entry.get("proxy_jump"):
+            lines.append(f"  ProxyJump {entry['proxy_jump']}")
+        blocks.append("\n".join(lines))
 
     return "\n\n".join(blocks)
 

@@ -11,7 +11,7 @@ REQUIRED_CONFIG_KEYS = {"type", "hostname", "user", "sshkey"}
 OPTIONAL_CONFIG_KEYS = {"agent", "homelab_state_dir", "ssh_config", "standalone"}
 ALLOWED_CONFIG_KEYS = REQUIRED_CONFIG_KEYS | OPTIONAL_CONFIG_KEYS
 ALLOWED_HOST_KEYS = {"config", "features"}
-ALLOWED_SSH_CONFIG_KEYS = {"hostname", "user", "sshkey"}
+ALLOWED_SSH_CONFIG_KEYS = {"hostname", "proxy_jump", "user", "sshkey"}
 
 
 class _Missing:

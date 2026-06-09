@@ -210,6 +210,17 @@ def update_pdm_remote(
     pdm_request("PUT", f"/api2/json/remotes/remote/{remote_id}", body)
 
 
+def create_pdm_remote(remote_id: str, node: str, fingerprint: str, authid: str, token: str) -> None:
+    body: dict[str, Any] = {
+        "id": remote_id,
+        "type": "pve",
+        "authid": authid,
+        "token": token,
+        "nodes": [f"{node},fingerprint={fingerprint}"],
+    }
+    pdm_request("POST", "/api2/json/remotes/remote", body)
+
+
 def rotate_pve_token(target: str, authid: str, comment: str) -> str:
     user, token_name = parse_authid(authid)
     maybe_remove_pve_token(target, authid)
@@ -295,7 +306,18 @@ def main() -> None:
     log(f"live fingerprint: {fingerprint}")
 
     log("updating PDM remote fingerprint")
-    update_pdm_remote(remote_id, node, fingerprint)
+    try:
+        update_pdm_remote(remote_id, node, fingerprint)
+    except PdmApiError as exc:
+        if exc.status != 404:
+            raise
+        log("PDM remote is missing; creating it")
+        token = rotate_pve_token(target, authid, comment)
+        create_pdm_remote(remote_id, node, fingerprint, authid, token)
+        if not remote_version_ok(remote_id):
+            fail("PDM remote failed after create")
+        log("PDM remote created")
+        return
     if remote_version_ok(remote_id):
         log("PDM remote is authorized after fingerprint refresh")
         return

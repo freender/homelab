@@ -20,8 +20,8 @@ VALID_ARCHIVE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 PROFILE_TO_SECRET = {
     "backup-main": "pbs-backup-main",
     "backup-cinci": "pbs-backup-cinci",
-    "backup-cinci-hosts": "pbs-backup-cinci-hosts",
-    "backup-cottonwood-hosts": "pbs-backup-cottonwood-hosts",
+    "host-backup-cinci": "pbs-host-backup-cinci",
+    "host-backup-cottonwood": "pbs-host-backup-cottonwood",
     "backup-xur-cinci": "pbs-backup-xur-cinci",
     "backup-xur-cottonwood": "pbs-backup-xur-cottonwood",
 }
