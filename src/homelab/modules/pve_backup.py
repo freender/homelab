@@ -88,7 +88,9 @@ def validate_standalone_backup_config(root: Path, host: str) -> None:
             )
         key = (storage, schedule, vmid, exclude)
         if key in seen_jobs:
-            raise ValueError(f"{host}: duplicate PVE backup job for storage/schedule/vmid/exclude {key}")
+            raise ValueError(
+                f"{host}: duplicate PVE backup job for storage/schedule/vmid/exclude {key}"
+            )
         seen_jobs.add(key)
 
 
