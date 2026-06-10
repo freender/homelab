@@ -67,6 +67,7 @@ for (( i=0; i<STORAGE_COUNT; i++ )); do
     name_var="STORAGE_${i}_NAME"
     server_var="STORAGE_${i}_SERVER"
     datastore_var="STORAGE_${i}_DATASTORE"
+    namespace_var="STORAGE_${i}_NAMESPACE"
     username_var="STORAGE_${i}_USERNAME"
     fingerprint_var="STORAGE_${i}_FINGERPRINT"
     password_var_ref="STORAGE_${i}_PASSWORD_VAR"
@@ -74,46 +75,55 @@ for (( i=0; i<STORAGE_COUNT; i++ )); do
     name="${!name_var}"
     server="${!server_var}"
     datastore="${!datastore_var}"
+    namespace="${!namespace_var:-}"
     username="${!username_var}"
     fingerprint="${!fingerprint_var}"
     password_var_name="${!password_var_ref}"
 
+    if [[ -z "$password_var_name" ]]; then
+        print_error "Password variable name missing for $name"
+        exit 1
+    fi
+
+    password="${!password_var_name:-}"
+    if [[ -z "$password" ]]; then
+        print_error "Missing $password_var_name in staged pve-backup tokens or $TOKENS_FILE"
+        print_sub "Run ./deploy pve-backup $HOST from riven so PBS storage tokens are staged from 1Password"
+        exit 1
+    fi
+
     if storage_defined "$name"; then
-        print_sub "Storage $name already configured"
+        print_sub "Recreating PBS storage $name..."
+        pvesm remove "$name"
     else
-        if [[ -z "$password_var_name" ]]; then
-            print_error "Password variable name missing for $name"
-            exit 1
-        fi
-
-        password="${!password_var_name:-}"
-        if [[ -z "$password" ]]; then
-            print_error "Missing $password_var_name in staged pve-backup tokens or $TOKENS_FILE"
-            print_sub "Run ./deploy pve-backup $HOST from riven so PBS storage tokens are staged from 1Password"
-            exit 1
-        fi
-
         print_sub "Adding PBS storage $name..."
-        add_error_file="$(mktemp)"
-        if ! pvesm add pbs "$name" \
-            --server "$server" \
-            --datastore "$datastore" \
-            --username "$username" \
-            --fingerprint "$fingerprint" \
-            --password "$password" \
-            --content backup 2>"$add_error_file"; then
-            cat "$add_error_file" >&2
-            if ! pbs_add_is_transient_failure "$add_error_file"; then
-                rm -f "$add_error_file"
-                exit 1
-            fi
-            rm -f "$add_error_file"
-            print_warn "PBS storage $name is not reachable/configurable yet; skipping until next deploy"
-            continue
-        fi
-        rm -f "$add_error_file"
         storage_created="true"
     fi
+
+    add_error_file="$(mktemp)"
+    add_args=(
+        --server "$server"
+        --datastore "$datastore"
+        --username "$username"
+        --fingerprint "$fingerprint"
+        --password "$password"
+        --content backup
+    )
+    if [[ -n "$namespace" ]]; then
+        add_args+=(--namespace "$namespace")
+    fi
+    if ! pvesm add pbs "$name" \
+        "${add_args[@]}" 2>"$add_error_file"; then
+        cat "$add_error_file" >&2
+        if ! pbs_add_is_transient_failure "$add_error_file"; then
+            rm -f "$add_error_file"
+            exit 1
+        fi
+        rm -f "$add_error_file"
+        print_warn "PBS storage $name is not reachable/configurable yet; skipping until next deploy"
+        continue
+    fi
+    rm -f "$add_error_file"
 
     print_sub "Ensuring prune policy on $name..."
     pvesm set "$name" --prune-backups keep-all=1

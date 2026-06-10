@@ -226,6 +226,7 @@ def build_standalone_backup_plans(root: Path, host: str, build_dir: Path) -> Non
             f"STORAGE_{index}_NAME='{shell_quote(storage['name'])}'",
             f"STORAGE_{index}_SERVER='{shell_quote(storage['server'])}'",
             f"STORAGE_{index}_DATASTORE='{shell_quote(storage['datastore'])}'",
+            f"STORAGE_{index}_NAMESPACE='{shell_quote(storage.get('namespace', ''))}'",
             f"STORAGE_{index}_USERNAME='{shell_quote(storage['username'])}'",
             f"STORAGE_{index}_FINGERPRINT='{shell_quote(fingerprint)}'",
             f"STORAGE_{index}_PASSWORD_VAR='{shell_quote(password_var)}'",
