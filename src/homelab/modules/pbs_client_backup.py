@@ -47,6 +47,7 @@ class BackupPlan:
     runner: str
     docker_image: str
     docker_network: str
+    docker_add_hosts: tuple[str, ...]
     archives: tuple[ArchivePlan, ...]
 
 
@@ -206,6 +207,12 @@ def normalize_backup_plan(root: Path, registry, host: str) -> BackupPlan:
         runner=runner,
         docker_image=str(registry.get(host, f"{prefix}.docker_image", "")),
         docker_network=str(registry.get(host, f"{prefix}.docker_network", "bridge")),
+        docker_add_hosts=tuple(
+            normalize_string_list(
+                registry.get(host, f"{prefix}.docker_add_hosts", []),
+                f"{prefix}.docker_add_hosts for {host} must be a list",
+            )
+        ),
         archives=tuple(archives),
     )
 
@@ -309,9 +316,12 @@ def write_config(path: Path, plan: BackupPlan, retire_pve_config_backup: bool) -
         f'RUNNER="{plan.runner}"',
         f'DOCKER_IMAGE="{plan.docker_image}"',
         f'DOCKER_NETWORK="{plan.docker_network}"',
+        f'DOCKER_ADD_HOST_COUNT="{len(plan.docker_add_hosts)}"',
         f'RETIRE_PVE_CONFIG_BACKUP="{str(retire_pve_config_backup).lower()}"',
         f'ARCHIVE_COUNT="{len(plan.archives)}"',
     ]
+    for index, add_host in enumerate(plan.docker_add_hosts):
+        lines.append(f'DOCKER_ADD_HOST_{index}="{add_host}"')
     for index, archive in enumerate(plan.archives):
         lines.extend(
             [
