@@ -5,6 +5,7 @@ from pathlib import Path
 from ..build import copy_file, copy_files, render_file
 from ..deploy import DeploySession, force_env, prepare_build_dir, stage_and_run_remote_installer
 from ..hosts import HostLookupError, default_registry
+from ..module_support import FileSpec, write_file_map
 from ..output import print_action, print_error, print_sub
 from ..ssh import HostConnection, build_files, diff_many
 
@@ -54,6 +55,10 @@ MODES = {
     "homelab-pve-cluster-rejoin-helper": "755",
     PIKVM_ROUTES_SCRIPT: "755",
 }
+FILE_SPECS = tuple(
+    FileSpec(file_name, REMOTE_PATHS[file_name], MODES.get(file_name, "644"))
+    for file_name in PVE_FILES
+)
 
 
 def deploy(
@@ -172,7 +177,7 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
     build_cluster_rejoin_helper(root, build_dir)
     build_pikvm_routes(root, host, build_dir)
 
-    write_file_map(build_dir)
+    write_file_map(build_dir, FILE_SPECS)
     build_network_interfaces_bundle(root, host, build_dir)
 
     connection = HostConnection(host)
@@ -216,16 +221,6 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
         connection,
         force=force,
     )
-
-
-
-def write_file_map(build_dir: Path) -> None:
-    lines = [
-        f"{file_name}|{REMOTE_PATHS[file_name]}|{MODES.get(file_name, '644')}"
-        for file_name in PVE_FILES
-    ]
-    (build_dir / "file-map.conf").write_text("\n".join(lines) + "\n", encoding="utf-8")
-
 
 def build_network_interfaces_bundle(root: Path, host: str, build_dir: Path) -> None:
     registry = default_registry(root)

@@ -65,12 +65,10 @@ if [[ "$archive_count" =~ ^[0-9]+$ ]]; then
 fi
 
 changed=false
-for file_name in "${!FILE_MAP_DEST[@]}"; do
-    rc=0
-    install_build_file "$file_name" || rc=$?
-    [[ $rc -eq 0 || $rc -eq 1 ]] || exit "$rc"
-    [[ $rc -eq 0 ]] && changed=true
-done
+rc=0
+install_file_map || rc=$?
+[[ $rc -eq 0 || $rc -eq 1 ]] || exit "$rc"
+[[ $rc -eq 0 ]] && changed=true
 
 if [[ "$changed" == true ]]; then
     systemctl daemon-reload

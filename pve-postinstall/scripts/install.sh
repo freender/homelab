@@ -42,20 +42,6 @@ required_files_for_type() {
     esac
 }
 
-load_file_map() {
-    local map_file="$BUILD_DIR/file-map.conf"
-    local filename remote_path mode
-
-    require_file "$map_file" "$map_file" || exit 1
-
-    declare -g -A FILE_MAP_DEST=()
-    declare -g -A FILE_MAP_MODE=()
-    while IFS='|' read -r filename remote_path mode; do
-        FILE_MAP_DEST["$filename"]="$remote_path"
-        FILE_MAP_MODE["$filename"]="${mode:-644}"
-    done < "$map_file"
-}
-
 install_file() {
     local file="$1"
     local source_file="$BUILD_DIR/$file"

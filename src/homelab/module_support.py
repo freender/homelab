@@ -119,6 +119,20 @@ def copy_cached_secret(root: Path, secret_name: str, destination: Path) -> Path:
     return destination
 
 
+def validate_secret_reference(root: Path, secret_name: str) -> None:
+    catalog = op_secrets.load_catalog(root)
+    entry = catalog.get(secret_name)
+    if entry is None:
+        raise op_secrets.OpSecretsError(
+            f"unknown secret '{secret_name}' (not in {op_secrets.CATALOG_PATH})"
+        )
+    if op_secrets.offline_mode() and entry.example is None:
+        raise op_secrets.OpSecretsError(
+            f"offline mode: no example file for secret '{secret_name}'. "
+            f"Create {entry.template}.example to support offline validation."
+        )
+
+
 def simple_root_installer_deploy(
     root: Path,
     requested_host: str,

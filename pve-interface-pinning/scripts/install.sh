@@ -20,11 +20,9 @@ load_file_map "$BUILD_DIR/file-map.conf"
 print_action "PVE interface pinning"
 mkdir -p /etc/systemd/network /etc/homelab /usr/local/sbin
 
-for file_name in "${!FILE_MAP_DEST[@]}"; do
-    rc=0
-    install_build_file "$file_name" "$BUILD_DIR" || rc=$?
-    [[ $rc -eq 0 || $rc -eq 1 ]] || exit "$rc"
-done
+rc=0
+install_file_map "$BUILD_DIR" || rc=$?
+[[ $rc -eq 0 || $rc -eq 1 ]] || exit "$rc"
 
 if [[ -f "$LINK_FILES" ]]; then
     while IFS= read -r link_file; do

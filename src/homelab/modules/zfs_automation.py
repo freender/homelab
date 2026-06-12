@@ -9,6 +9,7 @@ from .. import op_secrets
 from ..build import copy_files, render_file, write_env_file
 from ..deploy import DeploySession, force_env, prepare_build_dir, stage_and_run_remote_installer
 from ..hosts import default_registry
+from ..module_support import tmpfs_secret_stage, validate_secret_reference
 from ..output import print_action, print_sub
 from ..ssh import HostConnection, build_files, diff_many
 
@@ -35,9 +36,18 @@ class FileSpec:
 
 
 @dataclass(frozen=True)
+class SecretFileSpec:
+    build_name: str
+    remote_path: str
+    secret: str
+    mode: str = "600"
+
+
+@dataclass(frozen=True)
 class HostArtifacts:
     build_dir: Path
     file_specs: tuple[FileSpec, ...]
+    secret_file_specs: tuple[SecretFileSpec, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -223,7 +233,7 @@ def validate(root: Path, hosts: list[str]) -> None:
         normalize_pull_source_access(registry, host, include_disabled=True)
         for private_key in normalize_source_private_keys(registry, host):
             try:
-                op_secrets.secret_file(root, private_key.secret)
+                validate_secret_reference(root, private_key.secret)
             except op_secrets.OpSecretsError as exc:
                 raise ValueError(f"{host}: {exc}") from exc
         pools = resolve_pools(registry, host)
@@ -2280,11 +2290,26 @@ def resolve_remote_path(spec: FileSpec) -> str:
 
 
 def write_file_map(build_dir: Path, artifacts: HostArtifacts) -> None:
-    lines = [
-        f"{spec.build_name}|{resolve_remote_path(spec)}|{spec.mode}"
-        for spec in artifacts.file_specs
-    ]
+    lines = []
+    for spec in artifacts.file_specs:
+        lines.append(f"{spec.build_name}|{resolve_remote_path(spec)}|{spec.mode}")
+    for spec in artifacts.secret_file_specs:
+        lines.append(f"{spec.build_name}|{spec.remote_path}|{spec.mode}")
     (build_dir / "file-map.conf").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def stage_secret_files(
+    root: Path,
+    secret_dir: Path,
+    secret_specs: tuple[SecretFileSpec, ...],
+) -> dict[str, Path]:
+    staged: dict[str, Path] = {}
+    for spec in secret_specs:
+        path = secret_dir / spec.build_name
+        path.write_text(rendered_private_key(root, spec.secret), encoding="utf-8")
+        path.chmod(0o600)
+        staged[spec.build_name] = path
+    return staged
 
 
 def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
@@ -2296,35 +2321,81 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
     artifacts = build_host_artifacts(root, host)
     connection = HostConnection(host, user=ssh_user, hostname=ssh_hostname)
 
-    print_sub("Comparing with remote configs...")
-    diff_pairs = [
-        (artifacts.build_dir / spec.build_name, resolve_remote_path(spec))
-        for spec in artifacts.file_specs
-    ]
-    for message in diff_many(connection, diff_pairs):
-        print_sub(message)
+    secret_context = (
+        tmpfs_secret_stage("homelab-zfs-automation.")
+        if artifacts.secret_file_specs and not dry_run
+        else None
+    )
 
-    if dry_run:
-        print_sub(f"[DRY-RUN] Would deploy zfs-automation to {host}")
-        print_sub("Build files:")
-        for file_name in build_files(artifacts.build_dir):
-            print_sub(f"    {file_name}")
+    if secret_context is None:
+        print_sub("Comparing with remote configs...")
+        diff_pairs = [
+            (artifacts.build_dir / spec.build_name, resolve_remote_path(spec))
+            for spec in artifacts.file_specs
+        ]
+        for message in diff_many(connection, diff_pairs):
+            print_sub(message)
+
+        if dry_run:
+            print_sub(f"[DRY-RUN] Would deploy zfs-automation to {host}")
+            print_sub("Build files:")
+            for file_name in build_files(artifacts.build_dir):
+                print_sub(f"    {file_name}")
+            if artifacts.secret_file_specs:
+                print_sub("Secret files staged only during real deploy:")
+                for spec in artifacts.secret_file_specs:
+                    print_sub(f"    {spec.build_name}")
+            return
+
+        stage_and_run_remote_installer(
+            root,
+            connection,
+            REMOTE_ROOT,
+            [
+                (artifacts.build_dir, f"{REMOTE_ROOT}/build/{host}"),
+                (module_dir / "scripts", f"{REMOTE_ROOT}/scripts"),
+            ],
+            "scripts/install.sh",
+            host,
+            env=force_env(force),
+            require_root=True,
+            remote_subdirs=("build", "lib"),
+        )
         return
 
-    stage_and_run_remote_installer(
-        root,
-        connection,
-        REMOTE_ROOT,
-        [
+    with secret_context as secret_dir:
+        secret_paths = stage_secret_files(root, secret_dir, artifacts.secret_file_specs)
+        print_sub("Comparing with remote configs...")
+        diff_pairs = [
+            (artifacts.build_dir / spec.build_name, resolve_remote_path(spec))
+            for spec in artifacts.file_specs
+        ]
+        diff_pairs.extend(
+            (secret_paths[spec.build_name], spec.remote_path)
+            for spec in artifacts.secret_file_specs
+        )
+        for message in diff_many(connection, diff_pairs):
+            print_sub(message)
+
+        upload_paths = [
             (artifacts.build_dir, f"{REMOTE_ROOT}/build/{host}"),
             (module_dir / "scripts", f"{REMOTE_ROOT}/scripts"),
-        ],
-        "scripts/install.sh",
-        host,
-        env=force_env(force),
-        require_root=True,
-        remote_subdirs=("build", "lib"),
-    )
+        ]
+        upload_paths.extend(
+            (secret_paths[spec.build_name], f"{REMOTE_ROOT}/build/{host}/{spec.build_name}")
+            for spec in artifacts.secret_file_specs
+        )
+        stage_and_run_remote_installer(
+            root,
+            connection,
+            REMOTE_ROOT,
+            upload_paths,
+            "scripts/install.sh",
+            host,
+            env=force_env(force),
+            require_root=True,
+            remote_subdirs=("build", "lib"),
+        )
 
 
 def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
@@ -2516,13 +2587,14 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
             ]
         )
 
-    for index, private_key in enumerate(source_private_keys):
-        build_name = f"source-private-key-{index}"
-        (build_dir / build_name).write_text(
-            rendered_private_key(root, private_key.secret),
-            encoding="utf-8",
+    secret_file_specs = tuple(
+        SecretFileSpec(
+            f"source-private-key-{index}",
+            private_key.path,
+            private_key.secret,
         )
-        file_specs.append(FileSpec(build_name, private_key.path, mode="600"))
+        for index, private_key in enumerate(source_private_keys)
+    )
 
     render_file(
         templates_dir / "homelab-zfs-scrub.sh",
@@ -2572,6 +2644,7 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
     artifacts = HostArtifacts(
         build_dir=build_dir,
         file_specs=tuple(file_specs),
+        secret_file_specs=secret_file_specs,
     )
     write_file_map(build_dir, artifacts)
     return artifacts

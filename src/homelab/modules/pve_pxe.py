@@ -11,7 +11,7 @@ from .. import op_secrets
 from ..build import copy_files, render_file
 from ..deploy import DeploySession, force_env, prepare_build_dir, stage_and_run_remote_installer
 from ..hosts import HostLookupError, default_registry
-from ..module_support import FileSpec, tmpfs_secret_stage, write_file_map
+from ..module_support import FileSpec, tmpfs_secret_stage, validate_secret_reference, write_file_map
 from ..output import print_action, print_error, print_sub
 from ..ssh import HostConnection, diff_many, offline_mode
 from .pve_autoinstall import (
@@ -113,9 +113,9 @@ def validate(root: Path) -> None:
         if not path.is_file():
             raise ValueError(f"missing required template: {path}")
 
-    # Validate secret resolves (offline: checks example file exists)
+    # Validate the catalog entry without rendering the secret during dry-runs/validation.
     try:
-        op_secrets.secret_file(root, SECRET_NAME)
+        validate_secret_reference(root, SECRET_NAME)
     except op_secrets.OpSecretsError as exc:
         raise ValueError(str(exc)) from exc
 

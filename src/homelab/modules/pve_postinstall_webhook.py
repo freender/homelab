@@ -6,8 +6,9 @@ from pathlib import Path
 from .. import op_secrets
 from ..deploy import DeploySession, force_env, prepare_build_dir, stage_and_run_remote_installer
 from ..hosts import default_registry
+from ..module_support import tmpfs_secret_stage, validate_secret_reference
 from ..output import print_action, print_error, print_sub
-from ..ssh import HostConnection, diff_many, offline_mode
+from ..ssh import HostConnection, diff_many
 
 REMOTE_ROOT = "/tmp/homelab-pve-postinstall-webhook"
 FEATURE = "pve-postinstall-webhook"
@@ -59,7 +60,7 @@ def validate(root: Path) -> None:
             raise ValueError(f"missing required script: {path}")
 
     try:
-        op_secrets.secret_file(root, SECRET_NAME)
+        validate_secret_reference(root, SECRET_NAME)
     except op_secrets.OpSecretsError as exc:
         raise ValueError(str(exc)) from exc
 
@@ -73,35 +74,8 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
     ssh_timeout = str(registry.get(host, f"{FEATURE}.ssh_timeout_seconds", "1200"))
     deploy_timeout = str(registry.get(host, f"{FEATURE}.deploy_timeout_seconds", "3600"))
 
-    token = "<offline>"
-    pdm_token = "<offline>"
-    if not offline_mode():
-        token, pdm_token = _read_tokens(root)
-
     build_dir = root / "pve-postinstall-webhook" / "build" / host
     prepare_build_dir(build_dir)
-    _write_env(
-        build_dir / "env",
-        {
-            "LISTEN_HOST": listen_host,
-            "LISTEN_PORT": listen_port,
-            "REPO_DIR": repo_dir,
-            "WEBHOOK_TOKEN": token,
-            "DRY_RUN": webhook_dry_run,
-            "SSH_TIMEOUT_SECONDS": ssh_timeout,
-            "DEPLOY_TIMEOUT_SECONDS": deploy_timeout,
-            "SSH_AUTH_SOCK": "/root/.ssh/agent.sock",
-            "PDM_BASE_URL": "https://127.0.0.1:8443",
-            "PDM_TOKEN_ID": "root@pam!homelab-deploy",
-            "PDM_TOKEN_SECRET": pdm_token,
-            "PDM_TOKEN_REF": "op://Homelab/PDM Deploy API Token/password",
-            "PDM_REMOTE_REFRESH": "true",
-            "PDM_REMOTE_AUTHID": "root@pam!pdm-rasputin",
-            "PDM_REMOTE_TOKEN_COMMENT": "PDM on arc",
-            "OP_BIN": "/root/.local/bin/op",
-            "OP_SERVICE_ACCOUNT_TOKEN_FILE": "/root/.config/op/service-account-token",
-        },
-    )
 
     connection = HostConnection(
         host,
@@ -152,20 +126,68 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
         print_sub(f"[DRY-RUN] Webhook deploy mode: {mode}")
         return
 
-    stage_and_run_remote_installer(
-        root,
-        connection,
-        REMOTE_ROOT,
-        [
-            (scripts_dir, f"{REMOTE_ROOT}/scripts"),
-            (build_dir, f"{REMOTE_ROOT}/build/{host}"),
-        ],
-        "scripts/install.sh",
-        host,
-        env=force_env(force),
-        require_root=True,
-        remote_subdirs=("build", "lib", "scripts"),
-    )
+    token, pdm_token = _read_tokens(root)
+    with tmpfs_secret_stage("homelab-pve-postinstall-webhook.") as secret_dir:
+        env_path = secret_dir / "env"
+        _write_env(
+            env_path,
+            _env_values(
+                listen_host,
+                listen_port,
+                repo_dir,
+                token,
+                pdm_token,
+                webhook_dry_run,
+                ssh_timeout,
+                deploy_timeout,
+            ),
+        )
+        stage_and_run_remote_installer(
+            root,
+            connection,
+            REMOTE_ROOT,
+            [
+                (scripts_dir, f"{REMOTE_ROOT}/scripts"),
+                (build_dir, f"{REMOTE_ROOT}/build/{host}"),
+                (env_path, f"{REMOTE_ROOT}/build/{host}/env"),
+            ],
+            "scripts/install.sh",
+            host,
+            env=force_env(force),
+            require_root=True,
+            remote_subdirs=("build", "lib", "scripts"),
+        )
+
+
+def _env_values(
+    listen_host: str,
+    listen_port: str,
+    repo_dir: str,
+    token: str,
+    pdm_token: str,
+    webhook_dry_run: str,
+    ssh_timeout: str,
+    deploy_timeout: str,
+) -> dict[str, str]:
+    return {
+        "LISTEN_HOST": listen_host,
+        "LISTEN_PORT": listen_port,
+        "REPO_DIR": repo_dir,
+        "WEBHOOK_TOKEN": token,
+        "DRY_RUN": webhook_dry_run,
+        "SSH_TIMEOUT_SECONDS": ssh_timeout,
+        "DEPLOY_TIMEOUT_SECONDS": deploy_timeout,
+        "SSH_AUTH_SOCK": "/root/.ssh/agent.sock",
+        "PDM_BASE_URL": "https://127.0.0.1:8443",
+        "PDM_TOKEN_ID": "root@pam!homelab-deploy",
+        "PDM_TOKEN_SECRET": pdm_token,
+        "PDM_TOKEN_REF": "op://Homelab/PDM Deploy API Token/password",
+        "PDM_REMOTE_REFRESH": "true",
+        "PDM_REMOTE_AUTHID": "root@pam!pdm-rasputin",
+        "PDM_REMOTE_TOKEN_COMMENT": "PDM on arc",
+        "OP_BIN": "/root/.local/bin/op",
+        "OP_SERVICE_ACCOUNT_TOKEN_FILE": "/root/.config/op/service-account-token",
+    }
 
 
 def _read_tokens(root: Path) -> tuple[str, str]:

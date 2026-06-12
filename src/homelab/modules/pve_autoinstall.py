@@ -27,6 +27,7 @@ from typing import Any
 from .. import op_secrets
 from ..deploy import DeploySession
 from ..hosts import HostLookupError, default_registry
+from ..module_support import validate_secret_reference
 from ..output import print_action, print_error, print_ok, print_sub
 from ..ssh import HostConnection, offline_mode
 
@@ -174,7 +175,7 @@ def validate(
 
     for secret_name in (PDM_SECRET_NAME,):
         try:
-            op_secrets.secret_file(root, secret_name)
+            validate_secret_reference(root, secret_name)
         except op_secrets.OpSecretsError as exc:
             raise ValueError(str(exc)) from exc
 
