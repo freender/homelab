@@ -29,10 +29,12 @@ load_file_map() {
 
     require_file "$map_file" "$map_file" || return 1
 
+    declare -g -a FILE_MAP_NAMES=()
     declare -g -A FILE_MAP_DEST=()
     declare -g -A FILE_MAP_MODE=()
     while IFS='|' read -r filename remote_path mode; do
         [[ -n "$filename" ]] || continue
+        FILE_MAP_NAMES+=("$filename")
         FILE_MAP_DEST["$filename"]="$remote_path"
         FILE_MAP_MODE["$filename"]="${mode:-644}"
     done < "$map_file"
@@ -73,6 +75,27 @@ install_build_file() {
     install_if_changed "$build_dir/$name" "$(mapped_dest "$name")" "$(mapped_mode "$name")" "$(mapped_dest "$name")" || rc=$?
     [[ $rc -eq 0 || $rc -eq 1 ]] || return "$rc"
     return "$rc"
+}
+
+install_file_map() {
+    local build_dir="${1:-${BUILD_DIR:-}}"
+    local changed=1
+    local name
+    local rc
+
+    if [[ -z "$build_dir" ]]; then
+        print_error "BUILD_DIR is required for install_file_map"
+        return 2
+    fi
+
+    for name in "${FILE_MAP_NAMES[@]}"; do
+        rc=0
+        install_build_file "$name" "$build_dir" || rc=$?
+        [[ $rc -eq 0 || $rc -eq 1 ]] || return "$rc"
+        [[ $rc -eq 0 ]] && changed=0
+    done
+
+    return "$changed"
 }
 
 require_file() {

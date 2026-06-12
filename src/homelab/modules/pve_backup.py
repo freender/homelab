@@ -7,6 +7,7 @@ from pathlib import Path
 from .. import backup_excludes, op_secrets
 from ..deploy import DeploySession, force_env, prepare_build_dir, stage_and_run_remote_installer
 from ..hosts import default_registry
+from ..module_support import normalize_bool, normalize_string_list
 from ..output import print_action, print_sub
 from ..ssh import HostConnection, build_files
 from . import pbs_client_backup
@@ -171,35 +172,6 @@ def normalize_storage_name(name: str) -> str:
 
 def shell_quote(value: object) -> str:
     return str(value).replace("'", "'\"'\"'")
-
-
-def normalize_string_list(value: object, message: str) -> list[str]:
-    if value in (None, ""):
-        return []
-    if isinstance(value, str):
-        return [value]
-    if not isinstance(value, list):
-        raise ValueError(message)
-    normalized = []
-    for item in value:
-        text = str(item).strip()
-        if text:
-            normalized.append(text)
-    return normalized
-
-
-def normalize_bool(value: object, default: bool, message: str) -> bool:
-    if value is None:
-        return default
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        normalized = value.strip().lower()
-        if normalized in {"true", "yes", "1", "on"}:
-            return True
-        if normalized in {"false", "no", "0", "off"}:
-            return False
-    raise ValueError(message)
 
 
 def build_standalone_backup_plans(root: Path, host: str, build_dir: Path) -> None:

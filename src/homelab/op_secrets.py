@@ -1,27 +1,33 @@
 """1Password-backed secret retrieval for the homelab repo.
 
-Materializes secrets onto a tmpfs build directory under /dev/shm so nothing
-sensitive is ever written to persistent disk on `riven`. Templates live in
-`secrets/templates/<name>.env.tpl` and contain `op://` references that
-`op inject` resolves at deploy time.
+Materializes secrets into a 24-hour tmpfs cache under /dev/shm so repeated
+deploy commands do not consume extra 1Password service-account reads. Nothing
+sensitive is written to persistent disk on `riven`. Templates live in
+`secrets/templates/<name>.env.tpl` and contain `op://` references that `op inject`
+resolves at deploy time.
 
 Usage:
     from . import op_secrets
-    path = op_secrets.secret_file("pbs-backup-main")  # /dev/shm/.../pbs-backup-main.env
+    path = op_secrets.secret_file("pbs-backup-main")  # /dev/shm/.../*.env
 
 Authentication:
-    Service-account token at ~/.config/op/homelab.token (mode 0600).
+    Service-account token at ~/.config/op/service-account-token (mode 0600).
     The token contents are exported to OP_SERVICE_ACCOUNT_TOKEN for child
     `op` invocations and then dropped from this process's environment.
 
 Offline mode (HOMELAB_OFFLINE=1):
     Returns `secrets/templates/<name>.env.example` if present without
     invoking `op`. Used by `homelab validate` for CI parity.
+
+Cache controls:
+    HOMELAB_SECRET_CACHE_TTL=86400 by default. Set to 0 to disable the
+    cross-process cache. Use `homelab secrets cache-clear` to revoke early.
 """
 
 from __future__ import annotations
 
 import atexit
+import hashlib
 import json
 import os
 import re
@@ -31,6 +37,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
@@ -46,6 +53,8 @@ TOKEN_PATHS = (
 )
 TMPFS_BASE = Path("/dev/shm")
 TMPFS_PREFIX = "homelab-secrets."
+CACHE_PREFIX = "homelab-secret-cache"
+DEFAULT_CACHE_TTL_SECONDS = 24 * 60 * 60
 DEFAULT_VAULT = "Homelab"
 
 # Matches `{{ op://Vault/Item/field }}` (single-line, with optional whitespace).
@@ -196,6 +205,57 @@ def _ensure_session_dir() -> Path:
     return session_path
 
 
+def cache_ttl_seconds() -> int:
+    raw = os.environ.get("HOMELAB_SECRET_CACHE_TTL", str(DEFAULT_CACHE_TTL_SECONDS))
+    try:
+        ttl = int(raw)
+    except ValueError:
+        raise OpSecretsError(f"HOMELAB_SECRET_CACHE_TTL must be an integer, got {raw!r}")
+    return max(ttl, 0)
+
+
+def _cache_dir() -> Path:
+    if not TMPFS_BASE.is_dir():
+        raise OpSecretsError(f"{TMPFS_BASE} not available; cannot cache secrets to tmpfs")
+    path = TMPFS_BASE / f"{CACHE_PREFIX}-{os.getuid()}"
+    if path.exists() and not path.is_dir():
+        raise OpSecretsError(f"secret cache path exists but is not a directory: {path}")
+    path.mkdir(mode=0o700, exist_ok=True)
+    info = path.stat()
+    if info.st_uid != os.getuid():
+        raise OpSecretsError(f"secret cache directory must be owned by current user: {path}")
+    mode = stat.S_IMODE(info.st_mode)
+    if mode & 0o077:
+        path.chmod(0o700)
+    return path
+
+
+def _secret_cache_key(entry: SecretEntry) -> str:
+    digest = hashlib.sha256(entry.template.read_bytes()).hexdigest()[:24]
+    safe_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", entry.name)
+    return f"{safe_name}.{digest}.env"
+
+
+def _cache_path(entry: SecretEntry) -> Path:
+    return _cache_dir() / _secret_cache_key(entry)
+
+
+def _is_cache_fresh(path: Path, ttl_seconds: int) -> bool:
+    if ttl_seconds <= 0 or not path.is_file():
+        return False
+    age_seconds = time.time() - path.stat().st_mtime
+    return age_seconds <= ttl_seconds
+
+
+def _prune_secret_cache(entry: SecretEntry) -> None:
+    cache_dir = _cache_dir()
+    safe_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", entry.name)
+    current = _secret_cache_key(entry)
+    for path in cache_dir.glob(f"{safe_name}.*.env"):
+        if path.name != current:
+            _remove_secret_file(path)
+
+
 def _install_signal_handlers() -> None:
     def _handler(signum: int, _frame: Any) -> None:
         cleanup()
@@ -240,6 +300,60 @@ def cleanup() -> None:
         shutil.rmtree(target, ignore_errors=True)
     except OSError:
         pass
+
+
+def _remove_secret_file(path: Path) -> None:
+    shred = shutil.which("shred")
+    try:
+        if shred:
+            subprocess.run(
+                [shred, "-u", "-n", "1", str(path)],
+                check=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        else:
+            path.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def clear_cache() -> None:
+    """Shred and remove the cross-process tmpfs secret cache."""
+    _rendered.clear()
+    path = TMPFS_BASE / f"{CACHE_PREFIX}-{os.getuid()}"
+    if not path.exists():
+        return
+    if not path.is_dir():
+        raise OpSecretsError(f"secret cache path exists but is not a directory: {path}")
+    info = path.stat()
+    if info.st_uid != os.getuid():
+        raise OpSecretsError(f"refusing to remove cache not owned by current user: {path}")
+    for file_path in sorted(path.rglob("*"), reverse=True):
+        if file_path.is_file():
+            _remove_secret_file(file_path)
+    shutil.rmtree(path, ignore_errors=True)
+
+
+def cache_info() -> dict[str, object]:
+    path = TMPFS_BASE / f"{CACHE_PREFIX}-{os.getuid()}"
+    files = []
+    if path.is_dir():
+        now = time.time()
+        for file_path in sorted(path.glob("*.env")):
+            stat_result = file_path.stat()
+            files.append(
+                {
+                    "name": file_path.name,
+                    "age_seconds": int(now - stat_result.st_mtime),
+                    "size": stat_result.st_size,
+                }
+            )
+    return {
+        "path": str(path),
+        "ttl_seconds": cache_ttl_seconds(),
+        "files": files,
+    }
 
 
 def _render_with_op(template: Path, destination: Path) -> None:
@@ -299,6 +413,24 @@ def secret_file(root: Path, name: str) -> Path:
         return entry.example
 
     ensure_op_session()
+    ttl_seconds = cache_ttl_seconds()
+    if ttl_seconds > 0:
+        cache_path = _cache_path(entry)
+        if _is_cache_fresh(cache_path, ttl_seconds):
+            _rendered[name] = cache_path
+            return cache_path
+        _prune_secret_cache(entry)
+        temp_path = cache_path.with_name(f".{cache_path.name}.{os.getpid()}.tmp")
+        try:
+            _render_with_op(entry.template, temp_path)
+            os.replace(temp_path, cache_path)
+            cache_path.chmod(0o600)
+        finally:
+            if temp_path.exists():
+                _remove_secret_file(temp_path)
+        _rendered[name] = cache_path
+        return cache_path
+
     session = _ensure_session_dir()
     destination = session / entry.filename
     _render_with_op(entry.template, destination)
@@ -367,6 +499,8 @@ def render_all(root: Path) -> Path:
         secret_file(root, name)
     if _session_dir is None:
         # Offline mode does not allocate a tmpfs dir; surface where files live.
+        if not offline_mode():
+            return _cache_dir()
         return root / TEMPLATES_DIR
     return _session_dir
 

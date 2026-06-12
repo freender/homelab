@@ -81,9 +81,9 @@ If a module has no dedicated test script, use `./deploy --dry-run` as the test.
 
 ### Imports and shared functions
 - Reuse `src/homelab/hosts.py`, `src/homelab/ssh.py`, and `deploy.py` from Python modules.
-- Reuse `src/homelab/module_support.py` for shared file-map module helpers like `FileSpec`, `HostArtifacts`, `require_text`, and `write_file_map`.
+- Reuse `src/homelab/module_support.py` for shared file-map module helpers like `FileSpec`, `HostArtifacts`, `require_text`, `write_file_map`, `tmpfs_secret_stage`, and `simple_root_installer_deploy`.
 - Remote installers should source staged `lib/utils.sh` when present.
-- Remote installers using `file-map.conf` should use shared `load_file_map`, `mapped_dest`, `mapped_mode`, and `install_build_file` helpers from `lib/utils.sh` instead of reimplementing them per module.
+- Remote installers using `file-map.conf` should use shared `load_file_map`, `mapped_dest`, `mapped_mode`, `install_build_file`, and `install_file_map` helpers from `lib/utils.sh` instead of reimplementing them per module.
 - Keep fallback helper functions only where remote context may lack `utils.sh`.
 
 ### Formatting and syntax
@@ -166,7 +166,9 @@ Keep the same flow used across modules:
 - Never commit `.env`, `telegram.env`, or actual secret values.
 - Homelab repo deploy-time secrets are sourced from 1Password via `src/homelab/op_secrets.py` and `op inject`.
 - `secrets/catalog.yml` maps stable secret names to `secrets/templates/*.env.tpl` files containing `op://Homelab/<Item>/<field>` references.
-- Rendered secrets must live only in `/dev/shm/homelab-secrets.*` and are shredded on cleanup; do not write generated secret files under the repo.
+- Rendered secrets must live only in tmpfs paths under `/dev/shm`, including the 24-hour cache at `/dev/shm/homelab-secret-cache-$UID` and per-run staging dirs like `/dev/shm/homelab-secrets.*`; do not write generated secret files under the repo.
+- `op_secrets.secret_file()` has a 24-hour tmpfs cache by default to reduce 1Password service-account reads. Use `HOMELAB_SECRET_CACHE_TTL=0` to disable it, `homelab secrets cache-status` to inspect it, and `homelab secrets cache-clear` to shred/remove it early.
+- When a module needs to stage rendered secrets into a remote bundle, use `tmpfs_secret_stage()`/`copy_cached_secret()` and upload the temporary file; do not copy cached secret files into module `build/` directories.
 - The normal read-only service-account token path on `riven` is `~/.config/op/service-account-token`; `~/.config/op/homelab.token` is reserved for a temporary bootstrap token and should not remain after bootstrap.
 - Use `PATH="$HOME/.local/bin:$PATH" PYTHONPATH=src .venv/bin/python -m homelab.cli secrets doctor` to verify 1Password secret resolution.
 - Use `homelab secrets bootstrap` only for one-time migration from existing ignored `secrets/*.env` files into 1Password; it requires temporary write access and should be followed by `homelab secrets purge-local` and token downgrade/removal.

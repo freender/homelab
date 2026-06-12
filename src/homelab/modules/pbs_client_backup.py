@@ -7,7 +7,15 @@ from pathlib import Path
 from .. import backup_excludes, op_secrets
 from ..deploy import DeploySession, force_env, prepare_build_dir, stage_and_run_remote_installer
 from ..hosts import default_registry
-from ..module_support import FileSpec, require_text, write_file_map
+from ..module_support import (
+    FileSpec,
+    copy_cached_secret,
+    normalize_bool,
+    normalize_string_list,
+    require_text,
+    tmpfs_secret_stage,
+    write_file_map,
+)
 from ..output import print_action, print_sub
 from ..ssh import HostConnection, build_files, diff_many
 from ..templates import render_template
@@ -106,35 +114,6 @@ def validate(root: Path, hosts: list[str]) -> None:
             )
 
 
-def normalize_bool(value: object, default: bool, message: str) -> bool:
-    if value is None:
-        return default
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        normalized = value.strip().lower()
-        if normalized in {"true", "yes", "1", "on"}:
-            return True
-        if normalized in {"false", "no", "0", "off"}:
-            return False
-    raise ValueError(message)
-
-
-def normalize_string_list(value: object, message: str) -> list[str]:
-    if value in (None, ""):
-        return []
-    if isinstance(value, str):
-        return [value]
-    if not isinstance(value, list):
-        raise ValueError(message)
-    normalized = []
-    for item in value:
-        text = str(item).strip()
-        if text:
-            normalized.append(text)
-    return normalized
-
-
 def normalize_backup_plan(root: Path, registry, host: str) -> BackupPlan:
     prefix = MODULE_DIR
     archives_config = registry.get(host, f"{prefix}.archives", [])
@@ -218,12 +197,13 @@ def normalize_backup_plan(root: Path, registry, host: str) -> BackupPlan:
 
 
 def secret_path(root: Path, profile: str) -> Path:
+    return op_secrets.secret_file(root, secret_name_for_profile(profile))
+
+
+def secret_name_for_profile(profile: str) -> str:
     if profile not in PROFILE_TO_SECRET:
         raise ValueError(f"invalid PBS secret_profile '{profile}'")
-    try:
-        return op_secrets.secret_file(root, PROFILE_TO_SECRET[profile])
-    except op_secrets.OpSecretsError as exc:
-        raise ValueError(str(exc)) from exc
+    return PROFILE_TO_SECRET[profile]
 
 
 def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
@@ -247,9 +227,17 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
         hostname=str(registry.get(host, "config.hostname", host)),
     )
     print_sub("Comparing with remote configs...")
+    secret = secret_path(root, plan.secret_profile)
     for message in diff_many(
         connection,
-        [(build_dir / spec.build_name, spec.remote_path) for spec in FILE_SPECS],
+        [
+            (
+                secret if spec.build_name == "homelab-pbs-client-backup.env"
+                else build_dir / spec.build_name,
+                spec.remote_path,
+            )
+            for spec in FILE_SPECS
+        ],
     ):
         print_sub(message)
 
@@ -260,20 +248,27 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
             print_sub(f"    {file_name}")
         return
 
-    stage_and_run_remote_installer(
-        root,
-        connection,
-        REMOTE_ROOT,
-        [
-            (build_dir, f"{REMOTE_ROOT}/build/{host}"),
-            (root / MODULE_DIR / "scripts", f"{REMOTE_ROOT}/scripts"),
-        ],
-        "scripts/install.sh",
-        host,
-        env=force_env(force),
-        require_root=True,
-        remote_subdirs=("build", "lib", "scripts"),
-    )
+    with tmpfs_secret_stage("homelab-pbs-client-backup.") as secret_dir:
+        secret_stage = copy_cached_secret(
+            root,
+            secret_name_for_profile(plan.secret_profile),
+            secret_dir / "homelab-pbs-client-backup.env",
+        )
+        stage_and_run_remote_installer(
+            root,
+            connection,
+            REMOTE_ROOT,
+            [
+                (build_dir, f"{REMOTE_ROOT}/build/{host}"),
+                (secret_stage, f"{REMOTE_ROOT}/build/{host}/homelab-pbs-client-backup.env"),
+                (root / MODULE_DIR / "scripts", f"{REMOTE_ROOT}/scripts"),
+            ],
+            "scripts/install.sh",
+            host,
+            env=force_env(force),
+            require_root=True,
+            remote_subdirs=("build", "lib", "scripts"),
+        )
 
 
 def build_host_bundle(root: Path, host: str, plan: BackupPlan, build_dir: Path) -> None:
@@ -298,11 +293,6 @@ def build_host_bundle(root: Path, host: str, plan: BackupPlan, build_dir: Path) 
         build_dir / "homelab-pbs-client-backup.conf",
         plan,
         retire_pve_config_backup=host_type == "pve",
-    )
-    secret = secret_path(root, plan.secret_profile)
-    (build_dir / "homelab-pbs-client-backup.env").write_text(
-        secret.read_text(encoding="utf-8"),
-        encoding="utf-8",
     )
     write_file_map(build_dir, FILE_SPECS)
 

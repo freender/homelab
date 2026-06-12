@@ -162,9 +162,10 @@ def secrets_list() -> None:
 
 @secrets.command("render")
 def secrets_render() -> None:
-    """Materialize all secrets into the session tmpfs and report the path.
+    """Materialize all secrets into tmpfs and report the path.
 
-    The directory is automatically shredded and removed when this process exits.
+    With the default 24-hour cache enabled, the reported path is the shared
+    tmpfs cache. Use `homelab secrets cache-clear` to remove it early.
     Use this for manual inspection only; never copy contents elsewhere.
     """
     root = repo_root()
@@ -174,7 +175,38 @@ def secrets_render() -> None:
     except op_secrets.OpSecretsError as exc:
         raise click.ClickException(str(exc)) from exc
     print_sub(f"Rendered to: {path}")
-    print_warn("This directory is removed when this process exits.")
+    print_warn("Secrets stay in tmpfs until cache expiry, cache-clear, or reboot.")
+
+
+@secrets.command("cache-status")
+def secrets_cache_status() -> None:
+    """Show the shared tmpfs secret cache path, TTL, and file ages."""
+    try:
+        info = op_secrets.cache_info()
+    except op_secrets.OpSecretsError as exc:
+        raise click.ClickException(str(exc)) from exc
+    print_header("Homelab Secrets Cache")
+    print_sub(f"Path: {info['path']}")
+    print_sub(f"TTL: {info['ttl_seconds']} seconds")
+    files = info["files"]
+    if not files:
+        print_sub("Files: none")
+        return
+    for file_info in files:
+        print_sub(
+            f"{file_info['name']} age={file_info['age_seconds']}s "
+            f"size={file_info['size']}B"
+        )
+
+
+@secrets.command("cache-clear")
+def secrets_cache_clear() -> None:
+    """Shred and remove the shared tmpfs secret cache."""
+    try:
+        op_secrets.clear_cache()
+    except op_secrets.OpSecretsError as exc:
+        raise click.ClickException(str(exc)) from exc
+    print_ok("secret cache cleared")
 
 
 @secrets.command("bootstrap")

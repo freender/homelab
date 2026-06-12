@@ -6,7 +6,7 @@ from pathlib import Path
 
 from ..deploy import DeploySession, force_env, prepare_build_dir, stage_and_run_remote_installer
 from ..hosts import default_registry
-from ..module_support import FileSpec, HostArtifacts, require_text, write_file_map
+from ..module_support import FileSpec, HostArtifacts, normalize_bool, require_text, write_file_map
 from ..output import print_action, print_sub
 from ..ssh import HostConnection, build_files, diff_many
 
@@ -88,20 +88,6 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
         require_root=True,
         remote_subdirs=("build", "lib"),
     )
-
-
-def normalize_bool(value: object, default: bool, message: str) -> bool:
-    if value is None:
-        return default
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        normalized = value.strip().lower()
-        if normalized in {"true", "yes", "1", "on"}:
-            return True
-        if normalized in {"false", "no", "0", "off"}:
-            return False
-    raise ValueError(message)
 
 
 def normalize_mac(value: object, message: str) -> str:

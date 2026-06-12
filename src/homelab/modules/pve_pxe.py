@@ -3,6 +3,7 @@ from __future__ import annotations
 import ctypes
 import random
 import string
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Any
 
@@ -10,6 +11,7 @@ from .. import op_secrets
 from ..build import copy_files, render_file
 from ..deploy import DeploySession, force_env, prepare_build_dir, stage_and_run_remote_installer
 from ..hosts import HostLookupError, default_registry
+from ..module_support import FileSpec, tmpfs_secret_stage, write_file_map
 from ..output import print_action, print_error, print_sub
 from ..ssh import HostConnection, diff_many, offline_mode
 from .pve_autoinstall import (
@@ -48,6 +50,28 @@ STATIC_UNITS = [
     "pxe-autoupdate.service",
     "iso-autobuild.service",
 ]
+
+FILE_SPECS = (
+    FileSpec("pxe-mgmt.conf", f"{PXE_CONFIG_DIR}/pxe-mgmt.conf", "600"),
+    FileSpec("dnsmasq-pxe.conf", "/etc/dnsmasq.d/pxe-mgmt.conf"),
+    FileSpec("nginx-pxe.conf", "/etc/nginx/sites-available/pxe"),
+    FileSpec("boot.ipxe", "/srv/pxe/boot.ipxe"),
+    FileSpec("pdm-auto-warning.ipxe", "/srv/pxe/pdm-auto-warning.ipxe"),
+    FileSpec("pdm-auto.ipxe", "/srv/pxe/pdm-auto.ipxe"),
+    FileSpec("pve-load.ipxe", "/srv/pxe/pve-load.ipxe"),
+    FileSpec("pve-tui.ipxe", "/srv/pxe/pve-tui.ipxe"),
+    FileSpec("pve-gui.ipxe", "/srv/pxe/pve-gui.ipxe"),
+    FileSpec("pve-debug.ipxe", "/srv/pxe/pve-debug.ipxe"),
+    FileSpec("pve-serial.ipxe", "/srv/pxe/pve-serial.ipxe"),
+    FileSpec("autoexec.ipxe", "/srv/tftp/autoexec.ipxe"),
+    FileSpec("pxe-enable", "/usr/local/sbin/pxe-enable", "755"),
+    FileSpec("pxe-disable", "/usr/local/sbin/pxe-disable", "755"),
+    FileSpec("pxe-autoupdate", "/usr/local/sbin/pxe-autoupdate", "755"),
+    FileSpec("iso-autobuild", "/usr/local/sbin/iso-autobuild", "755"),
+    FileSpec("pxe-autoupdate.service", "/etc/systemd/system/pxe-autoupdate.service"),
+    FileSpec("pxe-autoupdate.timer", "/etc/systemd/system/pxe-autoupdate.timer"),
+    FileSpec("iso-autobuild.service", "/etc/systemd/system/iso-autobuild.service"),
+)
 
 
 def deploy(
@@ -184,6 +208,7 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
         build_dir / "pxe-autoupdate.timer",
         AUTOUPDATE_SCHEDULE=autoupdate_schedule,
     )
+    write_file_map(build_dir, FILE_SPECS)
 
     connection = HostConnection(
         host,
@@ -191,63 +216,69 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
         hostname=str(registry.get(host, "config.hostname")),
     )
 
-    # Resolve token and write to build dir (mode 600); never logged
-    if not op_secrets.offline_mode():
-        token = _read_token(root)
-        token_file = build_dir / "homelab-pve-auto-install.token"
-        token_file.write_text(token, encoding="utf-8")
-        token_file.chmod(0o600)
-        print_sub("Token resolved from 1Password")
-    else:
-        print_sub("[offline] token resolution skipped")
-
-    rendered_iso_hosts = _render_iso_answers(
-        root,
-        registry,
-        build_dir,
-        connection,
-        force=force,
-        dry_run=dry_run,
+    use_secret_stage = not dry_run and not op_secrets.offline_mode()
+    secret_context = (
+        tmpfs_secret_stage("homelab-pve-pxe.")
+        if use_secret_stage
+        else nullcontext(None)
     )
 
-    print_sub("Comparing with remote configs...")
-    for message in diff_many(connection, [
-        (build_dir / "pxe-mgmt.conf",             f"{PXE_CONFIG_DIR}/pxe-mgmt.conf"),
-        (build_dir / "dnsmasq-pxe.conf",          "/etc/dnsmasq.d/pxe-mgmt.conf"),
-        (build_dir / "nginx-pxe.conf",            "/etc/nginx/sites-available/pxe"),
-        (build_dir / "pxe-autoupdate.service",    "/etc/systemd/system/pxe-autoupdate.service"),
-        (build_dir / "pxe-autoupdate.timer",      "/etc/systemd/system/pxe-autoupdate.timer"),
-        (build_dir / "boot.ipxe",                 "/srv/pxe/boot.ipxe"),
-        (build_dir / "pve-load.ipxe",             "/srv/pxe/pve-load.ipxe"),
-        (build_dir / "pxe-enable",                "/usr/local/sbin/pxe-enable"),
-        (build_dir / "pxe-disable",               "/usr/local/sbin/pxe-disable"),
-        (build_dir / "pxe-autoupdate",            "/usr/local/sbin/pxe-autoupdate"),
-        (build_dir / "iso-autobuild",             "/usr/local/sbin/iso-autobuild"),
-        (build_dir / "iso-autobuild.service",     "/etc/systemd/system/iso-autobuild.service"),
-        (build_dir / "autoexec.ipxe",             "/srv/tftp/autoexec.ipxe"),
-    ]):
-        print_sub(message)
+    with secret_context as secret_dir:
+        if secret_dir is not None:
+            token = _read_token(root)
+            token_file = secret_dir / "homelab-pve-auto-install.token"
+            token_file.write_text(token, encoding="utf-8")
+            token_file.chmod(0o600)
+            print_sub("Token resolved from 1Password")
+            iso_build_dir = secret_dir
+        else:
+            if op_secrets.offline_mode():
+                print_sub("[offline] token resolution skipped")
+            iso_build_dir = build_dir
 
-    if dry_run:
-        print_sub(f"[DRY-RUN] Would deploy to {host}:{REMOTE_ROOT}/")
-        if rendered_iso_hosts:
-            print_sub(f"[DRY-RUN] Would stage baked ISO answers: {' '.join(rendered_iso_hosts)}")
-        return
+        rendered_iso_hosts = _render_iso_answers(
+            root,
+            registry,
+            iso_build_dir,
+            connection,
+            force=force,
+            dry_run=dry_run,
+        )
 
-    stage_and_run_remote_installer(
-        root,
-        connection,
-        REMOTE_ROOT,
-        [
+        print_sub("Comparing with remote configs...")
+        for message in diff_many(
+            connection,
+            [(build_dir / spec.build_name, spec.remote_path) for spec in FILE_SPECS],
+        ):
+            print_sub(message)
+
+        if dry_run:
+            print_sub(f"[DRY-RUN] Would deploy to {host}:{REMOTE_ROOT}/")
+            if rendered_iso_hosts:
+                print_sub(
+                    "[DRY-RUN] Would stage baked ISO answers: "
+                    f"{' '.join(rendered_iso_hosts)}"
+                )
+            return
+
+        upload_paths = [
             (build_dir, f"{REMOTE_ROOT}/build/{host}"),
             (root / "pve-pxe" / "scripts", f"{REMOTE_ROOT}/scripts"),
-        ],
-        "scripts/install.sh",
-        host,
-        env=force_env(force),
-        require_root=True,
-        remote_subdirs=("build", "lib"),
-    )
+        ]
+        if secret_dir is not None:
+            upload_paths.insert(1, (secret_dir, f"{REMOTE_ROOT}/build/{host}"))
+
+        stage_and_run_remote_installer(
+            root,
+            connection,
+            REMOTE_ROOT,
+            upload_paths,
+            "scripts/install.sh",
+            host,
+            env=force_env(force),
+            require_root=True,
+            remote_subdirs=("build", "lib"),
+        )
 
 
 def _iso_target_hosts(registry: Any) -> list[str]:

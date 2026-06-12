@@ -22,6 +22,8 @@ else
 fi
 
 require_dir "$BUILD_DIR" "$BUILD_DIR" || exit 1
+require_file "$BUILD_DIR/file-map.conf" "$BUILD_DIR/file-map.conf" || exit 1
+load_file_map "$BUILD_DIR/file-map.conf"
 
 print_header "PVE PXE"
 
@@ -87,17 +89,16 @@ print_action "Cleaning legacy PXE duplicate artifacts"
     rm -rf /srv/pxe.stage /root/iso/pxe-build /srv/pxe.prev/iso
 ) 9>/run/pxe-autoupdate.lock
 
-# install_if_changed returns 0=updated, 1=unchanged, 2=error.
-# Guard each call so set -e does not treat "unchanged" (rc=1) as failure.
-ic() { local rc=0; install_if_changed "$@" || rc=$?; [[ $rc -le 1 ]] || return "$rc"; }
+print_action "Installing managed PXE files"
+rc=0
+install_file_map "$BUILD_DIR" || rc=$?
+[[ $rc -eq 0 || $rc -eq 1 ]] || exit "$rc"
 
 # ── Management config (PDM URL + fingerprint) ────────────────────────────────
 print_action "Installing management config"
-ic "$BUILD_DIR/pxe-mgmt.conf" /etc/homelab-pxe/pxe-mgmt.conf 600 /etc/homelab-pxe/pxe-mgmt.conf
 
 # ── dnsmasq proxyPXE ─────────────────────────────────────────────────────────
 print_action "Installing dnsmasq proxyPXE config"
-ic "$BUILD_DIR/dnsmasq-pxe.conf" /etc/dnsmasq.d/pxe-mgmt.conf 644 /etc/dnsmasq.d/pxe-mgmt.conf
 
 # Disable dnsmasq default config if present (we control via drop-in)
 if [[ -f /etc/dnsmasq.conf ]] && ! grep -q "^#.*managed by homelab" /etc/dnsmasq.conf 2>/dev/null; then
@@ -108,7 +109,6 @@ fi
 
 # ── nginx vhost ───────────────────────────────────────────────────────────────
 print_action "Installing nginx vhost"
-ic "$BUILD_DIR/nginx-pxe.conf" /etc/nginx/sites-available/pxe 644 /etc/nginx/sites-available/pxe
 
 if [[ ! -L /etc/nginx/sites-enabled/pxe ]]; then
     ln -sf /etc/nginx/sites-available/pxe /etc/nginx/sites-enabled/pxe
@@ -133,7 +133,7 @@ ipxe_files=(
     pve-serial.ipxe
 )
 for f in "${ipxe_files[@]}"; do
-    ic "$BUILD_DIR/$f" "/srv/pxe/$f" 644 "/srv/pxe/$f"
+    require_file "/srv/pxe/$f" "/srv/pxe/$f" || exit 1
 done
 
 if [[ -r /etc/homelab-pxe/pxe-mgmt.conf ]]; then
@@ -156,7 +156,6 @@ fi
 
 # ── TFTP autoexec (dnsmasq:nogroup for tftp-secure) ──────────────────────────
 print_action "Installing TFTP autoexec"
-ic "$BUILD_DIR/autoexec.ipxe" /srv/tftp/autoexec.ipxe 644 /srv/tftp/autoexec.ipxe
 chown dnsmasq:nogroup /srv/tftp/autoexec.ipxe
 print_sub "autoexec.ipxe ownership: dnsmasq:nogroup"
 
@@ -189,10 +188,6 @@ fi
 
 # ── Operational scripts ───────────────────────────────────────────────────────
 print_action "Installing operational scripts"
-ic "$BUILD_DIR/pxe-enable"     /usr/local/sbin/pxe-enable     755 pxe-enable
-ic "$BUILD_DIR/pxe-disable"    /usr/local/sbin/pxe-disable    755 pxe-disable
-ic "$BUILD_DIR/pxe-autoupdate" /usr/local/sbin/pxe-autoupdate 755 pxe-autoupdate
-ic "$BUILD_DIR/iso-autobuild"  /usr/local/sbin/iso-autobuild  755 iso-autobuild
 
 # ── Baked ISO answer TOML files (0600; staged by Python orchestrator) ─────────
 ANSWERS_SRC="$BUILD_DIR/iso-answers"
@@ -209,12 +204,6 @@ fi
 
 # ── pxe-autoupdate systemd service + timer ────────────────────────────────────
 print_action "Installing pxe-autoupdate systemd units"
-ic "$BUILD_DIR/pxe-autoupdate.service" \
-    /etc/systemd/system/pxe-autoupdate.service 644 pxe-autoupdate.service
-ic "$BUILD_DIR/pxe-autoupdate.timer" \
-    /etc/systemd/system/pxe-autoupdate.timer 644 pxe-autoupdate.timer
-ic "$BUILD_DIR/iso-autobuild.service" \
-    /etc/systemd/system/iso-autobuild.service 644 iso-autobuild.service
 
 if systemctl list-unit-files --no-legend iso-autobuild.timer 2>/dev/null \
     | grep -q '^iso-autobuild\.timer'; then
