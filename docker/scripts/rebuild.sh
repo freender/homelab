@@ -5,27 +5,31 @@
 set -euo pipefail
 
 PULL_IMAGES=true
-CONFIRM=false
 
 usage() {
     cat <<'EOF'
-Usage: ./rebuild.sh --yes [--pull|--no-pull]
+Usage: ./rebuild.sh [--pull|--no-pull]
 
 Manual destructive recovery for Docker/containerd runtime state on this Docker host.
 
 This deletes disposable Docker runtime metadata and local image/layer/container state:
   /var/lib/containerd
-  /var/lib/docker/{buildkit,containerd,containers,image,network,overlay2,tmp}
+  /var/lib/docker/{buildkit,containerd,containers,image,network,overlay2,swarm,tmp}
 
 This preserves:
-  /var/lib/docker/swarm, backed up and restored
   /var/lib/docker/volumes
   bind-mounted appdata/media outside Docker runtime
 
-After Docker starts, this runs start.sh to recreate compose stacks.
+After Docker starts, this joins the configured swarm only when a join token is
+available, then runs start.sh to recreate compose stacks.
+
+Swarm join token sources, in order:
+  1) DOCKER_SWARM_JOIN_TOKEN environment variable
+  2) /mnt/cache/appdata/.homelab/docker/swarm.token
+
+If neither exists, swarm join is skipped.
 
 Options:
-  --yes                         Required confirmation.
   --pull                        Run start.sh --pull after rebuild. Default.
   --no-pull                     Run start.sh --no-pull after rebuild. Use only if images are guaranteed available.
 EOF
@@ -40,8 +44,12 @@ info() {
     printf '>>> %s\n' "$*"
 }
 
-docker_identity() {
-    docker info --format '{{.Swarm.LocalNodeState}} {{.Swarm.NodeID}}' 2>/dev/null || printf 'unknown -\n'
+load_docker_env() {
+    local env_file="$1"
+
+    [[ -f $env_file ]] || return 0
+    # shellcheck source=/dev/null
+    source "$env_file"
 }
 
 wait_for_docker() {
@@ -57,11 +65,57 @@ wait_for_docker() {
     return 1
 }
 
+swarm_token_file() {
+    printf '%s\n' "$SCRIPT_DIR/.homelab/docker/swarm.token"
+}
+
+read_swarm_token() {
+    local role="$1"
+    local token_file token
+
+    if [[ -n ${DOCKER_SWARM_JOIN_TOKEN:-} ]]; then
+        printf '%s\n' "$DOCKER_SWARM_JOIN_TOKEN"
+        return 0
+    fi
+
+    token_file="$(swarm_token_file)"
+    if [[ -f $token_file ]]; then
+        token="$(tr -d '[:space:]' < "$token_file")"
+        [[ -n $token ]] || die "swarm token file is empty: $token_file"
+        printf '%s\n' "$token"
+        return 0
+    fi
+
+    return 1
+}
+
+join_configured_swarm() {
+    [[ ${DOCKER_SWARM_ENABLED:-false} == "true" ]] || return 0
+
+    local role token join_cmd
+
+    [[ -n ${DOCKER_SWARM_MANAGER_ADDR:-} ]] || die "DOCKER_SWARM_MANAGER_ADDR is not configured"
+    role="${DOCKER_SWARM_NODE_ROLE:-manager}"
+    [[ $role == manager || $role == worker ]] || die "unsupported DOCKER_SWARM_NODE_ROLE: $role"
+
+    if ! token="$(read_swarm_token "$role")"; then
+        info "swarm is enabled, but no join token is available; skipping swarm join"
+        return 0
+    fi
+    [[ -n $token ]] || die "failed to read swarm join token"
+
+    join_cmd=(docker swarm join --token "$token")
+    if [[ -n ${DOCKER_SWARM_ADVERTISE_ADDR:-} ]]; then
+        join_cmd+=(--advertise-addr "$DOCKER_SWARM_ADVERTISE_ADDR")
+    fi
+    join_cmd+=("$DOCKER_SWARM_MANAGER_ADDR")
+
+    info "joining configured swarm via $DOCKER_SWARM_MANAGER_ADDR"
+    "${join_cmd[@]}"
+}
+
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --yes)
-            CONFIRM=true
-            ;;
         --pull)
             PULL_IMAGES=true
             ;;
@@ -80,16 +134,12 @@ while [[ $# -gt 0 ]]; do
 done
 
 [[ ${EUID:-$(id -u)} -eq 0 ]] || die "run as root on the Docker host"
-[[ $CONFIRM == true ]] || die "--yes is required"
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 START_SH="$SCRIPT_DIR/start.sh"
 [[ -x $START_SH ]] || die "start.sh missing or not executable: $START_SH"
+load_docker_env "$SCRIPT_DIR/.homelab/docker/env"
 
-read -r BEFORE_SWARM_STATE BEFORE_SWARM_NODE < <(docker_identity)
-info "swarm identity before rebuild: state=$BEFORE_SWARM_STATE node=$BEFORE_SWARM_NODE"
-
-BACKUP_DIR="/root/homelab-docker-runtime-backup/$(date +%Y%m%d-%H%M%S)"
 info "stopping Docker and containerd"
 systemctl stop docker.service docker.socket containerd.service || true
 sleep 3
@@ -98,12 +148,6 @@ pkill -TERM -x containerd-shim || true
 sleep 3
 pkill -KILL -x docker-proxy || true
 pkill -KILL -x containerd-shim || true
-
-info "backing up swarm identity to $BACKUP_DIR"
-mkdir -p "$BACKUP_DIR"
-if [[ -d /var/lib/docker/swarm ]]; then
-    cp -a /var/lib/docker/swarm "$BACKUP_DIR/swarm"
-fi
 
 info "deleting disposable Docker runtime state"
 rm -rf \
@@ -114,12 +158,10 @@ rm -rf \
     /var/lib/docker/image \
     /var/lib/docker/network \
     /var/lib/docker/overlay2 \
+    /var/lib/docker/swarm \
     /var/lib/docker/tmp
 
 mkdir -p /var/lib/docker
-if [[ ! -d /var/lib/docker/swarm && -d "$BACKUP_DIR/swarm" ]]; then
-    cp -a "$BACKUP_DIR/swarm" /var/lib/docker/
-fi
 
 info "starting containerd and Docker"
 systemctl reset-failed docker.service containerd.service || true
@@ -127,12 +169,7 @@ systemctl start containerd.service
 systemctl start docker.service
 wait_for_docker || die "Docker did not become healthy after runtime rebuild"
 
-read -r AFTER_SWARM_STATE AFTER_SWARM_NODE < <(docker_identity)
-if [[ $BEFORE_SWARM_STATE == active ]]; then
-    [[ $AFTER_SWARM_STATE == active ]] || die "swarm was active before rebuild but is now $AFTER_SWARM_STATE"
-    [[ $AFTER_SWARM_NODE == "$BEFORE_SWARM_NODE" ]] || die "swarm node ID changed: before=$BEFORE_SWARM_NODE after=$AFTER_SWARM_NODE"
-fi
-info "swarm identity after rebuild: state=$AFTER_SWARM_STATE node=$AFTER_SWARM_NODE"
+join_configured_swarm
 
 if [[ $PULL_IMAGES == true ]]; then
     info "recreating compose stacks with image pulls"

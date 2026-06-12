@@ -10,6 +10,24 @@ from ..ssh import HostConnection, build_files, diff_many
 
 REMOTE_ROOT = "/tmp/homelab-docker"
 
+HA_SWARM_DEFAULTS = {
+    "tower": {
+        "manager": "neo",
+        "manager_addr": "neo.freender.internal:2377",
+        "advertise_addr": "10.0.40.10",
+    },
+    "helm": {
+        "manager": "tower",
+        "manager_addr": "tower.freender.internal:2377",
+        "advertise_addr": "10.0.40.245",
+    },
+    "neo": {
+        "manager": "tower",
+        "manager_addr": "tower.freender.internal:2377",
+        "advertise_addr": "10.0.40.18",
+    },
+}
+
 TEMPLATE_FILES = [
     "homelab-docker-update.service",
     "homelab-docker-update.timer",
@@ -50,6 +68,8 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
     update_schedule = str(registry.get(host, "docker.update_schedule", "")).strip()
     update_timer_enabled = "true" if update_schedule else "false"
     dependency_units: tuple[str, ...] = ()
+    swarm_defaults = HA_SWARM_DEFAULTS.get(host, {})
+    swarm_enabled = "true" if swarm_defaults else "false"
 
     templates_dir = root / "docker" / "templates"
     build_dir = root / "docker" / "build" / host
@@ -71,6 +91,16 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
         build_dir / "env",
         {
             "ENABLE_DOCKER_UPDATE_TIMER": update_timer_enabled,
+            "DOCKER_SWARM_ENABLED": swarm_enabled,
+            "DOCKER_SWARM_HOSTNAME": host,
+            "DOCKER_SWARM_NODE_ROLE": "manager" if swarm_enabled == "true" else "",
+            "DOCKER_SWARM_MANAGER": swarm_defaults.get("manager", ""),
+            "DOCKER_SWARM_MANAGER_ADDR": swarm_defaults.get("manager_addr", ""),
+            "DOCKER_SWARM_MANAGER_SSH": swarm_defaults.get("manager", ""),
+            "DOCKER_SWARM_ADVERTISE_ADDR": swarm_defaults.get("advertise_addr", ""),
+            "DOCKER_SWARM_OVERLAY_NAME": "net_overlay" if swarm_enabled == "true" else "",
+            "DOCKER_SWARM_OVERLAY_SUBNET": "10.0.100.0/24" if swarm_enabled == "true" else "",
+            "DOCKER_SWARM_EXPECTED_NODES": "tower helm neo" if swarm_enabled == "true" else "",
         },
     )
 
@@ -84,6 +114,7 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
             root / "docker" / "scripts" / "docker-common.sh",
             "/mnt/cache/appdata/.homelab/docker/docker-common.sh",
         ),
+        (build_dir / "env", "/mnt/cache/appdata/.homelab/docker/env"),
     ]
     if update_timer_enabled == "true":
         diff_pairs += [

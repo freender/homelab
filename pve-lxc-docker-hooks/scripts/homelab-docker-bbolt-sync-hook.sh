@@ -39,7 +39,7 @@ notify_corruption() {
         return 0
     }
 
-    rebuild_cmd="pct exec $vmid -- /mnt/cache/appdata/rebuild.sh --yes"
+    rebuild_cmd="pct exec $vmid -- /mnt/cache/appdata/rebuild.sh"
 
     msg="$(printf \
 '⚠️ *containerd DB corrupt* — CT %s on %s
@@ -50,7 +50,7 @@ bbolt rc: %s
 
 %s
 
-Recommendation: run the Docker runtime rebuild inside the affected CT. It stops Docker/containerd, deletes disposable Docker/containerd runtime state, preserves swarm identity and volumes, then recreates compose stacks.
+Recommendation: run the Docker runtime rebuild inside the affected CT. It stops Docker/containerd, deletes disposable Docker/containerd runtime state including local swarm state, preserves volumes, rejoins the swarm when a join token file is present, then recreates compose stacks.
 
 Manual rebuild:
 `%s`' \

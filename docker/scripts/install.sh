@@ -41,6 +41,11 @@ copy_if_changed "$SCRIPT_DIR/scripts/docker-common.sh" "$HOMELAB_DOCKER_DIR/dock
 [[ $rc -eq 1 ]] || [[ $rc -eq 0 ]] || exit "$rc"
 chmod +x "$HOMELAB_DOCKER_DIR/docker-common.sh"
 
+rc=0
+copy_if_changed "$BUILD_DIR/env" "$HOMELAB_DOCKER_DIR/env" "docker env" || rc=$?
+[[ $rc -eq 1 ]] || [[ $rc -eq 0 ]] || exit "$rc"
+chmod 0644 "$HOMELAB_DOCKER_DIR/env"
+
 units_changed=false
 
 cleanup_legacy_backup_unit() {
