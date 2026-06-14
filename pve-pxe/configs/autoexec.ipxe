@@ -1,8 +1,0 @@
-#!ipxe
-# autoexec.ipxe - TFTP entry point for snponly.efi / ipxe.efi clients (UniFi path).
-# Must be owned dnsmasq:nogroup for tftp-secure mode.
-# pxe-enable enforces the correct ownership on every start.
-
-dhcp
-ifopen
-chain http://10.0.0.50/boot.ipxe

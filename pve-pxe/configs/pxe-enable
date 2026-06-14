@@ -1,23 +1,16 @@
 #!/usr/bin/env bash
-# pxe-enable - Start nginx and dnsmasq PXE services.
+# pxe-enable - Start nginx HTTP Boot service.
 # Safe to run multiple times; idempotent.
 set -euo pipefail
 
-TFTP_ROOT=/srv/tftp
-TFTP_AUTOEXEC="$TFTP_ROOT/autoexec.ipxe"
-DNSMASQ_CONF=/etc/dnsmasq.d/pxe-mgmt.conf
+HTTPBOOT_IPXE=/srv/pxe/httpboot/ipxe.efi
+HTTPBOOT_AUTOEXEC=/srv/pxe/httpboot/autoexec.ipxe
 
-if [[ ! -f "$DNSMASQ_CONF" ]]; then
-    echo "pxe-enable: missing dnsmasq config $DNSMASQ_CONF" >&2
+if [[ ! -f "$HTTPBOOT_IPXE" || ! -f "$HTTPBOOT_AUTOEXEC" ]]; then
+    echo "pxe-enable: missing HTTP Boot files under /srv/pxe/httpboot" >&2
     exit 1
 fi
 
-# Ensure TFTP autoexec file ownership for tftp-secure mode
-if [[ -f "$TFTP_AUTOEXEC" ]]; then
-    chown dnsmasq:nogroup "$TFTP_AUTOEXEC"
-fi
-
 systemctl start nginx
-systemctl start dnsmasq
 
-echo "pxe-enable: nginx and dnsmasq started"
+echo "pxe-enable: nginx started for HTTP Boot"

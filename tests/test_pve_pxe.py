@@ -2,8 +2,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from homelab.templates import render_template
-
 ROOT = Path(__file__).resolve().parents[1]
 PXE_CONFIGS = ROOT / "pve-pxe" / "configs"
 
@@ -12,24 +10,8 @@ def read_config(name: str) -> str:
     return (PXE_CONFIGS / name).read_text(encoding="utf-8")
 
 
-def test_dnsmasq_proxy_range_uses_dnsmasq_supported_syntax(tmp_path: Path) -> None:
-    output = tmp_path / "dnsmasq-pxe.conf"
-
-    render_template(
-        ROOT / "pve-pxe" / "templates" / "dnsmasq-pxe.conf",
-        output,
-        MGMT_IP="10.0.0.50",
-        MGMT_NETWORK="10.0.0.0/24",
-        MGMT_PROXY_NETWORK="10.0.0.0",
-    )
-
-    rendered = output.read_text(encoding="utf-8")
-    assert "dhcp-range=10.0.0.0,proxy,255.255.255.0" in rendered
-    assert "dhcp-range=10.0.0.0/24,proxy" not in rendered
-
-
-def test_tftp_entrypoint_uses_explicit_http_server() -> None:
-    autoexec = read_config("autoexec.ipxe")
+def test_httpboot_entrypoint_uses_explicit_http_server() -> None:
+    autoexec = read_config("httpboot-autoexec.ipxe")
 
     assert "chain http://10.0.0.50/boot.ipxe" in autoexec
     assert "${next-server}" not in autoexec

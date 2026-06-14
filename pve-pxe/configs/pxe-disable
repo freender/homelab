@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# pxe-disable - Stop dnsmasq PXE service.
-# nginx is kept running to serve baked ISOs via /iso/ at all times.
+# pxe-disable - HTTP Boot is controlled by UniFi Network Boot settings.
+# nginx is kept running to serve /httpboot, /boot.ipxe, payloads, and baked ISOs.
 # Safe to run multiple times; idempotent.
 set -euo pipefail
 
-systemctl stop dnsmasq 2>/dev/null || true
+systemctl start nginx
 
-echo "pxe-disable: dnsmasq stopped (nginx kept running for ISO downloads)"
+echo "pxe-disable: no local PXE service to stop; disable UniFi Network Boot if needed"

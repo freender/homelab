@@ -7,7 +7,7 @@ set menu-default cancel
 
 :menu
 menu WARNING: PDM automated Proxmox install is DESTRUCTIVE
-item cancel          Cancel and return to Homelab PXE menu (default ${menu-timeout/1000}s)
+item cancel          Cancel and return to Homelab network boot menu (default ${menu-timeout/1000}s)
 item confirm         START automated install via PDM
 choose --timeout ${menu-timeout} --default ${menu-default} selected || goto cancel
 goto ${selected}

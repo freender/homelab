@@ -80,7 +80,7 @@ MODULES: dict[str, ModuleDefinition] = {
         deploy=deploy_pve_postinstall_webhook,
     ),
     "pve-pxe": ModuleDefinition(
-        name="PVE PXE Boot",
+        name="PVE HTTP Boot",
         deploy=deploy_pve_pxe,
     ),
     "pve-realtek-r8152-dkms": ModuleDefinition(

@@ -36,7 +36,7 @@ IPXE_MENUS = [
     "pve-gui.ipxe",
     "pve-debug.ipxe",
     "pve-serial.ipxe",
-    "autoexec.ipxe",
+    "httpboot-autoexec.ipxe",
 ]
 
 OPERATIONAL_SCRIPTS = [
@@ -53,7 +53,6 @@ STATIC_UNITS = [
 
 FILE_SPECS = (
     FileSpec("pxe-mgmt.conf", f"{PXE_CONFIG_DIR}/pxe-mgmt.conf", "600"),
-    FileSpec("dnsmasq-pxe.conf", "/etc/dnsmasq.d/pxe-mgmt.conf"),
     FileSpec("nginx-pxe.conf", "/etc/nginx/sites-available/pxe"),
     FileSpec("boot.ipxe", "/srv/pxe/boot.ipxe"),
     FileSpec("pdm-auto-warning.ipxe", "/srv/pxe/pdm-auto-warning.ipxe"),
@@ -63,7 +62,7 @@ FILE_SPECS = (
     FileSpec("pve-gui.ipxe", "/srv/pxe/pve-gui.ipxe"),
     FileSpec("pve-debug.ipxe", "/srv/pxe/pve-debug.ipxe"),
     FileSpec("pve-serial.ipxe", "/srv/pxe/pve-serial.ipxe"),
-    FileSpec("autoexec.ipxe", "/srv/tftp/autoexec.ipxe"),
+    FileSpec("httpboot-autoexec.ipxe", "/srv/pxe/httpboot/autoexec.ipxe"),
     FileSpec("pxe-enable", "/usr/local/sbin/pxe-enable", "755"),
     FileSpec("pxe-disable", "/usr/local/sbin/pxe-disable", "755"),
     FileSpec("pxe-autoupdate", "/usr/local/sbin/pxe-autoupdate", "755"),
@@ -108,7 +107,7 @@ def validate(root: Path) -> None:
         if not path.is_file():
             raise ValueError(f"missing required config: {path}")
 
-    for tmpl in ("pxe-mgmt.conf", "dnsmasq-pxe.conf", "nginx-pxe.conf", "pxe-autoupdate.timer"):
+    for tmpl in ("pxe-mgmt.conf", "nginx-pxe.conf", "pxe-autoupdate.timer"):
         path = templates_dir / tmpl
         if not path.is_file():
             raise ValueError(f"missing required template: {path}")
@@ -168,12 +167,9 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
         registry.get(host, "pve-pxe.autoupdate_schedule", "*-*-* 09:00:00")
     )
 
-    # Derive the /24 network for dnsmasq proxyDHCP from the management IP.
     ip_parts = mgmt_ip.split(".")
     if len(ip_parts) != 4:
         raise ValueError(f"pve-pxe.mgmt_ip must be a dotted IPv4 address for {host}")
-    mgmt_network = f"{ip_parts[0]}.{ip_parts[1]}.{ip_parts[2]}.0/24"
-    mgmt_proxy_network = f"{ip_parts[0]}.{ip_parts[1]}.{ip_parts[2]}.0"
 
     configs_dir = root / "pve-pxe" / "configs"
     templates_dir = root / "pve-pxe" / "templates"
@@ -190,13 +186,6 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
         MGMT_IP=mgmt_ip,
         PDM_URL=pdm_url,
         PDM_CERT_FINGERPRINT=pdm_cert_fingerprint,
-    )
-    render_file(
-        templates_dir / "dnsmasq-pxe.conf",
-        build_dir / "dnsmasq-pxe.conf",
-        MGMT_IP=mgmt_ip,
-        MGMT_NETWORK=mgmt_network,
-        MGMT_PROXY_NETWORK=mgmt_proxy_network,
     )
     render_file(
         templates_dir / "nginx-pxe.conf",

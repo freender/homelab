@@ -1,5 +1,5 @@
 #!ipxe
-# boot.ipxe - Safe top-level Homelab PXE menu
+# boot.ipxe - Safe top-level Homelab network boot menu
 # Defaults to local disk after 10 seconds.
 
 set menu-timeout 10000
@@ -7,7 +7,7 @@ set menu-default local
 set pxe-server 10.0.0.50
 
 :menu
-menu Homelab PXE
+menu Homelab Network Boot
 item local           Boot local disk (default 10s)
 item shell           iPXE shell
 item reboot          Reboot

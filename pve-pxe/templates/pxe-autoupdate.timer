@@ -1,5 +1,5 @@
 [Unit]
-Description=Daily auto-update of the Proxmox VE PXE payload
+Description=Daily auto-update of the Proxmox VE HTTP Boot payload
 
 [Timer]
 OnCalendar={{ AUTOUPDATE_SCHEDULE }}

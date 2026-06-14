@@ -1,7 +1,7 @@
 #!/bin/bash
-# install.sh - Deploy PXE service configs.
+# install.sh - Deploy HTTP Boot service configs.
 # Usage: ./scripts/install.sh [hostname]
-# Installs: dnsmasq proxyPXE config, nginx vhost, iPXE menu files, operational
+# Installs: nginx vhost, HTTP Boot iPXE loader, iPXE menu files, operational
 #           scripts (pxe-enable, pxe-disable, pxe-autoupdate, iso-autobuild),
 #           pxe-autoupdate systemd service/timer, and baked ISO answer files.
 # Does NOT stage the Proxmox ISO or initrd — those are managed at runtime by pxe-autoupdate.
@@ -25,7 +25,7 @@ require_dir "$BUILD_DIR" "$BUILD_DIR" || exit 1
 require_file "$BUILD_DIR/file-map.conf" "$BUILD_DIR/file-map.conf" || exit 1
 load_file_map "$BUILD_DIR/file-map.conf"
 
-print_header "PVE PXE"
+print_header "PVE HTTP Boot"
 
 bootstrap_pkgs=()
 command -v curl >/dev/null 2>&1 || bootstrap_pkgs+=(curl)
@@ -57,11 +57,10 @@ fi
 # ── Packages ────────────────────────────────────────────────────────────────
 missing_pkgs=()
 command -v nginx    >/dev/null 2>&1 || missing_pkgs+=(nginx)
-command -v dnsmasq  >/dev/null 2>&1 || missing_pkgs+=(dnsmasq)
 command -v rsync    >/dev/null 2>&1 || missing_pkgs+=(rsync)
 command -v flock    >/dev/null 2>&1 || missing_pkgs+=(util-linux)
 command -v xorriso  >/dev/null 2>&1 || missing_pkgs+=(xorriso)
-[[ -f /usr/lib/ipxe/snponly.efi ]] || missing_pkgs+=(ipxe)
+[[ -f /usr/lib/ipxe/ipxe.efi ]] || missing_pkgs+=(ipxe)
 command -v proxmox-auto-install-assistant >/dev/null 2>&1 \
     || missing_pkgs+=(proxmox-auto-install-assistant)
 if [[ ${#missing_pkgs[@]} -gt 0 ]]; then
@@ -73,14 +72,14 @@ else
 fi
 
 # ── Directory layout ─────────────────────────────────────────────────────────
-mkdir -p /srv/pxe /srv/tftp /etc/homelab-pxe /etc/homelab-pxe/iso-answers /srv/pxe/iso \
+mkdir -p /srv/pxe /srv/pxe/httpboot /etc/homelab-pxe /etc/homelab-pxe/iso-answers /srv/pxe/iso \
          /var/lib/node_exporter/textfile \
          /etc/nginx/sites-available /etc/nginx/sites-enabled \
-         /etc/dnsmasq.d /root/iso
+         /root/iso
 chmod 700 /etc/homelab-pxe/iso-answers
 chmod 755 /srv/pxe/iso
 
-print_action "Cleaning legacy PXE duplicate artifacts"
+print_action "Cleaning legacy duplicate artifacts"
 (
     flock -n 9 || {
         print_warn "pxe-autoupdate is running; skipping artifact cleanup"
@@ -89,7 +88,7 @@ print_action "Cleaning legacy PXE duplicate artifacts"
     rm -rf /srv/pxe.stage /root/iso/pxe-build /srv/pxe.prev/iso
 ) 9>/run/pxe-autoupdate.lock
 
-print_action "Installing managed PXE files"
+print_action "Installing managed HTTP Boot files"
 rc=0
 install_file_map "$BUILD_DIR" || rc=$?
 [[ $rc -eq 0 || $rc -eq 1 ]] || exit "$rc"
@@ -97,15 +96,12 @@ install_file_map "$BUILD_DIR" || rc=$?
 # ── Management config (PDM URL + fingerprint) ────────────────────────────────
 print_action "Installing management config"
 
-# ── dnsmasq proxyPXE ─────────────────────────────────────────────────────────
-print_action "Installing dnsmasq proxyPXE config"
-
-# Disable dnsmasq default config if present (we control via drop-in)
-if [[ -f /etc/dnsmasq.conf ]] && ! grep -q "^#.*managed by homelab" /etc/dnsmasq.conf 2>/dev/null; then
-    print_sub "Disabling dnsmasq default config"
-    mv /etc/dnsmasq.conf /etc/dnsmasq.conf.bak
-    echo "# managed by homelab pve-pxe module" > /etc/dnsmasq.conf
-fi
+# ── Retire legacy proxyPXE/TFTP ──────────────────────────────────────────────
+print_action "Disabling legacy proxyPXE/TFTP"
+systemctl disable --now dnsmasq 2>/dev/null || true
+rm -f /etc/dnsmasq.d/pxe-mgmt.conf
+rm -f /srv/tftp/autoexec.ipxe /srv/tftp/ipxe.efi /srv/tftp/snponly.efi /srv/tftp/undionly.kpxe
+rmdir /srv/tftp 2>/dev/null || true
 
 # ── nginx vhost ───────────────────────────────────────────────────────────────
 print_action "Installing nginx vhost"
@@ -154,21 +150,14 @@ else
     print_warn "no proxmox-ve_*.iso found under /srv/pxe; pve-load.ipxe left unchanged"
 fi
 
-# ── TFTP autoexec (dnsmasq:nogroup for tftp-secure) ──────────────────────────
-print_action "Installing TFTP autoexec"
-chown dnsmasq:nogroup /srv/tftp/autoexec.ipxe
-print_sub "autoexec.ipxe ownership: dnsmasq:nogroup"
-
-print_action "Installing iPXE TFTP binaries"
-for binary in snponly.efi ipxe.efi undionly.kpxe; do
-    src="/usr/lib/ipxe/$binary"
-    if [[ -f "$src" ]]; then
-        install -m 0644 -o dnsmasq -g nogroup "$src" "/srv/tftp/$binary"
-        print_sub "  installed $binary"
-    else
-        print_warn "missing packaged iPXE binary: $src"
-    fi
-done
+print_action "Installing HTTP Boot loader"
+if [[ -f /usr/lib/ipxe/ipxe.efi ]]; then
+    install -m 0644 /usr/lib/ipxe/ipxe.efi /srv/pxe/httpboot/ipxe.efi
+    print_sub "installed /srv/pxe/httpboot/ipxe.efi"
+else
+    print_error "missing packaged iPXE binary: /usr/lib/ipxe/ipxe.efi"
+    exit 1
+fi
 
 # ── PDM answer-auth token ─────────────────────────────────────────────────────
 # Staged by the Python orchestrator from 1Password; mode 600; never logged.
@@ -217,23 +206,19 @@ systemctl enable pxe-autoupdate.timer
 systemctl is-active --quiet pxe-autoupdate.timer || systemctl start pxe-autoupdate.timer
 print_ok "pxe-autoupdate.timer enabled"
 
-if systemctl is-active --quiet dnsmasq; then
-    systemctl restart dnsmasq
-    print_sub "dnsmasq restarted for updated PXE/TFTP config"
-fi
-
 # ── nginx config test + reload ────────────────────────────────────────────────
 if nginx -t 2>/dev/null; then
     print_ok "nginx config valid"
     # Use restart (not reload) so new listen directives take effect.
     systemctl is-active --quiet nginx && systemctl restart nginx || true
 else
-    print_warn "nginx config test failed — PXE services not started"
+    print_warn "nginx config test failed — HTTP Boot service not started"
     exit 1
 fi
 
 print_ok "pve-pxe deploy complete"
-print_sub "Run: pxe-enable   (to start serving before a rebuild window)"
-print_sub "Run: pxe-disable  (to stop serving after a window)"
+print_sub "UniFi Network Boot filename: http://10.0.0.50/httpboot/ipxe.efi"
+print_sub "Run: pxe-enable   (to ensure nginx is serving HTTP Boot)"
+print_sub "Run: pxe-disable  (note: disable UniFi Network Boot to stop clients)"
 print_sub "Run: pxe-autoupdate  (to detect and promote a new PVE ISO)"
 print_sub "Run: iso-autobuild   (to manually rebuild baked offsite ISOs)"

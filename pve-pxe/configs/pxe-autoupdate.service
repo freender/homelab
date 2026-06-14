@@ -1,5 +1,5 @@
 [Unit]
-Description=Auto-update Proxmox VE PXE payload
+Description=Auto-update Proxmox VE HTTP Boot payload
 After=network-online.target
 Wants=network-online.target
 
