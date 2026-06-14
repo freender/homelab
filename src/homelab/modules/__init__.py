@@ -15,11 +15,11 @@ from .pve_autoinstall import deploy as deploy_pve_autoinstall
 from .pve_backup import deploy as deploy_pve_backup
 from .pve_exporters import deploy as deploy_pve_exporters
 from .pve_gpu_passthrough import deploy as deploy_pve_gpu_passthrough
+from .pve_http_boot import deploy as deploy_pve_http_boot
 from .pve_interface_pinning import deploy as deploy_pve_interface_pinning
 from .pve_lxc_docker_hooks import deploy as deploy_pve_lxc_docker_hooks
 from .pve_postinstall import deploy as deploy_pve_postinstall
 from .pve_postinstall_webhook import deploy as deploy_pve_postinstall_webhook
-from .pve_http_boot import deploy as deploy_pve_http_boot
 from .pve_realtek_r8152_dkms import deploy as deploy_pve_realtek_r8152_dkms
 from .pve_zfs_large_block_patch import deploy as deploy_pve_zfs_large_block_patch
 from .pve_zfs_migration_sync_patch import deploy as deploy_pve_zfs_migration_sync_patch
