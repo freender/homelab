@@ -4,7 +4,7 @@
 
 :load
 isset ${pve-kargs} || set pve-kargs ro ramdisk_size=16777216 rw quiet splash=silent
-kernel http://10.0.0.50/vmlinuz initrd=initrd.img ${pve-kargs}
-initrd --name initrd.img http://10.0.0.50/initrd.img
-initrd http://10.0.0.50/proxmox-ve_PLACEHOLDER.iso proxmox.iso
+kernel http://${pxe-server}/vmlinuz initrd=initrd.img ${pve-kargs}
+initrd --name initrd.img http://${pxe-server}/initrd.img
+initrd http://${pxe-server}/proxmox-ve_PLACEHOLDER.iso proxmox.iso
 boot

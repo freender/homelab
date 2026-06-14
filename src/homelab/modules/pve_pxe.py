@@ -27,8 +27,10 @@ POSTINSTALL_WEBHOOK_SECRET_NAME = "pve-postinstall-webhook"
 PXE_CONFIG_DIR = "/etc/homelab-pxe"
 ISO_ANSWER_DIR = f"{PXE_CONFIG_DIR}/iso-answers"
 
+# Static iPXE menus copied verbatim. The entry points (boot.ipxe and
+# httpboot-autoexec.ipxe) are rendered from templates because they bake in the
+# per-host pxe-server IP; every other menu inherits ${pxe-server} via iPXE chain.
 IPXE_MENUS = [
-    "boot.ipxe",
     "pdm-auto-warning.ipxe",
     "pdm-auto.ipxe",
     "pve-load.ipxe",
@@ -36,6 +38,11 @@ IPXE_MENUS = [
     "pve-gui.ipxe",
     "pve-debug.ipxe",
     "pve-serial.ipxe",
+]
+
+# iPXE entry points rendered from templates/ with the host's MGMT_IP.
+IPXE_ENTRY_TEMPLATES = [
+    "boot.ipxe",
     "httpboot-autoexec.ipxe",
 ]
 
@@ -107,7 +114,13 @@ def validate(root: Path) -> None:
         if not path.is_file():
             raise ValueError(f"missing required config: {path}")
 
-    for tmpl in ("pxe-mgmt.conf", "nginx-pxe.conf", "pxe-autoupdate.timer"):
+    required_templates = (
+        "pxe-mgmt.conf",
+        "nginx-pxe.conf",
+        "pxe-autoupdate.timer",
+        *IPXE_ENTRY_TEMPLATES,
+    )
+    for tmpl in required_templates:
         path = templates_dir / tmpl
         if not path.is_file():
             raise ValueError(f"missing required template: {path}")
@@ -197,6 +210,12 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
         build_dir / "pxe-autoupdate.timer",
         AUTOUPDATE_SCHEDULE=autoupdate_schedule,
     )
+    for entry in IPXE_ENTRY_TEMPLATES:
+        render_file(
+            templates_dir / entry,
+            build_dir / entry,
+            MGMT_IP=mgmt_ip,
+        )
     write_file_map(build_dir, FILE_SPECS)
 
     connection = HostConnection(

@@ -1,0 +1,8 @@
+#!ipxe
+# httpboot-autoexec.ipxe - iPXE entry point after UEFI HTTP Boot loads ipxe.efi.
+# Rendered by homelab deploy; do not edit manually.
+
+set pxe-server {{ MGMT_IP }}
+dhcp
+ifopen
+chain http://${pxe-server}/boot.ipxe

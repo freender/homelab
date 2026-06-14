@@ -1,6 +1,0 @@
-#!ipxe
-# httpboot-autoexec.ipxe - iPXE entry point after UEFI HTTP Boot loads ipxe.efi.
-
-dhcp
-ifopen
-chain http://10.0.0.50/boot.ipxe

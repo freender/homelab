@@ -16,7 +16,6 @@ LOCK="/run/pxe-autoupdate.lock"
 # PDM connection details (written by homelab deploy; do not edit here)
 # shellcheck source=/etc/homelab-pxe/pxe-mgmt.conf
 source /etc/homelab-pxe/pxe-mgmt.conf
-PXE_HTTP_BASE="http://${PXE_MGMT_IP}"
 
 log()    { echo "pxe-autoupdate: $*"; }
 metric() {
@@ -93,24 +92,17 @@ rm -f "$STAGE"/proxmox-ve_*.iso
 install -m 0644 "$PXE_BUILD/vmlinuz"    "$STAGE/vmlinuz"
 install -m 0644 "$PXE_BUILD/initrd.img" "$STAGE/initrd.img"
 install -m 0644 "$PXE_BUILD/$prepared_iso" "$STAGE/$prepared_iso"
-sed -i \
-    -e "s#http://\${next-server}#${PXE_HTTP_BASE}#g" \
-    -e "s#http:///##g" \
-    "$STAGE"/*.ipxe
+# iPXE menus resolve the server at runtime via ${pxe-server} (set in the entry
+# points by homelab deploy), so the only per-version rewrite is the ISO filename.
 sed -i -E \
-    -e "s#http://[^/]+/initrd\.img#${PXE_HTTP_BASE}/initrd.img#g" \
-    -e "s#http://[^/]+/proxmox-ve_[^[:space:]]+\.iso#${PXE_HTTP_BASE}/${prepared_iso}#g" \
-    -e "s#proxmox-ve_PLACEHOLDER\.iso#${prepared_iso}#g" \
+    -e "s#proxmox-ve_[^[:space:]]+\.iso#${prepared_iso}#g" \
     "$STAGE/pve-load.ipxe"
-sed -i -E \
-    -e "s#http://[^/]+/pve-load\.ipxe#${PXE_HTTP_BASE}/pve-load.ipxe#g" \
-    "$STAGE/pdm-auto.ipxe"
 
 # 5. Validate staged payload consistency
 grep -q "${prepared_iso}" "$STAGE/pve-load.ipxe" \
     || fail "pve-load.ipxe not pointing at ${prepared_iso}"
-if grep -R "PLACEHOLDER\|\${next-server}" "$STAGE"/*.ipxe >/dev/null; then
-    fail "staged iPXE scripts still contain placeholder server or ISO references"
+if grep -R "PLACEHOLDER" "$STAGE"/*.ipxe >/dev/null; then
+    fail "staged iPXE scripts still contain placeholder ISO references"
 fi
 for f in vmlinuz initrd.img "$prepared_iso" boot.ipxe pve-load.ipxe pdm-auto.ipxe; do
     [[ -s "$STAGE/$f" ]] || fail "staged payload missing $f"

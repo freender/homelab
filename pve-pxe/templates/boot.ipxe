@@ -1,10 +1,11 @@
 #!ipxe
 # boot.ipxe - Safe top-level Homelab network boot menu
+# Rendered by homelab deploy; do not edit manually.
 # Defaults to local disk after 10 seconds.
 
 set menu-timeout 10000
 set menu-default local
-set pxe-server 10.0.0.50
+set pxe-server {{ MGMT_IP }}
 
 :menu
 menu Homelab Network Boot

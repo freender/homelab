@@ -93,9 +93,6 @@ rc=0
 install_file_map "$BUILD_DIR" || rc=$?
 [[ $rc -eq 0 || $rc -eq 1 ]] || exit "$rc"
 
-# ── Management config (PDM URL + fingerprint) ────────────────────────────────
-print_action "Installing management config"
-
 # ── Retire legacy proxyPXE/TFTP ──────────────────────────────────────────────
 print_action "Disabling legacy proxyPXE/TFTP"
 systemctl disable --now dnsmasq 2>/dev/null || true
@@ -116,34 +113,19 @@ if [[ -L /etc/nginx/sites-enabled/default ]]; then
     print_sub "Disabled nginx default site"
 fi
 
-# ── iPXE menu files ───────────────────────────────────────────────────────────
-print_action "Installing iPXE menu files"
-ipxe_files=(
-    boot.ipxe
-    pdm-auto-warning.ipxe
-    pdm-auto.ipxe
-    pve-load.ipxe
-    pve-tui.ipxe
-    pve-gui.ipxe
-    pve-debug.ipxe
-    pve-serial.ipxe
-)
-for f in "${ipxe_files[@]}"; do
-    require_file "/srv/pxe/$f" "/srv/pxe/$f" || exit 1
-done
-
-if [[ -r /etc/homelab-pxe/pxe-mgmt.conf ]]; then
-    # shellcheck source=/dev/null
-    source /etc/homelab-pxe/pxe-mgmt.conf
-fi
+# ── iPXE menus: point pve-load.ipxe at the current ISO ────────────────────────
+# install_file_map already installed every iPXE menu. Menus resolve the server
+# at runtime via ${pxe-server} (set in the entry points), so the only fix-up
+# here is replacing the PLACEHOLDER ISO name on a fresh host that has not yet
+# run pxe-autoupdate. Once pxe-autoupdate promotes a real ISO, it owns this.
+print_action "Pointing pve-load.ipxe at current ISO"
 current_iso="$(find /srv/pxe -maxdepth 1 -name 'proxmox-ve_*auto*.iso' -printf '%f\n' 2>/dev/null | sort -V | tail -1)"
 if [[ -z "$current_iso" ]]; then
     current_iso="$(find /srv/pxe -maxdepth 1 -name 'proxmox-ve_*.iso' -printf '%f\n' 2>/dev/null | sort -V | tail -1)"
 fi
 if [[ -n "$current_iso" ]]; then
     sed -i -E \
-        -e "s#http://[^/]+/proxmox-ve_[^[:space:]]+\.iso#http://${PXE_MGMT_IP:-10.0.0.50}/${current_iso}#g" \
-        -e "s#proxmox-ve_PLACEHOLDER\.iso#${current_iso}#g" \
+        -e "s#proxmox-ve_[^[:space:]]+\.iso#${current_iso}#g" \
         /srv/pxe/pve-load.ipxe
     print_sub "pve-load.ipxe points at $current_iso"
 else
@@ -174,9 +156,6 @@ else
         print_warn "Token not staged and not present on host — run deploy online to install from 1Password"
     fi
 fi
-
-# ── Operational scripts ───────────────────────────────────────────────────────
-print_action "Installing operational scripts"
 
 # ── Baked ISO answer TOML files (0600; staged by Python orchestrator) ─────────
 ANSWERS_SRC="$BUILD_DIR/iso-answers"
@@ -217,7 +196,11 @@ else
 fi
 
 print_ok "pve-pxe deploy complete"
-print_sub "UniFi Network Boot filename: http://10.0.0.50/httpboot/ipxe.efi"
+if [[ -r /etc/homelab-pxe/pxe-mgmt.conf ]]; then
+    # shellcheck source=/dev/null
+    source /etc/homelab-pxe/pxe-mgmt.conf
+fi
+print_sub "UniFi Network Boot filename: http://${PXE_MGMT_IP:-10.0.0.50}/httpboot/ipxe.efi"
 print_sub "Run: pxe-enable   (to ensure nginx is serving HTTP Boot)"
 print_sub "Run: pxe-disable  (note: disable UniFi Network Boot to stop clients)"
 print_sub "Run: pxe-autoupdate  (to detect and promote a new PVE ISO)"
