@@ -12,8 +12,8 @@ from ..ssh import HostConnection, build_files, diff_many
 REMOTE_ROOT = "/tmp/homelab-pve-postinstall"
 NOTIFY_SCRIPT = "notify-failure.sh"
 NOTIFY_SERVICE = "homelab-notify-failure@.service"
-PIKVM_ROUTES_SCRIPT = "homelab-cinci-pikvm-routes"
-PIKVM_ROUTES_SERVICE = "homelab-cinci-pikvm-routes.service"
+SITE_ROUTES_SCRIPT = "homelab-site-routes"
+SITE_ROUTES_SERVICE = "homelab-site-routes.service"
 PVE_FILES = [
     "proxmox.sources",
     "ceph.sources",
@@ -24,15 +24,15 @@ PVE_FILES = [
     NOTIFY_SCRIPT,
     NOTIFY_SERVICE,
     "homelab-pve-cluster-rejoin-helper",
-    PIKVM_ROUTES_SCRIPT,
-    PIKVM_ROUTES_SERVICE,
+    SITE_ROUTES_SCRIPT,
+    SITE_ROUTES_SERVICE,
 ]
 GENERATED_FILES = {
     NOTIFY_SCRIPT,
     NOTIFY_SERVICE,
     "homelab-pve-cluster-rejoin-helper",
-    PIKVM_ROUTES_SCRIPT,
-    PIKVM_ROUTES_SERVICE,
+    SITE_ROUTES_SCRIPT,
+    SITE_ROUTES_SERVICE,
 }
 
 REMOTE_PATHS = {
@@ -45,15 +45,15 @@ REMOTE_PATHS = {
     NOTIFY_SCRIPT: "/usr/local/bin/homelab-notify-failure",
     NOTIFY_SERVICE: "/etc/systemd/system/homelab-notify-failure@.service",
     "homelab-pve-cluster-rejoin-helper": "/usr/local/sbin/homelab-pve-cluster-rejoin-helper",
-    PIKVM_ROUTES_SCRIPT: "/usr/local/sbin/homelab-cinci-pikvm-routes",
-    PIKVM_ROUTES_SERVICE: "/etc/systemd/system/homelab-cinci-pikvm-routes.service",
+    SITE_ROUTES_SCRIPT: "/usr/local/sbin/homelab-site-routes",
+    SITE_ROUTES_SERVICE: "/etc/systemd/system/homelab-site-routes.service",
 }
 
 MODES = {
     "pve-remove-nag.sh": "755",
     NOTIFY_SCRIPT: "755",
     "homelab-pve-cluster-rejoin-helper": "755",
-    PIKVM_ROUTES_SCRIPT: "755",
+    SITE_ROUTES_SCRIPT: "755",
 }
 FILE_SPECS = tuple(
     FileSpec(file_name, REMOTE_PATHS[file_name], MODES.get(file_name, "644"))
@@ -175,7 +175,7 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
         NOTIFY_SCRIPT="/usr/local/bin/homelab-notify-failure",
     )
     build_cluster_rejoin_helper(root, build_dir)
-    build_pikvm_routes(root, host, build_dir)
+    build_site_routes(root, host, build_dir)
 
     write_file_map(build_dir, FILE_SPECS)
     build_network_interfaces_bundle(root, host, build_dir)
@@ -202,10 +202,10 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
             print_sub("Network interfaces subfeature: enabled")
         else:
             print_sub("Network interfaces subfeature: disabled")
-        if (build_dir / PIKVM_ROUTES_SCRIPT).is_file():
-            print_sub("Pi-KVM routes subfeature: enabled")
+        if (build_dir / SITE_ROUTES_SCRIPT).is_file():
+            print_sub("Site routes subfeature: enabled")
         else:
-            print_sub("Pi-KVM routes subfeature: disabled")
+            print_sub("Site routes subfeature: disabled")
         return
 
     stage_and_install(
@@ -254,10 +254,10 @@ def build_network_interfaces_bundle(root: Path, host: str, build_dir: Path) -> N
     )
 
 
-def build_pikvm_routes(root: Path, host: str, build_dir: Path) -> None:
+def build_site_routes(root: Path, host: str, build_dir: Path) -> None:
     registry = default_registry(root)
     try:
-        config = registry.get(host, "pve-postinstall.pikvm_routes")
+        config = registry.get(host, "pve-postinstall.site_routes")
     except HostLookupError:
         return
 
@@ -269,15 +269,15 @@ def build_pikvm_routes(root: Path, host: str, build_dir: Path) -> None:
     subnets = config.get("subnets", [])
     host_records = config.get("host_records", [])
     if not gateway:
-        raise ValueError(f"pve-postinstall.pikvm_routes.gateway required for {host}")
+        raise ValueError(f"pve-postinstall.site_routes.gateway required for {host}")
     if not interface:
-        raise ValueError(f"pve-postinstall.pikvm_routes.interface required for {host}")
+        raise ValueError(f"pve-postinstall.site_routes.interface required for {host}")
     if not isinstance(subnets, list) or not subnets:
         raise ValueError(
-            f"pve-postinstall.pikvm_routes.subnets must be a non-empty list for {host}"
+            f"pve-postinstall.site_routes.subnets must be a non-empty list for {host}"
         )
     if not isinstance(host_records, list):
-        raise ValueError(f"pve-postinstall.pikvm_routes.host_records must be a list for {host}")
+        raise ValueError(f"pve-postinstall.site_routes.host_records must be a list for {host}")
 
     lines = [
         "#!/bin/sh",
@@ -297,11 +297,11 @@ def build_pikvm_routes(root: Path, host: str, build_dir: Path) -> None:
     )
     for record in host_records:
         if not isinstance(record, dict):
-            raise ValueError(f"invalid pikvm_routes.host_records entry for {host}")
+            raise ValueError(f"invalid site_routes.host_records entry for {host}")
         ip = str(record.get("ip", "")).strip()
         names_raw = record.get("names", [])
         if not ip or not isinstance(names_raw, list) or not names_raw:
-            raise ValueError(f"pikvm_routes.host_records entries need ip and names for {host}")
+            raise ValueError(f"site_routes.host_records entries need ip and names for {host}")
         names = " ".join(str(name).strip() for name in names_raw if str(name).strip())
         first_name = names.split(" ", 1)[0]
         escaped_ip = ip.replace(".", r"\.")
@@ -314,18 +314,18 @@ def build_pikvm_routes(root: Path, host: str, build_dir: Path) -> None:
                 "fi",
             ]
         )
-    (build_dir / PIKVM_ROUTES_SCRIPT).write_text("\n".join(lines) + "\n", encoding="utf-8")
-    (build_dir / PIKVM_ROUTES_SERVICE).write_text(
+    (build_dir / SITE_ROUTES_SCRIPT).write_text("\n".join(lines) + "\n", encoding="utf-8")
+    (build_dir / SITE_ROUTES_SERVICE).write_text(
         "\n".join(
             [
                 "[Unit]",
-                "Description=Cinci routes via relocated Pi-KVM WireGuard router",
+                "Description=Homelab site routes",
                 "After=network-online.target",
                 "Wants=network-online.target",
                 "",
                 "[Service]",
                 "Type=oneshot",
-                "ExecStart=/usr/local/sbin/homelab-cinci-pikvm-routes",
+                "ExecStart=/usr/local/sbin/homelab-site-routes",
                 "RemainAfterExit=yes",
                 "",
                 "[Install]",

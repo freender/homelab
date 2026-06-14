@@ -277,15 +277,19 @@ install_other_subfeatures() {
         print_sub "Network interfaces not configured; skipping"
     fi
 
-    if [[ -f "$BUILD_DIR/homelab-cinci-pikvm-routes" ]]; then
-        print_sub "Configuring Pi-KVM routed access..."
-        install_file homelab-cinci-pikvm-routes || return 1
-        install_file homelab-cinci-pikvm-routes.service || return 1
+    if [[ -f "$BUILD_DIR/homelab-site-routes" ]]; then
+        print_sub "Configuring site routes..."
+        if systemctl list-unit-files homelab-cinci-pikvm-routes.service >/dev/null 2>&1; then
+            systemctl disable --now homelab-cinci-pikvm-routes.service >/dev/null 2>&1 || true
+            rm -f /etc/systemd/system/homelab-cinci-pikvm-routes.service /usr/local/sbin/homelab-cinci-pikvm-routes
+        fi
+        install_file homelab-site-routes || return 1
+        install_file homelab-site-routes.service || return 1
         systemctl daemon-reload
-        systemctl enable --now homelab-cinci-pikvm-routes.service >/dev/null
-        print_ok "homelab-cinci-pikvm-routes.service enabled"
+        systemctl enable --now homelab-site-routes.service >/dev/null
+        print_ok "homelab-site-routes.service enabled"
     else
-        print_sub "Pi-KVM routed access not configured; skipping"
+        print_sub "Site routes not configured; skipping"
     fi
 }
 
