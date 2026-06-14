@@ -70,9 +70,13 @@ def validate_standalone_backup_config(root: Path, host: str) -> None:
         storage_names.add(name)
         username = str(storage.get("username", "")).strip()
         password_var = str(storage.get("password_var", "")).strip()
-        if password_var == "PBS_BACKUP_XUR_CINCI_PASSWORD" and "!" not in username:
+        xur_token_vars = {
+            "PBS_BACKUP_XUR_CINCI_PASSWORD",
+            "PBS_BACKUP_XUR_COTTONWOOD_PASSWORD",
+        }
+        if password_var in xur_token_vars and "!" not in username:
             raise ValueError(
-                f"{host}: Xur Cinci PBS storage {name!r} must use an API token username"
+                f"{host}: Xur PBS storage {name!r} must use an API token username"
             )
 
     seen_jobs: set[tuple[str, str, str, str]] = set()
