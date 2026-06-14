@@ -2,9 +2,9 @@
 # install.sh - Deploy HTTP Boot service configs.
 # Usage: ./scripts/install.sh [hostname]
 # Installs: nginx vhost, HTTP Boot iPXE loader, iPXE menu files, operational
-#           scripts (pxe-enable, pxe-disable, pxe-autoupdate, iso-autobuild),
-#           pxe-autoupdate systemd service/timer, and baked ISO answer files.
-# Does NOT stage the Proxmox ISO or initrd — those are managed at runtime by pxe-autoupdate.
+#           scripts, pve-http-boot-autoupdate systemd service/timer, and baked
+#           ISO answer files.
+# Does NOT stage the Proxmox ISO or initrd — those are managed at runtime by pve-http-boot-autoupdate.
 
 set -euo pipefail
 
@@ -72,21 +72,21 @@ else
 fi
 
 # ── Directory layout ─────────────────────────────────────────────────────────
-mkdir -p /srv/pxe /srv/pxe/httpboot /etc/homelab-pxe /etc/homelab-pxe/iso-answers /srv/pxe/iso \
+mkdir -p /srv/httpboot /srv/httpboot/httpboot /etc/homelab-http-boot /etc/homelab-http-boot/iso-answers /srv/httpboot/iso \
          /var/lib/node_exporter/textfile \
          /etc/nginx/sites-available /etc/nginx/sites-enabled \
          /root/iso
-chmod 700 /etc/homelab-pxe/iso-answers
-chmod 755 /srv/pxe/iso
+chmod 700 /etc/homelab-http-boot/iso-answers
+chmod 755 /srv/httpboot/iso
 
-print_action "Cleaning legacy duplicate artifacts"
+print_action "Cleaning duplicate artifacts"
 (
     flock -n 9 || {
-        print_warn "pxe-autoupdate is running; skipping artifact cleanup"
+        print_warn "pve-http-boot-autoupdate is running; skipping artifact cleanup"
         exit 0
     }
-    rm -rf /srv/pxe.stage /root/iso/pxe-build /srv/pxe.prev/iso
-) 9>/run/pxe-autoupdate.lock
+    rm -rf /srv/httpboot.stage /root/iso/http-boot-build /srv/httpboot.prev/iso
+) 9>/run/pve-http-boot-autoupdate.lock
 
 print_action "Installing managed HTTP Boot files"
 rc=0
@@ -96,16 +96,16 @@ install_file_map "$BUILD_DIR" || rc=$?
 # ── Retire legacy proxyPXE/TFTP ──────────────────────────────────────────────
 print_action "Disabling legacy proxyPXE/TFTP"
 systemctl disable --now dnsmasq 2>/dev/null || true
-rm -f /etc/dnsmasq.d/pxe-mgmt.conf
 rm -f /srv/tftp/autoexec.ipxe /srv/tftp/ipxe.efi /srv/tftp/snponly.efi /srv/tftp/undionly.kpxe
 rmdir /srv/tftp 2>/dev/null || true
 
 # ── nginx vhost ───────────────────────────────────────────────────────────────
 print_action "Installing nginx vhost"
 
-if [[ ! -L /etc/nginx/sites-enabled/pxe ]]; then
-    ln -sf /etc/nginx/sites-available/pxe /etc/nginx/sites-enabled/pxe
-    print_sub "Enabled nginx pxe site"
+rm -f /etc/nginx/sites-enabled/pxe
+if [[ ! -L /etc/nginx/sites-enabled/http-boot ]]; then
+    ln -sf /etc/nginx/sites-available/http-boot /etc/nginx/sites-enabled/http-boot
+    print_sub "Enabled nginx http-boot site"
 fi
 # Disable default nginx site if enabled
 if [[ -L /etc/nginx/sites-enabled/default ]]; then
@@ -115,27 +115,27 @@ fi
 
 # ── iPXE menus: point pve-load.ipxe at the current ISO ────────────────────────
 # install_file_map already installed every iPXE menu. Menus resolve the server
-# at runtime via ${pxe-server} (set in the entry points), so the only fix-up
+# at runtime via ${http-boot-server} (set in the entry points), so the only fix-up
 # here is replacing the PLACEHOLDER ISO name on a fresh host that has not yet
-# run pxe-autoupdate. Once pxe-autoupdate promotes a real ISO, it owns this.
+# run pve-http-boot-autoupdate. Once pve-http-boot-autoupdate promotes a real ISO, it owns this.
 print_action "Pointing pve-load.ipxe at current ISO"
-current_iso="$(find /srv/pxe -maxdepth 1 -name 'proxmox-ve_*auto*.iso' -printf '%f\n' 2>/dev/null | sort -V | tail -1)"
+current_iso="$(find /srv/httpboot -maxdepth 1 -name 'proxmox-ve_*auto*.iso' -printf '%f\n' 2>/dev/null | sort -V | tail -1)"
 if [[ -z "$current_iso" ]]; then
-    current_iso="$(find /srv/pxe -maxdepth 1 -name 'proxmox-ve_*.iso' -printf '%f\n' 2>/dev/null | sort -V | tail -1)"
+    current_iso="$(find /srv/httpboot -maxdepth 1 -name 'proxmox-ve_*.iso' -printf '%f\n' 2>/dev/null | sort -V | tail -1)"
 fi
 if [[ -n "$current_iso" ]]; then
     sed -i -E \
         -e "s#proxmox-ve_[^[:space:]]+\.iso#${current_iso}#g" \
-        /srv/pxe/pve-load.ipxe
+        /srv/httpboot/pve-load.ipxe
     print_sub "pve-load.ipxe points at $current_iso"
 else
-    print_warn "no proxmox-ve_*.iso found under /srv/pxe; pve-load.ipxe left unchanged"
+    print_warn "no proxmox-ve_*.iso found under /srv/httpboot; pve-load.ipxe left unchanged"
 fi
 
 print_action "Installing HTTP Boot loader"
 if [[ -f /usr/lib/ipxe/ipxe.efi ]]; then
-    install -m 0644 /usr/lib/ipxe/ipxe.efi /srv/pxe/httpboot/ipxe.efi
-    print_sub "installed /srv/pxe/httpboot/ipxe.efi"
+    install -m 0644 /usr/lib/ipxe/ipxe.efi /srv/httpboot/httpboot/ipxe.efi
+    print_sub "installed /srv/httpboot/httpboot/ipxe.efi"
 else
     print_error "missing packaged iPXE binary: /usr/lib/ipxe/ipxe.efi"
     exit 1
@@ -163,15 +163,15 @@ if [[ -d "$ANSWERS_SRC" ]] && [[ -n "$(ls -A "$ANSWERS_SRC" 2>/dev/null)" ]]; th
     print_action "Installing baked ISO answer TOML files"
     for f in "$ANSWERS_SRC"/*.toml; do
         name="$(basename "$f")"
-        install -m 0600 "$f" "/etc/homelab-pxe/iso-answers/$name"
+        install -m 0600 "$f" "/etc/homelab-http-boot/iso-answers/$name"
         print_sub "  installed $name"
     done
 else
     print_sub "No new baked ISO answer files staged"
 fi
 
-# ── pxe-autoupdate systemd service + timer ────────────────────────────────────
-print_action "Installing pxe-autoupdate systemd units"
+# ── pve-http-boot-autoupdate systemd service + timer ──────────────────────────
+print_action "Installing pve-http-boot-autoupdate systemd units"
 
 if systemctl list-unit-files --no-legend iso-autobuild.timer 2>/dev/null \
     | grep -q '^iso-autobuild\.timer'; then
@@ -181,9 +181,9 @@ if systemctl list-unit-files --no-legend iso-autobuild.timer 2>/dev/null \
 fi
 
 systemctl daemon-reload || true
-systemctl enable pxe-autoupdate.timer
-systemctl is-active --quiet pxe-autoupdate.timer || systemctl start pxe-autoupdate.timer
-print_ok "pxe-autoupdate.timer enabled"
+systemctl enable pve-http-boot-autoupdate.timer
+systemctl is-active --quiet pve-http-boot-autoupdate.timer || systemctl start pve-http-boot-autoupdate.timer
+print_ok "pve-http-boot-autoupdate.timer enabled"
 
 # ── nginx config test + reload ────────────────────────────────────────────────
 if nginx -t 2>/dev/null; then
@@ -195,13 +195,13 @@ else
     exit 1
 fi
 
-print_ok "pve-pxe deploy complete"
-if [[ -r /etc/homelab-pxe/pxe-mgmt.conf ]]; then
+print_ok "pve-http-boot deploy complete"
+if [[ -r /etc/homelab-http-boot/http-boot-mgmt.conf ]]; then
     # shellcheck source=/dev/null
-    source /etc/homelab-pxe/pxe-mgmt.conf
+    source /etc/homelab-http-boot/http-boot-mgmt.conf
 fi
-print_sub "UniFi Network Boot filename: http://${PXE_MGMT_IP:-10.0.0.50}/httpboot/ipxe.efi"
-print_sub "Run: pxe-enable   (to ensure nginx is serving HTTP Boot)"
-print_sub "Run: pxe-disable  (note: disable UniFi Network Boot to stop clients)"
-print_sub "Run: pxe-autoupdate  (to detect and promote a new PVE ISO)"
+print_sub "UniFi Network Boot filename: http://${HTTP_BOOT_MGMT_IP:-10.0.0.50}/httpboot/ipxe.efi"
+print_sub "Run: pve-http-boot-enable   (to ensure nginx is serving HTTP Boot)"
+print_sub "Run: pve-http-boot-disable  (note: disable UniFi Network Boot to stop clients)"
+print_sub "Run: pve-http-boot-autoupdate  (to detect and promote a new PVE ISO)"
 print_sub "Run: iso-autobuild   (to manually rebuild baked offsite ISOs)"

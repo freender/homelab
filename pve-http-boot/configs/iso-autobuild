@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # iso-autobuild - Build baked PVE install ISOs for offsite hosts.
-# Reads per-host answer TOML files from /etc/homelab-pxe/iso-answers/<host>.toml.
-# Outputs /srv/pxe/iso/proxmox-ve-<host>-auto.iso (replaces previous).
-# Called by pxe-autoupdate after a new base ISO is promoted; safe to run manually.
+# Reads per-host answer TOML files from /etc/homelab-http-boot/iso-answers/<host>.toml.
+# Outputs /srv/httpboot/iso/proxmox-ve-<host>-auto.iso (replaces previous).
+# Called by pve-http-boot-autoupdate after a new base ISO is promoted; safe to run manually.
 set -euo pipefail
 
-ANSWER_DIR="/etc/homelab-pxe/iso-answers"
+ANSWER_DIR="/etc/homelab-http-boot/iso-answers"
 ISO_BASE_DIR="/root/iso"
-ISO_SERVE_DIR="/srv/pxe/iso"
+ISO_SERVE_DIR="/srv/httpboot/iso"
 METRIC="/var/lib/node_exporter/textfile/iso_autobuild.prom"
 LOCK="/run/iso-autobuild.lock"
 
@@ -32,7 +32,7 @@ fi
 
 # Find latest base ISO.
 latest_iso="$(ls -1t "$ISO_BASE_DIR"/proxmox-ve_*.iso 2>/dev/null | head -1)"
-[[ -n "$latest_iso" ]] || fail "no base ISO found in $ISO_BASE_DIR; run pxe-autoupdate first"
+[[ -n "$latest_iso" ]] || fail "no base ISO found in $ISO_BASE_DIR; run pve-http-boot-autoupdate first"
 log "base ISO: $(basename "$latest_iso")"
 
 # Find answer files.

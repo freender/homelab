@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# pve-http-boot-enable - Start nginx HTTP Boot service.
+# Safe to run multiple times; idempotent.
+set -euo pipefail
+
+HTTPBOOT_IPXE=/srv/httpboot/httpboot/ipxe.efi
+HTTPBOOT_AUTOEXEC=/srv/httpboot/httpboot/autoexec.ipxe
+
+if [[ ! -f "$HTTPBOOT_IPXE" || ! -f "$HTTPBOOT_AUTOEXEC" ]]; then
+    echo "pve-http-boot-enable: missing HTTP Boot files under /srv/httpboot/httpboot" >&2
+    exit 1
+fi
+
+systemctl start nginx
+
+echo "pve-http-boot-enable: nginx started for HTTP Boot"

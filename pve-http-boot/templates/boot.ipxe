@@ -5,7 +5,7 @@
 
 set menu-timeout 10000
 set menu-default local
-set pxe-server {{ MGMT_IP }}
+set http-boot-server {{ MGMT_IP }}
 
 :menu
 menu Homelab Network Boot
@@ -31,16 +31,16 @@ goto menu
 reboot
 
 :pdm-auto
-chain http://${pxe-server}/pdm-auto-warning.ipxe
+chain http://${http-boot-server}/pdm-auto-warning.ipxe
 
 :pve-tui
-chain http://${pxe-server}/pve-tui.ipxe
+chain http://${http-boot-server}/pve-tui.ipxe
 
 :pve-gui
-chain http://${pxe-server}/pve-gui.ipxe
+chain http://${http-boot-server}/pve-gui.ipxe
 
 :pve-debug
-chain http://${pxe-server}/pve-debug.ipxe
+chain http://${http-boot-server}/pve-debug.ipxe
 
 :pve-serial
-chain http://${pxe-server}/pve-serial.ipxe
+chain http://${http-boot-server}/pve-serial.ipxe

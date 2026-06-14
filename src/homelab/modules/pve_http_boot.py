@@ -21,15 +21,15 @@ from .pve_autoinstall import (
     _root_password_secret,
 )
 
-REMOTE_ROOT = "/tmp/homelab-pve-pxe"
-SECRET_NAME = "pve-pxe-token"
+REMOTE_ROOT = "/tmp/homelab-pve-http-boot"
+SECRET_NAME = "pve-http-boot-token"
 POSTINSTALL_WEBHOOK_SECRET_NAME = "pve-postinstall-webhook"
-PXE_CONFIG_DIR = "/etc/homelab-pxe"
-ISO_ANSWER_DIR = f"{PXE_CONFIG_DIR}/iso-answers"
+HTTP_BOOT_CONFIG_DIR = "/etc/homelab-http-boot"
+ISO_ANSWER_DIR = f"{HTTP_BOOT_CONFIG_DIR}/iso-answers"
 
 # Static iPXE menus copied verbatim. The entry points (boot.ipxe and
 # httpboot-autoexec.ipxe) are rendered from templates because they bake in the
-# per-host pxe-server IP; every other menu inherits ${pxe-server} via iPXE chain.
+# per-host HTTP Boot server IP; every other menu inherits it via iPXE chain.
 IPXE_MENUS = [
     "pdm-auto-warning.ipxe",
     "pdm-auto.ipxe",
@@ -47,35 +47,41 @@ IPXE_ENTRY_TEMPLATES = [
 ]
 
 OPERATIONAL_SCRIPTS = [
-    "pxe-enable",
-    "pxe-disable",
-    "pxe-autoupdate",
+    "pve-http-boot-enable",
+    "pve-http-boot-disable",
+    "pve-http-boot-autoupdate",
     "iso-autobuild",
 ]
 
 STATIC_UNITS = [
-    "pxe-autoupdate.service",
+    "pve-http-boot-autoupdate.service",
     "iso-autobuild.service",
 ]
 
 FILE_SPECS = (
-    FileSpec("pxe-mgmt.conf", f"{PXE_CONFIG_DIR}/pxe-mgmt.conf", "600"),
-    FileSpec("nginx-pxe.conf", "/etc/nginx/sites-available/pxe"),
-    FileSpec("boot.ipxe", "/srv/pxe/boot.ipxe"),
-    FileSpec("pdm-auto-warning.ipxe", "/srv/pxe/pdm-auto-warning.ipxe"),
-    FileSpec("pdm-auto.ipxe", "/srv/pxe/pdm-auto.ipxe"),
-    FileSpec("pve-load.ipxe", "/srv/pxe/pve-load.ipxe"),
-    FileSpec("pve-tui.ipxe", "/srv/pxe/pve-tui.ipxe"),
-    FileSpec("pve-gui.ipxe", "/srv/pxe/pve-gui.ipxe"),
-    FileSpec("pve-debug.ipxe", "/srv/pxe/pve-debug.ipxe"),
-    FileSpec("pve-serial.ipxe", "/srv/pxe/pve-serial.ipxe"),
-    FileSpec("httpboot-autoexec.ipxe", "/srv/pxe/httpboot/autoexec.ipxe"),
-    FileSpec("pxe-enable", "/usr/local/sbin/pxe-enable", "755"),
-    FileSpec("pxe-disable", "/usr/local/sbin/pxe-disable", "755"),
-    FileSpec("pxe-autoupdate", "/usr/local/sbin/pxe-autoupdate", "755"),
+    FileSpec("http-boot-mgmt.conf", f"{HTTP_BOOT_CONFIG_DIR}/http-boot-mgmt.conf", "600"),
+    FileSpec("nginx-http-boot.conf", "/etc/nginx/sites-available/http-boot"),
+    FileSpec("boot.ipxe", "/srv/httpboot/boot.ipxe"),
+    FileSpec("pdm-auto-warning.ipxe", "/srv/httpboot/pdm-auto-warning.ipxe"),
+    FileSpec("pdm-auto.ipxe", "/srv/httpboot/pdm-auto.ipxe"),
+    FileSpec("pve-load.ipxe", "/srv/httpboot/pve-load.ipxe"),
+    FileSpec("pve-tui.ipxe", "/srv/httpboot/pve-tui.ipxe"),
+    FileSpec("pve-gui.ipxe", "/srv/httpboot/pve-gui.ipxe"),
+    FileSpec("pve-debug.ipxe", "/srv/httpboot/pve-debug.ipxe"),
+    FileSpec("pve-serial.ipxe", "/srv/httpboot/pve-serial.ipxe"),
+    FileSpec("httpboot-autoexec.ipxe", "/srv/httpboot/httpboot/autoexec.ipxe"),
+    FileSpec("pve-http-boot-enable", "/usr/local/sbin/pve-http-boot-enable", "755"),
+    FileSpec("pve-http-boot-disable", "/usr/local/sbin/pve-http-boot-disable", "755"),
+    FileSpec("pve-http-boot-autoupdate", "/usr/local/sbin/pve-http-boot-autoupdate", "755"),
     FileSpec("iso-autobuild", "/usr/local/sbin/iso-autobuild", "755"),
-    FileSpec("pxe-autoupdate.service", "/etc/systemd/system/pxe-autoupdate.service"),
-    FileSpec("pxe-autoupdate.timer", "/etc/systemd/system/pxe-autoupdate.timer"),
+    FileSpec(
+        "pve-http-boot-autoupdate.service",
+        "/etc/systemd/system/pve-http-boot-autoupdate.service",
+    ),
+    FileSpec(
+        "pve-http-boot-autoupdate.timer",
+        "/etc/systemd/system/pve-http-boot-autoupdate.timer",
+    ),
     FileSpec("iso-autobuild.service", "/etc/systemd/system/iso-autobuild.service"),
 )
 
@@ -88,10 +94,10 @@ def deploy(
     session: DeploySession,
 ) -> int:
     registry = default_registry(root)
-    supported_hosts = registry.list_hosts(feature="pve-pxe")
+    supported_hosts = registry.list_hosts(feature="pve-http-boot")
     hosts = registry.filter_hosts(requested_host, supported_hosts)
     if not hosts:
-        print_action(f"Skipping pve-pxe (not applicable to {requested_host})")
+        print_action(f"Skipping pve-http-boot (not applicable to {requested_host})")
         return 0
 
     try:
@@ -106,8 +112,8 @@ def deploy(
 
 def validate(root: Path) -> None:
     registry = default_registry(root)
-    configs_dir = root / "pve-pxe" / "configs"
-    templates_dir = root / "pve-pxe" / "templates"
+    configs_dir = root / "pve-http-boot" / "configs"
+    templates_dir = root / "pve-http-boot" / "templates"
 
     for name in IPXE_MENUS + OPERATIONAL_SCRIPTS + STATIC_UNITS:
         path = configs_dir / name
@@ -115,9 +121,9 @@ def validate(root: Path) -> None:
             raise ValueError(f"missing required config: {path}")
 
     required_templates = (
-        "pxe-mgmt.conf",
-        "nginx-pxe.conf",
-        "pxe-autoupdate.timer",
+        "http-boot-mgmt.conf",
+        "nginx-http-boot.conf",
+        "pve-http-boot-autoupdate.timer",
         *IPXE_ENTRY_TEMPLATES,
     )
     for tmpl in required_templates:
@@ -137,7 +143,7 @@ def validate(root: Path) -> None:
 
     pdm_host = _find_pdm_host(registry)
     if pdm_host is None:
-        raise ValueError("pve-pxe: no PDM host found; cannot load baked ISO globals")
+        raise ValueError("pve-http-boot: no PDM host found; cannot load baked ISO globals")
     _get_iso_global_cfg(registry, pdm_host)
 
     for host in iso_hosts:
@@ -151,10 +157,10 @@ def _read_token(root: Path) -> str:
     """Read the PDM answer-auth token from the rendered 1Password secret."""
     env_path = op_secrets.secret_file(root, SECRET_NAME)
     env = op_secrets.parse_env_file(env_path)
-    token = env.get("PVE_PXE_TOKEN", "").strip()
+    token = env.get("PVE_HTTP_BOOT_TOKEN", "").strip()
     if not token:
         raise ValueError(
-            f"PVE_PXE_TOKEN is empty in rendered secret '{SECRET_NAME}'"
+            f"PVE_HTTP_BOOT_TOKEN is empty in rendered secret '{SECRET_NAME}'"
         )
     return token
 
@@ -173,20 +179,20 @@ def _read_pdm_cert_fingerprint(root: Path) -> str:
 def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
     registry = default_registry(root)
 
-    mgmt_ip = str(registry.get(host, "pve-pxe.mgmt_ip"))
-    pdm_url = str(registry.get(host, "pve-pxe.pdm_url"))
+    mgmt_ip = str(registry.get(host, "pve-http-boot.mgmt_ip"))
+    pdm_url = str(registry.get(host, "pve-http-boot.pdm_url"))
     pdm_cert_fingerprint = _read_pdm_cert_fingerprint(root)
     autoupdate_schedule = str(
-        registry.get(host, "pve-pxe.autoupdate_schedule", "*-*-* 09:00:00")
+        registry.get(host, "pve-http-boot.autoupdate_schedule", "*-*-* 09:00:00")
     )
 
     ip_parts = mgmt_ip.split(".")
     if len(ip_parts) != 4:
-        raise ValueError(f"pve-pxe.mgmt_ip must be a dotted IPv4 address for {host}")
+        raise ValueError(f"pve-http-boot.mgmt_ip must be a dotted IPv4 address for {host}")
 
-    configs_dir = root / "pve-pxe" / "configs"
-    templates_dir = root / "pve-pxe" / "templates"
-    build_dir = root / "pve-pxe" / "build" / host
+    configs_dir = root / "pve-http-boot" / "configs"
+    templates_dir = root / "pve-http-boot" / "templates"
+    build_dir = root / "pve-http-boot" / "build" / host
     prepare_build_dir(build_dir)
 
     # Copy static iPXE menus, operational scripts, and service unit
@@ -194,20 +200,20 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
 
     # Render host-specific templates
     render_file(
-        templates_dir / "pxe-mgmt.conf",
-        build_dir / "pxe-mgmt.conf",
+        templates_dir / "http-boot-mgmt.conf",
+        build_dir / "http-boot-mgmt.conf",
         MGMT_IP=mgmt_ip,
         PDM_URL=pdm_url,
         PDM_CERT_FINGERPRINT=pdm_cert_fingerprint,
     )
     render_file(
-        templates_dir / "nginx-pxe.conf",
-        build_dir / "nginx-pxe.conf",
+        templates_dir / "nginx-http-boot.conf",
+        build_dir / "nginx-http-boot.conf",
         MGMT_IP=mgmt_ip,
     )
     render_file(
-        templates_dir / "pxe-autoupdate.timer",
-        build_dir / "pxe-autoupdate.timer",
+        templates_dir / "pve-http-boot-autoupdate.timer",
+        build_dir / "pve-http-boot-autoupdate.timer",
         AUTOUPDATE_SCHEDULE=autoupdate_schedule,
     )
     for entry in IPXE_ENTRY_TEMPLATES:
@@ -226,7 +232,7 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
 
     use_secret_stage = not dry_run and not op_secrets.offline_mode()
     secret_context = (
-        tmpfs_secret_stage("homelab-pve-pxe.")
+        tmpfs_secret_stage("homelab-pve-http-boot.")
         if use_secret_stage
         else nullcontext(None)
     )
@@ -271,7 +277,7 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
 
         upload_paths = [
             (build_dir, f"{REMOTE_ROOT}/build/{host}"),
-            (root / "pve-pxe" / "scripts", f"{REMOTE_ROOT}/scripts"),
+            (root / "pve-http-boot" / "scripts", f"{REMOTE_ROOT}/scripts"),
         ]
         if secret_dir is not None:
             upload_paths.insert(1, (secret_dir, f"{REMOTE_ROOT}/build/{host}"))
@@ -342,7 +348,7 @@ def _render_iso_answers(
 
     pdm_host = _find_pdm_host(registry)
     if pdm_host is None:
-        raise ValueError("pve-pxe: no PDM host found; cannot render baked ISO answers")
+        raise ValueError("pve-http-boot: no PDM host found; cannot render baked ISO answers")
     global_cfg = _get_iso_global_cfg(registry, pdm_host)
 
     if dry_run:
@@ -360,7 +366,7 @@ def _render_iso_answers(
         if to_render:
             print_sub(f"Missing baked ISO answers: {' '.join(to_render)}")
         else:
-            print_sub("Baked ISO answers already present on PXE host; use --force to refresh")
+            print_sub("Baked ISO answers already present on HTTP Boot host; use --force to refresh")
 
     if not to_render:
         return []
@@ -451,8 +457,8 @@ def _build_iso_answer_toml(
     mgmt_mac = _get_mgmt_mac(registry, host)
 
     toml = (
-        f"# Auto-generated by homelab pve-pxe. Do not edit manually.\n"
-        f"# Redeploy with: ./deploy --force pve-pxe arc\n"
+        f"# Auto-generated by homelab pve-http-boot. Do not edit manually.\n"
+        f"# Redeploy with: ./deploy --force pve-http-boot arc\n"
         f"\n"
         f"[global]\n"
         f'keyboard = "{global_cfg["keyboard"]}"\n'

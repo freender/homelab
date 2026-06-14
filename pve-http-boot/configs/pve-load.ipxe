@@ -1,0 +1,10 @@
+#!ipxe
+# pve-load.ipxe - Shared initrd/ISO loader for Proxmox VE network installs.
+# The proxmox-ve_* ISO filename is updated by pve-http-boot-autoupdate on each version bump.
+
+:load
+isset ${pve-kargs} || set pve-kargs ro ramdisk_size=16777216 rw quiet splash=silent
+kernel http://${http-boot-server}/vmlinuz initrd=initrd.img ${pve-kargs}
+initrd --name initrd.img http://${http-boot-server}/initrd.img
+initrd http://${http-boot-server}/proxmox-ve_PLACEHOLDER.iso proxmox.iso
+boot

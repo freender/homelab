@@ -19,7 +19,7 @@ from .pve_interface_pinning import deploy as deploy_pve_interface_pinning
 from .pve_lxc_docker_hooks import deploy as deploy_pve_lxc_docker_hooks
 from .pve_postinstall import deploy as deploy_pve_postinstall
 from .pve_postinstall_webhook import deploy as deploy_pve_postinstall_webhook
-from .pve_pxe import deploy as deploy_pve_pxe
+from .pve_http_boot import deploy as deploy_pve_http_boot
 from .pve_realtek_r8152_dkms import deploy as deploy_pve_realtek_r8152_dkms
 from .pve_zfs_large_block_patch import deploy as deploy_pve_zfs_large_block_patch
 from .pve_zfs_migration_sync_patch import deploy as deploy_pve_zfs_migration_sync_patch
@@ -79,9 +79,9 @@ MODULES: dict[str, ModuleDefinition] = {
         name="PVE Post-Install Webhook",
         deploy=deploy_pve_postinstall_webhook,
     ),
-    "pve-pxe": ModuleDefinition(
+    "pve-http-boot": ModuleDefinition(
         name="PVE HTTP Boot",
-        deploy=deploy_pve_pxe,
+        deploy=deploy_pve_http_boot,
     ),
     "pve-realtek-r8152-dkms": ModuleDefinition(
         name="PVE Realtek r8152 DKMS Driver",
@@ -118,7 +118,7 @@ MODULE_ORDER = [
     "pve-postinstall-webhook",
     "pve-autoinstall",
     "pve-realtek-r8152-dkms",
-    "pve-pxe",
+    "pve-http-boot",
     "pve-backup",
     "apcupsd",
     "pve-exporters",

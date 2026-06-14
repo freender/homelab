@@ -1,32 +1,32 @@
 #!/usr/bin/env bash
-# pxe-autoupdate - Detect, build, validate, and atomically promote a new Proxmox VE PXE payload.
+# pve-http-boot-autoupdate - Detect, build, validate, and atomically promote a new Proxmox VE HTTP Boot payload.
 # Reads the PDM answer-auth token from TOKEN_FILE; never prints it.
 # Writes a node_exporter textfile metric on each run.
 set -euo pipefail
 
 ISO_INDEX="https://enterprise.proxmox.com/iso/"
 ISO_DIR="/root/iso"
-SRV="/srv/pxe"
-STAGE="/srv/pxe.stage"
-PXE_BUILD="$ISO_DIR/pxe-build"
+SRV="/srv/httpboot"
+STAGE="/srv/httpboot.stage"
+HTTP_BOOT_BUILD="$ISO_DIR/http-boot-build"
 TOKEN_FILE="/root/homelab-pve-auto-install.token"
-METRIC="/var/lib/node_exporter/textfile/pxe_autoupdate.prom"
-LOCK="/run/pxe-autoupdate.lock"
+METRIC="/var/lib/node_exporter/textfile/pve_http_boot_autoupdate.prom"
+LOCK="/run/pve-http-boot-autoupdate.lock"
 
 # PDM connection details (written by homelab deploy; do not edit here)
-# shellcheck source=/etc/homelab-pxe/pxe-mgmt.conf
-source /etc/homelab-pxe/pxe-mgmt.conf
+# shellcheck source=/etc/homelab-http-boot/http-boot-mgmt.conf
+source /etc/homelab-http-boot/http-boot-mgmt.conf
 
-log()    { echo "pxe-autoupdate: $*"; }
+log()    { echo "pve-http-boot-autoupdate: $*"; }
 metric() {
     mkdir -p "$(dirname "$METRIC")"
-    printf 'pve_pxe_autoupdate_result %s\npve_pxe_autoupdate_timestamp %s\n' \
+    printf 'pve_http_boot_autoupdate_result %s\npve_http_boot_autoupdate_timestamp %s\n' \
         "$1" "$(date +%s)" > "$METRIC.tmp" && mv "$METRIC.tmp" "$METRIC"
 }
 fail()   { log "ERROR: $*" >&2; metric 1; exit 1; }
 
 cleanup_temp() {
-    rm -rf "$STAGE" "$PXE_BUILD"
+    rm -rf "$STAGE" "$HTTP_BOOT_BUILD"
 }
 trap cleanup_temp EXIT
 
@@ -62,24 +62,24 @@ else
     log "WARN: no upstream sha256sum available"
 fi
 
-# 3. Build prepared PXE payload
+# 3. Build prepared HTTP Boot payload
 command -v proxmox-auto-install-assistant >/dev/null \
     || apt-get install -y proxmox-auto-install-assistant xorriso >/dev/null
 [[ -s "$TOKEN_FILE" ]] || fail "missing or empty token file $TOKEN_FILE"
 
-rm -rf "$PXE_BUILD"
-mkdir -p "$PXE_BUILD"
+rm -rf "$HTTP_BOOT_BUILD"
+mkdir -p "$HTTP_BOOT_BUILD"
 proxmox-auto-install-assistant prepare-iso "$ISO_DIR/$latest" \
     --pxe --pxe-loader ipxe --fetch-from http \
     --url "$PDM_URL" \
     --cert-fingerprint "$PDM_CERT_FINGERPRINT" \
     --answer-auth-token "$(cat "$TOKEN_FILE")" \
-    --output "$PXE_BUILD" >/dev/null
+    --output "$HTTP_BOOT_BUILD" >/dev/null
 
-[[ -s "$PXE_BUILD/vmlinuz" && -s "$PXE_BUILD/initrd.img" ]] \
+[[ -s "$HTTP_BOOT_BUILD/vmlinuz" && -s "$HTTP_BOOT_BUILD/initrd.img" ]] \
     || fail "prepare-iso did not produce vmlinuz/initrd.img"
-prepared_iso="$(find "$PXE_BUILD" -maxdepth 1 -name 'proxmox-ve_*.iso' -printf '%f\n' 2>/dev/null | sort -V | tail -1)"
-[[ -n "$prepared_iso" && -s "$PXE_BUILD/$prepared_iso" ]] \
+prepared_iso="$(find "$HTTP_BOOT_BUILD" -maxdepth 1 -name 'proxmox-ve_*.iso' -printf '%f\n' 2>/dev/null | sort -V | tail -1)"
+[[ -n "$prepared_iso" && -s "$HTTP_BOOT_BUILD/$prepared_iso" ]] \
     || fail "prepare-iso did not produce prepared Proxmox ISO"
 
 # 4. Assemble staging copy with new payload + version-bumped loaders
@@ -89,10 +89,10 @@ rm -rf "$STAGE"
 mkdir -p "$STAGE"
 rsync -a --exclude '/iso/' "$SRV"/ "$STAGE"/
 rm -f "$STAGE"/proxmox-ve_*.iso
-install -m 0644 "$PXE_BUILD/vmlinuz"    "$STAGE/vmlinuz"
-install -m 0644 "$PXE_BUILD/initrd.img" "$STAGE/initrd.img"
-install -m 0644 "$PXE_BUILD/$prepared_iso" "$STAGE/$prepared_iso"
-# iPXE menus resolve the server at runtime via ${pxe-server} (set in the entry
+install -m 0644 "$HTTP_BOOT_BUILD/vmlinuz"    "$STAGE/vmlinuz"
+install -m 0644 "$HTTP_BOOT_BUILD/initrd.img" "$STAGE/initrd.img"
+install -m 0644 "$HTTP_BOOT_BUILD/$prepared_iso" "$STAGE/$prepared_iso"
+# iPXE menus resolve the server at runtime via ${http-boot-server} (set in the entry
 # points by homelab deploy), so the only per-version rewrite is the ISO filename.
 sed -i -E \
     -e "s#proxmox-ve_[^[:space:]]+\.iso#${prepared_iso}#g" \
@@ -110,7 +110,7 @@ done
 
 # 6. Atomically promote: keep rollback copy, swap dirs, reload nginx
 need_disable=0
-systemctl is-active --quiet nginx || { /usr/local/sbin/pxe-enable; need_disable=1; }
+systemctl is-active --quiet nginx || { /usr/local/sbin/pve-http-boot-enable; need_disable=1; }
 rm -rf "$SRV.prev"
 mkdir -p "$SRV.prev"
 rsync -a --exclude '/iso/' "$SRV"/ "$SRV.prev"/
@@ -126,7 +126,7 @@ if [[ "$ok" -ne 1 ]]; then
     log "post-promote check failed; rolling back"
     rsync -a --delete --exclude '/iso/' "$SRV.prev"/ "$SRV"/
     systemctl reload nginx 2>/dev/null || systemctl restart nginx
-    [[ "$need_disable" -eq 1 ]] && /usr/local/sbin/pxe-disable || true
+    [[ "$need_disable" -eq 1 ]] && /usr/local/sbin/pve-http-boot-disable || true
     fail "rolled back to previous payload"
 fi
 
@@ -139,7 +139,7 @@ fi
 
 # 9. Clean up: keep current + one previous ISO in /root/iso
 ls -1t "$ISO_DIR"/proxmox-ve_*.iso 2>/dev/null | tail -n +3 | xargs -r rm -f
-[[ "$need_disable" -eq 1 ]] && /usr/local/sbin/pxe-disable || true
+[[ "$need_disable" -eq 1 ]] && /usr/local/sbin/pve-http-boot-disable || true
 
 log "promoted proxmox-ve_${ver}"
 metric 0

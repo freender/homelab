@@ -13,7 +13,7 @@ choose --timeout ${menu-timeout} --default ${menu-default} selected || goto canc
 goto ${selected}
 
 :cancel
-chain http://${pxe-server}/boot.ipxe
+chain http://${http-boot-server}/boot.ipxe
 
 :confirm
-chain http://${pxe-server}/pdm-auto.ipxe
+chain http://${http-boot-server}/pdm-auto.ipxe
