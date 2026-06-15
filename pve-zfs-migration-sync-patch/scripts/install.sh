@@ -199,7 +199,7 @@ perl -c "${TARGET}" >/dev/null
 cleanup_source_sync_patches
 
 if [[ ${RESTART_SERVICES} == true ]]; then
-  systemctl try-restart pvedaemon.service pve-ha-lrm.service
+  systemctl try-restart pvedaemon.service pve-ha-lrm.service pvescheduler.service
 fi
 
 # Replication and migration tasks run in forked workers, which load this module

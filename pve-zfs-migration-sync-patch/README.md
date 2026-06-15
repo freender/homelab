@@ -69,9 +69,10 @@ snapshot contents after `zfs receive`.
 - Backups: `/var/backups/homelab/pve-zfs-recv-cache-patch/`
 
 The apt hook runs the patch script with `--restart-services`, which uses
-`systemctl try-restart pvedaemon.service pve-ha-lrm.service` after reapplying
-the patch. This prevents long-lived PVE daemons from keeping superseded Perl
-module code loaded after package updates.
+`systemctl try-restart pvedaemon.service pve-ha-lrm.service pvescheduler.service`
+after reapplying the patch. This prevents long-lived PVE daemons, including the
+scheduled replication runner, from keeping superseded Perl module code loaded
+after package updates.
 
 Remove this module and revert the local patch when Proxmox/OpenZFS ships an
 equivalent upstream fix.
