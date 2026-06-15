@@ -21,6 +21,21 @@ cat > "${PATCH_SCRIPT}" <<'SCRIPT'
 #!/usr/bin/env bash
 set -euo pipefail
 
+RESTART_SERVICES=false
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --restart-services)
+      RESTART_SERVICES=true
+      ;;
+    *)
+      echo "usage: $0 [--restart-services]" >&2
+      exit 2
+      ;;
+  esac
+  shift
+done
+
 TARGET=/usr/share/perl5/PVE/Storage/ZFSPoolPlugin.pm
 OLD_TARGET_STORAGE=/usr/share/perl5/PVE/Storage.pm
 OLD_TARGET_REPLICATION=/usr/share/perl5/PVE/Replication.pm
@@ -183,8 +198,13 @@ perl -c "${TARGET}" >/dev/null
 
 cleanup_source_sync_patches
 
+if [[ ${RESTART_SERVICES} == true ]]; then
+  systemctl try-restart pvedaemon.service pve-ha-lrm.service
+fi
+
 # Replication and migration tasks run in forked workers, which load this module
-# from disk on the next job; no Proxmox service restart is required.
+# from disk on the next job. Package-triggered reapplies restart the relevant
+# daemons so long-lived processes do not keep superseded Perl code loaded.
 write_status "${state}"
 cat "${STATUS_FILE}"
 SCRIPT
@@ -192,7 +212,7 @@ chmod 0755 "${PATCH_SCRIPT}"
 
 cat > "${APT_HOOK}" <<EOF
 // Reapply the homelab ZFS receive cache patch after package updates.
-DPkg::Post-Invoke { "${PATCH_SCRIPT} >/var/log/homelab-pve-zfs-recv-cache-patch.log 2>&1 || true"; };
+DPkg::Post-Invoke { "${PATCH_SCRIPT} --restart-services >/var/log/homelab-pve-zfs-recv-cache-patch.log 2>&1 || true"; };
 EOF
 chmod 0644 "${APT_HOOK}"
 
