@@ -1,60 +1,72 @@
-# PVE ZFS Migration Sync Patch
+# PVE ZFS Migration Receive Cache Patch
 
-Adds a `syncfs()` call via `/usr/bin/sync --file-system <mountpoint>` before
-Proxmox creates migration snapshots for ZFS-backed storage, covering both code
-paths that take snapshots during HA-managed CT migration.
+Patches Proxmox ZFS storage import so LXC `subvol` datasets are unmounted before
+and after `zfs recv -F`. This mitigates stale Linux page-cache/live-mount reads
+after PVE ZFS replication or migration receives into an already-mounted target
+dataset.
 
-**Patched files:**
+## Patched File
 
-- `/usr/share/perl5/PVE/Storage.pm` — non-replicated migration path.
-  Fixes `$volume_export_prepare` so `storage_migrate()` flushes dirty TXG
-  data before taking the `__migration__` snapshot.
+- `/usr/share/perl5/PVE/Storage/ZFSPoolPlugin.pm`
+  - Function: `PVE::Storage::ZFSPoolPlugin::volume_import`
+  - Adds target-side `zfs unmount <dataset>` before `zfs recv -F` for `subvol`
+    imports when the target dataset already exists.
+  - Adds target-side `zfs unmount <dataset>` after successful receive, so normal
+    PVE activation or CT start remounts a fresh live view.
 
-- `/usr/share/perl5/PVE/Replication.pm` — replicated migration path.
-  Fixes `replicate()` so `run_replication()` during HA migrate flushes both
-  the kernel page cache and ZFS dirty TXGs before taking the `__replicate_*`
-  snapshot.  Without this fix the `Storage.pm` change has no effect for CTs
-  with a PVE replication job: `LXC/Migrate.pm` calls `run_replication()`
-  first, marks those volumes in `$rep_volumes`, and then skips
-  `storage_migrate()` entirely (`next if $rep_volumes->{$volid}`), so the
-  `Storage.pm` path is never reached.
+## Why
 
-  The fix applies two operations per ZFS volume before snapshotting:
+Observed failure mode during PVE stopped LXC migration on ZFS:
 
-  `syncfs()` via `/usr/bin/sync --file-system <mountpoint>` — flushes all
-  kernel page-cache dirty pages to the ZFS vnode. `zfs snapshot` is itself
-  a TXG-committed operation that forces a TXG sync, so `zpool sync` is not
-  needed: once the page-cache pages are in ZFS's dirty TXG via `syncfs`,
-  the snapshot commit flushes them to disk atomically.
+1. PVE receives an incremental stream into a mounted target CT rootfs dataset.
+2. The target `__replicate_*` snapshot contains the expected bytes.
+3. The target live mounted path can still serve stale page-cache contents for
+   `/var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db`.
+4. File metadata can match exactly and `zfs diff` can report `0` lines.
+5. Starting the CT in that state can make containerd/BoltDB panic.
 
-  Complete flush chain: page cache → ZFS vnode (syncfs) → `zfs snapshot`
-  (forces TXG commit → disk + creates snapshot atomically).
+Tested mitigations:
 
-  This is a general fix requiring no guest-specific hooks or knowledge.
+- `echo 3 > /proc/sys/vm/drop_caches` fixed the stale live read.
+- `zfs unmount && zfs mount` fixed the stale live read.
+- `sync` alone did not fix it.
+- Receiving into an unmounted target dataset prevented the mismatch in testing.
 
-Root cause chain:
-1. CT stops — guest writes via `mmap` flush to the kernel page cache only.
-2. `run_replication()` fires (dataset still mounted, page cache not flushed).
-3. Without `syncfs`: page-cache dirty pages are invisible to ZFS; `zpool sync`
-   has nothing to flush for them; snapshot captures stale data.
-4. `zfs send` ships the stale snapshot — destination receives corrupt db.
-5. Containerd opens the corrupt bbolt database and panics.
+This patch uses the least global mitigation: receive into an unmounted `subvol`
+target and leave it unmounted for PVE activation/start to remount.
 
-Upstream tracking: Bug 7653 - LXC migration on zfspool snapshot may contain
-stale data: https://bugzilla.proxmox.com/show_bug.cgi?id=7653
+## Superseded Patch
 
-Remove this module and revert the local patches when Proxmox ships equivalent
-upstream behavior for this bug.
+This module previously patched `Storage.pm` and `Replication.pm` to call
+`syncfs()` before migration snapshots. Later testing showed the problem is not
+source-side snapshot flushing. It is target-side stale live reads after receive.
 
-Deployment also installs `/usr/local/sbin/homelab-pve-zfs-migration-sync-patch`
-and an apt `DPkg::Post-Invoke` hook so `libpve-storage-perl` and `pve-container`
-package upgrades that replace `Storage.pm` or `Replication.pm` are repatched
-automatically. The next forked replication or migration worker loads the patched
-modules from disk; no Proxmox service restart is required.
+Deploying this module removes the old local reapply script and apt hook:
 
-Operational files:
+- `/usr/local/sbin/homelab-pve-zfs-migration-sync-patch`
+- `/etc/apt/apt.conf.d/99-homelab-pve-zfs-migration-sync-patch`
 
-- Script: `/usr/local/sbin/homelab-pve-zfs-migration-sync-patch`
-- Apt hook: `/etc/apt/apt.conf.d/99-homelab-pve-zfs-migration-sync-patch`
-- Status: `/var/lib/homelab/pve-zfs-migration-sync-patch/status`
-- Backups: `/var/backups/homelab/pve-zfs-migration-sync-patch/`
+Old backups remain under:
+
+- `/var/backups/homelab/pve-zfs-migration-sync-patch/`
+
+## Upstream Tracking
+
+Proxmox Bugzilla:
+
+- Bug 7653 - LXC migration on zfspool snapshot may contain stale data
+- https://bugzilla.proxmox.com/show_bug.cgi?id=7653
+
+The current evidence likely also belongs upstream to OpenZFS/Linux because the
+observable mismatch is live mounted file contents versus the same dataset's
+snapshot contents after `zfs receive`.
+
+## Operational Files
+
+- Script: `/usr/local/sbin/homelab-pve-zfs-recv-cache-patch`
+- Apt hook: `/etc/apt/apt.conf.d/99-homelab-pve-zfs-recv-cache-patch`
+- Status: `/var/lib/homelab/pve-zfs-recv-cache-patch/status`
+- Backups: `/var/backups/homelab/pve-zfs-recv-cache-patch/`
+
+Remove this module and revert the local patch when Proxmox/OpenZFS ships an
+equivalent upstream fix.

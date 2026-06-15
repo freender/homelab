@@ -115,7 +115,7 @@ Local patches for Proxmox behavior that should be removed when equivalent
 upstream fixes ship:
 
 - [pve-zfs-large-block-patch](pve-zfs-large-block-patch/): Bug 4603 - Add support for migrating ZFS datasets with large_blocks
-- [pve-zfs-migration-sync-patch](pve-zfs-migration-sync-patch/): Bug 7653 - LXC migration on zfspool snapshot may contain stale data
+- [pve-zfs-migration-sync-patch](pve-zfs-migration-sync-patch/): Bug 7653 - target-side ZFS receive cache mitigation for LXC migration
 
 Revert these local patches and remove the modules after the corresponding
 Proxmox fixes are included upstream.
