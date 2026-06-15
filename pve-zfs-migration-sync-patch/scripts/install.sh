@@ -47,8 +47,7 @@ PATCHED=$(cat <<'EOF'
     };
 
     # Receiving into a mounted subvol can leave stale cached file contents visible
-    # through the live mount. Unmount before/after receive so activation remounts it.
-    $unmount_received_subvol->() if $exists;
+    # through the live mount. Unmount after receive so activation remounts it.
 
     eval {
         run_command(['zfs', 'recv', '-F', '-x', 'encryption', '--', $zfspath],
@@ -114,7 +113,7 @@ write_status() {
     printf 'target=%s\n' "${TARGET}"
     printf 'package=libpve-storage-perl\n'
     printf 'package_version=%s\n' "${package_version}"
-    printf 'mitigation=unmount-subvol-before-after-zfs-receive\n'
+    printf 'mitigation=unmount-subvol-after-zfs-receive\n'
     grep -nF 'unmount_received_subvol' "${TARGET}" || true
   } > "${STATUS_FILE}"
 }
@@ -154,13 +153,14 @@ pre_unmount_count=$(grep -Fc '    $unmount_received_subvol->() if $exists;' "${T
 post_unmount_count=$(grep -Fc '        $unmount_received_subvol->();' "${TARGET}" || true)
 original_count=$(grep -Fc "run_command(['zfs', 'recv', '-F', '-x', 'encryption', '--', \$zfspath]" "${TARGET}" || true)
 
-if [[ ${patched_count} -ge 1 && ${pre_unmount_count} -ge 1 && ${post_unmount_count} -ge 1 ]]; then
+if [[ ${patched_count} -ge 1 && ${pre_unmount_count} -eq 0 && ${post_unmount_count} -ge 1 ]]; then
   state=already-patched
 elif [[ ${patched_count} -ge 1 && ${original_count} -eq 1 ]]; then
   backup="${BACKUP_DIR}/ZFSPoolPlugin.pm.$(date -u +%Y%m%dT%H%M%SZ).partial.bak"
   cp "${TARGET}" "${backup}"
-  if [[ ${pre_unmount_count} -eq 0 ]]; then
-    perl -0pi -e 's/# Receiving into a mounted subvol can leave stale cached file contents visible\n    # through the live mount\.[^\n]*\n\n    eval \{/# Receiving into a mounted subvol can leave stale cached file contents visible\n    # through the live mount. Unmount before\/after receive so activation remounts it.\n    \$unmount_received_subvol->() if \$exists;\n\n    eval {/s' "${TARGET}"
+  if [[ ${pre_unmount_count} -gt 0 ]]; then
+    perl -0pi -e 's/\n    \$unmount_received_subvol->\(\) if \$exists;\n//s' "${TARGET}"
+    perl -0pi -e 's/# through the live mount\.[^\n]*/# through the live mount. Unmount after receive so activation remounts it./' "${TARGET}"
   fi
   if [[ ${post_unmount_count} -eq 0 ]]; then
     perl -0pi -e 's/(run_command\(\[\x27zfs\x27, \x27recv\x27, \x27-F\x27, \x27-x\x27, \x27encryption\x27, \x27--\x27, \$zfspath\],\n            input => "<&\$fd"\);)/$1\n        \$unmount_received_subvol->();/s' "${TARGET}"

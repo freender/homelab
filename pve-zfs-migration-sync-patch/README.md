@@ -1,16 +1,13 @@
 # PVE ZFS Migration Receive Cache Patch
 
-Patches Proxmox ZFS storage import so LXC `subvol` datasets are unmounted before
-and after `zfs recv -F`. This mitigates stale Linux page-cache/live-mount reads
-after PVE ZFS replication or migration receives into an already-mounted target
-dataset.
+Patches Proxmox ZFS storage import so LXC `subvol` datasets are unmounted after
+`zfs recv -F`. This mitigates stale Linux page-cache/live-mount reads after PVE
+ZFS replication or migration receives into an already-mounted target dataset.
 
 ## Patched File
 
 - `/usr/share/perl5/PVE/Storage/ZFSPoolPlugin.pm`
   - Function: `PVE::Storage::ZFSPoolPlugin::volume_import`
-  - Adds target-side `zfs unmount <dataset>` before `zfs recv -F` for `subvol`
-    imports when the target dataset already exists.
   - Adds target-side `zfs unmount <dataset>` after successful receive, so normal
     PVE activation or CT start remounts a fresh live view.
 
@@ -31,9 +28,12 @@ Tested mitigations:
 - `zfs unmount && zfs mount` fixed the stale live read.
 - `sync` alone did not fix it.
 - Receiving into an unmounted target dataset prevented the mismatch in testing.
+- Later CT 902 testing showed both before-only and after-only unmount variants
+  were sufficient; after-only was kept because it directly guarantees a fresh
+  mount for PVE activation/start and avoids changing the receive precondition.
 
-This patch uses the least global mitigation: receive into an unmounted `subvol`
-target and leave it unmounted for PVE activation/start to remount.
+This patch uses the least global mitigation: leave the received `subvol`
+unmounted for PVE activation/start to remount.
 
 ## Superseded Patch
 

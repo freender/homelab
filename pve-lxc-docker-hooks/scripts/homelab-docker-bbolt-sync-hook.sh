@@ -194,7 +194,7 @@ fi
 if [[ $PHASE == post-stop ]]; then
     # Filesystem sync is intentionally not performed here.
     # PVE/ZFSPoolPlugin.pm handles stale live reads by unmounting target ZFS
-    # subvols before/after receive. No hookscript-level sync is needed here.
+    # subvols after receive. No hookscript-level sync is needed here.
     log "sync=skipped reason=handled_by_zfs_receive_cache_patch phase=$PHASE db_count=${#dbs[@]}"
 fi
 
