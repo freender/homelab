@@ -21,6 +21,7 @@ TARGET=/usr/share/perl5/PVE/Storage/ZFSPoolPlugin.pm
 STATE_DIR=/var/lib/homelab/pve-zfs-large-block-patch
 BACKUP_DIR=/var/backups/homelab/pve-zfs-large-block-patch
 STATUS_FILE=${STATE_DIR}/status
+LOCK_FILE=/run/lock/homelab-pve-patches.lock
 
 ORIGINAL="    my \$cmd = ['zfs', 'send', '-RpvU'];"
 PATCHED="    my \$cmd = ['zfs', 'send', '-RpvUL'];"
@@ -39,7 +40,17 @@ write_status() {
   } > "${STATUS_FILE}"
 }
 
+acquire_patch_lock() {
+  mkdir -p "$(dirname "${LOCK_FILE}")"
+  exec 200>"${LOCK_FILE}"
+  if ! flock -n 200; then
+    echo "waiting for shared homelab PVE patch lock: ${LOCK_FILE}"
+    flock 200
+  fi
+}
+
 mkdir -p "${STATE_DIR}" "${BACKUP_DIR}"
+acquire_patch_lock
 
 if [[ ! -f ${TARGET} ]]; then
   echo "missing target: ${TARGET}" >&2

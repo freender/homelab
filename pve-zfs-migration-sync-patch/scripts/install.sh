@@ -42,6 +42,7 @@ OLD_TARGET_REPLICATION=/usr/share/perl5/PVE/Replication.pm
 STATE_DIR=/var/lib/homelab/pve-zfs-recv-cache-patch
 BACKUP_DIR=/var/backups/homelab/pve-zfs-recv-cache-patch
 STATUS_FILE=${STATE_DIR}/status
+LOCK_FILE=/run/lock/homelab-pve-patches.lock
 
 ORIGINAL=$(cat <<'EOF'
     eval {
@@ -133,7 +134,17 @@ write_status() {
   } > "${STATUS_FILE}"
 }
 
+acquire_patch_lock() {
+  mkdir -p "$(dirname "${LOCK_FILE}")"
+  exec 200>"${LOCK_FILE}"
+  if ! flock -n 200; then
+    echo "waiting for shared homelab PVE patch lock: ${LOCK_FILE}"
+    flock 200
+  fi
+}
+
 mkdir -p "${STATE_DIR}" "${BACKUP_DIR}"
+acquire_patch_lock
 
 cleanup_source_sync_patches() {
   local timestamp

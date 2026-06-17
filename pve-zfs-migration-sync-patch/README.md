@@ -74,5 +74,9 @@ after reapplying the patch. This prevents long-lived PVE daemons, including the
 scheduled replication runner, from keeping superseded Perl module code loaded
 after package updates.
 
+Patch reapply uses the shared lock `/run/lock/homelab-pve-patches.lock`, so it
+waits for other homelab PVE patch hooks before editing Proxmox Perl files or
+restarting services.
+
 Remove this module and revert the local patch when Proxmox/OpenZFS ships an
 equivalent upstream fix.

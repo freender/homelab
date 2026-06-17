@@ -30,6 +30,9 @@ that replace `ZFSPoolPlugin.pm` are patched again automatically. The next
 forked replication or migration worker loads the patched module from disk; no
 Proxmox service restart is required.
 
+Patch reapply uses the shared lock `/run/lock/homelab-pve-patches.lock`, so it
+waits for other homelab PVE patch hooks before editing Proxmox Perl files.
+
 Operational files:
 
 - Script: `/usr/local/sbin/homelab-pve-zfs-large-block-patch`
