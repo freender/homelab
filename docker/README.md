@@ -23,7 +23,7 @@ Per-host settings live in `hosts.conf` using `docker.*` keys.
 ### What Gets Deployed
 
 **All hosts** (`/mnt/cache/appdata/`):
-- `start.sh` - Updates and starts Docker stacks (Traefik first), cleans up unused images and volumes
+- `start.sh` - Updates and starts Docker stacks (Traefik first), then safely prunes unused images after update runs
 - `rm.sh` - Stops all Docker stacks with confirmation
 
 **Hosts with update schedules configured** (`/etc/systemd/system/`):
@@ -49,6 +49,8 @@ tower:
 ### Update Schedule
 
 Docker auto-update is handled by `homelab-docker-update.timer`, rendered from `hosts.conf` via `docker.update_schedule`. The timer runs `start.sh`, which pulls images before `docker compose up -d` by default.
+
+After a successful pull/update run, `start.sh` prunes unused Docker images only. It skips pruning when any stack failed or when any stopped container exists, and it never prunes Docker networks or volumes. Use `--no-prune` to disable image pruning for a run.
 
 Docker boot/start orchestration is intentionally not managed here. Containers should use native Docker restart policies for boot, reboot, and HA migration recovery.
 
@@ -78,7 +80,7 @@ Orchestrates Docker Compose stacks with custom startup order:
 - Starts priority stacks first (Traefik)
 - Pulls latest images
 - Starts all remaining stacks
-- Cleans up unused Docker images and volumes
+- Cleans up unused Docker images after safe update runs
 - Skips directories without compose files
 
 ### rm.sh

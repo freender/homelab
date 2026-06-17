@@ -139,6 +139,7 @@ Keep the same flow used across modules:
 - Return `0` for "not applicable" module/host skips.
 - Track host-level failures via deployment framework arrays.
 - Copy/update only when content changes unless `FORCE_UPDATE=true`.
+- Do not leave backup, disabled, or timestamped copies inside active config include directories such as `/etc/apt/apt.conf.d/`; apt treats invalid extensions there as notices. Store backups under `/var/backups/homelab/<module>/` or remove superseded files.
 
 ### SSH and remote execution
 - Do not hardcode host lists; derive from `hosts list --feature ...`.

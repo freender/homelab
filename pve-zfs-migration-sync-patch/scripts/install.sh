@@ -7,6 +7,7 @@ PATCH_SCRIPT=/usr/local/sbin/homelab-pve-zfs-recv-cache-patch
 APT_HOOK=/etc/apt/apt.conf.d/99-homelab-pve-zfs-recv-cache-patch
 
 OLD_STATE_DIR=/var/lib/homelab/pve-zfs-migration-sync-patch
+OLD_BACKUP_DIR=/var/backups/homelab/pve-zfs-migration-sync-patch
 OLD_PATCH_SCRIPT=/usr/local/sbin/homelab-pve-zfs-migration-sync-patch
 OLD_APT_HOOK=/etc/apt/apt.conf.d/99-homelab-pve-zfs-migration-sync-patch
 
@@ -230,6 +231,11 @@ chmod 0644 "${APT_HOOK}"
 # Disable the superseded source-side syncfs patch so package upgrades do not
 # reapply it. Backups remain under /var/backups/homelab/pve-zfs-migration-sync-patch.
 rm -f "${OLD_PATCH_SCRIPT}" "${OLD_APT_HOOK}"
+mkdir -p "${OLD_BACKUP_DIR}"
+for stale_apt_hook in "${OLD_APT_HOOK}".disabled.* "${OLD_APT_HOOK}".bak "${OLD_APT_HOOK}".backup; do
+  [[ -e ${stale_apt_hook} ]] || continue
+  mv -f "${stale_apt_hook}" "${OLD_BACKUP_DIR}/$(basename "${stale_apt_hook}")"
+done
 if [[ -d ${OLD_STATE_DIR} ]]; then
   cat > "${OLD_STATE_DIR}/status" <<EOF
 storage_state=superseded

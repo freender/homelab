@@ -3,13 +3,12 @@
 # Place this file in /mnt/cache/appdata and execute it.
 # Supports custom startup order for dependencies.
 # Pulls images by default; use `--no-pull` for fast restart-only runs.
-# Pruning is opt-in; use `--prune` after confirming no shared resources are at risk.
+# Safely prunes unused images after update runs; never prunes networks or volumes.
 
 set -u
 
 PULL_IMAGES=true
-PRUNE_IMAGES=false
-PRUNE_VOLUMES=false
+PRUNE_IMAGES=auto
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -22,12 +21,11 @@ while [[ $# -gt 0 ]]; do
         --prune)
             PRUNE_IMAGES=true
             ;;
-        --prune-volumes)
-            PRUNE_IMAGES=true
-            PRUNE_VOLUMES=true
+        --no-prune)
+            PRUNE_IMAGES=false
             ;;
         *)
-            echo "Usage: $0 [--pull|--no-pull] [--prune] [--prune-volumes]" >&2
+            echo "Usage: $0 [--pull|--no-pull] [--prune|--no-prune]" >&2
             exit 1
             ;;
     esac
@@ -84,6 +82,37 @@ start_stack() {
     return 0
 }
 
+should_prune_images() {
+    local stopped_containers
+    local code
+
+    if [[ ${#failed_stacks[@]} -gt 0 ]]; then
+        echo ">>> Skipping Docker image prune because one or more stacks failed"
+        return 1
+    fi
+
+    stopped_containers="$(docker ps -a \
+        --filter "status=created" \
+        --filter "status=exited" \
+        --filter "status=dead" \
+        --format "{{.Names}}: {{.Status}}")"
+    code=$?
+    if [[ $code -ne 0 ]]; then
+        echo "!! failed to inspect stopped containers before image prune (exit $code)"
+        return 2
+    fi
+
+    if [[ -n "$stopped_containers" ]]; then
+        echo ">>> Skipping Docker image prune because stopped containers exist"
+        while IFS= read -r container; do
+            [[ -n "$container" ]] && printf '   - %s\n' "$container"
+        done <<< "$stopped_containers"
+        return 1
+    fi
+
+    return 0
+}
+
 # Define startup order (stacks that need to run first)
 mapfile -t ORDERED_STACKS < <(get_priority_stacks "$ROOT")
 mapfile -t STACK_DIRS < <(list_stack_dirs "$ROOT")
@@ -133,21 +162,24 @@ echo ""
 [[ "$found" -eq 0 && ${#ORDERED_STACKS[@]} -eq 0 ]] && echo "No compose stacks found under $ROOT"
 
 echo ""
-if [[ "$PRUNE_IMAGES" == "true" ]]; then
-    if [[ "$PRUNE_VOLUMES" == "true" ]]; then
-        echo ">>> Pruning unused Docker images and volumes"
-        docker system prune -f --volumes
-    else
+if [[ "$PRUNE_IMAGES" == "false" ]]; then
+    echo ">>> Skipping Docker image prune (--no-prune)"
+elif [[ "$PRUNE_IMAGES" == "auto" && "$PULL_IMAGES" != "true" ]]; then
+    echo ">>> Skipping Docker image prune (--no-pull run)"
+else
+    should_prune_images
+    code=$?
+    if [[ $code -eq 0 ]]; then
         echo ">>> Pruning unused Docker images"
         docker image prune -af
-    fi
-    code=$?
-    if [[ $code -ne 0 ]]; then
-        echo "!! docker prune failed (exit $code)"
+        code=$?
+        if [[ $code -ne 0 ]]; then
+            echo "!! docker image prune failed (exit $code)"
+            prune_failed=true
+        fi
+    elif [[ $code -eq 2 ]]; then
         prune_failed=true
     fi
-else
-    echo ">>> Skipping Docker prune (use --prune to opt in)"
 fi
 
 echo ""
