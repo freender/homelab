@@ -1,10 +1,7 @@
 /seerr/cache
 /plex/Library/Application Support/Plex Media Server/Cache
-/plex/Library/Application Support/Plex Media Server/Metadata
-/plex/Library/Application Support/Plex Media Server/Media
 /plex/transcode
 /plex/downloads
-/jellyfin/library/data/metadata
 /jellyfin/library/cache
 /radarr/MediaCover
 /radarr4k/MediaCover
