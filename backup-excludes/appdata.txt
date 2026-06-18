@@ -3,6 +3,7 @@
 /plex/transcode
 /plex/downloads
 /jellyfin/library/cache
+/jellyfin/library/data/transcodes
 /radarr/MediaCover
 /radarr4k/MediaCover
 /sonarr/MediaCover
