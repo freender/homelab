@@ -43,10 +43,16 @@ FILE_SPECS = (
     FileSpec("sshd-hardening.conf", "/etc/ssh/sshd_config.d/01-disable-password-auth.conf"),
     FileSpec("zfs.conf", "/etc/modprobe.d/zfs.conf"),
     FileSpec("99-inotify.conf", "/etc/sysctl.d/99-inotify.conf"),
-    FileSpec(NOTIFY_SCRIPT, "/usr/local/bin/homelab-notify-failure", mode="755"),
+    FileSpec(
+        NOTIFY_SCRIPT,
+        "/usr/local/bin/homelab-notify-failure",
+        mode="755",
+        feature="notifications",
+    ),
     FileSpec(
         NOTIFY_SERVICE,
         "/etc/systemd/system/homelab-notify-failure@.service",
+        feature="notifications",
     ),
     FileSpec("telegram.env", "/etc/homelab/telegram.env", mode="600", feature="notifications"),
     FileSpec("99-wireguard.conf", "/etc/sysctl.d/99-wireguard.conf", feature="wireguard"),
@@ -216,12 +222,15 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
     primary_interface_mac = load_network_mac(root, host)
     samba_enabled = str(registry.get(host, "ubuntu-setup.samba", "false")).lower() == "true"
     wireguard_enabled = str(registry.get(host, "ubuntu-setup.wireguard", "false")).lower() == "true"
+    notifications_requested = (
+        str(registry.get(host, "ubuntu-setup.notifications", "true")).lower() == "true"
+    )
     zfs_arc_max = str(registry.get(host, "ubuntu-setup.zfs_arc_max", "8589934592"))
     notifications_enabled = False
     telegram_path: Path | None = None
     try:
         telegram_path = telegram_env_path(root)
-        notifications_enabled = telegram_path.is_file()
+        notifications_enabled = notifications_requested and telegram_path.is_file()
     except ValueError:
         notifications_enabled = False
 

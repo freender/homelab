@@ -52,10 +52,10 @@ Hosts currently managed by this module:
 
 ## Troubleshooting
 
-- `zavala` is a PBS container on cinci and is not emitted as a direct SSH alias unless container SSH is intentionally exposed. Use `cinci-root` plus `docker exec` for container administration:
+- `zavala` is retired. Cinci PBS now runs in Docker on `cinci`; use the normal `cinci` or `cinci-root` alias for host-level administration:
 
 ```bash
-ssh cinci-root 'docker exec zavala proxmox-backup-manager datastore list'
+ssh cinci-root 'docker ps --filter name=pbs'
 ```
 
 ## Structure
