@@ -5,6 +5,7 @@ from pathlib import Path
 from ..build import write_env_file
 from ..deploy import DeploySession, force_env, prepare_build_dir, stage_and_run_remote_installer
 from ..hosts import HostLookupError, default_registry
+from ..module_support import feature_paused
 from ..output import print_action, print_sub
 from ..ssh import HostConnection
 
@@ -44,13 +45,14 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
 
     autoupgrade = str(registry.get(host, "apt-upgrade.autoupgrade", "false")).lower()
     schedule = str(registry.get(host, "apt-upgrade.schedule", "*-*-* 09:00:00"))
+    paused = feature_paused(registry, host, "apt-upgrade")
 
     build_dir = root / "apt-upgrade" / "build" / host
     prepare_build_dir(build_dir)
     write_service(build_dir, cleanup=False)
     if autoupgrade == "true":
         write_timer(build_dir, schedule)
-    write_env(build_dir, autoupgrade=autoupgrade, schedule=schedule)
+    write_env(build_dir, autoupgrade=autoupgrade, schedule=schedule, paused=paused)
 
     ssh_hostname = str(registry.get(host, "config.hostname", host))
     ssh_user = str(registry.get(host, "config.user"))
@@ -69,7 +71,12 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
         print_sub(message)
 
     if dry_run:
-        if autoupgrade == "true":
+        if paused:
+            print_sub(
+                f"[DRY-RUN] Would pause apt-upgrade on {host} "
+                "(stop and disable the timer, skip on-demand run)"
+            )
+        elif autoupgrade == "true":
             print_sub(
                 f"[DRY-RUN] Would install apt dist-upgrade timer on {host} at {schedule}"
             )
@@ -123,13 +130,14 @@ def write_timer(build_dir: Path, schedule: str) -> None:
     (build_dir / "timer").write_text(content, encoding="utf-8")
 
 
-def write_env(build_dir: Path, autoupgrade: str, schedule: str) -> None:
+def write_env(build_dir: Path, autoupgrade: str, schedule: str, paused: bool) -> None:
     write_env_file(
         build_dir / "env",
         {
             "CLEANUP": "false",
             "AUTOUPGRADE": autoupgrade,
             "SCHEDULE": schedule,
+            "PAUSED": "true" if paused else "false",
         },
     )
 

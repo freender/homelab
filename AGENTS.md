@@ -77,6 +77,48 @@ If a module has no dedicated test script, use `./deploy --dry-run` as the test.
 - `*/build`: generated output (gitignored).
 - `secrets/`: 1Password-backed deploy-time secret catalog/templates only; no plaintext `.env` files should live here.
 
+## Deploy, Disable, and Pause Patterns
+
+There are three distinct "off/freeze" switches. Do not conflate them.
+
+- **`deploy: false`** (host-level feature gate; formerly `enabled: false`). Set on a
+  feature block in `hosts.conf`. Removes the host from that module's deploy targets
+  entirely: the module is skipped and the running service on the host is **never
+  touched**. Use for planning/inventory-only blocks. Resolved centrally in
+  `src/homelab/hosts.py` (`_feature_value_enabled`); `deploy` wins when both are
+  present. Legacy `enabled: false` still works but emits a `DeprecationWarning` —
+  prefer `deploy: false` in new inventory.
+- **`<feature>.paused: true`** (module-wide pause). Keeps the feature deployed but
+  actively **stops and disables its managed systemd units** on the host, and can be
+  flipped back to resume. Use to freeze a service (e.g. pause backups/upgrades/zfs)
+  during maintenance without removing it from inventory. Implemented via the shared
+  helpers below. Supported today by `disk-spindown`, `apt-upgrade`,
+  `pbs-client-backup`, and `zfs-automation` (host-wide freeze of all zfs timers).
+- **Per-job/sub-unit `paused: true`** (fine-grained pause). For modules that manage
+  multiple independent units, pause a single one while the rest keep running.
+  Currently: `zfs-automation.replication_jobs.<job>.paused: true` stops/disables only
+  that replication job's timer (unit files stay installed). This is **distinct from
+  the job's `enabled: false`**, which retires the job entirely (unit files removed).
+
+### How to add `paused` to a module
+
+1. **Python:** read the flag with `feature_paused(registry, host, "<feature>")` from
+   `module_support.py` (module-wide) and/or `normalize_bool(...)` for a nested
+   sub-unit flag. Write a `PAUSED` (and, for multi-unit modules, a list like
+   `PAUSED_REPLICATION_TIMERS`) entry into the module's env/config file. Surface the
+   pause in the `[DRY-RUN]` output.
+2. **Bash (`install.sh`):** after files are installed and `systemctl daemon-reload`,
+   call the shared `lib/utils.sh` helper `homelab_apply_pause "$PAUSED" unit...`.
+   It stops+disables each unit and returns 0 (caller should early-exit) when paused,
+   1 when not. For multi-unit modules, enumerate units (glob on-disk where they are
+   dynamically generated, e.g. `homelab-zfs-replication-*.timer`) so nothing is
+   missed, and prefer `ensure_timer_state <unit> false` for per-unit disable while
+   other units follow their normal enable flag.
+3. **Semantics:** a paused deploy must leave unit files on disk (deployed, not
+   uninstalled), and resume must respect pre-existing per-area toggles (e.g. do not
+   re-enable a timer that `manage_*: false` keeps disabled).
+4. **Docs:** update the `hosts.conf` header contract if you add a new pause knob.
+
 ## Coding Style Guidelines
 
 - Python target: 3.13; local orchestration should be Python.

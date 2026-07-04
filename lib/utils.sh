@@ -369,3 +369,42 @@ ensure_timer_state() {
         print_sub "$timer already enabled"
     fi
 }
+
+# Apply the shared module "paused" convention.
+#
+# When paused, stop and disable the given systemd units so the module's managed
+# service does no work, while the module stays deployed and can be resumed by
+# flipping the flag back. This is distinct from the host-level `deploy: false`
+# targeting gate, which skips deployment entirely and never touches the units.
+#
+# Usage:
+#   if homelab_apply_pause "$PAUSED" unit1.timer unit2.service; then
+#       print_header "My Module Complete (paused)"
+#       exit 0
+#   fi
+#
+# Returns 0 when paused (caller should stop further work / early-exit), and
+# 1 when not paused (caller should continue with normal enable logic).
+homelab_apply_pause() {
+    local paused="$1"
+    shift
+
+    if [[ "$paused" != "true" ]]; then
+        return 1
+    fi
+
+    local unit
+    print_action "Pausing"
+    for unit in "$@"; do
+        [[ -n "$unit" ]] || continue
+        if systemctl is-active --quiet "$unit" 2>/dev/null \
+            || systemctl is-enabled --quiet "$unit" 2>/dev/null; then
+            systemctl disable --now "$unit" 2>/dev/null || true
+            print_ok "$unit stopped and disabled"
+        else
+            print_sub "$unit already stopped"
+        fi
+    done
+
+    return 0
+}

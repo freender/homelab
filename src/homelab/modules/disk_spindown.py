@@ -9,7 +9,7 @@ from ..hosts import default_registry
 from ..module_support import (
     FileSpec,
     HostArtifacts,
-    normalize_bool,
+    feature_paused,
     require_text,
     write_file_map,
 )
@@ -97,17 +97,13 @@ def normalize_config(registry, host: str) -> DiskSpindownConfig:
     if host_type != "pve":
         raise ValueError(f"disk-spindown supports PVE hosts only: {host}")
 
-    # NOTE: `disk-spindown.paused` is a separate knob from the feature-level
-    # `enabled: false` convention (see hosts.conf header comment). Setting the
-    # feature `enabled: false` removes the host from deploy targets entirely
-    # and never touches the running service. `paused: true` keeps the module
-    # deploying so it can actively stop/disable the hd-idle service and wakeup
-    # timer on the host, and can be flipped back to resume spin-down.
-    paused = normalize_bool(
-        registry.get(host, "disk-spindown.paused", None),
-        False,
-        f"disk-spindown.paused must be true or false for {host}",
-    )
+    # NOTE: `disk-spindown.paused` is a separate knob from the host-level
+    # `deploy: false` targeting gate (see hosts.conf header comment). Setting
+    # `deploy: false` removes the host from deploy targets entirely and never
+    # touches the running service. `paused: true` keeps the module deploying so
+    # it can actively stop/disable the hd-idle service and wakeup timer on the
+    # host, and can be flipped back to resume spin-down.
+    paused = feature_paused(registry, host, "disk-spindown")
 
     idle_seconds = int(registry.get(host, "disk-spindown.idle_seconds", 1800))
     if idle_seconds < 300:

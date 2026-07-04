@@ -107,22 +107,42 @@ def _resolve_dotted_key(data: dict[str, Any], key: str) -> Any:
 
 def _has_enabled_feature(config: dict[str, Any], feature: str) -> bool:
     if feature in config:
-        return _feature_value_enabled(config[feature])
+        return _feature_value_enabled(config[feature], feature)
 
     features = config.get("features") or {}
     return (
         isinstance(features, dict)
         and feature in features
-        and _feature_value_enabled(features[feature])
+        and _feature_value_enabled(features[feature], feature)
     )
 
 
-def _feature_value_enabled(value: object) -> bool:
+def _feature_value_enabled(value: object, feature: str | None = None) -> bool:
     if value is False:
         return False
-    if isinstance(value, dict) and value.get("enabled") is False:
-        return False
+    if isinstance(value, dict):
+        # `deploy: false` is the host-level targeting gate (skip deployment;
+        # never touch the running service). The legacy `enabled: false` spelling
+        # is still honored for a transition but is deprecated in favor of
+        # `deploy`. `deploy` wins when both are present.
+        if "deploy" in value:
+            return value.get("deploy") is not False
+        if value.get("enabled") is False:
+            _warn_legacy_enabled(feature)
+            return False
     return True
+
+
+def _warn_legacy_enabled(feature: str | None) -> None:
+    import warnings
+
+    target = f" for feature '{feature}'" if feature else ""
+    warnings.warn(
+        f"host-level 'enabled: false'{target} is deprecated; "
+        "use 'deploy: false' instead",
+        DeprecationWarning,
+        stacklevel=3,
+    )
 
 
 def validate_hosts_data(data: object, path: Path) -> None:

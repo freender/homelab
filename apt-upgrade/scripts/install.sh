@@ -22,9 +22,10 @@ fi
 
 require_dir "$BUILD_DIR" "$BUILD_DIR" || exit 1
 
-# Source env to get AUTOUPGRADE and SCHEDULE
+# Source env to get AUTOUPGRADE, SCHEDULE, and PAUSED
 AUTOUPGRADE="false"
 SCHEDULE="*-*-* 09:00:00"
+PAUSED="false"
 if [[ -f "$BUILD_DIR/env" ]]; then
     # shellcheck source=/dev/null
     source "$BUILD_DIR/env"
@@ -34,6 +35,20 @@ fi
 local_changed=false
 if copy_if_changed "$BUILD_DIR/service" "$SERVICE_PATH" "$SERVICE_NAME"; then
     local_changed=true
+fi
+
+if [[ "$local_changed" == true ]]; then
+    systemctl daemon-reload
+fi
+
+# Paused: keep the service unit installed but stop/disable the timer and skip
+# any on-demand upgrade. Flip apt-upgrade.paused back to false to resume.
+if homelab_apply_pause "$PAUSED" "$TIMER_NAME"; then
+    print_header "apt-upgrade paused"
+    if [[ -f /var/run/reboot-required ]]; then
+        print_warn "Reboot required on $(hostname)"
+    fi
+    exit 0
 fi
 
 if [[ "$AUTOUPGRADE" == "true" ]]; then
@@ -61,9 +76,6 @@ if [[ "$AUTOUPGRADE" == "true" ]]; then
     systemctl list-timers --all --no-pager | grep -F "$TIMER_NAME" || true
 else
     # autoupgrade not enabled: install service only, run upgrade now
-    if [[ "$local_changed" == true ]]; then
-        systemctl daemon-reload
-    fi
     print_sub "Running apt upgrade now (autoupgrade not enabled)..."
     systemctl start "$SERVICE_NAME"
     print_sub "Upgrade complete"

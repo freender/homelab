@@ -117,23 +117,11 @@ if [[ "${HD_IDLE_ENABLED:-true}" == "false" ]]; then
 
     systemctl disable --now hd-idle.service 2>/dev/null || true
 
-    print_action "Disabling"
-    if systemctl is-active --quiet homelab-disk-wakeup.timer 2>/dev/null \
-        || systemctl is-enabled --quiet homelab-disk-wakeup.timer 2>/dev/null; then
-        systemctl disable --now homelab-disk-wakeup.timer
-        print_ok "homelab-disk-wakeup.timer stopped and disabled"
-    else
-        print_sub "homelab-disk-wakeup.timer already stopped"
-    fi
-    if systemctl is-active --quiet homelab-disk-spindown.service 2>/dev/null \
-        || systemctl is-enabled --quiet homelab-disk-spindown.service 2>/dev/null; then
-        systemctl disable --now homelab-disk-spindown.service
-        print_ok "homelab-disk-spindown.service stopped and disabled"
-    else
-        print_sub "homelab-disk-spindown.service already stopped"
-    fi
+    homelab_apply_pause "true" \
+        homelab-disk-wakeup.timer \
+        homelab-disk-spindown.service
 
-    print_header "Disk Spindown Complete (disabled)"
+    print_header "Disk Spindown Complete (paused)"
     exit 0
 fi
 

@@ -9,7 +9,7 @@ from .. import op_secrets
 from ..build import copy_files, render_file, write_env_file
 from ..deploy import DeploySession, force_env, prepare_build_dir, stage_and_run_remote_installer
 from ..hosts import default_registry
-from ..module_support import tmpfs_secret_stage, validate_secret_reference
+from ..module_support import feature_paused, tmpfs_secret_stage, validate_secret_reference
 from ..output import print_action, print_sub
 from ..ssh import HostConnection, build_files, diff_many
 
@@ -117,6 +117,7 @@ class ReplicationJob:
     syncoid_options: tuple[str, ...]
     delete_target_snapshots: bool
     target_snapshot_prune: TargetSnapshotPrune | None
+    paused: bool = False
 
 
 @dataclass(frozen=True)
@@ -1114,6 +1115,16 @@ def normalize_replication_config(
         if not enabled and not include_disabled:
             continue
 
+        # `paused: true` keeps the job fully deployed (unit files stay installed)
+        # but stops and disables its timer so it does not run. This differs from
+        # `enabled: false`, which retires the job entirely (units removed). A
+        # paused job stays in the returned list so its units are still managed.
+        paused = normalize_bool(
+            job_config.get("paused"),
+            False,
+            f"paused for replication job '{normalized_job_name}' must be true or false for {host}",
+        )
+
         schedule = str(job_config.get("schedule", defaults.get("schedule", "*-*-* 02:30:00")))
         explicit_plans = job_config.get("plans", [])
         if not isinstance(explicit_plans, list):
@@ -1219,6 +1230,7 @@ def normalize_replication_config(
                 syncoid_options=tuple(syncoid_options),
                 delete_target_snapshots=delete_target_snapshots,
                 target_snapshot_prune=target_snapshot_prune,
+                paused=paused,
             )
         )
     return parsed_jobs
@@ -2337,6 +2349,23 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
             print_sub(message)
 
         if dry_run:
+            if feature_paused(registry, host, "zfs-automation"):
+                print_sub(
+                    f"[DRY-RUN] Would pause zfs-automation on {host} "
+                    "(stop and disable snapshot, scrub, health-check, and all "
+                    "replication timers)"
+                )
+            else:
+                paused_jobs = [
+                    job.name
+                    for job in normalize_replication_config(registry, host)
+                    if job.paused
+                ]
+                for job_name in paused_jobs:
+                    print_sub(
+                        f"[DRY-RUN] Would pause replication job '{job_name}' on {host} "
+                        "(stop and disable its timer; job stays deployed)"
+                    )
             print_sub(f"[DRY-RUN] Would deploy zfs-automation to {host}")
             print_sub("Build files:")
             for file_name in build_files(artifacts.build_dir):
@@ -2436,6 +2465,11 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
         True,
         f"zfs-automation.manage_health_check must be true or false for {host}",
     )
+    # `paused: true` stops and disables ALL managed zfs timers (snapshots, scrub,
+    # health-check, and every replication job) while keeping the module deployed;
+    # distinct from `deploy: false`, which skips the host entirely. This is a
+    # single host-wide freeze switch that overrides the per-area manage_* flags.
+    paused = feature_paused(registry, host, "zfs-automation")
     pools = resolve_pools(registry, host)
     snapshot_plans = normalize_snapshot_plans(registry, host)
     replication_jobs = normalize_replication_config(
@@ -2619,10 +2653,18 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
         encoding="utf-8",
     )
 
+    paused_replication_timers = " ".join(
+        f"homelab-zfs-replication-{job.name}.timer"
+        for job in replication_jobs
+        if job.paused
+    )
+
     write_env_file(
         build_dir / "env",
         {
             "HOMELAB_STATE_DIR": homelab_state_dir,
+            "PAUSED": "true" if paused else "false",
+            "PAUSED_REPLICATION_TIMERS": paused_replication_timers,
             "ENABLE_ZFS_SNAPSHOTS": "true" if snapshot_plans and manage_snapshots else "false",
             "ENABLE_ZFS_REPLICATION": (
                 "true" if replication_jobs and manage_replication else "false"

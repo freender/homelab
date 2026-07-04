@@ -10,6 +10,7 @@ from ..hosts import default_registry
 from ..module_support import (
     FileSpec,
     copy_cached_secret,
+    feature_paused,
     normalize_bool,
     normalize_string_list,
     require_text,
@@ -46,6 +47,7 @@ class ArchivePlan:
 @dataclass(frozen=True)
 class BackupPlan:
     enabled: bool
+    paused: bool
     schedule: str
     repository: str
     namespace: str
@@ -168,6 +170,7 @@ def normalize_backup_plan(root: Path, registry, host: str) -> BackupPlan:
             True,
             f"{prefix}.enabled for {host} must be true or false",
         ),
+        paused=feature_paused(registry, host, prefix),
         schedule=str(registry.get(host, f"{prefix}.schedule", "*-*-* 00:20:00")),
         repository=require_text(
             registry.get(host, f"{prefix}.repository", ""),
@@ -242,6 +245,11 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
         print_sub(message)
 
     if dry_run:
+        if plan.paused:
+            print_sub(
+                f"[DRY-RUN] Would pause PBS client backup on {host} "
+                "(stop and disable the timer)"
+            )
         print_sub(f"[DRY-RUN] Would deploy PBS client backup to {host}:{REMOTE_ROOT}/")
         print_sub("Build files:")
         for file_name in build_files(build_dir):
@@ -304,6 +312,7 @@ def write_config(path: Path, plan: BackupPlan, retire_pve_config_backup: bool) -
         f'BACKUP_ID="{plan.backup_id}"',
         f'BACKUP_TYPE="{plan.backup_type}"',
         f'RUNNER="{plan.runner}"',
+        f'PAUSED="{str(plan.paused).lower()}"',
         f'DOCKER_IMAGE="{plan.docker_image}"',
         f'DOCKER_NETWORK="{plan.docker_network}"',
         f'DOCKER_ADD_HOST_COUNT="{len(plan.docker_add_hosts)}"',

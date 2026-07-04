@@ -50,6 +50,22 @@ def normalize_bool(value: object, default: bool, message: str) -> bool:
     raise ValueError(message)
 
 
+def feature_paused(registry, host: str, feature: str, default: bool = False) -> bool:
+    """Return whether a feature is paused for a host.
+
+    `<feature>.paused` is a distinct knob from the host-level `deploy: false`
+    (formerly `enabled: false`) targeting gate. `deploy: false` removes the host
+    from a module's deploy targets entirely and never touches the running
+    service; `paused: true` keeps the module deploying so it can actively stop
+    and disable the managed units, and can be flipped back to resume.
+    """
+    return normalize_bool(
+        registry.get(host, f"{feature}.paused", None),
+        default,
+        f"{feature}.paused must be true or false for {host}",
+    )
+
+
 def normalize_string_list(value: object, message: str) -> list[str]:
     if value in (None, ""):
         return []

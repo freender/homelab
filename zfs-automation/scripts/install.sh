@@ -335,11 +335,51 @@ if [[ "$units_changed" == "true" ]]; then
     systemctl daemon-reload
 fi
 
+# Paused: keep every unit installed and current, but stop and disable ALL
+# managed zfs timers (snapshots, scrub, health-check, and every replication
+# job) so no zfs automation runs. This is a host-wide freeze that overrides the
+# per-area ENABLE_ZFS_* flags. Flip zfs-automation.paused back to false to
+# resume. Replication jobs are enumerated from disk (not just the file map) so
+# jobs that are still generated but paused are all caught.
+if [[ "${PAUSED:-false}" == "true" ]]; then
+    pause_units=(
+        homelab-zfs-snapshots.timer
+        zfs-scrub.timer
+        homelab-zfs-health-check.timer
+    )
+    shopt -s nullglob
+    for timer_path in /etc/systemd/system/homelab-zfs-replication-*.timer; do
+        pause_units+=("$(basename "$timer_path")")
+    done
+    shopt -u nullglob
+
+    homelab_apply_pause "true" "${pause_units[@]}"
+    print_header "ZFS Automation Complete (paused)"
+    exit 0
+fi
+
 ensure_timer_state homelab-zfs-snapshots.timer "$ENABLE_ZFS_SNAPSHOTS" "$units_changed"
+
+# Per-job replication pause: a paused job keeps its units installed but its
+# timer is stopped/disabled, while non-paused jobs follow ENABLE_ZFS_REPLICATION.
+# Distinct from a retired job (enabled: false), whose units are removed above.
+declare -A PAUSED_REPLICATION_TIMER_SET=()
+for paused_timer in ${PAUSED_REPLICATION_TIMERS:-}; do
+    PAUSED_REPLICATION_TIMER_SET["$paused_timer"]=1
+done
+
+replication_job_paused() {
+    local unit="$1"
+    [[ -n "${PAUSED_REPLICATION_TIMER_SET[$unit]:-}" ]]
+}
 
 for unit in "${!FILE_MAP_DEST[@]}"; do
     if [[ "$unit" == homelab-zfs-replication-*.timer ]]; then
-        ensure_timer_state "$unit" "$ENABLE_ZFS_REPLICATION" "$units_changed"
+        if replication_job_paused "$unit"; then
+            ensure_timer_state "$unit" "false" "$units_changed"
+        else
+            ensure_timer_state "$unit" "$ENABLE_ZFS_REPLICATION" "$units_changed"
+        fi
     fi
 done
 
@@ -347,6 +387,11 @@ if [[ "${ZFS_REPLICATION_RECOVERY_START_FAILED:-false}" == "true" && "$ENABLE_ZF
     print_action "ZFS replication recovery"
     for unit in "${!FILE_MAP_DEST[@]}"; do
         if [[ "$unit" == homelab-zfs-replication-*.service ]] && systemctl is-failed --quiet "$unit"; then
+            timer_unit="${unit%.service}.timer"
+            if replication_job_paused "$timer_unit"; then
+                print_sub "Skipping paused $unit"
+                continue
+            fi
             print_sub "Restarting failed $unit"
             systemctl reset-failed "$unit"
             systemctl start "$unit"
