@@ -6,7 +6,13 @@ from pathlib import Path
 from ..build import render_file, write_env_file
 from ..deploy import DeploySession, force_env, prepare_build_dir, stage_and_run_remote_installer
 from ..hosts import default_registry
-from ..module_support import FileSpec, HostArtifacts, require_text, write_file_map
+from ..module_support import (
+    FileSpec,
+    HostArtifacts,
+    normalize_bool,
+    require_text,
+    write_file_map,
+)
 from ..output import print_action, print_error, print_sub
 from ..ssh import HostConnection, build_files, diff_many
 
@@ -21,6 +27,7 @@ TEMPLATE_FILES = [
 
 @dataclass(frozen=True)
 class DiskSpindownConfig:
+    paused: bool
     idle_seconds: int
     command_type: str
     symlink_policy: int
@@ -90,6 +97,18 @@ def normalize_config(registry, host: str) -> DiskSpindownConfig:
     if host_type != "pve":
         raise ValueError(f"disk-spindown supports PVE hosts only: {host}")
 
+    # NOTE: `disk-spindown.paused` is a separate knob from the feature-level
+    # `enabled: false` convention (see hosts.conf header comment). Setting the
+    # feature `enabled: false` removes the host from deploy targets entirely
+    # and never touches the running service. `paused: true` keeps the module
+    # deploying so it can actively stop/disable the hd-idle service and wakeup
+    # timer on the host, and can be flipped back to resume spin-down.
+    paused = normalize_bool(
+        registry.get(host, "disk-spindown.paused", None),
+        False,
+        f"disk-spindown.paused must be true or false for {host}",
+    )
+
     idle_seconds = int(registry.get(host, "disk-spindown.idle_seconds", 1800))
     if idle_seconds < 300:
         raise ValueError(f"disk-spindown.idle_seconds must be at least 300 for {host}")
@@ -108,6 +127,7 @@ def normalize_config(registry, host: str) -> DiskSpindownConfig:
     )
 
     return DiskSpindownConfig(
+        paused=paused,
         idle_seconds=idle_seconds,
         command_type=command_type,
         symlink_policy=symlink_policy,
@@ -138,6 +158,7 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
     write_env_file(
         build_dir / "homelab-disk-spindown.defaults",
         {
+            "HD_IDLE_ENABLED": "false" if config.paused else "true",
             "HD_IDLE_IDLE_SECONDS": config.idle_seconds,
             "HD_IDLE_COMMAND_TYPE": config.command_type,
             "HD_IDLE_SYMLINK_POLICY": config.symlink_policy,
@@ -149,6 +170,9 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
 
 def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
     registry = default_registry(root)
+    config = normalize_config(registry, host)
+    if config.paused:
+        print_sub(f"disk-spindown paused for {host}; will stop hd-idle on deploy")
     artifacts = build_host_artifacts(root, host)
     ssh_hostname = str(registry.get(host, "config.hostname", host))
     ssh_user = str(registry.get(host, "config.user"))

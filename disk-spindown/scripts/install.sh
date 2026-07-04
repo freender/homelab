@@ -68,6 +68,7 @@ write_discovered_defaults() {
 
     tmp_path="$(mktemp)"
     {
+        printf 'HD_IDLE_ENABLED="%s"\n' "${HD_IDLE_ENABLED:-true}"
         printf 'HD_IDLE_IDLE_SECONDS="%s"\n' "${HD_IDLE_IDLE_SECONDS:-1800}"
         printf 'HD_IDLE_COMMAND_TYPE="%s"\n' "${HD_IDLE_COMMAND_TYPE:-ata}"
         printf 'HD_IDLE_SYMLINK_POLICY="%s"\n' "${HD_IDLE_SYMLINK_POLICY:-1}"
@@ -99,6 +100,42 @@ for file_name in \
         esac
     fi
 done
+
+# Check the enabled/paused flag from the just-installed defaults file before
+# running hardware discovery. Discovery (write_discovered_defaults) can fail
+# hard if no rotational disks are currently visible (e.g. disks temporarily
+# disconnected/being serviced), which is exactly a scenario where pausing
+# matters. Skip discovery entirely when paused so disabling never depends on
+# disk enumeration succeeding.
+# shellcheck disable=SC1091
+source /etc/default/homelab-disk-spindown
+
+if [[ "${HD_IDLE_ENABLED:-true}" == "false" ]]; then
+    if [[ "$units_changed" == "true" ]]; then
+        systemctl daemon-reload
+    fi
+
+    systemctl disable --now hd-idle.service 2>/dev/null || true
+
+    print_action "Disabling"
+    if systemctl is-active --quiet homelab-disk-wakeup.timer 2>/dev/null \
+        || systemctl is-enabled --quiet homelab-disk-wakeup.timer 2>/dev/null; then
+        systemctl disable --now homelab-disk-wakeup.timer
+        print_ok "homelab-disk-wakeup.timer stopped and disabled"
+    else
+        print_sub "homelab-disk-wakeup.timer already stopped"
+    fi
+    if systemctl is-active --quiet homelab-disk-spindown.service 2>/dev/null \
+        || systemctl is-enabled --quiet homelab-disk-spindown.service 2>/dev/null; then
+        systemctl disable --now homelab-disk-spindown.service
+        print_ok "homelab-disk-spindown.service stopped and disabled"
+    else
+        print_sub "homelab-disk-spindown.service already stopped"
+    fi
+
+    print_header "Disk Spindown Complete (disabled)"
+    exit 0
+fi
 
 write_discovered_defaults
 
