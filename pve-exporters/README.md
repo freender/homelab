@@ -7,8 +7,29 @@ Prometheus-native host metrics exporters for Proxmox and ZFS storage hosts.
 - bray (Proxmox)
 - clovis (Proxmox)
 - osiris (Proxmox)
+- cinci (Ubuntu offsite, `runtime: docker`)
+- cottonwood (Ubuntu offsite, `runtime: docker`)
 
-Offsite hosts `cinci` and `cottonwood` are intentionally not monitored here.
+### Offsite Ubuntu hosts (`runtime: docker`)
+
+Offsite hosts `cinci` and `cottonwood` set `pve-exporters.runtime: docker` in
+`hosts.conf`. In this mode the module does **not** install native
+`prometheus-node-exporter`/`smartctl-exporter` packages and does **not** own the
+Docker exporter stack: `node-exporter`, `smartctl-exporter`, and `cadvisor` remain
+host-managed under `/mnt/cache/appdata/<host>-exporters/compose.yml` and are scraped
+by `vmagent` on `helm` (targets in `vmagent/scrape.yml`).
+
+What the module **does** manage on these hosts:
+- The host-native `zfs-pool-textfile-exporter` script + systemd service/timer that
+  writes `homelab_zpool_*` metrics to `/var/lib/prometheus/node-exporter/zfs-pools.prom`.
+- Ensures the `node-exporter` service in the host compose has
+  `--collector.textfile.directory=/host/var/lib/prometheus/node-exporter` (edited in
+  place, idempotent) and runs `docker compose up -d node-exporter`.
+
+It does not modify smartctl/cadvisor services, networks, or any host-specific compose
+tuning. Deploy is over the offsite root SSH path (`config.user: root`,
+`sshkey: offsite`), which requires the offsite key loaded in the shared agent
+(`addoffsitekey` on `riven`).
 
 ## What It Collects
 - Host metrics via node_exporter (CPU, memory, load, uptime, disk, network, hwmon, ZFS)
@@ -65,6 +86,8 @@ Deploy to specific hosts:
 ```bash
 ./deploy pve-exporters ace
 ./deploy pve-exporters bray
+./deploy pve-exporters cinci        # runtime: docker; offsite key must be loaded
+./deploy pve-exporters cottonwood   # runtime: docker; offsite key must be loaded
 ```
 
 ## Verification
