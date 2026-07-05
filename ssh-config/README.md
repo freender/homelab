@@ -52,10 +52,10 @@ Hosts currently managed by this module:
 
 ## Troubleshooting
 
-- `zavala` is retired. Cinci PBS now runs in Docker on `cinci`; use the normal `cinci` or `cinci-root` alias for host-level administration:
+- `zavala` is retired as a host alias. Cinci is now baremetal Ubuntu; PBS runs in Docker there (container `zavala`) as an offsite DR target and is not registered as a PDM remote on `arc`. Use the normal `cinci` or `cinci-root` alias for host-level administration:
 
 ```bash
-ssh cinci-root 'docker ps --filter name=pbs'
+ssh cinci-root 'docker ps --filter name=zavala'
 ```
 
 ## Structure

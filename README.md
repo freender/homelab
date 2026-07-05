@@ -8,8 +8,7 @@ Automation and configuration management for Proxmox-based homelab infrastructure
 
 **Network:**
 - Home: `*.freender.internal`
-- Remote Ubuntu NAS: `cottonwood`
-- Remote standalone PVE: `cinci`
+- Remote Ubuntu offsite hosts: `cottonwood`, `cinci` (baremetal Ubuntu, Docker/PBS DR targets)
 - VIP for Traefik HA
 
 ## Deploy All
