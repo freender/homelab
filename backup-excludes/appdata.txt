@@ -22,6 +22,7 @@
 /scripts/logs
 /alloy/data
 /geoipupdate
+/immich/backups
 /immich/encoded-video
 /immich/thumbs
 /immich/cache
