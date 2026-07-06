@@ -224,7 +224,14 @@ chmod 0755 "${PATCH_SCRIPT}"
 
 cat > "${APT_HOOK}" <<EOF
 // Reapply the homelab ZFS receive cache patch after package updates.
-DPkg::Post-Invoke { "${PATCH_SCRIPT} --restart-services >/var/log/homelab-pve-zfs-recv-cache-patch.log 2>&1 || true"; };
+// Deferred via systemd-run so the reapply runs after the dpkg transaction has
+// fully replaced ZFSPoolPlugin.pm and released the shared patch lock, instead
+// of racing the in-transaction Post-Invoke (which could leave the file
+// unpatched after a libpve-storage-perl upgrade). Falls back to inline if
+// systemd-run is unavailable.
+DPkg::Post-Invoke {
+  "if command -v systemd-run >/dev/null 2>&1 && [ -x ${PATCH_SCRIPT} ]; then systemd-run --collect --unit=homelab-pve-zfs-recv-cache-patch --on-active=30s ${PATCH_SCRIPT} --restart-services >/var/log/homelab-pve-zfs-recv-cache-patch.log 2>&1 || true; elif [ -x ${PATCH_SCRIPT} ]; then ${PATCH_SCRIPT} --restart-services >/var/log/homelab-pve-zfs-recv-cache-patch.log 2>&1 || true; fi";
+};
 EOF
 chmod 0644 "${APT_HOOK}"
 
