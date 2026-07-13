@@ -18,6 +18,32 @@ fi
 FORCE_UPDATE=${FORCE_UPDATE:-false}
 BACKUP_KEEP_COUNT=${BACKUP_KEEP_COUNT:-3}
 
+# Assert that env vars are set AND non-empty, and fail loudly when they are not.
+#
+# The installers source a generated build/env and then branch on flags like
+# ENABLE_ZFS_SNAPSHOTS. ensure_timer_state treats anything != "true" as "disable", so
+# a truncated or partially-rendered env file does not error — it silently *disables*
+# snapshots, scrub and replication. Bare `set -e` cannot catch that (the var is simply
+# empty, no command fails). Guard the flags explicitly instead.
+#
+# Usage: require_env ENABLE_ZFS_SNAPSHOTS ENABLE_ZFS_SCRUB
+require_env() {
+    local name
+    local missing=()
+
+    for name in "$@"; do
+        if [[ -z "${!name+x}" || -z "${!name}" ]]; then
+            missing+=("$name")
+        fi
+    done
+
+    if (( ${#missing[@]} > 0 )); then
+        print_error "missing or empty required env value(s): ${missing[*]}"
+        print_sub "The generated env file is incomplete; refusing to run with an ambiguous config."
+        return 1
+    fi
+}
+
 load_file_map() {
     local map_file="${1:-${BUILD_DIR:-}/file-map.conf}"
     local filename remote_path mode
