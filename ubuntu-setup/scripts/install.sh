@@ -126,11 +126,14 @@ if [[ -n "$DEPLOY_USER" ]]; then
 fi
 
 print_action "Sudoers"
+# Validate the staged file BEFORE it lands: an invalid file in /etc/sudoers.d/
+# breaks sudo host-wide the instant it is written.
+if ! visudo -cf "$BUILD_DIR/sudoers" >/dev/null; then
+    print_error "staged sudoers file is invalid; refusing to install"
+    exit 1
+fi
 rc=0
 install_build_file "sudoers" || rc=$?
-if [[ $rc -eq 0 ]]; then
-    visudo -cf "$(mapped_dest "sudoers")"
-fi
 
 print_action "SSH hardening"
 sshd_changed=false
@@ -141,10 +144,16 @@ if [[ "$(mapped_dest "sshd-hardening.conf")" != "$legacy_sshd_hardening" && -e "
     print_ok "Removed legacy $(basename "$legacy_sshd_hardening")"
 fi
 rc=0
-install_build_file "sshd-hardening.conf" || rc=$?
+# An sshd_config.d drop-in cannot be checked standalone, so install it, validate the
+# merged config, and roll back on failure — otherwise a bad drop-in survives on disk
+# and locks us out at the next sshd restart.
+install_build_file_validated "sshd-hardening.conf" sshd -t || rc=$?
+if [[ $rc -eq 2 ]]; then
+    print_error "sshd hardening config rejected by sshd -t; rolled back"
+    exit 1
+fi
 [[ $rc -eq 0 ]] && sshd_changed=true
 if [[ "$sshd_changed" == true ]]; then
-    sshd -t
     systemctl reload ssh
     print_ok "SSH reloaded"
 fi

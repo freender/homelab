@@ -77,6 +77,52 @@ install_build_file() {
     return "$rc"
 }
 
+# Install a file-map entry, then run a validation command against the resulting
+# system state. If validation fails, restore the previous contents (or remove the
+# file entirely when it is new) so a bad config never survives the deploy.
+#
+# Use this for files that cannot be validated in isolation because they are merged
+# into a wider config at load time (e.g. an sshd_config.d drop-in). When a file
+# CAN be checked standalone (e.g. `visudo -cf <file>`), prefer validating the build
+# file before installing it — that never lets a broken file touch the system at all.
+#
+# Usage: install_build_file_validated sshd-hardening.conf sshd -t
+# Returns: 0 when changed and valid, 1 when unchanged, 2 on error or failed validation
+install_build_file_validated() {
+    local name="$1"
+    shift
+
+    local dest backup="" rc=0
+    dest="$(mapped_dest "$name")" || return 2
+
+    if [[ -f "$dest" ]]; then
+        backup="$(mktemp)"
+        cp "$dest" "$backup"
+    fi
+
+    install_build_file "$name" || rc=$?
+
+    if [[ $rc -ne 0 ]]; then
+        [[ -n "$backup" ]] && rm -f "$backup"
+        return "$rc"
+    fi
+
+    if "$@"; then
+        [[ -n "$backup" ]] && rm -f "$backup"
+        print_ok "$name validated"
+        return 0
+    fi
+
+    print_error "validation failed for $name; rolling back $dest"
+    if [[ -n "$backup" ]]; then
+        cp "$backup" "$dest"
+        rm -f "$backup"
+    else
+        rm -f "$dest"
+    fi
+    return 2
+}
+
 install_file_map() {
     local build_dir="${1:-${BUILD_DIR:-}}"
     local changed=1
