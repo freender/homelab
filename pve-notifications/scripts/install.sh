@@ -91,15 +91,21 @@ for (( i=0; i<${REMOVE_WEBHOOK_TARGET_COUNT:-0}; i++ )); do
     fi
 done
 
-matcher_args=(--name "$MATCHER_NAME" --mode all --target "$TARGET_NAME" --comment "$MATCHER_COMMENT")
+matcher_args=(--mode all --target "$TARGET_NAME" --comment "$MATCHER_COMMENT")
 for (( i=0; i<${MATCH_SEVERITY_COUNT:-0}; i++ )); do
     severity_var="MATCH_SEVERITY_${i}"
     matcher_args+=(--match-severity "${!severity_var}")
 done
 
 print_sub "Configuring notification matcher $MATCHER_NAME..."
-pvesh delete "/cluster/notifications/matchers/$MATCHER_NAME" >/dev/null 2>&1 || true
-pvesh create /cluster/notifications/matchers "${matcher_args[@]}"
+# Update in place when the matcher already exists. The old delete-then-create left
+# alerting silently disabled whenever the create failed, since the matcher was
+# already gone by then.
+if pvesh get "/cluster/notifications/matchers/$MATCHER_NAME" >/dev/null 2>&1; then
+    pvesh set "/cluster/notifications/matchers/$MATCHER_NAME" "${matcher_args[@]}"
+else
+    pvesh create /cluster/notifications/matchers --name "$MATCHER_NAME" "${matcher_args[@]}"
+fi
 
 if [[ "${DISABLE_MAIL_TO_ROOT:-true}" == "true" ]]; then
     pvesh set /cluster/notifications/endpoints/sendmail/mail-to-root --disable 1 >/dev/null 2>&1 || true
