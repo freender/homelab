@@ -22,6 +22,16 @@ require_file "$BUILD_DIR/file-map.conf" "$BUILD_DIR/file-map.conf" || exit 1
 # shellcheck source=/dev/null
 source "$BUILD_DIR/env"
 
+# ensure_timer_state treats anything != "true" as "disable", so an empty flag from a
+# truncated env file would silently stop snapshots, scrub, replication and health
+# checks rather than failing. Refuse to run on an ambiguous config.
+require_env \
+    ENABLE_ZFS_SNAPSHOTS \
+    ENABLE_ZFS_SCRUB \
+    ENABLE_ZFS_REPLICATION \
+    ENABLE_ZFS_HEALTH_CHECK \
+    || exit 1
+
 HOMELAB_STATE_DIR="${HOMELAB_STATE_DIR:-/var/lib/homelab}"
 MANAGED_DIR="${HOMELAB_STATE_DIR}/zfs-automation-managed"
 
