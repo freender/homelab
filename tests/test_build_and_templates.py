@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -48,12 +49,30 @@ def test_render_template_raises_for_missing_context(tmp_path: Path) -> None:
         render_template(template, tmp_path / "out.conf")
 
 
-def test_write_env_file_writes_quoted_values(tmp_path: Path) -> None:
+def test_write_env_file_writes_shell_safe_values(tmp_path: Path) -> None:
     destination = tmp_path / "build" / "env"
 
     write_env_file(destination, {"NAME": "helm", "ENABLED": True, "COUNT": 3})
 
-    assert destination.read_text(encoding="utf-8") == 'NAME="helm"\nENABLED="True"\nCOUNT="3"\n'
+    # shlex.quote leaves simple tokens bare; they still `source` correctly.
+    assert destination.read_text(encoding="utf-8") == "NAME=helm\nENABLED=True\nCOUNT=3\n"
+
+
+def test_write_env_file_neutralizes_shell_metacharacters(tmp_path: Path) -> None:
+    destination = tmp_path / "build" / "env"
+
+    # These files are sourced by the remote installers as root. A value carrying a
+    # command substitution must survive as a literal, not execute.
+    write_env_file(destination, {"EVIL": 'a$(id)b"c', "SCHEDULE": "*-*-* 08:00:00"})
+
+    sourced = subprocess.run(
+        ["bash", "-c", f'. "{destination}"; printf "%s\\n%s" "$EVIL" "$SCHEDULE"'],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    assert sourced.stdout == 'a$(id)b"c\n*-*-* 08:00:00'
 
 
 def test_prepare_build_dir_rotates_previous_build(tmp_path: Path) -> None:
