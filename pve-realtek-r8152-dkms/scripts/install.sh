@@ -256,7 +256,23 @@ stage_dkms_source
 
 result=0
 install_dkms_module || result=1
-install_runtime_config
+
+# The blacklist hard-disables the generic RTL815x drivers (install ... /bin/false).
+# Only ever establish it when the r8152 DKMS module actually built for every -pve
+# kernel; otherwise the next boot into an unbuilt kernel has neither r8152 nor a
+# generic fallback, and the host comes back with no network. On failure, tear any
+# stale blacklist back down so the generic drivers can bind.
+if [[ ${result} -eq 0 ]]; then
+  install_runtime_config
+else
+  echo "error: r8152 DKMS build failed for at least one -pve kernel; refusing to blacklist the generic drivers" >&2
+  if [[ -e ${BLACKLIST_FILE} ]]; then
+    rm -f "${BLACKLIST_FILE}"
+    update-initramfs -u -k all
+    echo "warning: removed stale ${BLACKLIST_FILE} so cdc_ncm/cdc_ether/r8153_ecm can bind the NIC" >&2
+  fi
+fi
+
 install_pve_autoinstall_hook
 
 driver_state=$(live_driver_state)
