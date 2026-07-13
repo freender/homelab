@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import shlex
 import shutil
 import tempfile
 from pathlib import Path
@@ -57,14 +58,17 @@ class HostConnection:
             temp_path.unlink(missing_ok=True)
 
     def stage_bundle(self, local_path: Path, remote_path: str) -> None:
-        self.connection.run(f'rm -rf "{remote_path}" && mkdir -p "{remote_path}"', hide=True)
+        quoted = shlex.quote(remote_path)
+        self.connection.run(f"rm -rf {quoted} && mkdir -p {quoted}", hide=True)
         self.connection.put(str(local_path), remote=remote_path)
 
     def prepare_remote_dir(self, remote_root: str, *subdirs: str) -> None:
-        directories = [f'"{remote_root}"']
-        directories.extend(f'"{remote_root}/{subdir}"' for subdir in subdirs)
+        directories = [shlex.quote(remote_root)]
+        directories.extend(shlex.quote(f"{remote_root}/{subdir}") for subdir in subdirs)
         joined = " ".join(directories)
-        self.connection.run(f'rm -rf "{remote_root}" && mkdir -p {joined}', hide=True)
+        self.connection.run(
+            f"rm -rf {shlex.quote(remote_root)} && mkdir -p {joined}", hide=True
+        )
 
     def upload(self, local_path: Path, remote_path: str) -> None:
         if local_path.is_dir():
@@ -74,15 +78,15 @@ class HostConnection:
 
     def upload_dir(self, local_dir: Path, remote_dir: str) -> None:
         remote_root = remote_dir.rstrip("/")
-        self.connection.run(f'mkdir -p "{remote_root}"', hide=True)
+        self.connection.run(f"mkdir -p {shlex.quote(remote_root)}", hide=True)
         for path in sorted(local_dir.rglob("*")):
             relative_path = path.relative_to(local_dir)
             target_path = f"{remote_root}/{relative_path.as_posix()}"
             if path.is_dir():
-                self.connection.run(f'mkdir -p "{target_path}"', hide=True)
+                self.connection.run(f"mkdir -p {shlex.quote(target_path)}", hide=True)
             else:
                 parent = target_path.rsplit("/", 1)[0]
-                self.connection.run(f'mkdir -p "{parent}"', hide=True)
+                self.connection.run(f"mkdir -p {shlex.quote(parent)}", hide=True)
                 self.connection.put(str(path), remote=target_path)
 
     def upload_shared_libs(self, root: Path, remote_root: str) -> None:
@@ -102,21 +106,25 @@ class HostConnection:
         require_root: bool = False,
         interpreter: str | None = None,
     ) -> None:
-        joined_args = " ".join(f'"{arg}"' for arg in args)
-        command = f'cd "{remote_dir}" && chmod +x "{installer}"'
+        # Everything interpolated here runs as root on the target. Double-quoting is not
+        # enough: a value containing $, `, \ or " would be shell-expanded or would break
+        # out of the quoting. shlex.quote makes each piece a literal.
+        joined_args = " ".join(shlex.quote(arg) for arg in args)
+        quoted_installer = shlex.quote(installer)
+        command = f"cd {shlex.quote(remote_dir)} && chmod +x {quoted_installer}"
         if require_root:
             command += (
                 ' && if [ "$(id -u)" -ne 0 ]; then '
                 'echo "Error: deploy requires root SSH user" >&2; exit 1; fi'
             )
-        installer_command = f'"{installer}"'
+        installer_command = quoted_installer
         if interpreter:
-            installer_command = f'{interpreter} "{installer}"'
+            installer_command = f"{interpreter} {quoted_installer}"
         if env:
-            exports = " ".join(f'{key}="{value}"' for key, value in env.items())
-            command += f' && env {exports} {installer_command} {joined_args}'
+            exports = " ".join(f"{key}={shlex.quote(value)}" for key, value in env.items())
+            command += f" && env {exports} {installer_command} {joined_args}"
         else:
-            command += f' && {installer_command} {joined_args}'
+            command += f" && {installer_command} {joined_args}"
         self.connection.run(command, pty=False)
 
 

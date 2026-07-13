@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shlex
 from pathlib import Path
 
 from .templates import render_template
@@ -20,6 +21,9 @@ def render_file(template: Path, destination: Path, **context: str) -> None:
 
 
 def write_env_file(destination: Path, values: dict[str, object]) -> None:
-    lines = [f'{key}="{value}"' for key, value in values.items()]
+    # These files are `source`d by the remote installers as root. Double-quoting is
+    # not enough: a value containing $, `, \ or " would be expanded or would break out
+    # of the quoting. shlex.quote produces a literal the shell cannot reinterpret.
+    lines = [f"{key}={shlex.quote(str(value))}" for key, value in values.items()]
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_text("\n".join([*lines, ""]), encoding="utf-8")
