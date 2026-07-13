@@ -6,6 +6,7 @@ from .. import op_secrets
 from ..build import render_file, write_env_file
 from ..deploy import DeploySession, force_env, prepare_build_dir, stage_and_run_remote_installer
 from ..hosts import HostLookupError, default_registry
+from ..module_support import copy_cached_secret, tmpfs_secret_stage
 from ..output import print_action, print_error, print_sub
 from ..ssh import HostConnection, build_files, diff_many
 
@@ -139,10 +140,9 @@ def render_configs(
     render_file(conf_template, build_dir / "apcupsd.conf", **context)
     render_file(shutdown_template, build_dir / "doshutdown", **context)
     (build_dir / "doshutdown").chmod(0o755)
-    (build_dir / "telegram.env").write_text(
-        telegram_env_path(root).read_text(encoding="utf-8"),
-        encoding="utf-8",
-    )
+    # telegram.env is NOT rendered into build/: it holds a live bot token and build/
+    # is a persistent, mode-0644 directory in the repo. It is staged from the tmpfs
+    # secret cache at upload time instead (see stage_and_install).
     write_env_file(build_dir / "env", {"ROLE": role, "HOST": host})
     return build_dir
 
@@ -154,18 +154,21 @@ def stage_and_install(
     connection: HostConnection,
     force: bool,
 ) -> None:
-    stage_and_run_remote_installer(
-        root,
-        connection,
-        REMOTE_ROOT,
-        [
-            (build_dir, f"{REMOTE_ROOT}/build/{host}"),
-            (root / "apcupsd" / "scripts", f"{REMOTE_ROOT}/scripts"),
-            (root / "apcupsd" / "configs", f"{REMOTE_ROOT}/configs"),
-        ],
-        "scripts/install.sh",
-        host,
-        env=force_env(force),
-        require_root=True,
-        remote_subdirs=("build", "lib"),
-    )
+    with tmpfs_secret_stage("homelab-apcupsd.") as secret_dir:
+        secret_stage = copy_cached_secret(root, "telegram", secret_dir / "telegram.env")
+        stage_and_run_remote_installer(
+            root,
+            connection,
+            REMOTE_ROOT,
+            [
+                (build_dir, f"{REMOTE_ROOT}/build/{host}"),
+                (secret_stage, f"{REMOTE_ROOT}/build/{host}/telegram.env"),
+                (root / "apcupsd" / "scripts", f"{REMOTE_ROOT}/scripts"),
+                (root / "apcupsd" / "configs", f"{REMOTE_ROOT}/configs"),
+            ],
+            "scripts/install.sh",
+            host,
+            env=force_env(force),
+            require_root=True,
+            remote_subdirs=("build", "lib"),
+        )

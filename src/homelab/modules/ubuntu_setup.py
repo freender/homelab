@@ -7,6 +7,7 @@ from .. import op_secrets
 from ..build import copy_file, copy_files, render_file, write_env_file
 from ..deploy import DeploySession, force_env, prepare_build_dir, stage_and_run_remote_installer
 from ..hosts import HostLookupError, default_registry
+from ..module_support import copy_cached_secret, tmpfs_secret_stage
 from ..modules.apcupsd import telegram_env_path
 from ..output import print_action, print_sub
 from ..ssh import HostConnection, build_files, diff_many
@@ -132,7 +133,10 @@ def resolve_remote_path(spec: FileSpec, artifacts: HostArtifacts) -> str:
     )
 
 
-def source_path_for_spec(module_dir: Path, artifacts: HostArtifacts, spec: FileSpec) -> Path:
+def source_path_for_spec(root: Path, artifacts: HostArtifacts, spec: FileSpec) -> Path:
+    if spec.build_name == "telegram.env":
+        # Live bot token: read from the tmpfs secret cache, never rendered into build/.
+        return telegram_env_path(root)
     return artifacts.build_dir / spec.build_name
 
 
@@ -168,7 +172,7 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
 
     print_sub("Comparing with remote configs...")
     diffs = [
-        (source_path_for_spec(module_dir, artifacts, spec), resolve_remote_path(spec, artifacts))
+        (source_path_for_spec(root, artifacts, spec), resolve_remote_path(spec, artifacts))
         for spec in artifacts.file_specs
     ]
     for message in diff_many(connection, diffs):
@@ -181,20 +185,30 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
             print_sub(f"    {file_name}")
         return
 
-    stage_and_run_remote_installer(
-        root,
-        connection,
-        REMOTE_ROOT,
-        [
-            (artifacts.build_dir, f"{REMOTE_ROOT}/build/{host}"),
-            (module_dir / "scripts", f"{REMOTE_ROOT}/scripts"),
-        ],
-        "scripts/install.sh",
-        host,
-        env=force_env(force),
-        require_root=True,
-        remote_subdirs=("build", "lib"),
-    )
+    upload_paths = [
+        (artifacts.build_dir, f"{REMOTE_ROOT}/build/{host}"),
+        (module_dir / "scripts", f"{REMOTE_ROOT}/scripts"),
+    ]
+
+    with tmpfs_secret_stage("homelab-ubuntu-setup.") as secret_dir:
+        if artifacts.notifications_enabled:
+            upload_paths.append(
+                (
+                    copy_cached_secret(root, "telegram", secret_dir / "telegram.env"),
+                    f"{REMOTE_ROOT}/build/{host}/telegram.env",
+                )
+            )
+        stage_and_run_remote_installer(
+            root,
+            connection,
+            REMOTE_ROOT,
+            upload_paths,
+            "scripts/install.sh",
+            host,
+            env=force_env(force),
+            require_root=True,
+            remote_subdirs=("build", "lib"),
+        )
 
 
 def write_file_map(build_dir: Path, artifacts: HostArtifacts) -> None:
@@ -257,8 +271,9 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
         copy_file(config_dir / "99-wireguard.conf", build_dir / "99-wireguard.conf")
     if samba_enabled:
         copy_file(config_dir / f"smb-{host}.conf", build_dir / "smb.conf")
-    if notifications_enabled and telegram_path is not None:
-        copy_file(telegram_path, build_dir / "telegram.env")
+    # telegram.env deliberately NOT copied into build/: it holds a live bot token and
+    # build/ is a persistent, mode-0644 directory in the repo. It is staged from the
+    # tmpfs secret cache at upload time instead (see deploy_host).
 
     write_env_file(
         build_dir / "env",
