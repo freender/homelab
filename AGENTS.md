@@ -31,7 +31,10 @@ Use this file to make coding agents consistent with existing patterns.
 ```bash
 ./validate
 ```
-Includes Python compile checks, ShellCheck, `hosts.conf` parse validation, and module dry-runs.
+Runs every check CI gates on: Python compile, Ruff, Pytest, `hosts.conf` parse
+validation, the inventory/module cross-check, ShellCheck, and module dry-runs. Ruff and
+Pytest are skipped with a warning if they are not installed, so run it from the repo
+`.venv` (or `uv run`) for true CI parity.
 
 ### Lint all scripts + YAML
 ```bash
@@ -44,7 +47,12 @@ Run `find .` only from the repository root; never adapt this pattern to `/`, `/m
 ```bash
 .venv/bin/python -m pytest tests/
 ```
-The `tests/` directory covers host parsing, CLI validation, SSH helpers, build/template behavior, and module fallbacks. Add or update tests when changing those areas.
+The `tests/` directory covers host parsing, CLI validation, SSH helpers, build/template
+behavior, module fallbacks, docker start-up safety, PBS backup helpers, HTTP-boot
+artifacts, zfs replication pause semantics, and golden-file renders for the modules that
+can take a node off the network (`tests/test_render_golden.py`: pve-postinstall
+interfaces, pve-interface-pinning link files, pve-gpu-passthrough boot cmdline, and
+pve-autoinstall answer targeting). Add or update tests when changing those areas.
 
 ### Single-file lint (fast targeted check)
 ```bash
@@ -141,11 +149,12 @@ For module shape, helper APIs, module-boundary decisions, SSH staging, logging, 
 
 ## CI Expectations
 CI on push/PR to `main` runs:
-- Python lint.
+- Python lint (Ruff).
+- Pytest.
 - ShellCheck (warning severity).
 - YAML lint for `hosts.conf`.
 - `homelab validate`.
-Run `PYTHONPATH=src .venv/bin/python -m homelab.cli validate` locally for CI parity (or just `./validate`).
+Run `PYTHONPATH=src .venv/bin/python -m homelab.cli validate` locally for CI parity (or just `./validate`) — it runs Ruff and Pytest too.
 After pushing, check the GitHub Actions run status for that push and inspect failures immediately if any job is red.
 
 ## Cursor/Copilot Rules
