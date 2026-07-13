@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.util
 import os
 import shutil
 import subprocess
@@ -19,6 +20,37 @@ from .ssh import offline_mode
 
 def repo_root() -> Path:
     return Path(__file__).resolve().parents[2]
+
+
+def _module_available(name: str) -> bool:
+    return importlib.util.find_spec(name) is not None
+
+
+def check_feature_registry(root: Path) -> None:
+    """Cross-check hosts.conf feature names against the module registry, both ways.
+
+    Nothing previously connected the two, so a feature block could name a module that
+    does not exist (a typo silently deploys nothing) and a registered module could be
+    enabled by no host at all (dead code that still passes CI).
+    """
+    registry = default_registry(root)
+    declared = registry.declared_features()
+    registered = set(MODULES)
+
+    unknown = sorted(declared - registered)
+    if unknown:
+        raise click.ClickException(
+            "hosts.conf declares feature(s) with no matching module: "
+            f"{', '.join(unknown)}. Registered modules: {', '.join(sorted(registered))}"
+        )
+
+    # Not fatal: a module can legitimately sit in the registry between hosts. But it
+    # deploys nowhere and is never exercised, so it must not be silent.
+    orphaned = sorted(module for module in registered if not registry.list_hosts(feature=module))
+    for module in orphaned:
+        print_warn(f"module '{module}' is registered but no host enables it; it deploys nowhere")
+
+    print_ok(f"{len(declared)} feature(s) map to registered modules")
 
 
 @click.group()
@@ -54,10 +86,12 @@ def deploy(dry_run: bool, force: bool, module: str, host: str) -> None:
             if exit_code != 0:
                 failed_modules.append(module_name)
         print()
-        print_action("Deploy complete!")
         if failed_modules:
-            message = f"Failed modules: {' '.join(failed_modules)}"
-            raise SystemExit(click.ClickException(message).exit_code)
+            # Do NOT print "Deploy complete!" here: a partial deploy is not a success,
+            # and raising the ClickException (rather than only reading its exit_code)
+            # is what actually surfaces which modules failed.
+            raise click.ClickException(f"Failed modules: {' '.join(failed_modules)}")
+        print_action("Deploy complete!")
         raise SystemExit(0)
 
     module_definition = MODULES.get(module)
@@ -81,11 +115,31 @@ def validate() -> None:
     _run_command([sys.executable, "-m", "compileall", "src"], cwd=root)
     print_ok("Python sources compile")
 
+    # Ruff and pytest both gate CI. Running them here is what makes `./validate` an
+    # honest pre-PR check: without them you could follow the AGENTS.md checklist,
+    # see a green validate, push, and still land a red build.
+    if _module_available("ruff"):
+        print_action("Ruff")
+        _run_command([sys.executable, "-m", "ruff", "check", "src", "tests"], cwd=root)
+        print_ok("Ruff passed")
+    else:
+        print_warn("ruff not installed; skipping Python lint (CI will still run it)")
+
+    if _module_available("pytest"):
+        print_action("Pytest")
+        _run_command([sys.executable, "-m", "pytest", "-q", "tests"], cwd=root)
+        print_ok("Tests passed")
+    else:
+        print_warn("pytest not installed; skipping tests (CI will still run them)")
+
     print_action("YAML Syntax")
     with (root / "hosts.conf").open("r", encoding="utf-8") as handle:
         hosts_data = yaml.safe_load(handle)
     validate_hosts_data({} if hosts_data is None else hosts_data, root / "hosts.conf")
     print_ok("hosts.conf valid")
+
+    print_action("Inventory")
+    check_feature_registry(root)
 
     shellcheck = shutil.which("shellcheck")
     if shellcheck:

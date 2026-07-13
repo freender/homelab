@@ -58,6 +58,21 @@ class HostRegistry:
         config = self._get_host(host)
         return _has_enabled_feature(config, feature)
 
+    def declared_features(self) -> set[str]:
+        """Every feature name that appears under any host's `features:` block.
+
+        Includes features gated off with `deploy: false` / `enabled: false`: a typo
+        in a disabled block is still a typo, and we want validate to catch it.
+        """
+        declared: set[str] = set()
+        for config in self.load().values():
+            if not isinstance(config, dict):
+                continue
+            features = config.get("features")
+            if isinstance(features, dict):
+                declared.update(features.keys())
+        return declared
+
     def get(self, host: str, key: str, default: Any = _MISSING) -> Any:
         config = self._get_host(host)
 
