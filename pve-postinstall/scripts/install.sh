@@ -424,15 +424,33 @@ case "$HOST_TYPE" in
         fi
 
         print_sub "Deploying sshd hardening config..."
-        if install_file sshd-hardening.conf; then
+        sshd_dest="${FILE_MAP_DEST[sshd-hardening.conf]}"
+        sshd_backup=""
+        if [[ -f "$sshd_dest" ]]; then
+            sshd_backup="$(mktemp)"
+            cp "$sshd_dest" "$sshd_backup"
+        fi
+        if ! install_file sshd-hardening.conf; then
+            [[ -n "$sshd_backup" ]] && rm -f "$sshd_backup"
+            exit 1
+        fi
+        if [[ "$INSTALL_FILE_CHANGED" == "true" ]]; then
             if sshd -t 2>/dev/null; then
                 systemctl reload sshd && print_sub "sshd reloaded with hardened config"
             else
-                print_warn "sshd -t failed; sshd not reloaded"
+                # Roll back: warning-only left the bad drop-in on disk, where it would
+                # break the next sshd restart or reboot and lock us out of the node.
+                if [[ -n "$sshd_backup" ]]; then
+                    cp "$sshd_backup" "$sshd_dest"
+                else
+                    rm -f "$sshd_dest"
+                fi
+                print_error "sshd -t failed; rolled back $sshd_dest"
+                [[ -n "$sshd_backup" ]] && rm -f "$sshd_backup"
+                exit 1
             fi
-        else
-            exit 1
         fi
+        [[ -n "$sshd_backup" ]] && rm -f "$sshd_backup"
 
         print_sub "Deploying failure notification helper..."
         install_file notify-failure.sh || exit 1
