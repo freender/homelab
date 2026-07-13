@@ -58,6 +58,27 @@ storage_defined() {
     awk -v name="$name" '$1 == "pbs:" && $2 == name { found = 1 } END { exit found ? 0 : 1 }' /etc/pve/storage.cfg 2>/dev/null
 }
 
+# Print the full `pbs: <name>` stanza from storage.cfg, so a failed recreate can put
+# the previous definition back instead of leaving the storage undefined.
+storage_stanza() {
+    local name="$1"
+    awk -v name="$name" '
+        $1 == "pbs:" && $2 == name { inside = 1; print; next }
+        inside && /^[^[:space:]]/ { inside = 0 }
+        inside { print }
+    ' /etc/pve/storage.cfg 2>/dev/null
+}
+
+# `server` and `datastore` are FIXED properties in PVE's PBS storage plugin: passing
+# either to `pvesm set` fails with "can't change value of fixed parameter" even when the
+# value is unchanged. So they must be excluded from the converge path, and a change to
+# either is the only thing that genuinely requires the destructive remove+add path.
+storage_field() {
+    local name="$1"
+    local field="$2"
+    storage_stanza "$name" | awk -v field="$field" '$1 == field { print $2; exit }'
+}
+
 pbs_add_is_transient_failure() {
     local error_file="$1"
     grep -Eiq "(Can't connect|Connection timed out|No route to host|Network is unreachable|Connection refused|Temporary failure|Name or service not known|could not resolve)" "$error_file"
@@ -92,8 +113,44 @@ for (( i=0; i<STORAGE_COUNT; i++ )); do
         exit 1
     fi
 
+    stanza_backup=""
+    pw_backup=""
+    pw_file="/etc/pve/priv/storage/${name}.pw"
+
     if storage_defined "$name"; then
-        print_sub "Recreating PBS storage $name..."
+        current_datastore="$(storage_field "$name" datastore)"
+        current_server="$(storage_field "$name" server)"
+
+        if [[ "$current_datastore" == "$datastore" && "$current_server" == "$server" ]]; then
+            # Converge in place. pvesm set is idempotent and, unlike remove+add, never
+            # leaves the storage undefined — a removed PBS storage means backups stop
+            # silently, which is exactly what the old remove-then-add could do whenever
+            # the re-add failed. Only mutable properties may be passed here: --server and
+            # --datastore are fixed and would be rejected outright.
+            print_sub "Updating PBS storage $name..."
+            set_args=(
+                --username "$username"
+                --fingerprint "$fingerprint"
+                --password "$password"
+                --content backup
+                --prune-backups keep-all=1
+            )
+            if [[ -n "$namespace" ]]; then
+                set_args+=(--namespace "$namespace")
+            fi
+            pvesm set "$name" "${set_args[@]}"
+            continue
+        fi
+
+        # A fixed property changed, so this genuinely needs a recreate. Capture the
+        # current definition and its password first so we can put it back if the add fails.
+        print_sub "Recreating PBS storage $name (datastore ${current_datastore:-none} -> $datastore, server ${current_server:-none} -> $server)..."
+        stanza_backup="$(mktemp)"
+        storage_stanza "$name" > "$stanza_backup"
+        if [[ -f "$pw_file" ]]; then
+            pw_backup="$(mktemp)"
+            cp "$pw_file" "$pw_backup"
+        fi
         pvesm remove "$name"
     else
         print_sub "Adding PBS storage $name..."
@@ -115,15 +172,31 @@ for (( i=0; i<STORAGE_COUNT; i++ )); do
     if ! pvesm add pbs "$name" \
         "${add_args[@]}" 2>"$add_error_file"; then
         cat "$add_error_file" >&2
-        if ! pbs_add_is_transient_failure "$add_error_file"; then
-            rm -f "$add_error_file"
-            exit 1
-        fi
+        transient=false
+        pbs_add_is_transient_failure "$add_error_file" && transient=true
         rm -f "$add_error_file"
-        print_warn "PBS storage $name is not reachable/configurable yet; skipping until next deploy"
-        continue
+
+        if [[ -n "$stanza_backup" ]]; then
+            cat "$stanza_backup" >> /etc/pve/storage.cfg
+            rm -f "$stanza_backup"
+            if [[ -n "$pw_backup" ]]; then
+                mkdir -p "$(dirname "$pw_file")"
+                cp "$pw_backup" "$pw_file"
+                chmod 600 "$pw_file"
+                rm -f "$pw_backup"
+            fi
+            print_warn "Restored previous definition of PBS storage $name after failed re-add"
+        fi
+
+        if [[ "$transient" == true ]]; then
+            print_warn "PBS storage $name is not reachable/configurable yet; skipping until next deploy"
+            continue
+        fi
+        exit 1
     fi
     rm -f "$add_error_file"
+    [[ -n "$stanza_backup" ]] && rm -f "$stanza_backup"
+    [[ -n "$pw_backup" ]] && rm -f "$pw_backup"
 
     print_sub "Ensuring prune policy on $name..."
     pvesm set "$name" --prune-backups keep-all=1
