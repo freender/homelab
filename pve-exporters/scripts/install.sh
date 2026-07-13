@@ -67,7 +67,7 @@ mkdir -p /var/lib/prometheus/node-exporter
 rc=0
 backup_and_copy_if_changed "$NODE_ENV_SRC" /etc/default/prometheus-node-exporter || rc=$?
 [[ $rc -eq 1 ]] || [[ $rc -eq 0 ]] || exit "$rc"
-[[ $rc -eq 1 ]] && NODE_EXPORTER_CHANGED=true
+[[ $rc -eq 0 ]] && NODE_EXPORTER_CHANGED=true
 
 rc=0
 backup_and_copy_if_changed "$SMART_ENV_SRC" /etc/default/smartctl-exporter || rc=$?
