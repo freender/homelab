@@ -70,8 +70,8 @@ PVE backup configuration
 - Subfeatures (configured in `hosts.conf` under `pve-backup`):
   - `pbs_setup`: standalone PBS storage definitions and backup jobs
   - `restore_lxc_configs`: opt-in restore of selected standalone LXC configs from the staged `/etc/pve` PBS backup; autostart defaults to disabled
-- Requires:
-  - `/etc/homelab/pbs-tokens.env` on target host (see `pve-backup/configs/pbs-tokens.env.example`) for standalone PBS storage auth
+- PBS storage tokens are rendered from 1Password at deploy time and staged to the
+  target host; no secret file needs to be placed on the host by hand.
 
 PVE `/etc/pve` config backups are configured through `pbs-client-backup`.
 
@@ -109,12 +109,107 @@ PVE physical NIC naming and Wake-on-LAN configuration
 ./deploy pve-interface-pinning all
 ```
 
+### [zfs-automation](zfs-automation/)
+ZFS snapshots, scrub, health checks, and replication
+- Sanoid-style snapshot plans, scrub and health-check timers
+- Replication jobs (pull and push), including dynamic LXC sources
+- SSH forced-command allow-lists (`homelab-zfs-send-only` / `homelab-zfs-receive-only`)
+  restrict what a peer may `zfs send`/`receive`
+- Supports module-wide `paused: true` and per-job `replication_jobs.<job>.paused: true`
+
+```bash
+./deploy zfs-automation all
+```
+
+### [pbs-client-backup](pbs-client-backup/)
+Host-level PBS client backups (appdata, `/etc/pve`, system files)
+- Secrets rendered from 1Password into tmpfs at deploy time
+- Supports `paused: true`
+
+```bash
+./deploy pbs-client-backup all
+```
+
+### [pve-http-boot](pve-http-boot/)
+iPXE/HTTP boot server for unattended Proxmox installs
+- Serves baked ISO artifacts and iPXE scripts
+
+```bash
+./deploy pve-http-boot all
+```
+
+### [pve-autoinstall](pve-autoinstall/)
+Unattended Proxmox installer answer files
+- Matches a machine by `dmi_uuid` and installs to `boot_disk_serial`
+- Driven via PDM; answer files and root passwords are staged from 1Password
+
+```bash
+./deploy pve-autoinstall all
+```
+
+### [ubuntu-setup](ubuntu-setup/)
+Ubuntu OS setup for the offsite hosts (cinci, cottonwood)
+- Docker CE, sudoers, SSH hardening, ZFS ARC limit, inotify limits
+- Optional WireGuard, Samba, and Telegram failure notifications
+
+```bash
+./deploy ubuntu-setup all
+```
+
+### [keepalived](keepalived/)
+VRRP virtual IP for the Traefik HA frontend
+
+```bash
+./deploy keepalived all
+```
+
+### [disk-spindown](disk-spindown/)
+HDD idle spindown and wakeup timers
+- Supports `paused: true`
+
+```bash
+./deploy disk-spindown all
+```
+
+### [pve-notifications](pve-notifications/)
+PVE notification endpoints and matchers (Telegram webhook)
+
+```bash
+./deploy pve-notifications all
+```
+
+### [pve-postinstall-webhook](pve-postinstall-webhook/)
+Post-install webhook that triggers a deploy when a node finishes autoinstall
+
+```bash
+./deploy pve-postinstall-webhook all
+```
+
+### [pve-lxc-docker-hooks](pve-lxc-docker-hooks/)
+Pre-snapshot bbolt sync hooks for Docker-in-LXC guests
+
+> **Note:** currently enabled on no host — see `./validate` inventory warning.
+
+```bash
+./deploy pve-lxc-docker-hooks all
+```
+
+### [pve-realtek-r8152-dkms](pve-realtek-r8152-dkms/)
+DKMS build of the Realtek r8152 USB NIC driver
+- The generic drivers are blacklisted only when the DKMS build succeeds, so a failed
+  build can never leave the host without a working NIC driver
+
+```bash
+./deploy pve-realtek-r8152-dkms all
+```
+
 ### Proxmox Upstream Patches
 Local patches for Proxmox behavior that should be removed when equivalent
 upstream fixes ship:
 
 - [pve-zfs-large-block-patch](pve-zfs-large-block-patch/): Bug 4603 - Add support for migrating ZFS datasets with large_blocks
 - [pve-zfs-migration-sync-patch](pve-zfs-migration-sync-patch/): Bug 7653 - target-side ZFS receive cache mitigation for LXC migration
+- [pve-lxc-pre-replication-patch](pve-lxc-pre-replication-patch/): pre-replication hook for LXC guests
 
 Revert these local patches and remove the modules after the corresponding
 Proxmox fixes are included upstream.
