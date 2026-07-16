@@ -1,19 +1,22 @@
 from __future__ import annotations
 
 import re
-import tempfile
 from pathlib import Path
 
 from .. import backup_excludes, op_secrets
 from ..deploy import DeploySession, force_env, prepare_build_dir, stage_and_run_remote_installer
 from ..hosts import default_registry
-from ..module_support import normalize_bool, normalize_string_list
+from ..module_support import (
+    copy_cached_secret,
+    normalize_bool,
+    normalize_string_list,
+    tmpfs_secret_stage,
+)
 from ..output import print_action, print_sub
 from ..ssh import HostConnection, build_files
 from . import pbs_client_backup
 
 REMOTE_ROOT = "/tmp/homelab-pve-backup"
-TMPFS_BASE = Path("/dev/shm")
 
 
 def deploy(
@@ -138,18 +141,27 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
         (build_dir, f"{REMOTE_ROOT}/build/{host}"),
         (root / "pve-backup" / "scripts", f"{REMOTE_ROOT}/scripts"),
     ]
-    token_tmpdir = None
-    try:
+
+    # Both pbs-tokens.env and pbs.env hold live PBS credentials. Neither is rendered
+    # into build/ (a persistent, mode-0644 directory in the repo); they are staged in
+    # tmpfs and shredded on teardown.
+    with tmpfs_secret_stage("homelab-pve-backup.") as secret_dir:
         if (build_dir / "storage-plan.conf").is_file():
-            tmp_parent = TMPFS_BASE if TMPFS_BASE.is_dir() else None
-            token_tmpdir = tempfile.TemporaryDirectory(
-                prefix="homelab-pve-backup.",
-                dir=str(tmp_parent) if tmp_parent else None,
-            )
-            tokens_path = Path(token_tmpdir.name) / "pbs-tokens.env"
+            tokens_path = secret_dir / "pbs-tokens.env"
             write_pbs_tokens_file(root, host, tokens_path)
+            upload_paths.append((tokens_path, f"{REMOTE_ROOT}/build/{host}/pbs-tokens.env"))
+
+        if (build_dir / "restore-plan.conf").is_file():
+            plan = pbs_client_backup.normalize_backup_plan(root, default_registry(root), host)
             upload_paths.append(
-                (tokens_path, f"{REMOTE_ROOT}/build/{host}/pbs-tokens.env")
+                (
+                    copy_cached_secret(
+                        root,
+                        pbs_client_backup.secret_name_for_profile(plan.secret_profile),
+                        secret_dir / "pbs.env",
+                    ),
+                    f"{REMOTE_ROOT}/build/{host}/pbs.env",
+                )
             )
 
         connection = HostConnection(host)
@@ -164,9 +176,6 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
             require_root=True,
             remote_subdirs=("build", "lib"),
         )
-    finally:
-        if token_tmpdir is not None:
-            token_tmpdir.cleanup()
 
 
 def normalize_storage_name(name: str) -> str:
@@ -448,11 +457,8 @@ def build_config_restore_plan(root: Path, host: str, build_dir: Path) -> None:
             raise ValueError(
                 f"Invalid LXC VMID in pve-backup.restore_lxc_configs.vmids for {host}: {vmid}"
             )
-    env_source = pbs_client_backup.secret_path(root, plan.secret_profile)
-    (build_dir / "pbs.env").write_text(
-        env_source.read_text(encoding="utf-8"),
-        encoding="utf-8",
-    )
+    # pbs.env holds a live PBS password and is NOT written into build/; it is staged
+    # from the tmpfs secret cache at upload time (see deploy_host).
     (build_dir / "restore-plan.conf").write_text(
         "\n".join(
             [
