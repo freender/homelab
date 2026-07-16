@@ -119,6 +119,50 @@ def test_link_files_match_on_mac_and_set_expected_name(host: str) -> None:
 
 
 # --------------------------------------------------------------------------------------
+# pve-interface-pinning <-> pve-postinstall: mgmt_iface/storage_iface drift guard
+#
+# /etc/network/interfaces (pve-postinstall) and the .link files above (pve-interface-
+# pinning) are driven by two independent hosts.conf keys that happen to share the same
+# "nic0"/"nic1" defaults. Nothing else ties them together, so an operator changing one
+# without the other silently renders /etc/network/interfaces against an interface name
+# systemd-networkd never creates -- only discovered on the next reboot.
+# --------------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("host", _interface_hosts())
+def test_postinstall_iface_names_match_pinned_roles(host: str) -> None:
+    registry = default_registry(ROOT)
+    if not registry.has(host, "pve-interface-pinning"):
+        pytest.skip(f"{host}: pve-interface-pinning not enabled, nothing to cross-check")
+
+    pins = pve_interface_pinning.normalize_interface_pins(registry, host)
+
+    # Exercising the real validate() path is what actually gates ./deploy and
+    # ./validate; a passing assertion here without also calling it would only prove
+    # the golden data is fine today, not that drift gets caught tomorrow.
+    pve_interface_pinning.validate_postinstall_alignment(registry, host, pins)
+
+
+def test_postinstall_alignment_guard_actually_fires_on_drift() -> None:
+    # Guard the guard: prove validate_postinstall_alignment rejects real drift instead
+    # of silently passing everything.
+    host = _interface_hosts()[0]
+    registry = default_registry(ROOT)
+    pins = pve_interface_pinning.normalize_interface_pins(registry, host)
+    drifted = tuple(
+        pve_interface_pinning.InterfacePin(
+            name="nic9", role=pin.role, mac=pin.mac, wake_on_lan=pin.wake_on_lan
+        )
+        if pin.role == "management"
+        else pin
+        for pin in pins
+    )
+
+    with pytest.raises(ValueError, match="mgmt_iface"):
+        pve_interface_pinning.validate_postinstall_alignment(registry, host, drifted)
+
+
+# --------------------------------------------------------------------------------------
 # pve-gpu-passthrough: boot cmdline
 # --------------------------------------------------------------------------------------
 

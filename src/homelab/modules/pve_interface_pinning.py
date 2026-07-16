@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from ..deploy import DeploySession, force_env, prepare_build_dir, stage_and_run_remote_installer
-from ..hosts import default_registry
+from ..hosts import HostLookupError, default_registry
 from ..module_support import FileSpec, HostArtifacts, normalize_bool, require_text, write_file_map
 from ..output import print_action, print_sub
 from ..ssh import HostConnection, build_files, diff_many
@@ -50,7 +50,69 @@ def validate(root: Path, hosts: list[str]) -> None:
     for host in hosts:
         if str(registry.get(host, "config.type")) != "pve":
             raise ValueError(f"pve-interface-pinning only supports PVE hosts: {host}")
-        normalize_interface_pins(registry, host)
+        pins = normalize_interface_pins(registry, host)
+        validate_postinstall_alignment(registry, host, pins)
+
+
+def validate_postinstall_alignment(registry, host: str, pins: tuple[InterfacePin, ...]) -> None:
+    """Guard against pve-interface-pinning and pve-postinstall drifting apart.
+
+    /etc/network/interfaces is rendered by pve-postinstall from two independent
+    hosts.conf keys (`pve-postinstall.interfaces.mgmt_iface`/`storage_iface`) that are
+    never cross-checked against the interface names this module actually pins by MAC
+    (`pve-interface-pinning.interfaces[].name`). If they disagree, the rendered
+    /etc/network/interfaces references an interface name systemd-networkd never
+    creates, and the host comes back from its next reboot unreachable. Both keys
+    default to the same "nic0"/"nic1" strings, so this drift is otherwise invisible
+    until an operator changes one side without the other.
+    """
+    try:
+        interfaces_config = registry.get(host, "pve-postinstall.interfaces")
+    except HostLookupError:
+        return
+    if not isinstance(interfaces_config, dict):
+        return
+
+    pins_by_role: dict[str, list[InterfacePin]] = {}
+    for pin in pins:
+        pins_by_role.setdefault(pin.role, []).append(pin)
+    pinned_names = {pin.name for pin in pins}
+
+    mgmt_iface = str(registry.get(host, "pve-postinstall.interfaces.mgmt_iface", "nic0"))
+    storage_iface = str(registry.get(host, "pve-postinstall.interfaces.storage_iface", "nic1"))
+
+    _require_iface_pinned(host, "mgmt_iface", mgmt_iface, pinned_names)
+    _require_iface_pinned(host, "storage_iface", storage_iface, pinned_names)
+    _require_role_matches_iface(host, "management", "mgmt_iface", mgmt_iface, pins_by_role)
+    _require_role_matches_iface(host, "storage", "storage_iface", storage_iface, pins_by_role)
+
+
+def _require_iface_pinned(host: str, key: str, iface: str, pinned_names: set[str]) -> None:
+    if iface not in pinned_names:
+        raise ValueError(
+            f"pve-postinstall.interfaces.{key}={iface!r} for {host} has no matching "
+            f"pve-interface-pinning.interfaces[].name; /etc/network/interfaces would "
+            f"reference an interface systemd-networkd never creates"
+        )
+
+
+def _require_role_matches_iface(
+    host: str,
+    role: str,
+    key: str,
+    iface: str,
+    pins_by_role: dict[str, list[InterfacePin]],
+) -> None:
+    role_pins = pins_by_role.get(role, [])
+    if not role_pins:
+        return
+    role_names = {pin.name for pin in role_pins}
+    if iface not in role_names:
+        raise ValueError(
+            f"pve-postinstall.interfaces.{key}={iface!r} for {host} does not match the "
+            f"pve-interface-pinning.interfaces[] entry with role={role!r} "
+            f"({sorted(role_names)}); mgmt/storage roles have drifted from the pinned names"
+        )
 
 
 def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
