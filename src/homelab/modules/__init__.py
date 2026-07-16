@@ -27,6 +27,7 @@ from .pve_zfs_large_block_patch import deploy as deploy_pve_zfs_large_block_patc
 from .pve_zfs_migration_sync_patch import deploy as deploy_pve_zfs_migration_sync_patch
 from .ssh_config import deploy as deploy_ssh_config
 from .ubuntu_setup import deploy as deploy_ubuntu_setup
+from .wsl_conf import deploy as deploy_wsl_conf
 from .zfs_automation import deploy as deploy_zfs_automation
 
 
@@ -119,6 +120,7 @@ MODULES: dict[str, ModuleDefinition] = {
     ),
     "ssh-config": ModuleDefinition(name="SSH Config", deploy=deploy_ssh_config),
     "ubuntu-setup": ModuleDefinition(name="Ubuntu OS Setup", deploy=deploy_ubuntu_setup),
+    "wsl-conf": ModuleDefinition(name="WSL Conf", deploy=deploy_wsl_conf),
     "zfs-automation": ModuleDefinition(name="ZFS Automation", deploy=deploy_zfs_automation),
 }
 
@@ -141,6 +143,7 @@ MODULE_ORDER = [
     "pve-lxc-docker-hooks",
     "keepalived",
     "ssh-config",
+    "wsl-conf",
     "ubuntu-setup",
     "zfs-automation",
     "pbs-client-backup",

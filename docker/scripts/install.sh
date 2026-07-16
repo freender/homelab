@@ -22,6 +22,10 @@ require_file "$BUILD_DIR/env" "$BUILD_DIR/env" || exit 1
 # shellcheck source=/dev/null
 source "$BUILD_DIR/env"
 
+# An empty flag reads as "disable the update timer" rather than erroring; refuse to
+# run on a truncated env file instead of silently turning the timer off.
+require_env ENABLE_DOCKER_UPDATE_TIMER || exit 1
+
 APPDATA_DEST="/mnt/cache/appdata"
 APPDATA_SCRIPTS_DIR="${APPDATA_DEST}/scripts"
 HOMELAB_DOCKER_DIR="${APPDATA_DEST}/.homelab/docker"

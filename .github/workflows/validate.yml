@@ -18,8 +18,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Install ruff
-        run: python -m pip install ruff
+      - name: Install package and dev deps
+        run: python -m pip install '.[dev]'
       - name: Run ruff
         run: python -m ruff check src tests
 
@@ -71,15 +71,12 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Install Python deps
-        run: python -m pip install click pyyaml jinja2 rich fabric
-      - name: Install yq
-        run: |
-          mkdir -p .bin
-          wget -qO .bin/yq https://github.com/mikefarah/yq/releases/download/v4.44.1/yq_linux_amd64
-          chmod +x .bin/yq
+      # Install from pyproject rather than a hand-maintained list, so a new dependency
+      # cannot silently go missing here. Dev deps are needed because `validate` now
+      # runs ruff and pytest as part of CI parity.
+      - name: Install package and dev deps
+        run: python -m pip install '.[dev]'
       - name: Dry-run all modules
         run: |
-          export PATH="$PWD/.bin:$PATH"
           export HOMELAB_OFFLINE=true
           PYTHONPATH=src python -m homelab.cli validate
