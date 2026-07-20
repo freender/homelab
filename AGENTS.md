@@ -102,6 +102,26 @@ Three distinct "off/freeze" switches in `hosts.conf` — do not conflate them:
 For the implementation how-to (adding `paused` to a module: Python flag read, the
 `homelab_apply_pause` bash helper, unit-file semantics), load the `deploy-module` skill.
 
+## Module Retirement / Archival
+
+- Before retiring a module, confirm it deploys nowhere: no `<module>:` feature blocks in
+  `hosts.conf`, and `./validate`'s orphan-module check is clean afterward (it warns while
+  a registered module has zero hosts enabling it).
+- Prefer archiving over deleting when the module has meaningful implementation history;
+  trivial/obsolete modules can be `git rm`'d outright (see git log precedent for both:
+  `1639d7a` archives, `f5dbb5f`/`0e492c2` delete outright).
+- Archive layout under `archive/retired-modules/` (use `git mv` to preserve history):
+  - `src/homelab/modules/<module>.py` -> `archive/retired-modules/src/homelab/modules/`
+  - the module's top-level dir (`scripts/`, `templates/`, `configs/`, `README.md`; not
+    `build/`, which is gitignored) -> `archive/retired-modules/top-level/<module-dir>/`
+  - any dedicated tests -> `archive/retired-modules/tests/` or `.../reference/`, renamed
+    out of the `test_*.py` pattern so pytest stops collecting them.
+- Remove the module from `src/homelab/modules/__init__.py` (import, `MODULES` entry,
+  `MODULE_ORDER`), from the README module list, and from any `hosts.py` schema
+  validation.
+- Run `./validate` after retiring to confirm the orphan-module warning clears and nothing
+  else references the removed module.
+
 ## Coding Style Guidelines
 
 - Python target: 3.13; local orchestration should be Python.
