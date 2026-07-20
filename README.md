@@ -185,15 +185,6 @@ Post-install webhook that triggers a deploy when a node finishes autoinstall
 ./deploy pve-postinstall-webhook all
 ```
 
-### [pve-lxc-docker-hooks](pve-lxc-docker-hooks/)
-Pre-snapshot bbolt sync hooks for Docker-in-LXC guests
-
-> **Note:** currently enabled on no host — see `./validate` inventory warning.
-
-```bash
-./deploy pve-lxc-docker-hooks all
-```
-
 ### [pve-realtek-r8152-dkms](pve-realtek-r8152-dkms/)
 DKMS build of the Realtek r8152 USB NIC driver
 - The generic drivers are blacklisted only when the DKMS build succeeds, so a failed

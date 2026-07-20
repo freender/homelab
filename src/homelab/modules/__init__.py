@@ -17,7 +17,6 @@ from .pve_exporters import deploy as deploy_pve_exporters
 from .pve_gpu_passthrough import deploy as deploy_pve_gpu_passthrough
 from .pve_http_boot import deploy as deploy_pve_http_boot
 from .pve_interface_pinning import deploy as deploy_pve_interface_pinning
-from .pve_lxc_docker_hooks import deploy as deploy_pve_lxc_docker_hooks
 from .pve_lxc_pre_replication_patch import deploy as deploy_pve_lxc_pre_replication_patch
 from .pve_notifications import deploy as deploy_pve_notifications
 from .pve_postinstall import deploy as deploy_pve_postinstall
@@ -98,10 +97,6 @@ MODULES: dict[str, ModuleDefinition] = {
         name="PVE Interface Pinning",
         deploy=deploy_pve_interface_pinning,
     ),
-    "pve-lxc-docker-hooks": ModuleDefinition(
-        name="PVE LXC Docker Hooks",
-        deploy=deploy_pve_lxc_docker_hooks,
-    ),
     "pve-lxc-pre-replication-patch": ModuleDefinition(
         name="PVE LXC Pre-Replication Patch",
         deploy=deploy_pve_lxc_pre_replication_patch,
@@ -140,7 +135,6 @@ MODULE_ORDER = [
     "pve-lxc-pre-replication-patch",
     "disk-spindown",
     "pve-gpu-passthrough",
-    "pve-lxc-docker-hooks",
     "keepalived",
     "ssh-config",
     "wsl-conf",
