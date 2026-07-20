@@ -1,11 +1,13 @@
 # Homelab Agent Guide (AGENTS.md)
 
 ## Task type
-- **Repo code/config change** (edit `src/homelab/`, add/modify a module, run `./validate`):
-  focus on the Build/Test commands below and load the `deploy-module` skill. Topology is
-  not needed; use `hosts.conf` for inventory.
-- **Live homelab operation** (act on a running host, cross-host investigation, before SSH):
-  load the `homelab-infra` skill for topology, then the relevant topic skill.
+- **Repo code/config change or `./deploy` invocation** (edit `src/homelab/`, add/modify a
+  module, run `./validate`, or invoke `./deploy` itself — dry-run or live, single
+  module/host or `all all`): focus on the Build/Test commands below and load the
+  `deploy-module` skill. Topology is not needed; `./deploy` reads `hosts.conf` itself.
+- **Live homelab operation** (SSH to inspect/debug a running host directly, cross-host
+  investigation not covered by `./deploy`): load the `homelab-infra` skill for topology,
+  then the relevant topic skill.
 
 ## Purpose
 This repository is Python-orchestrated automation for a Proxmox homelab.
@@ -21,7 +23,7 @@ Use this file to make coding agents consistent with existing patterns.
 
 ## AI Quick Path
 - For host facts, SSH metadata, deploy targets, and feature config, read `hosts.conf` first.
-- For topology, VLANs, storage layout, heavy-path warnings, and cross-host context, load the `homelab-infra` skill (reads Infrastructure Overview).
+- For topology, VLANs, storage layout, heavy-path warnings, and cross-host context, load the `homelab-infra` skill (self-contained topology map).
 - For module code changes, read the module orchestrator in `src/homelab/modules/` and the matching `<module>/scripts/install.sh` before editing.
 - For Docker app placement and compose definitions, use the repo copy under `docker/`; do not inspect live `/mnt/cache/appdata` unless an explicit operational task requires a known app path.
 - For unknown infrastructure paths, ask or search the Homelab Obsidian docs; do not discover paths by crawling live filesystems.
@@ -29,7 +31,7 @@ Use this file to make coding agents consistent with existing patterns.
 ## Search and Scan Boundaries
 - Do not run broad recursive scans on any homelab host under `/`, `/mnt/*`, `/mnt/cache`, `/mnt/tank`, `/vm-flash`, `/backup`, or `/srv/timemachine`.
 - Do not adapt repo-local commands like `find .` to remote storage, media, backup, or appdata paths.
-- Prefer repo-local `Glob`/`Grep`, `hosts.conf`, Infrastructure Overview, and linked guides before SSHing or searching remote hosts.
+- Prefer repo-local `Glob`/`Grep`, `hosts.conf`, the `homelab-infra` skill, and linked guides before SSHing or searching remote hosts.
 - If a path is not explicitly known from inventory or documentation, ask before scanning.
 
 ## Build, Lint, and Test Commands
