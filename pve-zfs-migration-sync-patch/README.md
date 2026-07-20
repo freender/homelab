@@ -35,20 +35,18 @@ Tested mitigations:
 This patch uses the least global mitigation: leave the received `subvol`
 unmounted for PVE activation/start to remount.
 
-## Superseded Patch
+## Superseded Patch (Historical)
 
 This module previously patched `Storage.pm` and `Replication.pm` to call
 `syncfs()` before migration snapshots. Later testing showed the problem is not
 source-side snapshot flushing. It is target-side stale live reads after receive.
 
-Deploying this module removes the old local reapply script and apt hook:
-
-- `/usr/local/sbin/homelab-pve-zfs-migration-sync-patch`
-- `/etc/apt/apt.conf.d/99-homelab-pve-zfs-migration-sync-patch`
-
-Old backups remain under:
-
-- `/var/backups/homelab/pve-zfs-migration-sync-patch/`
+All deploy targets (ace, bray, clovis) were migrated off that approach and the
+old reapply script/apt hook (`homelab-pve-zfs-migration-sync-patch`) were
+removed from those hosts. The one-time cleanup code that performed this
+migration has since been dropped from `install.sh` since it is a permanent
+no-op on every current target; a fresh host would never have the old
+artifacts to clean up either.
 
 ## Upstream Tracking
 

@@ -6,11 +6,6 @@ BACKUP_DIR=/var/backups/homelab/pve-zfs-recv-cache-patch
 PATCH_SCRIPT=/usr/local/sbin/homelab-pve-zfs-recv-cache-patch
 APT_HOOK=/etc/apt/apt.conf.d/99-homelab-pve-zfs-recv-cache-patch
 
-OLD_STATE_DIR=/var/lib/homelab/pve-zfs-migration-sync-patch
-OLD_BACKUP_DIR=/var/backups/homelab/pve-zfs-migration-sync-patch
-OLD_PATCH_SCRIPT=/usr/local/sbin/homelab-pve-zfs-migration-sync-patch
-OLD_APT_HOOK=/etc/apt/apt.conf.d/99-homelab-pve-zfs-migration-sync-patch
-
 if [[ ${EUID} -ne 0 ]]; then
   echo "must run as root" >&2
   exit 1
@@ -38,8 +33,6 @@ while [[ $# -gt 0 ]]; do
 done
 
 TARGET=/usr/share/perl5/PVE/Storage/ZFSPoolPlugin.pm
-OLD_TARGET_STORAGE=/usr/share/perl5/PVE/Storage.pm
-OLD_TARGET_REPLICATION=/usr/share/perl5/PVE/Replication.pm
 STATE_DIR=/var/lib/homelab/pve-zfs-recv-cache-patch
 BACKUP_DIR=/var/backups/homelab/pve-zfs-recv-cache-patch
 STATUS_FILE=${STATE_DIR}/status
@@ -74,52 +67,6 @@ PATCHED=$(cat <<'EOF'
 EOF
 )
 
-STORAGE_ORIGINAL=$(cat <<'EOF'
-    volume_snapshot($cfg, $volid, $snapshot) if $migration_snapshot;
-EOF
-)
-
-STORAGE_ZPOOL_SYNC_PATCHED=$(cat <<'EOF'
-    if ($migration_snapshot) {
-        my ($sid) = parse_volume_id($volid);
-        my $scfg = storage_config($cfg, $sid);
-        PVE::Tools::run_command(['zpool', 'sync', $scfg->{pool}])
-            if $scfg->{type} eq 'zfspool';
-        volume_snapshot($cfg, $volid, $snapshot);
-    }
-EOF
-)
-
-STORAGE_SYNCFS_PATCHED=$(cat <<'EOF'
-    if ($migration_snapshot) {
-        my ($sid) = parse_volume_id($volid);
-        my $scfg = storage_config($cfg, $sid);
-        if ($scfg->{type} eq 'zfspool') {
-            my $path = path($cfg, $volid);
-            if (defined($path) && -d $path) {
-                PVE::Tools::run_command(['/usr/bin/sync', '--file-system', $path]);
-            }
-        }
-        volume_snapshot($cfg, $volid, $snapshot);
-    }
-EOF
-)
-
-REPLICATION_SYNCFS_PATCHED=$(cat <<'EOF'
-
-    foreach my $volid (@$sorted_volids) {
-        my ($storeid) = PVE::Storage::parse_volume_id($volid);
-        my $scfg = PVE::Storage::storage_config($storecfg, $storeid);
-        next if $scfg->{type} ne 'zfspool';
-        my $path = PVE::Storage::path($storecfg, $volid);
-        if (defined($path) && -d $path) {
-            $logfunc->("syncfs '$path' before snapshot");
-            PVE::Tools::run_command(['/usr/bin/sync', '--file-system', $path]);
-        }
-    }
-EOF
-)
-
 write_status() {
   local state=$1
   local package_version
@@ -146,28 +93,6 @@ acquire_patch_lock() {
 
 mkdir -p "${STATE_DIR}" "${BACKUP_DIR}"
 acquire_patch_lock
-
-cleanup_source_sync_patches() {
-  local timestamp
-  timestamp=$(date -u +%Y%m%dT%H%M%SZ)
-
-  if [[ -f ${OLD_TARGET_STORAGE} ]]; then
-    if grep -Fq "zpool', 'sync'" "${OLD_TARGET_STORAGE}" \
-      || grep -Fq "'/usr/bin/sync', '--file-system'" "${OLD_TARGET_STORAGE}"; then
-      cp "${OLD_TARGET_STORAGE}" "${BACKUP_DIR}/Storage.pm.remove-source-sync.${timestamp}.bak"
-      STORAGE_ORIGINAL_BLOCK=${STORAGE_ORIGINAL} STORAGE_ZPOOL_SYNC_BLOCK=${STORAGE_ZPOOL_SYNC_PATCHED} \
-        perl -0pi -e 's/\Q$ENV{STORAGE_ZPOOL_SYNC_BLOCK}\E/$ENV{STORAGE_ORIGINAL_BLOCK}/' "${OLD_TARGET_STORAGE}"
-      STORAGE_ORIGINAL_BLOCK=${STORAGE_ORIGINAL} STORAGE_SYNCFS_BLOCK=${STORAGE_SYNCFS_PATCHED} \
-        perl -0pi -e 's/\Q$ENV{STORAGE_SYNCFS_BLOCK}\E/$ENV{STORAGE_ORIGINAL_BLOCK}/' "${OLD_TARGET_STORAGE}"
-    fi
-  fi
-
-  if [[ -f ${OLD_TARGET_REPLICATION} ]] && grep -Fq "syncfs '\$path' before snapshot" "${OLD_TARGET_REPLICATION}"; then
-    cp "${OLD_TARGET_REPLICATION}" "${BACKUP_DIR}/Replication.pm.remove-source-sync.${timestamp}.bak"
-    REPLICATION_SYNCFS_BLOCK=${REPLICATION_SYNCFS_PATCHED} \
-      perl -0pi -e 's/\Q$ENV{REPLICATION_SYNCFS_BLOCK}\E//' "${OLD_TARGET_REPLICATION}"
-  fi
-}
 
 if [[ ! -f ${TARGET} ]]; then
   echo "missing target: ${TARGET}" >&2
@@ -208,8 +133,6 @@ fi
 
 perl -c "${TARGET}" >/dev/null
 
-cleanup_source_sync_patches
-
 if [[ ${RESTART_SERVICES} == true ]]; then
   systemctl try-restart pvedaemon.service pve-ha-lrm.service pvescheduler.service
 fi
@@ -234,23 +157,5 @@ DPkg::Post-Invoke {
 };
 EOF
 chmod 0644 "${APT_HOOK}"
-
-# Disable the superseded source-side syncfs patch so package upgrades do not
-# reapply it. Backups remain under /var/backups/homelab/pve-zfs-migration-sync-patch.
-rm -f "${OLD_PATCH_SCRIPT}" "${OLD_APT_HOOK}"
-mkdir -p "${OLD_BACKUP_DIR}"
-for stale_apt_hook in "${OLD_APT_HOOK}".disabled.* "${OLD_APT_HOOK}".bak "${OLD_APT_HOOK}".backup; do
-  [[ -e ${stale_apt_hook} ]] || continue
-  mv -f "${stale_apt_hook}" "${OLD_BACKUP_DIR}/$(basename "${stale_apt_hook}")"
-done
-if [[ -d ${OLD_STATE_DIR} ]]; then
-  cat > "${OLD_STATE_DIR}/status" <<EOF
-storage_state=superseded
-replication_state=superseded
-timestamp_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-replaced_by=${PATCH_SCRIPT}
-reason=target-side-zfs-receive-cache-mitigation
-EOF
-fi
 
 "${PATCH_SCRIPT}"
