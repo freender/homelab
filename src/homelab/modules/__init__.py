@@ -132,6 +132,13 @@ MODULE_ORDER = [
     "pve-autoinstall",
     "pve-realtek-r8152-dkms",
     "pve-http-boot",
+    # pbs-client-backup must run before pve-backup: it installs the persistent
+    # /etc/homelab/pbs-encryption.key keyfile that pve-backup's /etc/pve
+    # config-restore step (restore_lxc_configs) needs on the first deploy pass
+    # after a bare-metal rebuild (e.g. osiris via PDM). pve-backup's own
+    # storage-level `encryption-key` staging is order-independent (it fetches
+    # straight from 1Password), but the on-disk keyfile is not.
+    "pbs-client-backup",
     "pve-backup",
     "apcupsd",
     "pve-exporters",
@@ -145,7 +152,6 @@ MODULE_ORDER = [
     "wsl-conf",
     "ubuntu-setup",
     "zfs-automation",
-    "pbs-client-backup",
     "docker",
     "apt-upgrade",
     "pve-upgrade",
