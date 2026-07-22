@@ -103,7 +103,6 @@ def validate(root: Path, hosts: list[str]) -> None:
         module_dir / "templates" / TIMER_NAME,
         module_dir / "configs" / "pbs-client-backup.env.example",
         module_dir / "configs" / "keyrings" / "proxmox-release-trixie.gpg",
-        module_dir / "configs" / "keyrings" / "proxmox-release-bookworm.gpg",
     ]:
         if not path.is_file():
             raise ValueError(f"missing required file: {path}")
