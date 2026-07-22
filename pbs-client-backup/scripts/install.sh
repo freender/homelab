@@ -34,21 +34,98 @@ done
 # shellcheck source=/dev/null
 source "$BUILD_DIR/homelab-pbs-client-backup.conf"
 
-case "${RUNNER:-host}" in
-    host|native)
-        if ! command -v proxmox-backup-client >/dev/null 2>&1; then
-            print_error "proxmox-backup-client not found"
-            exit 1
-        fi
+# Ensure proxmox-backup-client is present.
+#  - PVE hosts: ships via the PVE apt repo (managed by pve-postinstall); presence check only.
+#  - Ubuntu hosts: install natively from the public, no-subscription Proxmox
+#    pbs-client apt repo, pinning the matching Debian suite (Ubuntu has no suite
+#    upstream, but the packages are ABI-compatible with the mapped Debian release).
+KEYRING_DIR="/usr/share/keyrings"
+PBS_CLIENT_SOURCE="/etc/apt/sources.list.d/pbs-client.sources"
+
+ubuntu_pbs_suite() {
+    # Map Ubuntu release -> Debian suite published in download.proxmox.com/debian/pbs-client.
+    local version_id="" codename=""
+    if [[ -r /etc/os-release ]]; then
+        # shellcheck source=/dev/null
+        . /etc/os-release
+        version_id="${VERSION_ID:-}"
+        codename="${VERSION_CODENAME:-}"
+    fi
+    case "$version_id" in
+        26.04) echo "trixie"; return 0 ;;
+        24.04) echo "bookworm"; return 0 ;;
+    esac
+    # Fallback by codename for releases not explicitly mapped above.
+    case "$codename" in
+        resolute) echo "trixie"; return 0 ;;
+        noble) echo "bookworm"; return 0 ;;
+    esac
+    return 1
+}
+
+install_pbs_client_ubuntu() {
+    local suite keyring src_keyring
+    if ! suite="$(ubuntu_pbs_suite)"; then
+        print_error "Unable to map this Ubuntu release to a Proxmox pbs-client suite"
+        return 1
+    fi
+    keyring="$KEYRING_DIR/proxmox-release-${suite}.gpg"
+    src_keyring="$SCRIPT_DIR/configs/keyrings/proxmox-release-${suite}.gpg"
+
+    if [[ ! -f "$src_keyring" ]]; then
+        print_error "Missing vendored keyring: $src_keyring"
+        return 1
+    fi
+
+    local changed=false
+    if [[ ! -f "$keyring" ]] || ! cmp -s "$src_keyring" "$keyring"; then
+        install -m 0644 "$src_keyring" "$keyring"
+        print_sub "Installed Proxmox $suite release keyring"
+        changed=true
+    fi
+
+    local desired
+    desired=$(cat <<EOF
+Types: deb
+URIs: http://download.proxmox.com/debian/pbs-client
+Suites: $suite
+Components: main
+Signed-By: $keyring
+EOF
+)
+    if [[ ! -f "$PBS_CLIENT_SOURCE" ]] || [[ "$(cat "$PBS_CLIENT_SOURCE")" != "$desired" ]]; then
+        printf '%s\n' "$desired" > "$PBS_CLIENT_SOURCE"
+        chmod 0644 "$PBS_CLIENT_SOURCE"
+        print_sub "Wrote $PBS_CLIENT_SOURCE (suite: $suite)"
+        changed=true
+    fi
+
+    if [[ "$changed" == true ]] || ! command -v proxmox-backup-client >/dev/null 2>&1; then
+        print_sub "Updating apt (pbs-client) and installing proxmox-backup-client..."
+        apt-get update -o Dir::Etc::sourcelist="$PBS_CLIENT_SOURCE" \
+            -o Dir::Etc::sourceparts="-" -o APT::Get::List-Cleanup="0" >/dev/null
+        DEBIAN_FRONTEND=noninteractive apt-get install -y proxmox-backup-client >/dev/null
+    fi
+
+    if ! command -v proxmox-backup-client >/dev/null 2>&1; then
+        print_error "proxmox-backup-client not found after install"
+        return 1
+    fi
+    print_ok "proxmox-backup-client present ($(proxmox-backup-client version 2>/dev/null | head -1))"
+}
+
+case "${HOST_TYPE:-}" in
+    ubuntu)
+        install_pbs_client_ubuntu || exit 1
         ;;
-    docker)
-        if ! command -v docker >/dev/null 2>&1; then
-            print_error "docker not found"
+    pve)
+        if ! command -v proxmox-backup-client >/dev/null 2>&1; then
+            print_error "proxmox-backup-client not found (expected from PVE repo)"
             exit 1
         fi
         ;;
     *)
-        print_error "Unsupported RUNNER: ${RUNNER:-}"
+        print_error "Unsupported HOST_TYPE: ${HOST_TYPE:-} (expected 'ubuntu' or 'pve')"
         exit 1
         ;;
 esac

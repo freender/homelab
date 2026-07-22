@@ -54,10 +54,7 @@ class BackupPlan:
     secret_profile: str
     backup_id: str
     backup_type: str
-    runner: str
-    docker_image: str
-    docker_network: str
-    docker_add_hosts: tuple[str, ...]
+    host_type: str
     archives: tuple[ArchivePlan, ...]
 
 
@@ -97,6 +94,8 @@ def validate(root: Path, hosts: list[str]) -> None:
         module_dir / "templates" / SERVICE_NAME,
         module_dir / "templates" / TIMER_NAME,
         module_dir / "configs" / "pbs-client-backup.env.example",
+        module_dir / "configs" / "keyrings" / "proxmox-release-trixie.gpg",
+        module_dir / "configs" / "keyrings" / "proxmox-release-bookworm.gpg",
     ]:
         if not path.is_file():
             raise ValueError(f"missing required file: {path}")
@@ -158,10 +157,10 @@ def normalize_backup_plan(root: Path, registry, host: str) -> BackupPlan:
             ArchivePlan(name=name, dataset=dataset, path=path, excludes=tuple(excludes))
         )
 
-    runner = str(registry.get(host, f"{prefix}.runner", "host")).strip().lower()
-    if runner not in {"host", "native", "docker"}:
+    host_type = str(registry.get(host, "config.type", "")).strip().lower()
+    if host_type not in {"ubuntu", "pve"}:
         raise ValueError(
-            f"{prefix}.runner for {host} must be 'host', 'native', or 'docker'"
+            f"{prefix} for {host} requires config.type of 'ubuntu' or 'pve'"
         )
 
     return BackupPlan(
@@ -186,15 +185,7 @@ def normalize_backup_plan(root: Path, registry, host: str) -> BackupPlan:
             f"{prefix}.backup_id required for {host}",
         ),
         backup_type=str(registry.get(host, f"{prefix}.backup_type", "host")),
-        runner=runner,
-        docker_image=str(registry.get(host, f"{prefix}.docker_image", "")),
-        docker_network=str(registry.get(host, f"{prefix}.docker_network", "bridge")),
-        docker_add_hosts=tuple(
-            normalize_string_list(
-                registry.get(host, f"{prefix}.docker_add_hosts", []),
-                f"{prefix}.docker_add_hosts for {host} must be a list",
-            )
-        ),
+        host_type=host_type,
         archives=tuple(archives),
     )
 
@@ -211,10 +202,6 @@ def secret_name_for_profile(profile: str) -> str:
 
 def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
     registry = default_registry(root)
-    host_type = str(registry.get(host, "config.type"))
-    if host_type not in {"ubuntu", "pve"}:
-        raise ValueError(f"{MODULE_DIR} supports Ubuntu and PVE hosts only")
-
     plan = normalize_backup_plan(root, registry, host)
     if not plan.enabled:
         print_sub(f"{MODULE_DIR} disabled for {host}; skipping")
@@ -269,20 +256,18 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
             [
                 (build_dir, f"{REMOTE_ROOT}/build/{host}"),
                 (secret_stage, f"{REMOTE_ROOT}/build/{host}/homelab-pbs-client-backup.env"),
+                (root / MODULE_DIR / "configs", f"{REMOTE_ROOT}/configs"),
                 (root / MODULE_DIR / "scripts", f"{REMOTE_ROOT}/scripts"),
             ],
             "scripts/install.sh",
             host,
             env=force_env(force),
             require_root=True,
-            remote_subdirs=("build", "lib", "scripts"),
+            remote_subdirs=("build", "configs", "lib", "scripts"),
         )
 
 
 def build_host_bundle(root: Path, host: str, plan: BackupPlan, build_dir: Path) -> None:
-    registry = default_registry(root)
-    host_type = str(registry.get(host, "config.type"))
-
     render_template(
         root / MODULE_DIR / "templates" / "homelab-pbs-client-backup.sh",
         build_dir / "homelab-pbs-client-backup",
@@ -300,27 +285,21 @@ def build_host_bundle(root: Path, host: str, plan: BackupPlan, build_dir: Path) 
     write_config(
         build_dir / "homelab-pbs-client-backup.conf",
         plan,
-        retire_pve_config_backup=host_type == "pve",
     )
     write_file_map(build_dir, FILE_SPECS)
 
 
-def write_config(path: Path, plan: BackupPlan, retire_pve_config_backup: bool) -> None:
+def write_config(path: Path, plan: BackupPlan) -> None:
     lines = [
         f'REPOSITORY="{plan.repository}"',
         f'NAMESPACE="{plan.namespace}"',
         f'BACKUP_ID="{plan.backup_id}"',
         f'BACKUP_TYPE="{plan.backup_type}"',
-        f'RUNNER="{plan.runner}"',
+        f'HOST_TYPE="{plan.host_type}"',
         f'PAUSED="{str(plan.paused).lower()}"',
-        f'DOCKER_IMAGE="{plan.docker_image}"',
-        f'DOCKER_NETWORK="{plan.docker_network}"',
-        f'DOCKER_ADD_HOST_COUNT="{len(plan.docker_add_hosts)}"',
-        f'RETIRE_PVE_CONFIG_BACKUP="{str(retire_pve_config_backup).lower()}"',
+        f'RETIRE_PVE_CONFIG_BACKUP="{str(plan.host_type == "pve").lower()}"',
         f'ARCHIVE_COUNT="{len(plan.archives)}"',
     ]
-    for index, add_host in enumerate(plan.docker_add_hosts):
-        lines.append(f'DOCKER_ADD_HOST_{index}="{add_host}"')
     for index, archive in enumerate(plan.archives):
         lines.extend(
             [

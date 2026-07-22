@@ -65,7 +65,7 @@ latest_snapshot_path() {
     printf '%s\n' "$snapshot_path"
 }
 
-backup_with_host_client() {
+backup_with_client() {
     local archive_specs=("${HOST_ARCHIVE_SPECS[@]}")
     local exclude_args=("${PBS_EXCLUDE_ARGS[@]}")
     local namespace_args=()
@@ -86,60 +86,8 @@ backup_with_host_client() {
         --backup-id "$BACKUP_ID"
 }
 
-backup_with_docker_client() {
-    local archive_specs=("${DOCKER_ARCHIVE_SPECS[@]}")
-    local add_host_args=("${DOCKER_ADD_HOST_ARGS[@]}")
-    local docker_args=("${DOCKER_MOUNT_ARGS[@]}")
-    local exclude_args=("${PBS_EXCLUDE_ARGS[@]}")
-    local namespace_args=()
-
-    if [[ -z "${DOCKER_IMAGE:-}" ]]; then
-        echo "DOCKER_IMAGE is required for docker runner" >&2
-        return 1
-    fi
-    if ! command -v docker >/dev/null 2>&1; then
-        echo "docker not found" >&2
-        return 1
-    fi
-    if [[ -n "${NAMESPACE:-}" ]]; then
-        namespace_args=(--ns "$NAMESPACE")
-    fi
-
-    docker run --rm \
-        --network "${DOCKER_NETWORK:-bridge}" \
-        --env PBS_PASSWORD \
-        --env PBS_TOKEN_SECRET \
-        --env PBS_FINGERPRINT \
-        "${add_host_args[@]}" \
-        "${docker_args[@]}" \
-        --entrypoint proxmox-backup-client \
-        "$DOCKER_IMAGE" \
-        backup "${archive_specs[@]}" \
-            "${exclude_args[@]}" \
-            --repository "$REPOSITORY" \
-            "${namespace_args[@]}" \
-            --backup-type "$BACKUP_TYPE" \
-            --backup-id "$BACKUP_ID"
-}
-
 HOST_ARCHIVE_SPECS=()
-DOCKER_ARCHIVE_SPECS=()
-DOCKER_ADD_HOST_ARGS=()
-DOCKER_MOUNT_ARGS=()
 PBS_EXCLUDE_ARGS=()
-
-docker_add_host_count="${DOCKER_ADD_HOST_COUNT:-0}"
-if [[ ! "$docker_add_host_count" =~ ^[0-9]+$ ]]; then
-    echo "DOCKER_ADD_HOST_COUNT must be a non-negative integer" >&2
-    exit 1
-fi
-for ((i = 0; i < docker_add_host_count; i++)); do
-    add_host_var="DOCKER_ADD_HOST_${i}"
-    add_host="${!add_host_var:-}"
-    if [[ -n "$add_host" ]]; then
-        DOCKER_ADD_HOST_ARGS+=(--add-host "$add_host")
-    fi
-done
 
 archive_count="${ARCHIVE_COUNT:-0}"
 if [[ ! "$archive_count" =~ ^[0-9]+$ || "$archive_count" -eq 0 ]]; then
@@ -181,8 +129,6 @@ for ((i = 0; i < archive_count; i++)); do
         echo "Using path archive $name: $source_path"
     fi
     HOST_ARCHIVE_SPECS+=("${name}.pxar:${source_path}")
-    DOCKER_ARCHIVE_SPECS+=("${name}.pxar:/backup-source/${name}")
-    DOCKER_MOUNT_ARGS+=(--mount "type=bind,src=${source_path},dst=/backup-source/${name},readonly")
 
     for ((j = 0; j < exclude_count; j++)); do
         exclude_var="ARCHIVE_${i}_EXCLUDE_${j}"
@@ -193,17 +139,6 @@ for ((i = 0; i < archive_count; i++)); do
     done
 done
 
-case "${RUNNER:-host}" in
-    host|native)
-        backup_with_host_client
-        ;;
-    docker)
-        backup_with_docker_client
-        ;;
-    *)
-        echo "Unsupported RUNNER: ${RUNNER:-}" >&2
-        exit 1
-        ;;
-esac
+backup_with_client
 
 echo "PBS client backup completed: $BACKUP_ID -> $REPOSITORY"
