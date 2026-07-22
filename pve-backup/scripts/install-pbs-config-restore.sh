@@ -204,6 +204,19 @@ if [[ -z "${PBS_FINGERPRINT:-}" ]]; then
     print_warn "PBS_FINGERPRINT missing in $ENV_FILE_SOURCE; proceeding without fingerprint pin check"
 fi
 
+# Client-side encryption: if the /etc/pve archive was written encrypted, the
+# same keyfile must be supplied to decrypt on restore. ENCRYPT/KEYFILE come from
+# the restore plan; the keyfile itself is installed by pbs-client-backup at KEYFILE.
+crypt_args=()
+if [[ "${ENCRYPT:-false}" == "true" ]]; then
+    keyfile="${KEYFILE:-/etc/homelab/pbs-encryption.key}"
+    if [[ ! -f "$keyfile" ]]; then
+        print_warn "Restore plan marks encryption but keyfile missing: $keyfile; skipping restore"
+        exit 0
+    fi
+    crypt_args=(--keyfile "$keyfile")
+fi
+
 namespace_args=()
 if [[ -n "${NAMESPACE:-}" ]]; then
     namespace_args=(--ns "$NAMESPACE")
@@ -230,7 +243,7 @@ rm -rf "$RESTORE_ROOT"
 mkdir -p "$RESTORE_ROOT/etc-pve" "$RESTORE_ROOT/etc-ceph"
 mkdir -p "$RESTORE_OUTPUT_DIR"
 
-proxmox-backup-client restore "$snapshot" "${ARCHIVE_NAME}.pxar" "$RESTORE_ROOT/etc-pve" --repository "$REPOSITORY" "${namespace_args[@]}"
+proxmox-backup-client restore "$snapshot" "${ARCHIVE_NAME}.pxar" "$RESTORE_ROOT/etc-pve" --repository "$REPOSITORY" "${namespace_args[@]}" "${crypt_args[@]}"
 
 if [[ -d "$RESTORE_ROOT/etc-pve/etc/pve" ]]; then
     src_pve="$RESTORE_ROOT/etc-pve/etc/pve"
@@ -249,7 +262,7 @@ apply_restored_notifications "$RESTORE_OUTPUT_DIR/latest"
 restore_lxc_configs "$RESTORE_OUTPUT_DIR/latest"
 
 if [[ "${CEPH_ENABLED:-false}" == "true" ]]; then
-    if proxmox-backup-client restore "$snapshot" "etc-ceph.pxar" "$RESTORE_ROOT/etc-ceph" --repository "$REPOSITORY" "${namespace_args[@]}" >/dev/null 2>&1; then
+    if proxmox-backup-client restore "$snapshot" "etc-ceph.pxar" "$RESTORE_ROOT/etc-ceph" --repository "$REPOSITORY" "${namespace_args[@]}" "${crypt_args[@]}" >/dev/null 2>&1; then
         if [[ -d "$RESTORE_ROOT/etc-ceph/etc/ceph" ]]; then
             src_ceph="$RESTORE_ROOT/etc-ceph/etc/ceph"
         else

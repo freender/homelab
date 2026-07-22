@@ -141,6 +141,24 @@ if [[ "$archive_count" =~ ^[0-9]+$ ]]; then
     done
 fi
 
+# Client-side encryption keyfile: staged from the tmpfs secret cache when
+# pbs-client-backup.encrypt is true. Placed at KEYFILE (0600) so backup (and,
+# for PVE hosts, the pve-backup config restore) can encrypt/decrypt.
+if [[ "${ENCRYPT:-false}" == "true" ]]; then
+    staged_keyfile="$BUILD_DIR/pbs-encryption.key"
+    if [[ ! -f "$staged_keyfile" ]]; then
+        print_error "ENCRYPT=true but staged keyfile missing: $staged_keyfile"
+        print_sub "Run ./deploy pbs-client-backup $HOST from riven so the key is staged from 1Password"
+        exit 1
+    fi
+    keyfile_dest="${KEYFILE:-/etc/homelab/pbs-encryption.key}"
+    mkdir -p "$(dirname "$keyfile_dest")"
+    if [[ ! -f "$keyfile_dest" ]] || ! cmp -s "$staged_keyfile" "$keyfile_dest"; then
+        install -m 0600 "$staged_keyfile" "$keyfile_dest"
+        print_sub "Installed PBS encryption keyfile at $keyfile_dest"
+    fi
+fi
+
 changed=false
 rc=0
 install_file_map || rc=$?

@@ -69,6 +69,7 @@ backup_with_client() {
     local archive_specs=("${HOST_ARCHIVE_SPECS[@]}")
     local exclude_args=("${PBS_EXCLUDE_ARGS[@]}")
     local namespace_args=()
+    local crypt_args=()
 
     if ! command -v proxmox-backup-client >/dev/null 2>&1; then
         echo "proxmox-backup-client not found" >&2
@@ -78,10 +79,20 @@ backup_with_client() {
         namespace_args=(--ns "$NAMESPACE")
     fi
 
+    if [[ "${ENCRYPT:-false}" == "true" ]]; then
+        if [[ -z "${KEYFILE:-}" || ! -f "$KEYFILE" ]]; then
+            echo "ENCRYPT=true but keyfile missing: ${KEYFILE:-<unset>}" >&2
+            return 1
+        fi
+        crypt_args=(--keyfile "$KEYFILE" --crypt-mode encrypt)
+        echo "Client-side encryption enabled (keyfile: $KEYFILE)"
+    fi
+
     proxmox-backup-client backup "${archive_specs[@]}" \
         "${exclude_args[@]}" \
         --repository "$REPOSITORY" \
         "${namespace_args[@]}" \
+        "${crypt_args[@]}" \
         --backup-type "$BACKUP_TYPE" \
         --backup-id "$BACKUP_ID"
 }

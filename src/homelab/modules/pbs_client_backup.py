@@ -8,13 +8,16 @@ from .. import backup_excludes, op_secrets
 from ..deploy import DeploySession, force_env, prepare_build_dir, stage_and_run_remote_installer
 from ..hosts import default_registry
 from ..module_support import (
+    ENCRYPTION_KEY_SECRET,
     FileSpec,
     copy_cached_secret,
     feature_paused,
     normalize_bool,
     normalize_string_list,
     require_text,
+    stage_encryption_keyfile,
     tmpfs_secret_stage,
+    validate_secret_reference,
     write_file_map,
 )
 from ..output import print_action, print_sub
@@ -25,6 +28,10 @@ REMOTE_ROOT = "/tmp/homelab-pbs-client-backup"
 MODULE_DIR = "pbs-client-backup"
 SERVICE_NAME = "homelab-pbs-client-backup.service"
 TIMER_NAME = "homelab-pbs-client-backup.timer"
+# On-host location of the shared PBS client-side encryption keyfile. The same
+# path is used by the restore side (pve-backup config restore) so encrypted
+# /etc/pve archives can be decrypted.
+KEYFILE_REMOTE_PATH = "/etc/homelab/pbs-encryption.key"
 VALID_ARCHIVE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 PROFILE_TO_SECRET = {
     "backup-main": "pbs-backup-main",
@@ -55,6 +62,7 @@ class BackupPlan:
     backup_id: str
     backup_type: str
     host_type: str
+    encrypt: bool
     archives: tuple[ArchivePlan, ...]
 
 
@@ -113,6 +121,11 @@ def validate(root: Path, hosts: list[str]) -> None:
             raise ValueError(
                 f"{host}: missing secret file for profile '{plan.secret_profile}'"
             )
+        if plan.encrypt:
+            try:
+                validate_secret_reference(root, ENCRYPTION_KEY_SECRET)
+            except op_secrets.OpSecretsError as exc:
+                raise ValueError(f"{host}: {exc}") from exc
 
 
 def normalize_backup_plan(root: Path, registry, host: str) -> BackupPlan:
@@ -186,6 +199,11 @@ def normalize_backup_plan(root: Path, registry, host: str) -> BackupPlan:
         ),
         backup_type=str(registry.get(host, f"{prefix}.backup_type", "host")),
         host_type=host_type,
+        encrypt=normalize_bool(
+            registry.get(host, f"{prefix}.encrypt", None),
+            False,
+            f"{prefix}.encrypt for {host} must be true or false",
+        ),
         archives=tuple(archives),
     )
 
@@ -249,16 +267,25 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
             secret_name_for_profile(plan.secret_profile),
             secret_dir / "homelab-pbs-client-backup.env",
         )
+        upload_paths = [
+            (build_dir, f"{REMOTE_ROOT}/build/{host}"),
+            (secret_stage, f"{REMOTE_ROOT}/build/{host}/homelab-pbs-client-backup.env"),
+            (root / MODULE_DIR / "configs", f"{REMOTE_ROOT}/configs"),
+            (root / MODULE_DIR / "scripts", f"{REMOTE_ROOT}/scripts"),
+        ]
+        if plan.encrypt:
+            keyfile_stage = stage_encryption_keyfile(
+                root,
+                secret_dir / "pbs-encryption.key",
+            )
+            upload_paths.append(
+                (keyfile_stage, f"{REMOTE_ROOT}/build/{host}/pbs-encryption.key")
+            )
         stage_and_run_remote_installer(
             root,
             connection,
             REMOTE_ROOT,
-            [
-                (build_dir, f"{REMOTE_ROOT}/build/{host}"),
-                (secret_stage, f"{REMOTE_ROOT}/build/{host}/homelab-pbs-client-backup.env"),
-                (root / MODULE_DIR / "configs", f"{REMOTE_ROOT}/configs"),
-                (root / MODULE_DIR / "scripts", f"{REMOTE_ROOT}/scripts"),
-            ],
+            upload_paths,
             "scripts/install.sh",
             host,
             env=force_env(force),
@@ -297,6 +324,8 @@ def write_config(path: Path, plan: BackupPlan) -> None:
         f'BACKUP_TYPE="{plan.backup_type}"',
         f'HOST_TYPE="{plan.host_type}"',
         f'PAUSED="{str(plan.paused).lower()}"',
+        f'ENCRYPT="{str(plan.encrypt).lower()}"',
+        f'KEYFILE="{KEYFILE_REMOTE_PATH}"',
         f'RETIRE_PVE_CONFIG_BACKUP="{str(plan.host_type == "pve").lower()}"',
         f'ARCHIVE_COUNT="{len(plan.archives)}"',
     ]

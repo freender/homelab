@@ -135,6 +135,54 @@ def copy_cached_secret(root: Path, secret_name: str, destination: Path) -> Path:
     return destination
 
 
+ENCRYPTION_KEY_SECRET = "pbs-encryption-key"
+_ENCRYPTION_KEY_PREFIX = "PBS_ENCRYPTION_KEY="
+
+
+def stage_encryption_keyfile(root: Path, destination: Path) -> Path:
+    """Render the PBS encryption key secret and write the raw JSON keyfile.
+
+    The secret env line is ``PBS_ENCRYPTION_KEY=<json>``; the value is the raw
+    single-line PBS keyfile JSON (as produced by ``proxmox-backup-client key
+    create``). We strip the ``PBS_ENCRYPTION_KEY=`` prefix and any surrounding
+    quotes and write only the JSON so the file is a valid keyfile for
+    ``--keyfile`` / ``--encryption-key``. Mirrors ``rendered_private_key`` in
+    zfs_automation. The destination must live in tmpfs; never write it into a
+    persistent repo ``build/`` directory.
+    """
+    text = op_secrets.secret_file(root, ENCRYPTION_KEY_SECRET).read_text(encoding="utf-8")
+    keyfile_json = ""
+    for raw_line in text.splitlines():
+        if raw_line.startswith(_ENCRYPTION_KEY_PREFIX):
+            keyfile_json = raw_line[len(_ENCRYPTION_KEY_PREFIX) :].strip()
+            break
+    if (keyfile_json.startswith('"') and keyfile_json.endswith('"')) or (
+        keyfile_json.startswith("'") and keyfile_json.endswith("'")
+    ):
+        keyfile_json = keyfile_json[1:-1]
+    if not keyfile_json.startswith("{") or '"fingerprint"' not in keyfile_json:
+        raise op_secrets.OpSecretsError(
+            f"secret '{ENCRYPTION_KEY_SECRET}' did not render a PBS keyfile JSON object"
+        )
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_text(keyfile_json.rstrip("\n") + "\n", encoding="utf-8")
+    destination.chmod(0o600)
+    return destination
+
+
+def encryption_key_fingerprint(root: Path) -> str:
+    """Return the fingerprint from the rendered PBS encryption key secret."""
+    path = op_secrets.secret_file(root, ENCRYPTION_KEY_SECRET)
+    env = op_secrets.parse_env_file(path)
+    fingerprint = env.get("PBS_ENCRYPTION_FINGERPRINT", "").strip()
+    if not fingerprint:
+        raise op_secrets.OpSecretsError(
+            f"PBS_ENCRYPTION_FINGERPRINT is empty in rendered secret "
+            f"'{ENCRYPTION_KEY_SECRET}'"
+        )
+    return fingerprint
+
+
 def validate_secret_reference(root: Path, secret_name: str) -> None:
     catalog = op_secrets.load_catalog(root)
     entry = catalog.get(secret_name)

@@ -57,3 +57,67 @@ def test_write_pbs_tokens_file_dedupes_storage_passwords(
         "PBS_BACKUP_CINCI_PASSWORD='value for PBS_BACKUP_CINCI_PASSWORD'\n"
     )
     assert stat.S_IMODE(destination.stat().st_mode) == 0o600
+
+
+def _storage_registry(storages: list[dict[str, object]]) -> object:
+    class FakeRegistry:
+        def get(self, host: str, key: str, default: object = None) -> object:
+            if key == "pve-backup.pbs_setup.storages":
+                return storages
+            if key == "pve-backup.pbs_setup.jobs":
+                return []
+            return default
+
+    return FakeRegistry()
+
+
+def test_build_standalone_backup_plans_emits_encryption_flag(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    storages = [
+        {
+            "name": "backup-local",
+            "server": "xur",
+            "datastore": "backup",
+            "username": "u@pbs",
+            "fingerprint": "aa:bb",
+            "password_var": "PBS_BACKUP_MAIN_PASSWORD",
+            "encryption": True,
+        },
+        {
+            "name": "backup-plain",
+            "server": "cinci",
+            "datastore": "backup",
+            "username": "v@pbs",
+            "fingerprint": "cc:dd",
+            "password_var": "PBS_BACKUP_CINCI_PASSWORD",
+        },
+    ]
+    monkeypatch.setattr(
+        pve_backup, "default_registry", lambda root: _storage_registry(storages)
+    )
+    build_dir = tmp_path / "build"
+    build_dir.mkdir()
+    pve_backup.build_standalone_backup_plans(tmp_path, "ace", build_dir)
+
+    text = (build_dir / "storage-plan.conf").read_text(encoding="utf-8")
+    assert "STORAGE_0_ENCRYPTION='true'" in text
+    assert "STORAGE_1_ENCRYPTION='false'" in text
+
+
+def test_host_has_encrypted_storage(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        pve_backup,
+        "default_registry",
+        lambda root: _storage_registry([{"name": "s", "encryption": True}]),
+    )
+    assert pve_backup.host_has_encrypted_storage(tmp_path, "ace") is True
+
+    monkeypatch.setattr(
+        pve_backup,
+        "default_registry",
+        lambda root: _storage_registry([{"name": "s"}]),
+    )
+    assert pve_backup.host_has_encrypted_storage(tmp_path, "ace") is False

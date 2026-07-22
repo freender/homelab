@@ -7,10 +7,15 @@ from .. import backup_excludes, op_secrets
 from ..deploy import DeploySession, force_env, prepare_build_dir, stage_and_run_remote_installer
 from ..hosts import default_registry
 from ..module_support import (
+    ENCRYPTION_KEY_SECRET as _ENCRYPTION_KEY_SECRET,
+)
+from ..module_support import (
     copy_cached_secret,
     normalize_bool,
     normalize_string_list,
+    stage_encryption_keyfile,
     tmpfs_secret_stage,
+    validate_secret_reference,
 )
 from ..output import print_action, print_sub
 from ..ssh import HostConnection, build_files
@@ -44,6 +49,8 @@ def validate(root: Path, hosts: list[str]) -> None:
             raise ValueError(f"missing config file: {config_dir / name}")
     for host in hosts:
         validate_standalone_backup_config(root, host)
+        if host_has_encrypted_storage(root, host):
+            validate_secret_reference(root, _ENCRYPTION_KEY_SECRET)
 
 
 def validate_standalone_backup_config(root: Path, host: str) -> None:
@@ -150,6 +157,13 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
             tokens_path = secret_dir / "pbs-tokens.env"
             write_pbs_tokens_file(root, host, tokens_path)
             upload_paths.append((tokens_path, f"{REMOTE_ROOT}/build/{host}/pbs-tokens.env"))
+            if host_has_encrypted_storage(root, host):
+                keyfile_path = stage_encryption_keyfile(
+                    root, secret_dir / "pbs-encryption.key"
+                )
+                upload_paths.append(
+                    (keyfile_path, f"{REMOTE_ROOT}/build/{host}/pbs-encryption.key")
+                )
 
         if (build_dir / "restore-plan.conf").is_file():
             plan = pbs_client_backup.normalize_backup_plan(root, default_registry(root), host)
@@ -207,6 +221,11 @@ def build_standalone_backup_plans(root: Path, host: str, build_dir: Path) -> Non
         password_var = storage.get("password_var") or (
             f"PBS_{normalize_storage_name(storage['name'])}_PASSWORD"
         )
+        encryption = normalize_bool(
+            storage.get("encryption", False),
+            False,
+            f"pve-backup.pbs_setup.storages[{index}].encryption must be boolean for {host}",
+        )
         storage_lines.extend([
             f"STORAGE_{index}_NAME='{shell_quote(storage['name'])}'",
             f"STORAGE_{index}_SERVER='{shell_quote(storage['server'])}'",
@@ -215,6 +234,7 @@ def build_standalone_backup_plans(root: Path, host: str, build_dir: Path) -> Non
             f"STORAGE_{index}_USERNAME='{shell_quote(storage['username'])}'",
             f"STORAGE_{index}_FINGERPRINT='{shell_quote(fingerprint)}'",
             f"STORAGE_{index}_PASSWORD_VAR='{shell_quote(password_var)}'",
+            f"STORAGE_{index}_ENCRYPTION='{str(encryption).lower()}'",
         ])
     (build_dir / "storage-plan.conf").write_text(
         "\n".join(storage_lines) + "\n",
@@ -392,6 +412,23 @@ def read_pbs_password(root: Path, password_var: str) -> str:
     return password
 
 
+def host_has_encrypted_storage(root: Path, host: str) -> bool:
+    registry = default_registry(root)
+    storages = registry.get(host, "pve-backup.pbs_setup.storages", [])
+    if not isinstance(storages, list):
+        return False
+    for index, storage in enumerate(storages):
+        if not isinstance(storage, dict):
+            continue
+        if normalize_bool(
+            storage.get("encryption", False),
+            False,
+            f"pve-backup.pbs_setup.storages[{index}].encryption must be boolean for {host}",
+        ):
+            return True
+    return False
+
+
 def write_pbs_tokens_file(root: Path, host: str, destination: Path) -> None:
     registry = default_registry(root)
     storages = registry.get(host, "pve-backup.pbs_setup.storages", [])
@@ -467,6 +504,8 @@ def build_config_restore_plan(root: Path, host: str, build_dir: Path) -> None:
                 f"BACKUP_ID='{shell_quote(plan.backup_id)}'",
                 f"ARCHIVE_NAME='{shell_quote(pve_archive.name)}'",
                 f"CEPH_ENABLED='{shell_quote(ceph_enabled)}'",
+                f"ENCRYPT='{str(plan.encrypt).lower()}'",
+                f"KEYFILE='{shell_quote(pbs_client_backup.KEYFILE_REMOTE_PATH)}'",
                 f"RESTORE_LXC_CONFIGS_ENABLED='{str(restore_lxc_enabled).lower()}'",
                 f"RESTORE_LXC_AUTOSTART='{str(restore_lxc_autostart).lower()}'",
                 f"RESTORE_LXC_CONFIG_COUNT='{len(restore_lxc_vmids)}'",

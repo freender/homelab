@@ -9,6 +9,7 @@ BUILD_DIR="$SCRIPT_DIR/build/$HOST"
 PLAN_FILE="$BUILD_DIR/storage-plan.conf"
 TOKENS_FILE="/etc/homelab/pbs-tokens.env"
 STAGED_TOKENS_FILE="$BUILD_DIR/pbs-tokens.env"
+STAGED_KEYFILE="$BUILD_DIR/pbs-encryption.key"
 STATE_DIR="/run/homelab-pve-backup"
 STATE_FILE="$STATE_DIR/backup-state.env"
 
@@ -31,15 +32,37 @@ if [[ -z "${STORAGE_COUNT:-}" ]]; then
 fi
 
 cleanup_staged_tokens() {
-    if [[ -f "$STAGED_TOKENS_FILE" ]]; then
-        if command -v shred >/dev/null 2>&1; then
-            shred -u -n 1 "$STAGED_TOKENS_FILE"
-        else
-            rm -f "$STAGED_TOKENS_FILE"
+    for staged in "$STAGED_TOKENS_FILE" "$STAGED_KEYFILE"; do
+        if [[ -f "$staged" ]]; then
+            if command -v shred >/dev/null 2>&1; then
+                shred -u -n 1 "$staged"
+            else
+                rm -f "$staged"
+            fi
         fi
-    fi
+    done
 }
 trap cleanup_staged_tokens EXIT
+
+# Apply (idempotently) the PBS client-side encryption key to a storage. PVE stores
+# the key at /etc/pve/priv/storage/<name>.enc and records `encryption-key <fp>` in
+# storage.cfg. On a cluster (ace) this propagates via pmxcfs to all nodes. We only
+# set it when the stanza has no encryption-key yet, so we never rotate/overwrite an
+# existing key (which would orphan already-encrypted snapshots).
+apply_storage_encryption() {
+    local name="$1"
+    if [[ ! -f "$STAGED_KEYFILE" ]]; then
+        print_error "Storage $name requests encryption but staged keyfile missing: $STAGED_KEYFILE"
+        print_sub "Run ./deploy pve-backup $HOST from riven so the encryption key is staged from 1Password"
+        return 1
+    fi
+    if [[ -n "$(storage_field "$name" encryption-key)" ]]; then
+        print_sub "PBS storage $name already has an encryption-key; leaving as-is"
+        return 0
+    fi
+    print_sub "Enabling client-side encryption on PBS storage $name..."
+    pvesm set "$name" --encryption-key "$STAGED_KEYFILE"
+}
 
 if [[ -f "$TOKENS_FILE" ]]; then
     # shellcheck disable=SC1090
@@ -92,6 +115,7 @@ for (( i=0; i<STORAGE_COUNT; i++ )); do
     username_var="STORAGE_${i}_USERNAME"
     fingerprint_var="STORAGE_${i}_FINGERPRINT"
     password_var_ref="STORAGE_${i}_PASSWORD_VAR"
+    encryption_var="STORAGE_${i}_ENCRYPTION"
 
     name="${!name_var}"
     server="${!server_var}"
@@ -100,6 +124,7 @@ for (( i=0; i<STORAGE_COUNT; i++ )); do
     username="${!username_var}"
     fingerprint="${!fingerprint_var}"
     password_var_name="${!password_var_ref}"
+    encryption="${!encryption_var:-false}"
 
     if [[ -z "$password_var_name" ]]; then
         print_error "Password variable name missing for $name"
@@ -139,6 +164,9 @@ for (( i=0; i<STORAGE_COUNT; i++ )); do
                 set_args+=(--namespace "$namespace")
             fi
             pvesm set "$name" "${set_args[@]}"
+            if [[ "$encryption" == "true" ]]; then
+                apply_storage_encryption "$name" || exit 1
+            fi
             continue
         fi
 
@@ -200,6 +228,10 @@ for (( i=0; i<STORAGE_COUNT; i++ )); do
 
     print_sub "Ensuring prune policy on $name..."
     pvesm set "$name" --prune-backups keep-all=1
+
+    if [[ "$encryption" == "true" ]]; then
+        apply_storage_encryption "$name" || exit 1
+    fi
 done
 
 printf 'PBS_STORAGE_CREATED=%q\n' "$storage_created" > "$STATE_FILE"
