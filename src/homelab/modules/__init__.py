@@ -22,6 +22,7 @@ from .pve_notifications import deploy as deploy_pve_notifications
 from .pve_postinstall import deploy as deploy_pve_postinstall
 from .pve_postinstall_webhook import deploy as deploy_pve_postinstall_webhook
 from .pve_realtek_r8152_dkms import deploy as deploy_pve_realtek_r8152_dkms
+from .pve_upgrade import deploy as deploy_pve_upgrade
 from .pve_zfs_large_block_patch import deploy as deploy_pve_zfs_large_block_patch
 from .pve_zfs_migration_sync_patch import deploy as deploy_pve_zfs_migration_sync_patch
 from .ssh_config import deploy as deploy_ssh_config
@@ -93,6 +94,10 @@ MODULES: dict[str, ModuleDefinition] = {
         name="PVE Realtek r8152 DKMS Driver",
         deploy=deploy_pve_realtek_r8152_dkms,
     ),
+    "pve-upgrade": ModuleDefinition(
+        name="PVE/PBS/PDM Upgrade",
+        deploy=deploy_pve_upgrade,
+    ),
     "pve-interface-pinning": ModuleDefinition(
         name="PVE Interface Pinning",
         deploy=deploy_pve_interface_pinning,
@@ -143,6 +148,7 @@ MODULE_ORDER = [
     "pbs-client-backup",
     "docker",
     "apt-upgrade",
+    "pve-upgrade",
 ]
 
 
