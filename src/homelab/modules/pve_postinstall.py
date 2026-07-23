@@ -16,7 +16,6 @@ SITE_ROUTES_SCRIPT = "homelab-site-routes"
 SITE_ROUTES_SERVICE = "homelab-site-routes.service"
 PVE_FILES = [
     "proxmox.sources",
-    "ceph.sources",
     "pve-test.sources",
     "no-nag-script",
     "pve-remove-nag.sh",
@@ -37,7 +36,6 @@ GENERATED_FILES = {
 
 REMOTE_PATHS = {
     "proxmox.sources": "/etc/apt/sources.list.d/proxmox.sources",
-    "ceph.sources": "/etc/apt/sources.list.d/ceph.sources",
     "pve-test.sources": "/etc/apt/sources.list.d/pve-test.sources",
     "no-nag-script": "/etc/apt/apt.conf.d/no-nag-script",
     "pve-remove-nag.sh": "/usr/local/bin/pve-remove-nag.sh",

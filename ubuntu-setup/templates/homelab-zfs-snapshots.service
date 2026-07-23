@@ -1,9 +1,0 @@
-[Unit]
-Description=Homelab ZFS snapshots via sanoid
-OnFailure=homelab-notify-failure@%n.service
-
-[Service]
-Type=oneshot
-ExecStart=/usr/sbin/sanoid --configdir=/etc/sanoid --cron --verbose
-StandardOutput=journal
-StandardError=journal

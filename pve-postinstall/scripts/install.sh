@@ -34,7 +34,7 @@ required_files_for_type() {
     local host_type="$1"
     case "$host_type" in
         pve)
-            printf '%s\n' proxmox.sources ceph.sources pve-test.sources no-nag-script pve-remove-nag.sh sshd-hardening.conf notify-failure.sh homelab-notify-failure@.service homelab-pve-cluster-rejoin-helper
+            printf '%s\n' proxmox.sources pve-test.sources no-nag-script pve-remove-nag.sh sshd-hardening.conf notify-failure.sh homelab-notify-failure@.service homelab-pve-cluster-rejoin-helper
             ;;
         *)
             return 1
@@ -80,7 +80,7 @@ install_file() {
 
 repo_files_need_backup() {
     local file
-    for file in proxmox.sources ceph.sources pve-test.sources; do
+    for file in proxmox.sources pve-test.sources; do
         if [[ ! -e "/etc/apt/sources.list.d/$file" ]] || ! cmp -s "$BUILD_DIR/$file" "/etc/apt/sources.list.d/$file"; then
             return 0
         fi
@@ -409,7 +409,7 @@ case "$HOST_TYPE" in
         done < <(required_files_for_type "$HOST_TYPE")
 
         print_sub "Deploying PVE repo sources..."
-        for file in proxmox.sources ceph.sources pve-test.sources; do
+        for file in proxmox.sources pve-test.sources; do
             install_file "$file" || exit 1
         done
 

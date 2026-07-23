@@ -467,9 +467,6 @@ def build_config_restore_plan(root: Path, host: str, build_dir: Path) -> None:
     )
     if pve_archive is None:
         return
-    ceph_enabled = "true" if any(
-        archive.path == "/etc/ceph" for archive in plan.archives
-    ) else "false"
     restore_lxc_configs = registry.get(host, "pve-backup.restore_lxc_configs", {})
     if restore_lxc_configs in (None, ""):
         restore_lxc_configs = {}
@@ -503,7 +500,6 @@ def build_config_restore_plan(root: Path, host: str, build_dir: Path) -> None:
                 f"NAMESPACE='{shell_quote(plan.namespace)}'",
                 f"BACKUP_ID='{shell_quote(plan.backup_id)}'",
                 f"ARCHIVE_NAME='{shell_quote(pve_archive.name)}'",
-                f"CEPH_ENABLED='{shell_quote(ceph_enabled)}'",
                 f"ENCRYPT='{str(plan.encrypt).lower()}'",
                 f"KEYFILE='{shell_quote(pbs_client_backup.KEYFILE_REMOTE_PATH)}'",
                 f"RESTORE_LXC_CONFIGS_ENABLED='{str(restore_lxc_enabled).lower()}'",

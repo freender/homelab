@@ -240,7 +240,7 @@ fi
 
 print_sub "Restoring snapshot $snapshot..."
 rm -rf "$RESTORE_ROOT"
-mkdir -p "$RESTORE_ROOT/etc-pve" "$RESTORE_ROOT/etc-ceph"
+mkdir -p "$RESTORE_ROOT/etc-pve"
 mkdir -p "$RESTORE_OUTPUT_DIR"
 
 proxmox-backup-client restore "$snapshot" "${ARCHIVE_NAME}.pxar" "$RESTORE_ROOT/etc-pve" --repository "$REPOSITORY" "${namespace_args[@]}" "${crypt_args[@]}"
@@ -260,20 +260,5 @@ print_sub "Fetched /etc/pve backup to $RESTORE_OUTPUT_DIR/latest"
 
 apply_restored_notifications "$RESTORE_OUTPUT_DIR/latest"
 restore_lxc_configs "$RESTORE_OUTPUT_DIR/latest"
-
-if [[ "${CEPH_ENABLED:-false}" == "true" ]]; then
-    if proxmox-backup-client restore "$snapshot" "etc-ceph.pxar" "$RESTORE_ROOT/etc-ceph" --repository "$REPOSITORY" "${namespace_args[@]}" "${crypt_args[@]}" >/dev/null 2>&1; then
-        if [[ -d "$RESTORE_ROOT/etc-ceph/etc/ceph" ]]; then
-            src_ceph="$RESTORE_ROOT/etc-ceph/etc/ceph"
-        else
-            src_ceph="$RESTORE_ROOT/etc-ceph"
-        fi
-        rm -rf "$RESTORE_OUTPUT_DIR/latest-ceph"
-        cp -r "$src_ceph" "$RESTORE_OUTPUT_DIR/latest-ceph"
-        print_sub "Fetched /etc/ceph backup to $RESTORE_OUTPUT_DIR/latest-ceph"
-    else
-        print_sub "No etc-ceph archive in snapshot; skipping /etc/ceph restore"
-    fi
-fi
 
 print_sub "PBS config restore completed"
