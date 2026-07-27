@@ -16,15 +16,15 @@ trap cleanup EXIT
 
 pool_tier() {
     case "$1" in
-        vault-disks) printf 'hdd' ;;
+        vault-hdd) printf 'hdd' ;;
         *) printf 'ssd' ;;
     esac
 }
 
 pool_role() {
     case "$1" in
-        vault-disks) printf 'media' ;;
-        vm-disks) printf 'vm' ;;
+        vault-hdd) printf 'media' ;;
+        vm-flash) printf 'vm' ;;
         rpool) printf 'boot' ;;
         cache) printf 'cache' ;;
         *) printf 'general' ;;
@@ -42,6 +42,19 @@ write_metric() {
         "$metric" "$HOST" "$pool" "$tier" "$role" "$value"
 }
 
+write_labeled_metric() {
+    local metric="$1"
+    local pool="$2"
+    local extra_label="$3"
+    local extra_value="$4"
+    local value="$5"
+    local tier role
+    tier="$(pool_tier "$pool")"
+    role="$(pool_role "$pool")"
+    printf '%s{host="%s",zpool="%s",tier="%s",role="%s",%s="%s"} %s\n' \
+        "$metric" "$HOST" "$pool" "$tier" "$role" "$extra_label" "$extra_value" "$value"
+}
+
 {
     printf '# HELP homelab_zpool_size_bytes ZFS pool total size in bytes.\n'
     printf '# TYPE homelab_zpool_size_bytes gauge\n'
@@ -51,14 +64,22 @@ write_metric() {
     printf '# TYPE homelab_zpool_free_bytes gauge\n'
     printf '# HELP homelab_zpool_used_percent ZFS pool allocated percentage.\n'
     printf '# TYPE homelab_zpool_used_percent gauge\n'
+    printf '# HELP homelab_zpool_healthy Whether the ZFS pool health state is ONLINE (1) or not (0).\n'
+    printf '# TYPE homelab_zpool_healthy gauge\n'
+    printf '# HELP homelab_zpool_state_info ZFS pool health state as reported by zpool list; value is always 1, state is a label.\n'
+    printf '# TYPE homelab_zpool_state_info gauge\n'
 
-    zpool list -Hp -o name,size,alloc,free | while IFS=$'\t' read -r pool size alloc free; do
+    zpool list -Hp -o name,size,alloc,free,health | while IFS=$'\t' read -r pool size alloc free health; do
         [[ -n "$pool" ]] || continue
         used_percent="$(awk -v alloc="$alloc" -v size="$size" 'BEGIN { if (size > 0) printf "%.6f", (alloc / size) * 100; else printf "0" }')"
+        healthy=0
+        [[ "$health" == "ONLINE" ]] && healthy=1
         write_metric homelab_zpool_size_bytes "$pool" "$size"
         write_metric homelab_zpool_allocated_bytes "$pool" "$alloc"
         write_metric homelab_zpool_free_bytes "$pool" "$free"
         write_metric homelab_zpool_used_percent "$pool" "$used_percent"
+        write_metric homelab_zpool_healthy "$pool" "$healthy"
+        write_labeled_metric homelab_zpool_state_info "$pool" state "$health" 1
     done
 } > "$TMP_FILE"
 

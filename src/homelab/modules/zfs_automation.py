@@ -1941,6 +1941,11 @@ def build_zfs_push_target_authorized_keys(access: ZfsPushTargetAccess) -> str:
 
 
 def build_health_check_script(pools: list[str]) -> str:
+    # `zpool status -x <pool>` always exits 0, even for a DEGRADED/FAULTED/UNAVAIL
+    # pool; it only changes its stdout message. Checking the exit code alone (the
+    # old behavior here) can never detect an unhealthy pool. Compare the reported
+    # `health` column against ONLINE instead, and print `zpool status` for context
+    # before failing so OnFailure notifications carry the vdev detail.
     lines = [
         "#!/bin/bash",
         "",
@@ -1948,9 +1953,17 @@ def build_health_check_script(pools: list[str]) -> str:
         "",
         shell_array_block("ZFS_POOLS", pools),
         "",
-        "for pool in \"${ZFS_POOLS[@]}\"; do",
-        "  /sbin/zpool status -x \"$pool\"",
+        "failed=0",
+        'for pool in "${ZFS_POOLS[@]}"; do',
+        '  health="$(/sbin/zpool list -H -o health -- "$pool")"',
+        '  if [[ "$health" != "ONLINE" ]]; then',
+        '    echo "pool $pool is $health" >&2',
+        '    /sbin/zpool status -- "$pool" >&2',
+        "    failed=1",
+        "  fi",
         "done",
+        "",
+        'exit "$failed"',
         "",
     ]
     return "\n".join(lines)
