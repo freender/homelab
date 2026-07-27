@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import shlex
 from pathlib import Path
+from typing import Any
 
 from .templates import render_template
 
@@ -16,7 +17,7 @@ def copy_files(source_dir: Path, destination_dir: Path, names: list[str]) -> Non
         copy_file(source_dir / name, destination_dir / name)
 
 
-def render_file(template: Path, destination: Path, **context: str) -> None:
+def render_file(template: Path, destination: Path, **context: Any) -> None:
     render_template(template, destination, **context)
 
 

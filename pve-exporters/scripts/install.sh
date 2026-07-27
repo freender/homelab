@@ -35,6 +35,7 @@ SMART_SVC_SRC="$BUILD_DIR/configs/smartctl-exporter.service"
 ZFS_POOL_BIN_SRC="$BUILD_DIR/configs/zfs-pool-textfile-exporter"
 ZFS_POOL_SVC_SRC="$BUILD_DIR/configs/zfs-pool-textfile-exporter.service"
 ZFS_POOL_TIMER_SRC="$BUILD_DIR/configs/zfs-pool-textfile-exporter.timer"
+ZFS_EXPECTED_POOLS_SRC="$BUILD_DIR/configs/zfs-expected-pools.conf"
 APC_BIN_SRC="$BUILD_DIR/configs/apcupsd-exporter.py"
 APC_ENV_SRC="$BUILD_DIR/configs/apcupsd-exporter.env"
 APC_SVC_SRC="$BUILD_DIR/configs/apcupsd-exporter.service"
@@ -98,6 +99,17 @@ backup_and_copy_if_changed "$ZFS_POOL_SVC_SRC" /etc/systemd/system/zfs-pool-text
 rc=0
 backup_and_copy_if_changed "$ZFS_POOL_TIMER_SRC" /etc/systemd/system/zfs-pool-textfile-exporter.timer || rc=$?
 [[ $rc -eq 1 ]] || [[ $rc -eq 0 ]] || exit "$rc"
+
+# Only staged when the host sets pve-exporters.zfs_expected_pools. Absent file
+# means the exporter reports only imported pools, which is the pre-existing
+# behaviour.
+if [[ -f "$ZFS_EXPECTED_POOLS_SRC" ]]; then
+    mkdir -p /etc/homelab
+    rc=0
+    backup_and_copy_if_changed "$ZFS_EXPECTED_POOLS_SRC" /etc/homelab/zfs-expected-pools.conf || rc=$?
+    [[ $rc -eq 1 ]] || [[ $rc -eq 0 ]] || exit "$rc"
+    chmod 0644 /etc/homelab/zfs-expected-pools.conf
+fi
 
 if [[ -f "$APC_BIN_SRC" && -f "$APC_ENV_SRC" && -f "$APC_SVC_SRC" ]]; then
     if file_needs_update "$APC_BIN_SRC" /usr/local/bin/apcupsd-exporter; then

@@ -5,6 +5,15 @@ set -euo pipefail
 HOST="${HOSTNAME_OVERRIDE:-$(hostname -s)}"
 OUT_DIR="/var/lib/prometheus/node-exporter"
 OUT_FILE="$OUT_DIR/zfs-pools.prom"
+# Optional per-host list of pools that are expected to be imported. `zpool list`
+# only reports pools that actually imported, so a pool that fails to import (or
+# is degraded past the point of importing at boot) silently drops its whole
+# series instead of going unhealthy -- an absent series never matches
+# `homelab_zpool_healthy == 0`. Naming the expected pools lets this exporter
+# report them as healthy=0/state=MISSING instead of emitting nothing at all.
+# When the file is absent the exporter only reports what is imported, exactly as
+# before, so hosts that opt out are unaffected.
+EXPECTED_POOLS_FILE="${ZFS_EXPECTED_POOLS_FILE:-/etc/homelab/zfs-expected-pools.conf}"
 
 mkdir -p "$OUT_DIR"
 TMP_FILE="$(mktemp "$OUT_DIR/.zfs-pools.prom.XXXXXX")"
@@ -42,6 +51,17 @@ write_metric() {
         "$metric" "$HOST" "$pool" "$tier" "$role" "$value"
 }
 
+read_expected_pools() {
+    [[ -r "$EXPECTED_POOLS_FILE" ]] || return 0
+    local line
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        line="${line%%#*}"
+        line="$(printf '%s' "$line" | tr -d '[:space:]')"
+        [[ -n "$line" ]] || continue
+        printf '%s\n' "$line"
+    done < "$EXPECTED_POOLS_FILE"
+}
+
 write_labeled_metric() {
     local metric="$1"
     local pool="$2"
@@ -66,11 +86,15 @@ write_labeled_metric() {
     printf '# TYPE homelab_zpool_used_percent gauge\n'
     printf '# HELP homelab_zpool_healthy Whether the ZFS pool health state is ONLINE (1) or not (0).\n'
     printf '# TYPE homelab_zpool_healthy gauge\n'
-    printf '# HELP homelab_zpool_state_info ZFS pool health state as reported by zpool list; value is always 1, state is a label.\n'
+    printf '# HELP homelab_zpool_state_info ZFS pool health state as reported by zpool list, or MISSING when an expected pool is not imported; value is always 1, state is a label.\n'
     printf '# TYPE homelab_zpool_state_info gauge\n'
 
-    zpool list -Hp -o name,size,alloc,free,health | while IFS=$'\t' read -r pool size alloc free health; do
+    # Process substitution rather than a pipe: a piped `while` runs in a subshell,
+    # so seen_marker would not survive the loop.
+    seen_marker=""
+    while IFS=$'\t' read -r pool size alloc free health; do
         [[ -n "$pool" ]] || continue
+        seen_marker+="|$pool|"
         used_percent="$(awk -v alloc="$alloc" -v size="$size" 'BEGIN { if (size > 0) printf "%.6f", (alloc / size) * 100; else printf "0" }')"
         healthy=0
         [[ "$health" == "ONLINE" ]] && healthy=1
@@ -80,7 +104,17 @@ write_labeled_metric() {
         write_metric homelab_zpool_used_percent "$pool" "$used_percent"
         write_metric homelab_zpool_healthy "$pool" "$healthy"
         write_labeled_metric homelab_zpool_state_info "$pool" state "$health" 1
-    done
+    done < <(zpool list -Hp -o name,size,alloc,free,health)
+
+    # Expected pools that never showed up in `zpool list`. Deliberately no
+    # size/alloc/free here: there is no pool to measure. Label set matches the
+    # imported case so the series keeps its identity across the transition.
+    while IFS= read -r pool; do
+        [[ -n "$pool" ]] || continue
+        [[ "$seen_marker" == *"|$pool|"* ]] && continue
+        write_metric homelab_zpool_healthy "$pool" 0
+        write_labeled_metric homelab_zpool_state_info "$pool" state MISSING 1
+    done < <(read_expected_pools)
 } > "$TMP_FILE"
 
 chmod 0644 "$TMP_FILE"

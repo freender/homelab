@@ -51,6 +51,9 @@ def validate(root: Path) -> None:
     template = apcupsd_exporter_env_template(root)
     if not template.is_file():
         raise ValueError(f"Missing required config: {template}")
+    pools_template = zfs_expected_pools_template(root)
+    if not pools_template.is_file():
+        raise ValueError(f"Missing required config: {pools_template}")
 
 
 def has_apcupsd_exporter(root: Path, host: str) -> bool:
@@ -67,6 +70,28 @@ def has_igpu_exporter(root: Path, host: str) -> bool:
 
 def apcupsd_exporter_env_template(root: Path) -> Path:
     return root / "pve-exporters" / "templates" / "apcupsd-exporter.env.tpl"
+
+
+def zfs_expected_pools_template(root: Path) -> Path:
+    return root / "pve-exporters" / "templates" / "zfs-expected-pools.conf.tpl"
+
+
+def zfs_expected_pools(root: Path, host: str) -> list[str]:
+    registry = default_registry(root)
+    configured = registry.get(host, "pve-exporters.zfs_expected_pools", None)
+    if configured is None:
+        return []
+    if not isinstance(configured, list):
+        raise ValueError(
+            f"{host}: pve-exporters.zfs_expected_pools must be a list of pool names"
+        )
+    pools: list[str] = []
+    for entry in configured:
+        pool = str(entry).strip()
+        if not pool:
+            raise ValueError(f"{host}: pve-exporters.zfs_expected_pools contains an empty entry")
+        pools.append(pool)
+    return pools
 
 
 def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
@@ -145,6 +170,18 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
                 configs_dir / "igpu-exporter.service",
                 "/etc/systemd/system/igpu-exporter.service",
             ),
+        ]):
+            print_sub(message)
+
+    expected_pools = zfs_expected_pools(root, host)
+    if expected_pools:
+        render_file(
+            zfs_expected_pools_template(root),
+            configs_dir / "zfs-expected-pools.conf",
+            ZFS_EXPECTED_POOLS=expected_pools,
+        )
+        for message in diff_many(connection, [
+            (configs_dir / "zfs-expected-pools.conf", "/etc/homelab/zfs-expected-pools.conf"),
         ]):
             print_sub(message)
 
