@@ -1,0 +1,35 @@
+#!/bin/bash
+
+set -euo pipefail
+
+HOST="${HOSTNAME_OVERRIDE:-$(hostname -s)}"
+OUT_DIR="/var/lib/prometheus/node-exporter"
+OUT_FILE="$OUT_DIR/systemd-failed.prom"
+
+mkdir -p "$OUT_DIR"
+TMP_FILE="$(mktemp "$OUT_DIR/.systemd-failed.prom.XXXXXX")"
+
+cleanup() {
+    rm -f "$TMP_FILE"
+}
+trap cleanup EXIT
+
+{
+    printf '# HELP homelab_systemd_units_failed_total Count of systemd units currently in failed state.\n'
+    printf '# TYPE homelab_systemd_units_failed_total gauge\n'
+    printf '# HELP homelab_systemd_unit_failed Always 1; one series per systemd unit currently in failed state.\n'
+    printf '# TYPE homelab_systemd_unit_failed gauge\n'
+
+    count=0
+    while IFS= read -r unit; do
+        [[ -n "$unit" ]] || continue
+        count=$((count + 1))
+        printf 'homelab_systemd_unit_failed{host="%s",unit="%s"} 1\n' "$HOST" "$unit"
+    done < <(systemctl --failed --no-legend --plain --state=failed 2>/dev/null | awk '{print $1}')
+
+    printf 'homelab_systemd_units_failed_total{host="%s"} %s\n' "$HOST" "$count"
+} > "$TMP_FILE"
+
+chmod 0644 "$TMP_FILE"
+mv "$TMP_FILE" "$OUT_FILE"
+trap - EXIT

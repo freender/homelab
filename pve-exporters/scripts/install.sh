@@ -36,6 +36,9 @@ ZFS_POOL_BIN_SRC="$BUILD_DIR/configs/zfs-pool-textfile-exporter"
 ZFS_POOL_SVC_SRC="$BUILD_DIR/configs/zfs-pool-textfile-exporter.service"
 ZFS_POOL_TIMER_SRC="$BUILD_DIR/configs/zfs-pool-textfile-exporter.timer"
 ZFS_EXPECTED_POOLS_SRC="$BUILD_DIR/configs/zfs-expected-pools.conf"
+SYSTEMD_FAILED_BIN_SRC="$BUILD_DIR/configs/systemd-failed-textfile-exporter"
+SYSTEMD_FAILED_SVC_SRC="$BUILD_DIR/configs/systemd-failed-textfile-exporter.service"
+SYSTEMD_FAILED_TIMER_SRC="$BUILD_DIR/configs/systemd-failed-textfile-exporter.timer"
 APC_BIN_SRC="$BUILD_DIR/configs/apcupsd-exporter.py"
 APC_ENV_SRC="$BUILD_DIR/configs/apcupsd-exporter.env"
 APC_SVC_SRC="$BUILD_DIR/configs/apcupsd-exporter.service"
@@ -109,6 +112,28 @@ if [[ -f "$ZFS_EXPECTED_POOLS_SRC" ]]; then
     backup_and_copy_if_changed "$ZFS_EXPECTED_POOLS_SRC" /etc/homelab/zfs-expected-pools.conf || rc=$?
     [[ $rc -eq 1 ]] || [[ $rc -eq 0 ]] || exit "$rc"
     chmod 0644 /etc/homelab/zfs-expected-pools.conf
+fi
+
+# Only staged when this host runs the containerized exporter runtime; native
+# PVE hosts already get failed-unit metrics from node_exporter's real systemd
+# collector, so this textfile fallback would just be a redundant second
+# source for the same data there.
+if [[ -f "$SYSTEMD_FAILED_BIN_SRC" ]]; then
+    if file_needs_update "$SYSTEMD_FAILED_BIN_SRC" /usr/local/bin/systemd-failed-textfile-exporter; then
+        backup_config /usr/local/bin/systemd-failed-textfile-exporter
+        install -m 755 "$SYSTEMD_FAILED_BIN_SRC" /usr/local/bin/systemd-failed-textfile-exporter
+        print_sub "Updated systemd-failed-textfile-exporter"
+    else
+        print_sub "systemd-failed-textfile-exporter unchanged; skipping update"
+    fi
+
+    rc=0
+    backup_and_copy_if_changed "$SYSTEMD_FAILED_SVC_SRC" /etc/systemd/system/systemd-failed-textfile-exporter.service || rc=$?
+    [[ $rc -eq 1 ]] || [[ $rc -eq 0 ]] || exit "$rc"
+
+    rc=0
+    backup_and_copy_if_changed "$SYSTEMD_FAILED_TIMER_SRC" /etc/systemd/system/systemd-failed-textfile-exporter.timer || rc=$?
+    [[ $rc -eq 1 ]] || [[ $rc -eq 0 ]] || exit "$rc"
 fi
 
 if [[ -f "$APC_BIN_SRC" && -f "$APC_ENV_SRC" && -f "$APC_SVC_SRC" ]]; then
@@ -253,6 +278,10 @@ if [[ "$EXPORTER_RUNTIME" != "docker" ]]; then
 fi
 systemctl enable --now zfs-pool-textfile-exporter.timer
 systemctl start zfs-pool-textfile-exporter.service
+if [[ -f "$SYSTEMD_FAILED_BIN_SRC" ]]; then
+    systemctl enable --now systemd-failed-textfile-exporter.timer
+    systemctl start systemd-failed-textfile-exporter.service
+fi
 if [[ "$EXPORTER_RUNTIME" != "docker" ]]; then
     systemctl enable --now smartctl-exporter
 fi
@@ -268,6 +297,9 @@ if [[ "$EXPORTER_RUNTIME" != "docker" ]]; then
     systemctl is-active --quiet prometheus-node-exporter
 fi
 systemctl is-active --quiet zfs-pool-textfile-exporter.timer
+if [[ -f "$SYSTEMD_FAILED_BIN_SRC" ]]; then
+    systemctl is-active --quiet systemd-failed-textfile-exporter.timer
+fi
 if [[ "$EXPORTER_RUNTIME" != "docker" ]]; then
     systemctl is-active --quiet smartctl-exporter
 fi

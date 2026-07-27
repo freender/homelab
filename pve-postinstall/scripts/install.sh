@@ -269,6 +269,36 @@ configure_native_zfs_scrub_timers() {
     done < <(zpool list -H -o name)
 }
 
+mask_unwanted_default_service() {
+    local unit="$1"
+    local reason="$2"
+
+    if ! systemctl list-unit-files "$unit" >/dev/null 2>&1; then
+        return 0
+    fi
+    if [[ "$(systemctl is-enabled "$unit" 2>/dev/null)" == "masked" ]]; then
+        # Idempotent even if already masked: a masked unit can still show up in
+        # `systemctl --failed` from before it was masked (or from any spurious
+        # start attempt), and that stale record would otherwise trip a
+        # failed-unit alert.
+        systemctl reset-failed "$unit" >/dev/null 2>&1 || true
+        print_sub "$unit already masked"
+        return 0
+    fi
+    systemctl disable --now "$unit" >/dev/null 2>&1 || true
+    systemctl mask "$unit"
+    systemctl reset-failed "$unit" >/dev/null 2>&1 || true
+    print_ok "$unit masked ($reason)"
+}
+
+mask_unwanted_default_services() {
+    # openipmi: LSB init script that fails at boot on hardware with no BMC/IPMI
+    # device (/dev/ipmi0 absent). None of ace/bray/clovis/osiris have IPMI, so it
+    # can never succeed here; mask it rather than leave a permanently-failed unit
+    # for any systemd failed-unit alert to trip over.
+    mask_unwanted_default_service openipmi.service "no IPMI hardware on this host"
+}
+
 install_other_subfeatures() {
     if [[ -f "$BUILD_DIR/interfaces" ]]; then
         print_sub "Configuring network interfaces..."
@@ -477,6 +507,9 @@ case "$HOST_TYPE" in
 
         print_sub "Configuring native ZFS scrub timers..."
         configure_native_zfs_scrub_timers || exit 1
+
+        print_sub "Masking unwanted default services..."
+        mask_unwanted_default_services
 
         print_sub "Applying additional subfeatures..."
         install_other_subfeatures || exit 1
