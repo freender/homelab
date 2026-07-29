@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import os
 import shlex
-import shutil
 import tempfile
 from pathlib import Path
 
@@ -56,11 +55,6 @@ class HostConnection:
             return 1, f"[~] {remote_path}"
         finally:
             temp_path.unlink(missing_ok=True)
-
-    def stage_bundle(self, local_path: Path, remote_path: str) -> None:
-        quoted = shlex.quote(remote_path)
-        self.connection.run(f"rm -rf {quoted} && mkdir -p {quoted}", hide=True)
-        self.connection.put(str(local_path), remote=remote_path)
 
     def prepare_remote_dir(self, remote_root: str, *subdirs: str) -> None:
         directories = [shlex.quote(remote_root)]
@@ -152,7 +146,4 @@ def build_files(build_dir: Path) -> list[str]:
     ]
 
 
-def stage_tree(local_path: Path, destination: Path) -> None:
-    if destination.exists():
-        shutil.rmtree(destination)
-    shutil.copytree(local_path, destination)
+

@@ -378,42 +378,6 @@ backup_and_install_if_changed() {
     return "$rc"
 }
 
-# Sync files from source directory into destination directory when changed
-# Returns: 0 if any file changed, 1 if no files changed, 2 on error
-# Usage: sync_dir_if_changed /tmp/src.d /etc/app.d [label]
-sync_dir_if_changed() {
-    local src_dir="$1"
-    local dst_dir="$2"
-    local label="${3:-$dst_dir}"
-    local changed=1
-    local file
-
-    if [[ ! -d "$src_dir" ]]; then
-        print_error "source directory not found: $src_dir"
-        return 2
-    fi
-
-    mkdir -p "$dst_dir"
-
-    shopt -s nullglob
-    for file in "$src_dir"/*; do
-        local target_file
-        target_file="$dst_dir/$(basename "$file")"
-        if copy_if_changed "$file" "$target_file" "$label/$(basename "$file")"; then
-            changed=0
-        else
-            local rc=$?
-            if [[ $rc -ne 1 ]]; then
-                shopt -u nullglob
-                return "$rc"
-            fi
-        fi
-    done
-    shopt -u nullglob
-
-    return "$changed"
-}
-
 # Enable or disable a systemd timer based on a flag, restarting it if units changed.
 # Usage: ensure_timer_state <timer> <"true"|"false"> <units_changed>
 ensure_timer_state() {

@@ -170,19 +170,6 @@ def stage_encryption_keyfile(root: Path, destination: Path) -> Path:
     return destination
 
 
-def encryption_key_fingerprint(root: Path) -> str:
-    """Return the fingerprint from the rendered PBS encryption key secret."""
-    path = op_secrets.secret_file(root, ENCRYPTION_KEY_SECRET)
-    env = op_secrets.parse_env_file(path)
-    fingerprint = env.get("PBS_ENCRYPTION_FINGERPRINT", "").strip()
-    if not fingerprint:
-        raise op_secrets.OpSecretsError(
-            f"PBS_ENCRYPTION_FINGERPRINT is empty in rendered secret "
-            f"'{ENCRYPTION_KEY_SECRET}'"
-        )
-    return fingerprint
-
-
 def validate_secret_reference(root: Path, secret_name: str) -> None:
     catalog = op_secrets.load_catalog(root)
     entry = catalog.get(secret_name)

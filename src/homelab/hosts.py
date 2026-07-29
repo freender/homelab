@@ -208,25 +208,22 @@ def validate_host_config(host: str, config: dict[str, Any]) -> None:
 
 
 def validate_host_features(host: str, features: object) -> None:
+    # NOTE: only the shape of the `features:` mapping itself is validated here
+    # (must be a mapping). The value under each feature key (e.g.
+    # `pve-exporters.runtime`, `zfs-automation.manage_scrub`) is entirely
+    # unvalidated at this layer -- there is no generic per-module config
+    # schema. A typo'd value silently falls through to whatever default the
+    # module's own `registry.get(host, key, default)` call happens to use.
+    # `./validate`'s dry-run of every module against every host is the
+    # de-facto gate today.
+    #
+    # Individual modules can (and where the blast radius warrants it, should)
+    # add their own targeted validation instead of waiting for a generic
+    # framework here -- see pve_exporters.exporter_runtime(), which validates
+    # `pve-exporters.runtime` against an explicit allowed set, as the pattern
+    # to follow for other high-risk single keys.
     if features is not None and not isinstance(features, dict):
         raise ValueError(f"features must be a mapping for {host}")
-
-
-def validate_optional_mapping_keys(
-    host: str,
-    field_name: str,
-    value: object,
-    allowed_keys: set[str],
-) -> None:
-    if value is None:
-        return
-    if not isinstance(value, dict):
-        raise ValueError(f"{field_name} must be a mapping for {host}")
-
-    unknown_keys = sorted(set(value) - allowed_keys)
-    if unknown_keys:
-        keys = ", ".join(unknown_keys)
-        raise ValueError(f"unknown {field_name} key(s) for {host}: {keys}")
 
 
 @cache
