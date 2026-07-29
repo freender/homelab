@@ -23,13 +23,12 @@ require_file "$BUILD_DIR/file-map.conf" "$BUILD_DIR/file-map.conf" || exit 1
 source "$BUILD_DIR/env"
 
 # ensure_timer_state treats anything != "true" as "disable", so an empty flag from a
-# truncated env file would silently stop snapshots, scrub, replication and health
-# checks rather than failing. Refuse to run on an ambiguous config.
+# truncated env file would silently stop snapshots, scrub and replication rather
+# than failing. Refuse to run on an ambiguous config.
 require_env \
     ENABLE_ZFS_SNAPSHOTS \
     ENABLE_ZFS_SCRUB \
     ENABLE_ZFS_REPLICATION \
-    ENABLE_ZFS_HEALTH_CHECK \
     || exit 1
 
 HOMELAB_STATE_DIR="${HOMELAB_STATE_DIR:-/var/lib/homelab}"
@@ -93,6 +92,37 @@ cleanup_obsolete_replication_units() {
         print_ok "Removed obsolete $unit_name"
     done
     shopt -u nullglob
+}
+
+# Retired: homelab-zfs-health-check was a strict subset of the pve-exporters
+# homelab_zpool_healthy textfile metric (same "health column != ONLINE" check,
+# 60x the latency, and unlike the exporter it can't detect an un-imported pool
+# at all since `zpool list` only reports pools that actually imported). Cleans
+# up wherever it was previously installed; safe to run even when it was never
+# deployed here.
+cleanup_retired_health_check() {
+    local path
+
+    RETIRED_HEALTH_CHECK_CLEANED=false
+
+    if systemctl is-enabled --quiet homelab-zfs-health-check.timer 2>/dev/null; then
+        systemctl disable --now homelab-zfs-health-check.timer
+    fi
+    systemctl stop homelab-zfs-health-check.service 2>/dev/null || true
+    systemctl reset-failed homelab-zfs-health-check.service homelab-zfs-health-check.timer 2>/dev/null || true
+
+    for path in \
+        /etc/systemd/system/homelab-zfs-health-check.service \
+        /etc/systemd/system/homelab-zfs-health-check.timer \
+        /usr/local/bin/homelab-zfs-health-check \
+        "$MANAGED_DIR/homelab-zfs-health-check.service" \
+        "$MANAGED_DIR/homelab-zfs-health-check.timer" \
+        "$MANAGED_DIR/homelab-zfs-health-check.sh"; do
+        [[ -e "$path" ]] || continue
+        rm -f "$path"
+        RETIRED_HEALTH_CHECK_CLEANED=true
+        print_ok "Removed retired $(basename "$path")"
+    done
 }
 
 cleanup_legacy_rebuild_bundle() {
@@ -299,6 +329,7 @@ cleanup_zfs_push_target_access
 
 cleanup_legacy_replication_units
 cleanup_obsolete_replication_units
+cleanup_retired_health_check
 
 rc=0
 install_build_file "sanoid.conf" || rc=$?
@@ -317,7 +348,8 @@ for helper in "${!FILE_MAP_DEST[@]}"; do
 done
 
 units_changed=false
-[[ "$LEGACY_REPLICATION_CLEANED" == "true" || "$OBSOLETE_REPLICATION_CLEANED" == "true" ]] && units_changed=true
+[[ "$LEGACY_REPLICATION_CLEANED" == "true" || "$OBSOLETE_REPLICATION_CLEANED" == "true" \
+    || "$RETIRED_HEALTH_CHECK_CLEANED" == "true" ]] && units_changed=true
 for unit in "${!FILE_MAP_DEST[@]}"; do
     if [[ "$unit" == "sanoid.conf" ]]; then
         continue
@@ -346,16 +378,15 @@ if [[ "$units_changed" == "true" ]]; then
 fi
 
 # Paused: keep every unit installed and current, but stop and disable ALL
-# managed zfs timers (snapshots, scrub, health-check, and every replication
-# job) so no zfs automation runs. This is a host-wide freeze that overrides the
-# per-area ENABLE_ZFS_* flags. Flip zfs-automation.paused back to false to
-# resume. Replication jobs are enumerated from disk (not just the file map) so
-# jobs that are still generated but paused are all caught.
+# managed zfs timers (snapshots, scrub, and every replication job) so no zfs
+# automation runs. This is a host-wide freeze that overrides the per-area
+# ENABLE_ZFS_* flags. Flip zfs-automation.paused back to false to resume.
+# Replication jobs are enumerated from disk (not just the file map) so jobs
+# that are still generated but paused are all caught.
 if [[ "${PAUSED:-false}" == "true" ]]; then
     pause_units=(
         homelab-zfs-snapshots.timer
         zfs-scrub.timer
-        homelab-zfs-health-check.timer
     )
     shopt -s nullglob
     for timer_path in /etc/systemd/system/homelab-zfs-replication-*.timer; do
@@ -410,6 +441,5 @@ if [[ "${ZFS_REPLICATION_RECOVERY_START_FAILED:-false}" == "true" && "$ENABLE_ZF
 fi
 
 ensure_timer_state zfs-scrub.timer "$ENABLE_ZFS_SCRUB" "$units_changed"
-ensure_timer_state homelab-zfs-health-check.timer "$ENABLE_ZFS_HEALTH_CHECK" "$units_changed"
 
 print_header "ZFS Automation Complete"

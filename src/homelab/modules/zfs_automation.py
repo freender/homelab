@@ -23,8 +23,6 @@ TEMPLATE_FILES = [
     "homelab-zfs-replication.timer",
     "homelab-zfs-scrub.sh",
     "zfs-scrub.service",
-    "homelab-zfs-health-check.service",
-    "homelab-zfs-health-check.timer",
 ]
 
 
@@ -174,15 +172,6 @@ BASE_FILE_SPECS = (
     FileSpec("homelab-zfs-scrub.sh", "/usr/local/bin/homelab-zfs-scrub", mode="755"),
     FileSpec("zfs-scrub.service", "/etc/systemd/system/zfs-scrub.service"),
     FileSpec("zfs-scrub.timer", "/etc/systemd/system/zfs-scrub.timer"),
-    FileSpec(
-        "homelab-zfs-health-check.service",
-        "/etc/systemd/system/homelab-zfs-health-check.service",
-    ),
-    FileSpec(
-        "homelab-zfs-health-check.timer",
-        "/etc/systemd/system/homelab-zfs-health-check.timer",
-    ),
-    FileSpec("homelab-zfs-health-check.sh", "/usr/local/bin/homelab-zfs-health-check", mode="755"),
 )
 
 
@@ -1940,36 +1929,6 @@ def build_zfs_push_target_authorized_keys(access: ZfsPushTargetAccess) -> str:
     return "\n".join(lines) + "\n"
 
 
-def build_health_check_script(pools: list[str]) -> str:
-    # `zpool status -x <pool>` always exits 0, even for a DEGRADED/FAULTED/UNAVAIL
-    # pool; it only changes its stdout message. Checking the exit code alone (the
-    # old behavior here) can never detect an unhealthy pool. Compare the reported
-    # `health` column against ONLINE instead, and print `zpool status` for context
-    # before failing so the journal carries the vdev detail for whoever follows up
-    # on the SystemdUnitFailed alert.
-    lines = [
-        "#!/bin/bash",
-        "",
-        "set -euo pipefail",
-        "",
-        shell_array_block("ZFS_POOLS", pools),
-        "",
-        "failed=0",
-        'for pool in "${ZFS_POOLS[@]}"; do',
-        '  health="$(/sbin/zpool list -H -o health -- "$pool")"',
-        '  if [[ "$health" != "ONLINE" ]]; then',
-        '    echo "pool $pool is $health" >&2',
-        '    /sbin/zpool status -- "$pool" >&2',
-        "    failed=1",
-        "  fi",
-        "done",
-        "",
-        'exit "$failed"',
-        "",
-    ]
-    return "\n".join(lines)
-
-
 def resolve_remote_path(spec: FileSpec) -> str:
     return spec.remote_path
 
@@ -2025,8 +1984,7 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
             if feature_paused(registry, host, "zfs-automation"):
                 print_sub(
                     f"[DRY-RUN] Would pause zfs-automation on {host} "
-                    "(stop and disable snapshot, scrub, health-check, and all "
-                    "replication timers)"
+                    "(stop and disable snapshot, scrub, and all replication timers)"
                 )
             else:
                 paused_jobs = [
@@ -2110,9 +2068,6 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
     snapshot_schedule = str(
         registry.get(host, "zfs-automation.snapshot_schedule", "*-*-* 00:00:00")
     )
-    health_check_schedule = str(
-        registry.get(host, "zfs-automation.health_check_schedule", "hourly")
-    )
     manage_snapshots = normalize_bool(
         registry.get(host, "zfs-automation.manage_snapshots", None),
         True,
@@ -2133,15 +2088,10 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
         True,
         f"zfs-automation.manage_scrub must be true or false for {host}",
     )
-    manage_health_check = normalize_bool(
-        registry.get(host, "zfs-automation.manage_health_check", None),
-        True,
-        f"zfs-automation.manage_health_check must be true or false for {host}",
-    )
     # `paused: true` stops and disables ALL managed zfs timers (snapshots, scrub,
-    # health-check, and every replication job) while keeping the module deployed;
-    # distinct from `deploy: false`, which skips the host entirely. This is a
-    # single host-wide freeze switch that overrides the per-area manage_* flags.
+    # and every replication job) while keeping the module deployed; distinct
+    # from `deploy: false`, which skips the host entirely. This is a single
+    # host-wide freeze switch that overrides the per-area manage_* flags.
     paused = feature_paused(registry, host, "zfs-automation")
     pools = resolve_pools(registry, host)
     snapshot_plans = normalize_snapshot_plans(registry, host)
@@ -2312,19 +2262,6 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
         templates_dir / "zfs-scrub.service",
         build_dir / "zfs-scrub.service",
     )
-    render_file(
-        templates_dir / "homelab-zfs-health-check.service",
-        build_dir / "homelab-zfs-health-check.service",
-    )
-    render_file(
-        templates_dir / "homelab-zfs-health-check.timer",
-        build_dir / "homelab-zfs-health-check.timer",
-        HEALTH_CHECK_SCHEDULE=health_check_schedule,
-    )
-    (build_dir / "homelab-zfs-health-check.sh").write_text(
-        build_health_check_script(pools),
-        encoding="utf-8",
-    )
 
     paused_replication_timers = " ".join(
         f"homelab-zfs-replication-{job.name}.timer"
@@ -2346,7 +2283,6 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
                 "true" if replication_recovery_start_failed else "false"
             ),
             "ENABLE_ZFS_SCRUB": "true" if pools and manage_scrub else "false",
-            "ENABLE_ZFS_HEALTH_CHECK": "true" if pools and manage_health_check else "false",
             "ENABLE_ZFS_PULL_SOURCE": "true" if pull_source_access is not None else "false",
             "ZFS_PULL_SOURCE_USER": pull_source_access.user if pull_source_access else "zfs-pull",
             "ZFS_PULL_SOURCE_HOME": "/var/lib/homelab-zfs-pull",
