@@ -49,6 +49,7 @@ def validate(root: Path) -> None:
         "doshutdown-master.tpl",
         "doshutdown-slave.tpl",
         "doshutdown-master-standalone.tpl",
+        "_guest-functions.tpl",
     ]
     for name in required:
         if not (templates_dir / name).is_file():
