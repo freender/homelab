@@ -31,37 +31,9 @@ source "$SCRIPT_DIR/scripts/docker-install.sh"
 # shellcheck source=/dev/null
 source "$SCRIPT_DIR/scripts/pin-primary-nic.sh"
 
-load_file_map() {
-    local map_file="$BUILD_DIR/file-map.conf"
-    local filename remote_path mode
-
-    declare -g -A FILE_MAP_DEST=()
-    declare -g -A FILE_MAP_MODE=()
-    while IFS='|' read -r filename remote_path mode; do
-        FILE_MAP_DEST["$filename"]="$remote_path"
-        FILE_MAP_MODE["$filename"]="${mode:-644}"
-    done < "$map_file"
-}
-
-mapped_dest() {
-    local name="$1"
-    printf '%s\n' "${FILE_MAP_DEST[$name]}"
-}
-
-mapped_mode() {
-    local name="$1"
-    printf '%s\n' "${FILE_MAP_MODE[$name]:-644}"
-}
-
-install_build_file() {
-    local name="$1"
-    local rc=0
-
-    install_if_changed "$BUILD_DIR/$name" "$(mapped_dest "$name")" "$(mapped_mode "$name")" "$(mapped_dest "$name")" || rc=$?
-    [[ $rc -eq 0 || $rc -eq 1 ]] || exit "$rc"
-    return "$rc"
-}
-
+# load_file_map/mapped_dest/mapped_mode/install_build_file come from lib/utils.sh
+# (sourced above) and already carry the "missing file-map entry" error guard;
+# do not redefine them here.
 load_file_map
 
 cleanup_legacy_rebuild_bundle() {
@@ -91,6 +63,17 @@ if [[ "$(timedatectl show --property=Timezone --value)" != "$SYSTEM_TIMEZONE" ]]
     print_ok "Timezone set to $SYSTEM_TIMEZONE"
 else
     print_sub "Timezone already set to $SYSTEM_TIMEZONE"
+fi
+
+# timedatectl set-timezone updates /etc/localtime itself on systemd hosts, but
+# match pve-postinstall's belt-and-suspenders approach (also used when
+# timedatectl is unavailable or silently no-ops) so /etc/localtime and
+# /etc/timezone are always consistent with SYSTEM_TIMEZONE.
+if [[ -e "/usr/share/zoneinfo/$SYSTEM_TIMEZONE" ]]; then
+    ln -snf "/usr/share/zoneinfo/$SYSTEM_TIMEZONE" /etc/localtime || print_warn "failed to update /etc/localtime"
+    printf '%s\n' "$SYSTEM_TIMEZONE" > /etc/timezone || print_warn "failed to write /etc/timezone"
+else
+    print_warn "timezone data not found for $SYSTEM_TIMEZONE"
 fi
 
 print_action "Unwanted default services"
@@ -156,7 +139,10 @@ install_build_file "sudoers" || rc=$?
 
 print_action "SSH hardening"
 sshd_changed=false
-legacy_sshd_hardening="/etc/ssh/sshd_config.d/99-disable-password-auth.conf"
+# 01-disable-password-auth.conf was ubuntu-setup's naming before it was unified
+# with pve-postinstall's 99-disable-password-auth.conf convention; clean it up
+# wherever a prior deploy left it behind.
+legacy_sshd_hardening="/etc/ssh/sshd_config.d/01-disable-password-auth.conf"
 if [[ "$(mapped_dest "sshd-hardening.conf")" != "$legacy_sshd_hardening" && -e "$legacy_sshd_hardening" ]]; then
     rm -f "$legacy_sshd_hardening"
     sshd_changed=true
@@ -220,29 +206,6 @@ if [[ "$WIREGUARD_ENABLED" == "true" ]]; then
         print_ok "wg-quick@${interface_name}.service enabled"
     done
     shopt -u nullglob
-fi
-
-if [[ "$SAMBA_ENABLED" == "true" ]]; then
-    print_action "Samba"
-    require_file "$BUILD_DIR/smb.conf" "$BUILD_DIR/smb.conf" || exit 1
-
-    if ! command -v smbd >/dev/null 2>&1; then
-        print_sub "Installing Samba..."
-        apt-get install -y -q samba
-        print_ok "Samba installed"
-    fi
-
-    rc=0
-    backup_and_install_if_changed \
-        "$BUILD_DIR/smb.conf" \
-        "$(mapped_dest "smb.conf")" \
-        "$(mapped_mode "smb.conf")" \
-        "$(mapped_dest "smb.conf")" || rc=$?
-    [[ $rc -eq 0 || $rc -eq 1 ]] || exit "$rc"
-    if [[ $rc -eq 0 ]]; then
-        systemctl restart smbd
-        print_ok "Samba restarted"
-    fi
 fi
 
 print_header "Ubuntu Setup Complete"

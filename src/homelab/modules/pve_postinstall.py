@@ -5,7 +5,7 @@ from pathlib import Path
 from ..build import copy_files, render_file
 from ..deploy import DeploySession, force_env, prepare_build_dir, stage_and_run_remote_installer
 from ..hosts import HostLookupError, default_registry
-from ..module_support import FileSpec, write_file_map
+from ..module_support import FileSpec, normalize_bool, write_file_map
 from ..output import print_action, print_error, print_sub
 from ..ssh import HostConnection, build_files, diff_many
 
@@ -113,9 +113,12 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
             raise ValueError(f"pve-postinstall.mounts entry must have label and path for {host}")
         mounts.append(f"{m['label']}:{m['path']}")
     mounts_str = " ".join(mounts)
-    expected_clustered = str(
-        host_type == "pve" and not bool(registry.get(host, "config.standalone", False))
-    ).lower()
+    is_standalone = normalize_bool(
+        registry.get(host, "config.standalone", None),
+        False,
+        f"config.standalone must be true or false for {host}",
+    )
+    expected_clustered = str(host_type == "pve" and not is_standalone).lower()
     cluster_link0 = ""
     if expected_clustered == "true":
         mgmt_ip = str(registry.get(host, "pve-postinstall.interfaces.mgmt_ip", ""))
@@ -344,7 +347,11 @@ def build_cluster_rejoin_helper(root: Path, build_dir: Path) -> None:
         hostname = str(registry.get(pve_host, "config.hostname"))
         mgmt_ip = str(registry.get(pve_host, "pve-postinstall.interfaces.mgmt_ip", ""))
         link0 = mgmt_ip.split("/", 1)[0] if mgmt_ip else hostname
-        standalone = bool(registry.get(pve_host, "config.standalone", False))
+        standalone = normalize_bool(
+            registry.get(pve_host, "config.standalone", None),
+            False,
+            f"config.standalone must be true or false for {pve_host}",
+        )
         lines.extend(
             [
                 f"    {pve_host})",

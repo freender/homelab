@@ -7,6 +7,7 @@ from .. import op_secrets
 from ..build import copy_file, copy_files, render_file, write_env_file
 from ..deploy import DeploySession, force_env, prepare_build_dir, stage_and_run_remote_installer
 from ..hosts import HostLookupError, default_registry
+from ..module_support import FileSpec, normalize_bool
 from ..output import print_action, print_sub
 from ..ssh import HostConnection, build_files, diff_many
 
@@ -17,18 +18,9 @@ STATIC_CONFIG_FILES = ["99-inotify.conf", "sshd-hardening.conf"]
 
 
 @dataclass(frozen=True)
-class FileSpec:
-    build_name: str
-    remote_path: str
-    mode: str = "644"
-    feature: str | None = None
-
-
-@dataclass(frozen=True)
 class HostArtifacts:
     build_dir: Path
     deploy_user: str
-    samba_enabled: bool
     wireguard_enabled: bool
     file_specs: tuple[FileSpec, ...]
 
@@ -36,11 +28,10 @@ class HostArtifacts:
 FILE_SPECS = (
     FileSpec("sudoers", "/etc/sudoers.d/99-{deploy_user}-homelab", mode="440"),
     FileSpec("10-network-names.rules", "/etc/udev/rules.d/10-network-names.rules"),
-    FileSpec("sshd-hardening.conf", "/etc/ssh/sshd_config.d/01-disable-password-auth.conf"),
+    FileSpec("sshd-hardening.conf", "/etc/ssh/sshd_config.d/99-disable-password-auth.conf"),
     FileSpec("zfs.conf", "/etc/modprobe.d/zfs.conf"),
     FileSpec("99-inotify.conf", "/etc/sysctl.d/99-inotify.conf"),
     FileSpec("99-wireguard.conf", "/etc/sysctl.d/99-wireguard.conf", feature="wireguard"),
-    FileSpec("smb.conf", "/etc/samba/smb.conf", feature="samba"),
 )
 
 
@@ -58,17 +49,16 @@ def deploy(
         print_action(f"Skipping ubuntu-setup (not applicable to {requested_host})")
         return 0
 
-    validate(root, hosts)
+    validate(root)
     session.run(lambda host: deploy_host(root, host, dry_run=dry_run, force=force), hosts)
     return 0 if session.finish() else 1
 
 
-def validate(root: Path, hosts: list[str]) -> None:
+def validate(root: Path) -> None:
     module_dir = root / "ubuntu-setup"
     config_dir = module_dir / "configs"
     templates_dir = module_dir / "templates"
     scripts_dir = module_dir / "scripts"
-    registry = default_registry(root)
 
     required_files = [
         scripts_dir / "install.sh",
@@ -82,12 +72,6 @@ def validate(root: Path, hosts: list[str]) -> None:
     for file_path in required_files:
         if not file_path.is_file():
             raise ValueError(f"missing required file: {file_path}")
-
-    for host in hosts:
-        if str(registry.get(host, "ubuntu-setup.samba", "false")).lower() == "true":
-            samba_config = config_dir / f"smb-{host}.conf"
-            if not samba_config.is_file():
-                raise ValueError(f"missing samba config: {samba_config}")
 
 def load_network_mac(root: Path, host: str) -> str:
     try:
@@ -121,7 +105,6 @@ def source_path_for_spec(root: Path, artifacts: HostArtifacts, spec: FileSpec) -
 def build_file_specs(artifacts: HostArtifacts) -> tuple[FileSpec, ...]:
     enabled_features = {
         "wireguard": artifacts.wireguard_enabled,
-        "samba": artifacts.samba_enabled,
     }
     return tuple(
         spec
@@ -203,8 +186,11 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
         registry.get(host, "ubuntu-setup.network.pin_interface.name", "nic0")
     )
     primary_interface_mac = load_network_mac(root, host)
-    samba_enabled = str(registry.get(host, "ubuntu-setup.samba", "false")).lower() == "true"
-    wireguard_enabled = str(registry.get(host, "ubuntu-setup.wireguard", "false")).lower() == "true"
+    wireguard_enabled = normalize_bool(
+        registry.get(host, "ubuntu-setup.wireguard", None),
+        False,
+        f"ubuntu-setup.wireguard must be true or false for {host}",
+    )
     zfs_arc_max = str(registry.get(host, "ubuntu-setup.zfs_arc_max", "8589934592"))
 
     build_dir = module_dir / "build" / host
@@ -221,15 +207,12 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
     )
     if wireguard_enabled:
         copy_file(config_dir / "99-wireguard.conf", build_dir / "99-wireguard.conf")
-    if samba_enabled:
-        copy_file(config_dir / f"smb-{host}.conf", build_dir / "smb.conf")
     write_env_file(
         build_dir / "env",
         {
             "DEPLOY_USER": user,
             "PRIMARY_INTERFACE_NAME": primary_interface_name,
             "PRIMARY_INTERFACE_MAC": primary_interface_mac,
-            "SAMBA_ENABLED": "true" if samba_enabled else "false",
             "SYSTEM_HOSTNAME": system_hostname,
             "SYSTEM_TIMEZONE": system_timezone,
             "WIREGUARD_ENABLED": "true" if wireguard_enabled else "false",
@@ -240,7 +223,6 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
     artifacts = HostArtifacts(
         build_dir=build_dir,
         deploy_user=user,
-        samba_enabled=samba_enabled,
         wireguard_enabled=wireguard_enabled,
         file_specs=(),
     )
@@ -248,7 +230,6 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
     artifacts = HostArtifacts(
         build_dir=build_dir,
         deploy_user=user,
-        samba_enabled=samba_enabled,
         wireguard_enabled=wireguard_enabled,
         file_specs=file_specs,
     )
