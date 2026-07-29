@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 # pve-http-boot-autoupdate - Detect, build, validate, and atomically promote a new Proxmox VE HTTP Boot payload.
 # Reads the PDM answer-auth token from TOKEN_FILE; never prints it.
-# Writes a node_exporter textfile metric on each run.
 set -euo pipefail
 
 ISO_INDEX="https://enterprise.proxmox.com/iso/"
@@ -10,7 +9,6 @@ SRV="/srv/httpboot"
 STAGE="/srv/httpboot.stage"
 HTTP_BOOT_BUILD="$ISO_DIR/http-boot-build"
 TOKEN_FILE="/root/homelab-pve-auto-install.token"
-METRIC="/var/lib/node_exporter/textfile/pve_http_boot_autoupdate.prom"
 LOCK="/run/pve-http-boot-autoupdate.lock"
 
 # PDM connection details (written by homelab deploy; do not edit here)
@@ -18,12 +16,14 @@ LOCK="/run/pve-http-boot-autoupdate.lock"
 source /etc/homelab-http-boot/http-boot-mgmt.conf
 
 log()    { echo "pve-http-boot-autoupdate: $*"; }
-metric() {
-    mkdir -p "$(dirname "$METRIC")"
-    printf 'pve_http_boot_autoupdate_result %s\npve_http_boot_autoupdate_timestamp %s\n' \
-        "$1" "$(date +%s)" > "$METRIC.tmp" && mv "$METRIC.tmp" "$METRIC"
-}
-fail()   { log "ERROR: $*" >&2; metric 1; exit 1; }
+# No node_exporter textfile metric here: arc (this host) has no node_exporter
+# installed/scraped (it's outside the pve-exporters host list), so a metric
+# would just be written and never read. Failures surface via `systemctl status
+# pve-http-boot-autoupdate`/journalctl (this is a oneshot unit; a failed run is
+# visible as a failed unit) rather than a Prometheus alert. If alerting on this
+# becomes worth having, wire it through a notify-on-failure unit instead of a
+# dead textfile metric.
+fail()   { log "ERROR: $*" >&2; exit 1; }
 
 cleanup_temp() {
     rm -rf "$STAGE" "$HTTP_BOOT_BUILD"
@@ -46,7 +46,6 @@ staged="$(
 )"
 if [[ "$latest" == "$staged" ]]; then
     log "up to date ($staged)"
-    metric 0
     exit 0
 fi
 log "new ISO $latest (staged: ${staged:-none}); rebuilding payload"
@@ -142,4 +141,3 @@ ls -1t "$ISO_DIR"/proxmox-ve_*.iso 2>/dev/null | tail -n +3 | xargs -r rm -f
 [[ "$need_disable" -eq 1 ]] && /usr/local/sbin/pve-http-boot-disable || true
 
 log "promoted proxmox-ve_${ver}"
-metric 0

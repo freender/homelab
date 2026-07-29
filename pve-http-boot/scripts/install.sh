@@ -73,11 +73,16 @@ fi
 
 # ── Directory layout ─────────────────────────────────────────────────────────
 mkdir -p /srv/httpboot /srv/httpboot/httpboot /etc/homelab-http-boot /etc/homelab-http-boot/iso-answers /srv/httpboot/iso \
-         /var/lib/node_exporter/textfile \
          /etc/nginx/sites-available /etc/nginx/sites-enabled \
          /root/iso
 chmod 700 /etc/homelab-http-boot/iso-answers
 chmod 755 /srv/httpboot/iso
+
+# Retired: iso-autobuild/pve-http-boot-autoupdate used to write node_exporter
+# textfile metrics here, but this host has no node_exporter to ever read them
+# (it's outside the pve-exporters host list). Remove any stale metric files
+# from earlier deploys.
+rm -rf /var/lib/node_exporter/textfile
 
 print_action "Cleaning duplicate artifacts"
 (

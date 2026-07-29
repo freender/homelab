@@ -8,16 +8,17 @@ set -euo pipefail
 ANSWER_DIR="/etc/homelab-http-boot/iso-answers"
 ISO_BASE_DIR="/root/iso"
 ISO_SERVE_DIR="/srv/httpboot/iso"
-METRIC="/var/lib/node_exporter/textfile/iso_autobuild.prom"
 LOCK="/run/iso-autobuild.lock"
 
+# No node_exporter textfile metric here: arc (this host) has no node_exporter
+# installed/scraped (it's outside the pve-exporters host list), so a metric
+# would just be written and never read. Failures surface via `systemctl status
+# iso-autobuild`/journalctl (this is a oneshot unit; a failed run is visible as
+# a failed unit) rather than a Prometheus alert. If alerting on this becomes
+# worth having, wire it through a notify-on-failure unit instead of a dead
+# textfile metric.
 log()    { echo "iso-autobuild: $*"; }
-fail()   { log "ERROR: $*" >&2; metric 1; exit 1; }
-metric() {
-    mkdir -p "$(dirname "$METRIC")"
-    printf 'pve_iso_autobuild_result %s\npve_iso_autobuild_timestamp %s\n' \
-        "$1" "$(date +%s)" > "$METRIC.tmp" && mv "$METRIC.tmp" "$METRIC"
-}
+fail()   { log "ERROR: $*" >&2; exit 1; }
 
 # Prevent overlapping runs.
 exec 9>"$LOCK"
@@ -41,7 +42,6 @@ answer_files=("$ANSWER_DIR"/*.toml)
 shopt -u nullglob
 if [[ ${#answer_files[@]} -eq 0 ]]; then
     log "no answer files in $ANSWER_DIR; no baked ISOs to build"
-    metric 0
     exit 0
 fi
 
@@ -74,9 +74,7 @@ done
 
 if [[ "$failed" -gt 0 ]]; then
     log "completed with errors: ${built} built, ${failed} failed"
-    metric 1
     exit 1
 fi
 
 log "all done: ${built} ISO(s) built in $ISO_SERVE_DIR"
-metric 0
