@@ -111,14 +111,20 @@ if [[ -n "${FILE_MAP_DEST[igpu-exporter.defaults]:-}" ]]; then
     # shellcheck source=/etc/default/igpu-exporter
     source /etc/default/igpu-exporter
     IGPU_BIN="/usr/local/bin/igpu-exporter"
+    # go version -m's vcs.revision is only populated when the build happens
+    # inside a git checkout; ours is built from a tarball extracted from a
+    # GitHub archive URL (no .git dir), so vcs.revision is always empty and
+    # that check can never detect a match, forcing a rebuild-from-source on
+    # every single deploy. Track the built version in a sidecar file instead.
+    IGPU_VERSION_FILE="/usr/local/bin/.igpu-exporter.version"
     IGPU_TMP_DIR="$(mktemp -d)"
     IGPU_SOURCE_URL="https://github.com/mike1808/igpu-exporter/archive/${IGPU_EXPORTER_VERSION}.tar.gz"
     installed_igpu_version=""
-    if [[ -x "$IGPU_BIN" ]]; then
-        installed_igpu_version=$(go version -m "$IGPU_BIN" 2>/dev/null | sed -n 's/^\s*vcs.revision=//p' | head -1 || true)
+    if [[ -x "$IGPU_BIN" && -f "$IGPU_VERSION_FILE" ]]; then
+        installed_igpu_version="$(cat "$IGPU_VERSION_FILE" 2>/dev/null || true)"
     fi
     if [[ "$FORCE_UPDATE" == "true" ]] || [[ ! -x "$IGPU_BIN" ]] || [[ "$installed_igpu_version" != "$IGPU_EXPORTER_VERSION" ]]; then
-        print_sub "Installing igpu-exporter ${IGPU_EXPORTER_VERSION}"
+        print_sub "Installing igpu-exporter ${IGPU_EXPORTER_VERSION} (was: ${installed_igpu_version:-none})"
         curl -fsSL "$IGPU_SOURCE_URL" -o "$IGPU_TMP_DIR/igpu-exporter.tar.gz"
         tar -xzf "$IGPU_TMP_DIR/igpu-exporter.tar.gz" -C "$IGPU_TMP_DIR"
         systemctl stop igpu-exporter 2>/dev/null || true
@@ -127,6 +133,7 @@ if [[ -n "${FILE_MAP_DEST[igpu-exporter.defaults]:-}" ]]; then
             go build -o "$IGPU_BIN" ./cmd
         )
         chmod 755 "$IGPU_BIN"
+        printf '%s' "$IGPU_EXPORTER_VERSION" > "$IGPU_VERSION_FILE"
     else
         print_sub "igpu-exporter ${IGPU_EXPORTER_VERSION} already installed"
     fi
@@ -147,10 +154,14 @@ if [[ "$EXPORTER_RUNTIME" != "docker" ]]; then
     SMART_URL="https://github.com/prometheus-community/smartctl_exporter/releases/download/v${SMARTCTL_EXPORTER_VERSION}/smartctl_exporter-${SMARTCTL_EXPORTER_VERSION}.linux-${ARCH_TAG}.tar.gz"
     TMP_DIR="$(mktemp -d)"
 
-    # Detect installed version
+    # Detect installed version. smartctl_exporter writes --version output to
+    # stderr, not stdout (confirmed empirically); redirecting stderr away here
+    # silently discards it, leaving installed_version always empty and forcing
+    # a redownload+reinstall on every single deploy regardless of whether the
+    # binary is already current. Merge stderr into the pipe instead.
     installed_version=""
     if [[ -x "$SMART_BIN" ]]; then
-        installed_version=$("$SMART_BIN" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)
+        installed_version=$("$SMART_BIN" --version 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)
     fi
 
     if [[ "$FORCE_UPDATE" == "true" ]] || [[ ! -x "$SMART_BIN" ]] || [[ "$installed_version" != "$SMARTCTL_EXPORTER_VERSION" ]]; then
