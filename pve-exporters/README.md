@@ -22,26 +22,30 @@ by `vmagent` on `helm` (targets in `vmagent/scrape.yml`).
 What the module **does** manage on these hosts:
 - The host-native `zfs-pool-textfile-exporter` script + systemd service/timer that
   writes `homelab_zpool_*` metrics to `/var/lib/prometheus/node-exporter/zfs-pools.prom`.
-- Ensures the `node-exporter` service in the host compose has
-  `--collector.textfile.directory=/host/var/lib/prometheus/node-exporter` (edited in
-  place, idempotent) and runs `docker compose up -d node-exporter`.
 
-It does not modify smartctl/cadvisor services, networks, or any host-specific compose
-tuning.
+It does not modify the `node-exporter`/`smartctl-exporter`/`cadvisor` compose services,
+networks, or any other host-specific compose tuning. The compose file itself is entirely
+host-managed — the module never reads or writes it.
 
-#### systemd collector over dbus (host compose, not repo-managed)
+#### Required manual compose settings (host compose, not repo-managed)
 
-The `node-exporter` service in both host compose files carries three settings that make
-node_exporter's native systemd collector work from inside a container. They are
-load-bearing for the fleet-wide `SystemdUnitFailed` vmalert rule on `helm`:
+Because the module writes the ZFS textfile metrics to
+`/var/lib/prometheus/node-exporter/` but does not touch compose, the `node-exporter`
+service in both host compose files must be configured **manually** with the settings
+below for those metrics — and the systemd collector — to actually reach Prometheus. They
+are load-bearing for the fleet-wide `SystemdUnitFailed` vmalert rule on `helm` and for
+`homelab_zpool_*` visibility:
 
 ```yaml
     security_opt:
       - apparmor=unconfined
     command:
       - '--collector.systemd'
+      - '--collector.textfile'
+      - '--collector.textfile.directory=/host/var/lib/prometheus/node-exporter'
     volumes:
       - /run/dbus/system_bus_socket:/var/run/dbus/system_bus_socket
+      - /var/lib/prometheus/node-exporter:/host/var/lib/prometheus/node-exporter:ro
 ```
 
 - The mount destination must be `/var/run/...`, not `/run/...`: go-systemd dials the
@@ -52,10 +56,11 @@ load-bearing for the fleet-wide `SystemdUnitFailed` vmalert rule on `helm`:
 - The container still runs as the image's unprivileged `nobody` user. Reading unit state
   over the system bus is allowed for unprivileged callers; polkit denies unit start/stop,
   so this is read-only access in practice.
-
-If a future compose edit drops any of these, `up` stays `1` while `node_systemd_units`
-silently disappears. The `SystemdCollectorFailing` rule on `helm` exists to catch exactly
-that (`node_scrape_collector_success{collector="systemd"} == 0`).
+- If any of these settings is missing or dropped in a future compose edit,
+  `homelab_zpool_*` and/or `node_systemd_units` silently disappear from Prometheus while
+  the container itself stays `up`. The `SystemdCollectorFailing` rule on `helm` exists to
+  catch the systemd-collector case (`node_scrape_collector_success{collector="systemd"}
+  == 0`); there is no equivalent alert yet for the textfile collector going missing.
 
 This replaced `systemd-failed-textfile-exporter`, a host-native textfile fallback that
 emitted `homelab_systemd_units_failed_total` purely because the containerized exporter had

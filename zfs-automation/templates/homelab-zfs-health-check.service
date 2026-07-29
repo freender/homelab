@@ -1,8 +1,0 @@
-[Unit]
-Description=Homelab ZFS pool health check
-
-[Service]
-Type=oneshot
-ExecStart=/usr/local/bin/homelab-zfs-health-check
-StandardOutput=journal
-StandardError=journal

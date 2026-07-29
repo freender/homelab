@@ -27,20 +27,9 @@ else
     exit 1
 fi
 
-require_dir "$BUILD_DIR/configs" "$BUILD_DIR/configs" || exit 1
-
-NODE_ENV_SRC="$BUILD_DIR/configs/node-exporter.defaults"
-SMART_ENV_SRC="$BUILD_DIR/configs/smartctl-exporter.defaults"
-SMART_SVC_SRC="$BUILD_DIR/configs/smartctl-exporter.service"
-ZFS_POOL_BIN_SRC="$BUILD_DIR/configs/zfs-pool-textfile-exporter"
-ZFS_POOL_SVC_SRC="$BUILD_DIR/configs/zfs-pool-textfile-exporter.service"
-ZFS_POOL_TIMER_SRC="$BUILD_DIR/configs/zfs-pool-textfile-exporter.timer"
-ZFS_EXPECTED_POOLS_SRC="$BUILD_DIR/configs/zfs-expected-pools.conf"
-APC_BIN_SRC="$BUILD_DIR/configs/apcupsd-exporter.py"
-APC_ENV_SRC="$BUILD_DIR/configs/apcupsd-exporter.env"
-APC_SVC_SRC="$BUILD_DIR/configs/apcupsd-exporter.service"
-IGPU_ENV_SRC="$BUILD_DIR/configs/igpu-exporter.defaults"
-IGPU_SVC_SRC="$BUILD_DIR/configs/igpu-exporter.service"
+require_dir "$BUILD_DIR" "$BUILD_DIR" || exit 1
+require_file "$BUILD_DIR/file-map.conf" "$BUILD_DIR/file-map.conf" || exit 1
+load_file_map "$BUILD_DIR/file-map.conf"
 
 # Install packages only when missing
 missing_pkgs=()
@@ -51,7 +40,7 @@ fi
 command -v python3 &>/dev/null               || missing_pkgs+=(python3)
 command -v curl &>/dev/null                  || missing_pkgs+=(curl)
 command -v tar &>/dev/null                   || missing_pkgs+=(tar)
-if [[ -f "$IGPU_ENV_SRC" && -f "$IGPU_SVC_SRC" ]]; then
+if [[ -n "${FILE_MAP_DEST[igpu-exporter.defaults]:-}" ]]; then
     command -v go &>/dev/null                || missing_pkgs+=(golang-go)
     command -v intel_gpu_top &>/dev/null     || missing_pkgs+=(intel-gpu-tools)
 fi
@@ -65,50 +54,21 @@ fi
 
 mkdir -p /etc/default
 mkdir -p /var/lib/prometheus/node-exporter
-rc=0
-backup_and_copy_if_changed "$NODE_ENV_SRC" /etc/default/prometheus-node-exporter || rc=$?
-[[ $rc -eq 1 ]] || [[ $rc -eq 0 ]] || exit "$rc"
-[[ $rc -eq 0 ]] && NODE_EXPORTER_CHANGED=true
-
-rc=0
-backup_and_copy_if_changed "$SMART_ENV_SRC" /etc/default/smartctl-exporter || rc=$?
-[[ $rc -eq 1 ]] || [[ $rc -eq 0 ]] || exit "$rc"
-
-rc=0
-backup_and_copy_if_changed "$SMART_SVC_SRC" /etc/systemd/system/smartctl-exporter.service || rc=$?
-[[ $rc -eq 1 ]] || [[ $rc -eq 0 ]] || exit "$rc"
 
 if [[ "$EXPORTER_RUNTIME" == "docker" ]]; then
+    # Native node-exporter/smartctl-exporter are not managed in docker mode: the
+    # host-managed compose stack under /mnt/cache/appdata/<host>-exporters/
+    # owns those services instead (see README). Actively remove any leftovers
+    # from an earlier native deploy so no unit is left installed-and-disabled
+    # pointing at a binary this mode never installs.
     systemctl disable --now prometheus-node-exporter smartctl-exporter 2>/dev/null || true
     systemctl stop prometheus-node-exporter smartctl-exporter 2>/dev/null || true
     systemctl reset-failed prometheus-node-exporter.service smartctl-exporter.service 2>/dev/null || true
-fi
-
-if file_needs_update "$ZFS_POOL_BIN_SRC" /usr/local/bin/zfs-pool-textfile-exporter; then
-    backup_config /usr/local/bin/zfs-pool-textfile-exporter
-    install -m 755 "$ZFS_POOL_BIN_SRC" /usr/local/bin/zfs-pool-textfile-exporter
-    print_sub "Updated zfs-pool-textfile-exporter"
-else
-    print_sub "zfs-pool-textfile-exporter unchanged; skipping update"
-fi
-
-rc=0
-backup_and_copy_if_changed "$ZFS_POOL_SVC_SRC" /etc/systemd/system/zfs-pool-textfile-exporter.service || rc=$?
-[[ $rc -eq 1 ]] || [[ $rc -eq 0 ]] || exit "$rc"
-
-rc=0
-backup_and_copy_if_changed "$ZFS_POOL_TIMER_SRC" /etc/systemd/system/zfs-pool-textfile-exporter.timer || rc=$?
-[[ $rc -eq 1 ]] || [[ $rc -eq 0 ]] || exit "$rc"
-
-# Only staged when the host sets pve-exporters.zfs_expected_pools. Absent file
-# means the exporter reports only imported pools, which is the pre-existing
-# behaviour.
-if [[ -f "$ZFS_EXPECTED_POOLS_SRC" ]]; then
-    mkdir -p /etc/homelab
-    rc=0
-    backup_and_copy_if_changed "$ZFS_EXPECTED_POOLS_SRC" /etc/homelab/zfs-expected-pools.conf || rc=$?
-    [[ $rc -eq 1 ]] || [[ $rc -eq 0 ]] || exit "$rc"
-    chmod 0644 /etc/homelab/zfs-expected-pools.conf
+    rm -f /etc/default/prometheus-node-exporter /etc/default/smartctl-exporter \
+          /etc/systemd/system/smartctl-exporter.service /usr/local/bin/smartctl_exporter
+elif [[ -n "${FILE_MAP_DEST[node-exporter.defaults]:-}" ]] && \
+     file_needs_update "$BUILD_DIR/node-exporter.defaults" "$(mapped_dest node-exporter.defaults)"; then
+    NODE_EXPORTER_CHANGED=true
 fi
 
 # Retired: this textfile fallback only ever existed because the containerized
@@ -129,35 +89,25 @@ if [[ -e /usr/local/bin/systemd-failed-textfile-exporter ]] ||
     print_sub "Removed retired systemd-failed-textfile-exporter"
 fi
 
-if [[ -f "$APC_BIN_SRC" && -f "$APC_ENV_SRC" && -f "$APC_SVC_SRC" ]]; then
-    if file_needs_update "$APC_BIN_SRC" /usr/local/bin/apcupsd-exporter; then
-        backup_config /usr/local/bin/apcupsd-exporter
-        install -m 755 "$APC_BIN_SRC" /usr/local/bin/apcupsd-exporter
-        print_sub "Updated apcupsd-exporter"
-    else
-        print_sub "apcupsd-exporter unchanged; skipping update"
-    fi
-    rc=0
-    backup_and_copy_if_changed "$APC_ENV_SRC" /etc/default/apcupsd-exporter || rc=$?
-    [[ $rc -eq 1 ]] || [[ $rc -eq 0 ]] || exit "$rc"
-
-    rc=0
-    backup_and_copy_if_changed "$APC_SVC_SRC" /etc/systemd/system/apcupsd-exporter.service || rc=$?
-    [[ $rc -eq 1 ]] || [[ $rc -eq 0 ]] || exit "$rc"
-else
+if [[ -z "${FILE_MAP_DEST[apcupsd-exporter.py]:-}" ]]; then
     systemctl disable --now apcupsd-exporter 2>/dev/null || true
     rm -f /etc/systemd/system/apcupsd-exporter.service /etc/default/apcupsd-exporter /usr/local/bin/apcupsd-exporter
 fi
 
-if [[ -f "$IGPU_ENV_SRC" && -f "$IGPU_SVC_SRC" ]]; then
-    rc=0
-    backup_and_copy_if_changed "$IGPU_ENV_SRC" /etc/default/igpu-exporter || rc=$?
-    [[ $rc -eq 1 ]] || [[ $rc -eq 0 ]] || exit "$rc"
+if [[ -z "${FILE_MAP_DEST[igpu-exporter.defaults]:-}" ]]; then
+    systemctl disable --now igpu-exporter 2>/dev/null || true
+    rm -f /etc/systemd/system/igpu-exporter.service /etc/default/igpu-exporter /usr/local/bin/igpu-exporter
+fi
 
-    rc=0
-    backup_and_copy_if_changed "$IGPU_SVC_SRC" /etc/systemd/system/igpu-exporter.service || rc=$?
-    [[ $rc -eq 1 ]] || [[ $rc -eq 0 ]] || exit "$rc"
+# Install/update every file this host's file-map declares (native node-exporter
+# and smartctl-exporter config are simply absent from the map in docker mode;
+# apcupsd/igpu config are absent unless those features are configured for the
+# host; see pve_exporters.py:build_file_specs).
+rc=0
+install_file_map "$BUILD_DIR" || rc=$?
+[[ $rc -eq 0 || $rc -eq 1 ]] || exit "$rc"
 
+if [[ -n "${FILE_MAP_DEST[igpu-exporter.defaults]:-}" ]]; then
     # shellcheck source=/etc/default/igpu-exporter
     source /etc/default/igpu-exporter
     IGPU_BIN="/usr/local/bin/igpu-exporter"
@@ -180,9 +130,6 @@ if [[ -f "$IGPU_ENV_SRC" && -f "$IGPU_SVC_SRC" ]]; then
     else
         print_sub "igpu-exporter ${IGPU_EXPORTER_VERSION} already installed"
     fi
-else
-    systemctl disable --now igpu-exporter 2>/dev/null || true
-    rm -f /etc/systemd/system/igpu-exporter.service /etc/default/igpu-exporter /usr/local/bin/igpu-exporter
 fi
 
 if [[ "$EXPORTER_RUNTIME" != "docker" ]]; then
@@ -217,49 +164,8 @@ if [[ "$EXPORTER_RUNTIME" != "docker" ]]; then
     else
         print_sub "smartctl_exporter v${SMARTCTL_EXPORTER_VERSION} already installed"
     fi
-fi
-
-if [[ "$EXPORTER_RUNTIME" == "docker" ]]; then
-    compose_file="/mnt/cache/appdata/exporters/compose.yml"
-    if [[ ! -f "$compose_file" && -f "/mnt/cache/appdata/${HOST}-exporters/compose.yml" ]]; then
-        compose_file="/mnt/cache/appdata/${HOST}-exporters/compose.yml"
-    fi
-    if [[ -f "$compose_file" ]]; then
-        python3 - "$compose_file" <<'PY'
-from __future__ import annotations
-
-import sys
-from pathlib import Path
-
-path = Path(sys.argv[1])
-text = path.read_text(encoding="utf-8")
-if "--collector.textfile.directory=/host/var/lib/prometheus/node-exporter" not in text:
-    lines = text.splitlines(keepends=True)
-    updated = []
-    inserted = False
-    for line in lines:
-        updated.append(line)
-        if not inserted and ("--collector.zfs" in line or "--collector.filesystem" in line):
-            prefix = line.split("-")[0]
-            stripped = line.strip()
-            quote = stripped[2] if len(stripped) > 2 and stripped[2] in {"'", '"'} else ""
-            updated.append(f"{prefix}- {quote}--collector.textfile{quote}\n")
-            updated.append(
-                f"{prefix}- {quote}--collector.textfile.directory=/host/var/lib/prometheus/node-exporter{quote}\n"
-            )
-            inserted = True
-    text = "".join(updated)
-    path.write_text(text, encoding="utf-8")
-PY
-        node_service="$(cd "$(dirname "$compose_file")" && docker compose config --services | grep -E '^node-exporter(-.*)?$' | head -1)"
-        if [[ -z "$node_service" ]]; then
-            echo "Could not find node-exporter service in $compose_file" >&2
-            exit 1
-        fi
-        (cd "$(dirname "$compose_file")" && docker compose up -d "$node_service")
-    else
-        print_sub "Docker exporter compose not found: $compose_file"
-    fi
+else
+    print_sub "Docker exporter compose is host-managed; not modified by this installer"
 fi
 
 systemctl daemon-reload
@@ -274,11 +180,11 @@ systemctl start zfs-pool-textfile-exporter.service
 if [[ "$EXPORTER_RUNTIME" != "docker" ]]; then
     systemctl enable --now smartctl-exporter
 fi
-if [[ -f "$IGPU_ENV_SRC" && -f "$IGPU_SVC_SRC" ]]; then
+if [[ -n "${FILE_MAP_DEST[igpu-exporter.defaults]:-}" ]]; then
     systemctl enable --now igpu-exporter
     systemctl is-active --quiet igpu-exporter
 fi
-if [[ -f "$APC_BIN_SRC" && -f "$APC_ENV_SRC" && -f "$APC_SVC_SRC" ]]; then
+if [[ -n "${FILE_MAP_DEST[apcupsd-exporter.py]:-}" ]]; then
     systemctl enable --now apcupsd-exporter
     systemctl is-active --quiet apcupsd-exporter
 fi
