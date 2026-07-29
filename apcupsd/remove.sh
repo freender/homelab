@@ -90,7 +90,7 @@ if [[ "$SKIP_CONFIRM" == "false" ]]; then
     echo "Actions per host:"
     echo "  - Stop and disable apcupsd service"
     echo "  - Backup /etc/apcupsd/ to /etc/apcupsd.bak.TIMESTAMP"
-    echo "  - Remove config files and telegram integration"
+    echo "  - Remove config files (including the retired telegram integration)"
     echo "  - Reset /etc/default/apcupsd (ISCONFIGURED=no)"
     if [[ "$PURGE" == "true" ]]; then
         echo "  - Purge apcupsd package"

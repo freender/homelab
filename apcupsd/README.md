@@ -70,7 +70,7 @@ cd ~/homelab && ./deploy apcupsd all
 **What it does:**
 - Stops and disables the apcupsd service
 - Backs up `/etc/apcupsd/` to `/etc/apcupsd.bak.TIMESTAMP`
-- Removes config files and telegram integration
+- Removes config files (including the retired telegram integration, if present)
 - Resets `/etc/default/apcupsd` (ISCONFIGURED=no)
 - Optionally purges the apcupsd package with `--purge`
 
@@ -87,16 +87,13 @@ ssh ace "apcaccess status | grep STATUS"
 ssh clovis "apcaccess status | grep STATUS"
 ```
 
-**Telegram env file:**
-Create `/etc/apcupsd/telegram/telegram.env` on each host:
+**UPS alerting:**
+This module no longer sends Telegram messages. UPS state is exported by
+`apcupsd-exporter` (deployed by `pve-exporters` on the UPS master hosts) and
+alerted on by the `ups` rule group in vmalert on helm. To check what the
+alerting stack currently sees:
 ```bash
-TELEGRAM_TOKEN=...
-TELEGRAM_CHATID=...
-```
-
-**Test Telegram:**
-```bash
-ssh ace "/etc/apcupsd/telegram/telegram.sh -s 'Test' -d 'Test message'"
+ssh bray "curl -s localhost:9162/metrics | grep -E '^apcupsd_(status|up|time_left)'"
 ```
 
 ## Quick Reference

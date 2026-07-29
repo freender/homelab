@@ -7,9 +7,6 @@ $LOGGER "UPS battery critical - initiating cluster shutdown"
 
 SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5"
 
-# Notify via Telegram
-/etc/apcupsd/telegram/telegram.sh -s "SHUTDOWN" -d "{{ HOST }} UPS critical - initiating cluster shutdown"
-
 SLAVE_HOSTS=({{ SLAVE_HOSTS }})
 
 # PHASE 1: Shutdown ALL VMs on ALL nodes simultaneously
@@ -71,7 +68,6 @@ fi
 
 # PHASE 3: Poweroff all hosts (slaves immediate, master after 30 seconds)
 $LOGGER "PHASE 3: Powering off hosts: slaves immediate, {{ HOST }} in 30 seconds"
-/etc/apcupsd/telegram/telegram.sh -s "SHUTDOWN" -d "All VMs stopped - powering off cluster (slaves now, {{ HOST }} in 30s)"
 
 # Poweroff slaves immediately
 for NODE in "${SLAVE_HOSTS[@]}"; do

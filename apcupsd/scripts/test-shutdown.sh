@@ -1,44 +1,55 @@
 #!/bin/bash
-# test-shutdown.sh - Dry-run test of cluster shutdown sequence
-# Does NOT actually shutdown anything - just logs what would happen
+# test-shutdown.sh - Dry-run inspection of the cluster shutdown sequence.
+# Does NOT shut anything down; it reports what the deployed doshutdown would do.
+#
+# Roles come from hosts.conf: bray is the UPS master for the ace/bray/clovis
+# cluster, osiris is a standalone master. Slaves are powered off by the master
+# over SSH, so master->slave SSH is the load-bearing dependency here.
 
-echo "=== DRY-RUN: Cluster Shutdown Test ==="
-echo "This script simulates the shutdown sequence without executing it."
+set -u
+
+MASTER="bray"
+SLAVES=("ace" "clovis")
+
+echo "=== DRY-RUN: Cluster Shutdown Inspection ==="
+echo "Master: $MASTER   Slaves: ${SLAVES[*]}"
 echo ""
 
-echo "1. Discovering running VMs cluster-wide..."
-echo "   ace VMs:"
-ssh ace "qm list 2>/dev/null | grep running" || echo "   (none)"
-echo "   bray VMs:"
-ssh bray "qm list 2>/dev/null | grep running" || echo "   (none)"
-echo "   clovis VMs:"
-ssh clovis "qm list 2>/dev/null | grep running" || echo "   (none)"
+echo "1. Running VMs cluster-wide:"
+for NODE in "$MASTER" "${SLAVES[@]}"; do
+    echo "   $NODE:"
+    ssh "$NODE" "qm list 2>/dev/null | awk '\$3==\"running\"'" 2>/dev/null | sed 's/^/     /' || echo "     (unreachable)"
+done
 echo ""
 
-echo "2. Would execute on ace:"
-echo "   - qm shutdown <each running VMID> --timeout 120"
-echo "   - ssh bray 'qm shutdown <vmids>'"
-echo "   - ssh clovis 'qm shutdown <vmids>'"
-echo "   - sleep 180 (wait for VMs)"
+echo "2. Deployed doshutdown on $MASTER:"
+if ssh "$MASTER" "test -x /etc/apcupsd/doshutdown" 2>/dev/null; then
+    echo "   present and executable"
+    ssh "$MASTER" "bash -n /etc/apcupsd/doshutdown" 2>/dev/null \
+        && echo "   syntax OK" || echo "   SYNTAX ERROR"
+    echo "   phases:"
+    ssh "$MASTER" "grep -E '^\\\$LOGGER \"PHASE' /etc/apcupsd/doshutdown" 2>/dev/null | sed 's/^/     /'
+else
+    echo "   MISSING or not executable"
+fi
 echo ""
 
-echo "3. Would execute staggered host shutdowns:"
-echo "   - ssh clovis 'shutdown -h +1' (1 minute delay)"
-echo "   - ssh bray 'shutdown -h +2' (2 minute delay)"
-echo "   - shutdown -h +3 on ace (3 minute delay)"
+echo "3. Master -> slave SSH (used to power off slaves in PHASE 3):"
+for NODE in "${SLAVES[@]}"; do
+    echo -n "   $MASTER -> $NODE: "
+    ssh "$MASTER" "ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no $NODE 'echo OK'" 2>/dev/null || echo "FAILED"
+done
 echo ""
 
-echo "4. Testing SSH connectivity:"
-echo -n "   ace -> bray: "
-ssh ace "ssh -o ConnectTimeout=5 bray 'echo OK'" 2>/dev/null || echo "FAILED"
-echo -n "   ace -> clovis: "
-ssh ace "ssh -o ConnectTimeout=5 clovis 'echo OK'" 2>/dev/null || echo "FAILED"
-echo ""
-
-echo "5. Testing Telegram notification:"
-echo "   Sending test message..."
-ssh ace "/etc/apcupsd/telegram/telegram.sh -s 'TEST' -d 'Shutdown test from ace (dry-run)'"
+echo "4. UPS state as the alerting stack sees it:"
+for NODE in "$MASTER" "osiris"; do
+    echo -n "   $NODE: "
+    ssh "$NODE" "curl -s --max-time 5 localhost:9162/metrics | grep -E '^apcupsd_(status|time_left)' | tr '\n' ' '" 2>/dev/null || echo "exporter unreachable"
+    echo ""
+done
 echo ""
 
 echo "=== DRY-RUN Complete ==="
-echo "To perform actual shutdown test, unplug the UPS from wall power."
+echo "UPS alerting is handled by the vmalert 'ups' group on helm; this module no"
+echo "longer sends Telegram messages itself."
+echo "For a real test, pull mains power from the UPS."

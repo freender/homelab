@@ -2,9 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
-from homelab.modules import apcupsd, pbs_client_backup, pve_exporters
+from homelab.modules import pbs_client_backup, pve_exporters
 
 
 def write_secret_catalog(
@@ -26,26 +24,6 @@ def write_secret_catalog(
         encoding="utf-8",
     )
     return example
-
-
-def test_apcupsd_uses_example_secret_in_offline_mode(monkeypatch, tmp_path: Path) -> None:
-    example = write_secret_catalog(
-        tmp_path,
-        "telegram",
-        "TELEGRAM_TOKEN={{ op://Homelab/Telegram Homelab Bot/token }}\n",
-        "TELEGRAM_TOKEN=example\n",
-    )
-
-    monkeypatch.setenv("HOMELAB_OFFLINE", "true")
-
-    assert apcupsd.telegram_env_path(tmp_path) == example
-
-
-def test_apcupsd_requires_real_secret_outside_offline_mode(monkeypatch, tmp_path: Path) -> None:
-    monkeypatch.delenv("HOMELAB_OFFLINE", raising=False)
-
-    with pytest.raises(ValueError, match="missing secrets catalog"):
-        apcupsd.telegram_env_path(tmp_path)
 
 
 def test_pbs_client_backup_uses_example_secret_in_offline_mode(

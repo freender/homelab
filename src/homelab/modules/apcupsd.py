@@ -2,11 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .. import op_secrets
 from ..build import render_file, write_env_file
 from ..deploy import DeploySession, force_env, prepare_build_dir, stage_and_run_remote_installer
 from ..hosts import HostLookupError, default_registry
-from ..module_support import copy_cached_secret, tmpfs_secret_stage
 from ..output import print_action, print_error, print_sub
 from ..ssh import HostConnection, build_files, diff_many
 
@@ -42,14 +40,19 @@ def deploy(
 
 
 def validate(root: Path) -> None:
-    telegram_env_path(root)
-
-
-def telegram_env_path(root: Path) -> Path:
-    try:
-        return op_secrets.secret_file(root, "telegram")
-    except op_secrets.OpSecretsError as exc:
-        raise ValueError(str(exc)) from exc
+    # Previously this only asserted the Telegram secret resolved, which is no
+    # longer used here; the templates it actually depends on went unchecked.
+    templates_dir = root / "apcupsd" / "templates"
+    required = [
+        "master.conf.tpl",
+        "slave.conf.tpl",
+        "doshutdown-master.tpl",
+        "doshutdown-slave.tpl",
+        "doshutdown-master-standalone.tpl",
+    ]
+    for name in required:
+        if not (templates_dir / name).is_file():
+            raise ValueError(f"missing apcupsd template: {templates_dir / name}")
 
 
 def get_slave_hosts(root: Path) -> str:
@@ -78,15 +81,6 @@ def deploy_host(root: Path, host: str, slave_hosts: str, dry_run: bool, force: b
     for message in diff_many(connection, [
         (build_dir / "apcupsd.conf", "/etc/apcupsd/apcupsd.conf"),
         (build_dir / "doshutdown", "/etc/apcupsd/doshutdown"),
-        (
-            root / "apcupsd" / "configs" / "shared" / "apcupsd.notify",
-            "/etc/apcupsd/apcupsd.notify",
-        ),
-        (
-            root / "apcupsd" / "configs" / "telegram" / "telegram.sh",
-            "/etc/apcupsd/telegram/telegram.sh",
-        ),
-        (telegram_env_path(root), "/etc/apcupsd/telegram/telegram.env"),
     ]):
         print_sub(message)
 
@@ -140,9 +134,6 @@ def render_configs(
     render_file(conf_template, build_dir / "apcupsd.conf", **context)
     render_file(shutdown_template, build_dir / "doshutdown", **context)
     (build_dir / "doshutdown").chmod(0o755)
-    # telegram.env is NOT rendered into build/: it holds a live bot token and build/
-    # is a persistent, mode-0644 directory in the repo. It is staged from the tmpfs
-    # secret cache at upload time instead (see stage_and_install).
     write_env_file(build_dir / "env", {"ROLE": role, "HOST": host})
     return build_dir
 
@@ -154,21 +145,17 @@ def stage_and_install(
     connection: HostConnection,
     force: bool,
 ) -> None:
-    with tmpfs_secret_stage("homelab-apcupsd.") as secret_dir:
-        secret_stage = copy_cached_secret(root, "telegram", secret_dir / "telegram.env")
-        stage_and_run_remote_installer(
-            root,
-            connection,
-            REMOTE_ROOT,
-            [
-                (build_dir, f"{REMOTE_ROOT}/build/{host}"),
-                (secret_stage, f"{REMOTE_ROOT}/build/{host}/telegram.env"),
-                (root / "apcupsd" / "scripts", f"{REMOTE_ROOT}/scripts"),
-                (root / "apcupsd" / "configs", f"{REMOTE_ROOT}/configs"),
-            ],
-            "scripts/install.sh",
-            host,
-            env=force_env(force),
-            require_root=True,
-            remote_subdirs=("build", "lib"),
-        )
+    stage_and_run_remote_installer(
+        root,
+        connection,
+        REMOTE_ROOT,
+        [
+            (build_dir, f"{REMOTE_ROOT}/build/{host}"),
+            (root / "apcupsd" / "scripts", f"{REMOTE_ROOT}/scripts"),
+        ],
+        "scripts/install.sh",
+        host,
+        env=force_env(force),
+        require_root=True,
+        remote_subdirs=("build", "lib"),
+    )

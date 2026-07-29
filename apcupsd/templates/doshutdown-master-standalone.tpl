@@ -5,9 +5,6 @@
 LOGGER="logger -t apcupsd-shutdown"
 $LOGGER "{{ HOST }} UPS battery critical - shutting down"
 
-# Notify via Telegram
-/etc/apcupsd/telegram/telegram.sh -s "SHUTDOWN" -d "{{ HOST }} UPS critical - shutting down"
-
 # Schedule poweroff in background with 2 second delay
 $LOGGER "Scheduling {{ HOST }} poweroff in 2 seconds"
 nohup sh -c 'sleep 2 && logger -t apcupsd-shutdown "Executing poweroff on {{ HOST }}" && systemctl poweroff' >/dev/null 2>&1 &

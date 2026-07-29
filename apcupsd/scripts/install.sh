@@ -7,7 +7,6 @@ set -e
 HOST=${1:-$(hostname)}
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD_DIR="$SCRIPT_DIR/build/$HOST"
-CONFIGS_DIR="$SCRIPT_DIR/configs"
 ENV_FILE="$BUILD_DIR/env"
 FORCE_UPDATE=${FORCE_UPDATE:-false}
 
@@ -28,9 +27,6 @@ fi
 echo "=== Installing apcupsd $ROLE on $HOST ==="
 
 require_dir "$BUILD_DIR" "$BUILD_DIR" || exit 1
-require_file "$CONFIGS_DIR/shared/apcupsd.notify" "$CONFIGS_DIR/shared/apcupsd.notify" || exit 1
-require_file "$CONFIGS_DIR/telegram/telegram.sh" "$CONFIGS_DIR/telegram/telegram.sh" || exit 1
-require_file "$BUILD_DIR/telegram.env" "$BUILD_DIR/telegram.env" || exit 1
 
 # Install package if needed
 if ! command -v apcupsd >/dev/null 2>&1; then
@@ -55,37 +51,8 @@ else
     [[ $rc -eq 1 ]] || exit "$rc"
 fi
 
-if copy_if_changed "$CONFIGS_DIR/shared/apcupsd.notify" /etc/apcupsd/apcupsd.notify "apcupsd.notify"; then
-    apcupsd_changed=true
-else
-    rc=$?
-    [[ $rc -eq 1 ]] || exit "$rc"
-fi
-
-# Setup telegram
-mkdir -p /etc/apcupsd/telegram
-if copy_if_changed "$CONFIGS_DIR/telegram/telegram.sh" /etc/apcupsd/telegram/telegram.sh "telegram.sh"; then
-    apcupsd_changed=true
-else
-    rc=$?
-    [[ $rc -eq 1 ]] || exit "$rc"
-fi
-
-ENV_FILE_DEST="/etc/apcupsd/telegram/telegram.env"
-if copy_if_changed "$BUILD_DIR/telegram.env" "$ENV_FILE_DEST" "telegram.env"; then
-    apcupsd_changed=true
-else
-    rc=$?
-    [[ $rc -eq 1 ]] || exit "$rc"
-fi
-chmod 600 "$ENV_FILE_DEST"
-chown root:root "$ENV_FILE_DEST"
-echo "Telegram credentials installed."
-
 # Set permissions
 chmod +x /etc/apcupsd/doshutdown
-chmod +x /etc/apcupsd/telegram/telegram.sh
-chmod +x /etc/apcupsd/apcupsd.notify
 chmod 644 /etc/apcupsd/apcupsd.conf
 chmod +x /etc/apcupsd/apccontrol
 
@@ -107,5 +74,3 @@ echo ""
 echo "=== apcupsd $ROLE installed on $HOST ==="
 echo ""
 apcaccess status 2>/dev/null | grep -E "STATUS|MODEL|TIMELEFT|BCHARGE" || echo "Waiting for UPS connection..."
-echo ""
-echo "Test Telegram: /etc/apcupsd/telegram/telegram.sh -s 'Test' -d 'Test from $HOST'"

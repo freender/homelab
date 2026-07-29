@@ -32,7 +32,7 @@ Run `./deploy` and `./validate` from the repo root. The wrappers prefer repo `.v
 ### [apcupsd](apcupsd/)
 UPS monitoring with coordinated cluster shutdown
 - Master/slave configuration
-- Telegram notifications
+- UPS state exported by apcupsd-exporter; alerting via the vmalert `ups` group
 
 ```bash
 ./deploy apcupsd all
