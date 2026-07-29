@@ -27,7 +27,39 @@ What the module **does** manage on these hosts:
   place, idempotent) and runs `docker compose up -d node-exporter`.
 
 It does not modify smartctl/cadvisor services, networks, or any host-specific compose
-tuning. Deploy is over the offsite root SSH path (`config.user: root`,
+tuning.
+
+#### systemd collector over dbus (host compose, not repo-managed)
+
+The `node-exporter` service in both host compose files carries three settings that make
+node_exporter's native systemd collector work from inside a container. They are
+load-bearing for the fleet-wide `SystemdUnitFailed` vmalert rule on `helm`:
+
+```yaml
+    security_opt:
+      - apparmor=unconfined
+    command:
+      - '--collector.systemd'
+    volumes:
+      - /run/dbus/system_bus_socket:/var/run/dbus/system_bus_socket
+```
+
+- The mount destination must be `/var/run/...`, not `/run/...`: go-systemd dials the
+  `/var/run` path and the image is scratch-based with no `/var/run` -> `/run` symlink.
+- `apparmor=unconfined` is required because Ubuntu's `docker-default` profile denies the
+  D-Bus `Hello` method call (`An AppArmor policy prevents this sender from sending this
+  message to this recipient`).
+- The container still runs as the image's unprivileged `nobody` user. Reading unit state
+  over the system bus is allowed for unprivileged callers; polkit denies unit start/stop,
+  so this is read-only access in practice.
+
+If a future compose edit drops any of these, `up` stays `1` while `node_systemd_units`
+silently disappears. The `SystemdCollectorFailing` rule on `helm` exists to catch exactly
+that (`node_scrape_collector_success{collector="systemd"} == 0`).
+
+This replaced `systemd-failed-textfile-exporter`, a host-native textfile fallback that
+emitted `homelab_systemd_units_failed_total` purely because the containerized exporter had
+no dbus access. `scripts/install.sh` now removes that fallback wherever it was installed. Deploy is over the offsite root SSH path (`config.user: root`,
 `sshkey: offsite`), which requires the offsite key loaded in the shared agent
 (`addoffsitekey` on `riven`).
 

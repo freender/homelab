@@ -16,9 +16,6 @@ REQUIRED = [
     "zfs-pool-textfile-exporter",
     "zfs-pool-textfile-exporter.service",
     "zfs-pool-textfile-exporter.timer",
-    "systemd-failed-textfile-exporter",
-    "systemd-failed-textfile-exporter.service",
-    "systemd-failed-textfile-exporter.timer",
     "apcupsd-exporter.service",
     "apcupsd-exporter.py",
     "igpu-exporter.defaults",
@@ -71,16 +68,6 @@ def has_igpu_exporter(root: Path, host: str) -> bool:
     return isinstance(exporter_config, dict)
 
 
-def has_systemd_failed_exporter(root: Path, host: str) -> bool:
-    # PVE nodes already get real failed-unit visibility from node_exporter's
-    # native systemd collector (talks to dbus directly). That collector needs
-    # dbus access node_exporter does not have when it runs containerized, so
-    # this textfile fallback is only needed on runtime: docker hosts (the
-    # offsite Ubuntu boxes).
-    registry = default_registry(root)
-    return str(registry.get(host, "pve-exporters.runtime", "native")) == "docker"
-
-
 def apcupsd_exporter_env_template(root: Path) -> Path:
     return root / "pve-exporters" / "templates" / "apcupsd-exporter.env.tpl"
 
@@ -122,12 +109,6 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
         "zfs-pool-textfile-exporter.service",
         "zfs-pool-textfile-exporter.timer",
     ])
-    if has_systemd_failed_exporter(root, host):
-        copy_files(common_dir, configs_dir, [
-            "systemd-failed-textfile-exporter",
-            "systemd-failed-textfile-exporter.service",
-            "systemd-failed-textfile-exporter.timer",
-        ])
 
     connection = HostConnection(
         host,
@@ -222,23 +203,6 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
         ),
     ]):
         print_sub(message)
-
-    if has_systemd_failed_exporter(root, host):
-        for message in diff_many(connection, [
-            (
-                configs_dir / "systemd-failed-textfile-exporter",
-                "/usr/local/bin/systemd-failed-textfile-exporter",
-            ),
-            (
-                configs_dir / "systemd-failed-textfile-exporter.service",
-                "/etc/systemd/system/systemd-failed-textfile-exporter.service",
-            ),
-            (
-                configs_dir / "systemd-failed-textfile-exporter.timer",
-                "/etc/systemd/system/systemd-failed-textfile-exporter.timer",
-            ),
-        ]):
-            print_sub(message)
 
     if dry_run:
         print_sub(f"[DRY-RUN] Would deploy to {host}:{REMOTE_ROOT}/")
