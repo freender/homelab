@@ -44,22 +44,36 @@ def metric_value(raw):
     return match.group(0)
 
 
+def render_labels(labels):
+    return ",".join(f'{k}="{esc(v)}"' for k, v in labels.items() if v)
+
+
+def identity_labels():
+    # Only the labels that are known without a working apcaccess call, so
+    # apcupsd_up keeps one stable series identity across success and failure.
+    # These come from the deploy-time env (see pve_exporters.py), not the probe.
+    return {
+        "host": UPS_HOST,
+        "ups_name": UPS_NAME,
+        "serial": UPS_SERIAL,
+    }
+
+
 def build_metrics():
     values = parse_status()
-    labels = {
+    # STATUS is deliberately NOT part of the common label set: it flips on every
+    # ONBATTERY/ONLINE transition, and carrying it on the gauges would give each
+    # transition a brand-new series, breaking exactly the trend continuity the
+    # battery-degradation and runtime alerts depend on. It rides on
+    # apcupsd_status alone, which is what an info-style metric is for.
+    base_labels = {
         "host": UPS_HOST or values.get("HOSTNAME", ""),
         "ups_name": UPS_NAME or values.get("UPSNAME", ""),
         "serial": UPS_SERIAL or values.get("SERIALNO", ""),
         "model": values.get("MODEL", ""),
-        "status": values.get("STATUS", ""),
     }
-    label_text = ",".join(f'{k}="{esc(v)}"' for k, v in labels.items() if v)
-
-    def with_extra(extra):
-        extra_text = ",".join(f'{k}="{esc(v)}"' for k, v in extra.items() if v)
-        if label_text and extra_text:
-            return label_text + "," + extra_text
-        return label_text or extra_text
+    label_text = render_labels(base_labels)
+    status_text = render_labels({**base_labels, "status": values.get("STATUS", "")})
 
     lines = []
     for key, (metric, help_text) in GAUGES.items():
@@ -72,11 +86,19 @@ def build_metrics():
 
     lines.append("# HELP apcupsd_status UPS status as labeled gauge")
     lines.append("# TYPE apcupsd_status gauge")
-    lines.append(f"apcupsd_status{{{label_text}}} 1")
+    lines.append(f"apcupsd_status{{{status_text}}} 1")
     lines.append("# HELP apcupsd_up Whether apcupsd exporter scrape succeeded")
     lines.append("# TYPE apcupsd_up gauge")
-    lines.append(f"apcupsd_up{{{label_text}}} 1")
+    lines.append(f"apcupsd_up{{{render_labels(identity_labels())}}} 1")
     return "\n".join(lines) + "\n"
+
+
+def build_failure_metrics():
+    return (
+        "# HELP apcupsd_up Whether apcupsd exporter scrape succeeded\n"
+        "# TYPE apcupsd_up gauge\n"
+        f"apcupsd_up{{{render_labels(identity_labels())}}} 0\n"
+    )
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -93,8 +115,13 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
         except Exception as exc:
-            body = f"apcupsd_up 0\n# scrape_error {exc}\n".encode()
-            self.send_response(500)
+            # Answer 200, not 500: a 5xx makes the scraper discard the body, so the
+            # apcupsd_up 0 this path exists to publish never actually landed in
+            # VictoriaMetrics. Serving it as a normal payload is what lets
+            # UpsExporterDown fire on a dead apcupsd rather than only on a dead
+            # exporter process.
+            body = (build_failure_metrics() + f"# scrape_error {exc}\n").encode()
+            self.send_response(200)
             self.send_header("Content-Type", "text/plain; version=0.0.4")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
