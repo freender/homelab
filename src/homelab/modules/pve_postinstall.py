@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ..build import copy_file, copy_files, render_file
+from ..build import copy_files, render_file
 from ..deploy import DeploySession, force_env, prepare_build_dir, stage_and_run_remote_installer
 from ..hosts import HostLookupError, default_registry
 from ..module_support import FileSpec, write_file_map
@@ -10,8 +10,6 @@ from ..output import print_action, print_error, print_sub
 from ..ssh import HostConnection, build_files, diff_many
 
 REMOTE_ROOT = "/tmp/homelab-pve-postinstall"
-NOTIFY_SCRIPT = "notify-failure.sh"
-NOTIFY_SERVICE = "homelab-notify-failure@.service"
 SITE_ROUTES_SCRIPT = "homelab-site-routes"
 SITE_ROUTES_SERVICE = "homelab-site-routes.service"
 PVE_FILES = [
@@ -20,15 +18,11 @@ PVE_FILES = [
     "no-nag-script",
     "pve-remove-nag.sh",
     "sshd-hardening.conf",
-    NOTIFY_SCRIPT,
-    NOTIFY_SERVICE,
     "homelab-pve-cluster-rejoin-helper",
     SITE_ROUTES_SCRIPT,
     SITE_ROUTES_SERVICE,
 ]
 GENERATED_FILES = {
-    NOTIFY_SCRIPT,
-    NOTIFY_SERVICE,
     "homelab-pve-cluster-rejoin-helper",
     SITE_ROUTES_SCRIPT,
     SITE_ROUTES_SERVICE,
@@ -40,8 +34,6 @@ REMOTE_PATHS = {
     "no-nag-script": "/etc/apt/apt.conf.d/no-nag-script",
     "pve-remove-nag.sh": "/usr/local/bin/pve-remove-nag.sh",
     "sshd-hardening.conf": "/etc/ssh/sshd_config.d/99-disable-password-auth.conf",
-    NOTIFY_SCRIPT: "/usr/local/bin/homelab-notify-failure",
-    NOTIFY_SERVICE: "/etc/systemd/system/homelab-notify-failure@.service",
     "homelab-pve-cluster-rejoin-helper": "/usr/local/sbin/homelab-pve-cluster-rejoin-helper",
     SITE_ROUTES_SCRIPT: "/usr/local/sbin/homelab-site-routes",
     SITE_ROUTES_SERVICE: "/etc/systemd/system/homelab-site-routes.service",
@@ -49,7 +41,6 @@ REMOTE_PATHS = {
 
 MODES = {
     "pve-remove-nag.sh": "755",
-    NOTIFY_SCRIPT: "755",
     "homelab-pve-cluster-rejoin-helper": "755",
     SITE_ROUTES_SCRIPT: "755",
 }
@@ -86,8 +77,6 @@ def deploy(
 def validate(root: Path) -> None:
     config_dir = root / "pve-postinstall" / "configs" / "pve"
     interfaces_template = root / "pve-postinstall" / "templates" / "pve-interfaces"
-    notify_script = root / "shared" / "scripts" / NOTIFY_SCRIPT
-    notify_template = root / "shared" / "templates" / NOTIFY_SERVICE
 
     for file_name in PVE_FILES:
         if file_name in GENERATED_FILES:
@@ -98,10 +87,6 @@ def validate(root: Path) -> None:
 
     if not interfaces_template.is_file():
         raise ValueError(f"missing interfaces template: {interfaces_template}")
-    if not notify_script.is_file():
-        raise ValueError(f"missing notify script: {notify_script}")
-    if not notify_template.is_file():
-        raise ValueError(f"missing notify template: {notify_template}")
 
 
 def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
@@ -162,15 +147,6 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
             for file_name in PVE_FILES
             if file_name not in GENERATED_FILES
         ],
-    )
-    copy_file(
-        root / "shared" / "scripts" / NOTIFY_SCRIPT,
-        build_dir / NOTIFY_SCRIPT,
-    )
-    render_file(
-        root / "shared" / "templates" / NOTIFY_SERVICE,
-        build_dir / NOTIFY_SERVICE,
-        NOTIFY_SCRIPT="/usr/local/bin/homelab-notify-failure",
     )
     build_cluster_rejoin_helper(root, build_dir)
     build_site_routes(root, host, build_dir)

@@ -2,7 +2,6 @@
 Description=Homelab ZFS replication
 Wants=network-online.target
 After=network-online.target
-OnFailure=homelab-notify-failure@%n.service
 
 [Service]
 Type=oneshot

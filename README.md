@@ -150,7 +150,7 @@ Unattended Proxmox installer answer files
 ### [ubuntu-setup](ubuntu-setup/)
 Ubuntu OS setup for the offsite hosts (cinci, cottonwood)
 - Docker CE, sudoers, SSH hardening, ZFS ARC limit, inotify limits
-- Optional WireGuard, Samba, and Telegram failure notifications
+- Optional WireGuard and Samba
 
 ```bash
 ./deploy ubuntu-setup all

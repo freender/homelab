@@ -1945,7 +1945,8 @@ def build_health_check_script(pools: list[str]) -> str:
     # pool; it only changes its stdout message. Checking the exit code alone (the
     # old behavior here) can never detect an unhealthy pool. Compare the reported
     # `health` column against ONLINE instead, and print `zpool status` for context
-    # before failing so OnFailure notifications carry the vdev detail.
+    # before failing so the journal carries the vdev detail for whoever follows up
+    # on the SystemdUnitFailed alert.
     lines = [
         "#!/bin/bash",
         "",

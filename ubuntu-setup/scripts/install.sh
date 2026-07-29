@@ -245,49 +245,4 @@ if [[ "$SAMBA_ENABLED" == "true" ]]; then
     fi
 fi
 
-print_action "Failure notifications"
-if [[ "$NOTIFICATIONS_ENABLED" == "true" ]]; then
-    # These two are only in file-map.conf (and thus have a resolvable
-    # mapped_dest) when the "notifications" feature is enabled -- calling
-    # install_build_file for them while disabled fails on an empty
-    # destination.
-    rc=0
-    install_build_file "notify-failure.sh" || rc=$?
-    if [[ $rc -eq 0 ]]; then
-        print_ok "notify-failure.sh deployed"
-    fi
-
-    notify_unit_changed=false
-    rc=0
-    install_build_file "homelab-notify-failure@.service" || rc=$?
-    [[ $rc -eq 0 ]] && notify_unit_changed=true
-
-    if [[ "$notify_unit_changed" == true ]]; then
-        systemctl daemon-reload
-        print_ok "homelab-notify-failure@.service deployed"
-    fi
-else
-    print_sub "Notifications disabled; not touching notify-failure.sh/service"
-fi
-
-if [[ "$NOTIFICATIONS_ENABLED" == "true" ]]; then
-    mkdir -p /etc/homelab
-    rc=0
-    install_build_file "telegram.env" || rc=$?
-    if [[ $rc -eq 0 ]]; then
-        print_ok "telegram.env deployed"
-    fi
-    print_sub "Notifications enabled"
-else
-    # Actively purge, not just skip: ubuntu-setup.notifications: false is used on
-    # offsite hosts specifically to keep the Telegram bot token off-host, so a
-    # previously-deployed token must not survive turning this off.
-    if [[ -e "$TELEGRAM_ENV_DEST" ]]; then
-        rm -f "$TELEGRAM_ENV_DEST"
-        print_ok "Removed $TELEGRAM_ENV_DEST (notifications disabled)"
-    else
-        print_sub "No telegram.env in secrets; notifications disabled"
-    fi
-fi
-
 print_header "Ubuntu Setup Complete"

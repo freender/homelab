@@ -1,6 +1,5 @@
 [Unit]
 Description=Homelab ZFS pool health check
-OnFailure=homelab-notify-failure@%n.service
 
 [Service]
 Type=oneshot

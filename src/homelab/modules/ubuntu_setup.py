@@ -7,15 +7,11 @@ from .. import op_secrets
 from ..build import copy_file, copy_files, render_file, write_env_file
 from ..deploy import DeploySession, force_env, prepare_build_dir, stage_and_run_remote_installer
 from ..hosts import HostLookupError, default_registry
-from ..module_support import copy_cached_secret, tmpfs_secret_stage
-from ..modules.apcupsd import telegram_env_path
 from ..output import print_action, print_sub
 from ..ssh import HostConnection, build_files, diff_many
 
 REMOTE_ROOT = "/tmp/homelab-ubuntu-setup"
 NETWORK_MACS_SECRET = "network-macs"
-NOTIFY_SCRIPT = "notify-failure.sh"
-NOTIFY_SERVICE = "homelab-notify-failure@.service"
 
 STATIC_CONFIG_FILES = ["99-inotify.conf", "sshd-hardening.conf"]
 
@@ -34,7 +30,6 @@ class HostArtifacts:
     deploy_user: str
     samba_enabled: bool
     wireguard_enabled: bool
-    notifications_enabled: bool
     file_specs: tuple[FileSpec, ...]
 
 
@@ -44,18 +39,6 @@ FILE_SPECS = (
     FileSpec("sshd-hardening.conf", "/etc/ssh/sshd_config.d/01-disable-password-auth.conf"),
     FileSpec("zfs.conf", "/etc/modprobe.d/zfs.conf"),
     FileSpec("99-inotify.conf", "/etc/sysctl.d/99-inotify.conf"),
-    FileSpec(
-        NOTIFY_SCRIPT,
-        "/usr/local/bin/homelab-notify-failure",
-        mode="755",
-        feature="notifications",
-    ),
-    FileSpec(
-        NOTIFY_SERVICE,
-        "/etc/systemd/system/homelab-notify-failure@.service",
-        feature="notifications",
-    ),
-    FileSpec("telegram.env", "/etc/homelab/telegram.env", mode="600", feature="notifications"),
     FileSpec("99-wireguard.conf", "/etc/sysctl.d/99-wireguard.conf", feature="wireguard"),
     FileSpec("smb.conf", "/etc/samba/smb.conf", feature="samba"),
 )
@@ -91,8 +74,6 @@ def validate(root: Path, hosts: list[str]) -> None:
         scripts_dir / "install.sh",
         scripts_dir / "docker-install.sh",
         scripts_dir / "pin-primary-nic.sh",
-        root / "shared" / "scripts" / NOTIFY_SCRIPT,
-        root / "shared" / "templates" / NOTIFY_SERVICE,
         templates_dir / "10-network-names.rules",
         templates_dir / "sudoers",
         templates_dir / "zfs.conf",
@@ -134,9 +115,6 @@ def resolve_remote_path(spec: FileSpec, artifacts: HostArtifacts) -> str:
 
 
 def source_path_for_spec(root: Path, artifacts: HostArtifacts, spec: FileSpec) -> Path:
-    if spec.build_name == "telegram.env":
-        # Live bot token: read from the tmpfs secret cache, never rendered into build/.
-        return telegram_env_path(root)
     return artifacts.build_dir / spec.build_name
 
 
@@ -144,7 +122,6 @@ def build_file_specs(artifacts: HostArtifacts) -> tuple[FileSpec, ...]:
     enabled_features = {
         "wireguard": artifacts.wireguard_enabled,
         "samba": artifacts.samba_enabled,
-        "notifications": artifacts.notifications_enabled,
     }
     return tuple(
         spec
@@ -190,25 +167,17 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
         (module_dir / "scripts", f"{REMOTE_ROOT}/scripts"),
     ]
 
-    with tmpfs_secret_stage("homelab-ubuntu-setup.") as secret_dir:
-        if artifacts.notifications_enabled:
-            upload_paths.append(
-                (
-                    copy_cached_secret(root, "telegram", secret_dir / "telegram.env"),
-                    f"{REMOTE_ROOT}/build/{host}/telegram.env",
-                )
-            )
-        stage_and_run_remote_installer(
-            root,
-            connection,
-            REMOTE_ROOT,
-            upload_paths,
-            "scripts/install.sh",
-            host,
-            env=force_env(force),
-            require_root=True,
-            remote_subdirs=("build", "lib"),
-        )
+    stage_and_run_remote_installer(
+        root,
+        connection,
+        REMOTE_ROOT,
+        upload_paths,
+        "scripts/install.sh",
+        host,
+        env=force_env(force),
+        require_root=True,
+        remote_subdirs=("build", "lib"),
+    )
 
 
 def write_file_map(build_dir: Path, artifacts: HostArtifacts) -> None:
@@ -236,17 +205,7 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
     primary_interface_mac = load_network_mac(root, host)
     samba_enabled = str(registry.get(host, "ubuntu-setup.samba", "false")).lower() == "true"
     wireguard_enabled = str(registry.get(host, "ubuntu-setup.wireguard", "false")).lower() == "true"
-    notifications_requested = (
-        str(registry.get(host, "ubuntu-setup.notifications", "true")).lower() == "true"
-    )
     zfs_arc_max = str(registry.get(host, "ubuntu-setup.zfs_arc_max", "8589934592"))
-    notifications_enabled = False
-    telegram_path: Path | None = None
-    try:
-        telegram_path = telegram_env_path(root)
-        notifications_enabled = notifications_requested and telegram_path.is_file()
-    except ValueError:
-        notifications_enabled = False
 
     build_dir = module_dir / "build" / host
     prepare_build_dir(build_dir)
@@ -260,21 +219,10 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
         INTERFACE_NAME=primary_interface_name,
         INTERFACE_MAC=primary_interface_mac,
     )
-    render_file(
-        root / "shared" / "templates" / NOTIFY_SERVICE,
-        build_dir / NOTIFY_SERVICE,
-        NOTIFY_SCRIPT="/usr/local/bin/homelab-notify-failure",
-    )
-    copy_file(root / "shared" / "scripts" / NOTIFY_SCRIPT, build_dir / NOTIFY_SCRIPT)
-
     if wireguard_enabled:
         copy_file(config_dir / "99-wireguard.conf", build_dir / "99-wireguard.conf")
     if samba_enabled:
         copy_file(config_dir / f"smb-{host}.conf", build_dir / "smb.conf")
-    # telegram.env deliberately NOT copied into build/: it holds a live bot token and
-    # build/ is a persistent, mode-0644 directory in the repo. It is staged from the
-    # tmpfs secret cache at upload time instead (see deploy_host).
-
     write_env_file(
         build_dir / "env",
         {
@@ -285,10 +233,7 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
             "SYSTEM_HOSTNAME": system_hostname,
             "SYSTEM_TIMEZONE": system_timezone,
             "WIREGUARD_ENABLED": "true" if wireguard_enabled else "false",
-            "NOTIFICATIONS_ENABLED": "true" if notifications_enabled else "false",
             "ZFS_ARC_MAX": zfs_arc_max,
-            "NOTIFY_SCRIPT_DEST": "/usr/local/bin/homelab-notify-failure",
-            "TELEGRAM_ENV_DEST": "/etc/homelab/telegram.env",
         },
     )
 
@@ -297,7 +242,6 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
         deploy_user=user,
         samba_enabled=samba_enabled,
         wireguard_enabled=wireguard_enabled,
-        notifications_enabled=notifications_enabled,
         file_specs=(),
     )
     file_specs = build_file_specs(artifacts)
@@ -306,7 +250,6 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
         deploy_user=user,
         samba_enabled=samba_enabled,
         wireguard_enabled=wireguard_enabled,
-        notifications_enabled=notifications_enabled,
         file_specs=file_specs,
     )
     write_file_map(build_dir, artifacts)
