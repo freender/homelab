@@ -106,6 +106,9 @@ no dbus access. `scripts/install.sh` now removes that fallback wherever it was i
 - `configs/common/apcupsd-exporter.py`
 - `configs/common/apcupsd-exporter.service`
 - `configs/common/apcupsd-exporter.env`
+- `configs/common/igpu-exporter.py`
+- `configs/common/igpu-exporter.service`
+- `configs/common/igpu-exporter.defaults`
 - `../deploy`
 
 ### Where each exporter binary comes from
@@ -117,12 +120,49 @@ because there is no packaged or released artifact to use.
 |---|---|---|
 | `prometheus-node-exporter` | `apt`, Debian `main` | packaged |
 | `smartctl_exporter` | `apt`, `<codename>-backports` (`prometheus-smartctl-exporter`) | packaged, but Debian stable ships it only in backports |
-| `igpu-exporter` | built from pinned upstream git revision | upstream publishes **zero** releases and it is packaged nowhere |
+| `igpu-exporter` | this repo (`configs/common/igpu-exporter.py`) | not packaged anywhere and upstream ships **zero** releases; a ~40-line wrapper over `intel_gpu_top` beats compiling a Go project on every host |
 | `apcupsd-exporter` | this repo (`configs/common/apcupsd-exporter.py`) | homelab-specific script |
 
-`prometheus-node-exporter`, `python3`, `intel-gpu-tools`, and `golang-go` are
-installed via `apt` as needed; `smartmontools` arrives as a dependency of
-`prometheus-smartctl-exporter`.
+Nothing in this module downloads anything at deploy time any more, so `curl`,
+`tar` and the `golang-go` toolchain are no longer installed. `python3` (runs the
+two in-repo exporters) and `intel-gpu-tools` are installed via `apt` as needed;
+`smartmontools` arrives as a dependency of `prometheus-smartctl-exporter`.
+
+#### igpu-exporter
+
+Previously the third-party Go exporter (`mike1808/igpu-exporter`), compiled from
+a pinned git revision on every host because upstream publishes no release
+artifacts and it is packaged nowhere. That meant installing the whole
+`golang-go` toolchain (~250 MB) on `ace`/`bray`/`clovis` and doing a
+build-from-source at deploy time, to produce a binary that just shelled out to
+`intel_gpu_top` anyway.
+
+`configs/common/igpu-exporter.py` reads `intel_gpu_top -J` directly. Metric
+names, HELP strings, TYPEs and `engine` label values are byte-identical to the
+Go exporter's output (verified by diffing `/metrics` before and after), so the
+`intel-gpu` scrape job in `vmagent/scrape.yml` and the
+`igpu_engines_busy_percent` panels in Grafana needed no changes. The one
+addition is `igpu_up`, which is 0 when no current `intel_gpu_top` sample is
+available.
+
+Implementation notes worth knowing before editing it:
+
+- `intel_gpu_top -J` **streams** samples (a `[` then concatenated objects with no
+  separating commas), so a reader thread keeps the newest sample and `/metrics`
+  serves whatever is current.
+- Sampling once per scrape would not work: the first sample is a ~0 ms warm-up
+  with every counter zeroed, so a one-shot invocation reports a permanently idle
+  GPU regardless of real load.
+- The reader supervises its own `intel_gpu_top` child and respawns it after 5s,
+  so a transient failure does not become a systemd restart loop. While no
+  sample is available it publishes `igpu_up 0` and **omits** the gauges rather
+  than serving the last known values, so a stalled exporter cannot masquerade as
+  an idle GPU.
+
+If `go` is not used for anything else on these hosts, the now-unused toolchain
+can be reclaimed manually (~250 MB): `apt purge golang-go && apt autoremove`.
+The `golang-github-containers-*` packages are unrelated Proxmox dependencies and
+must stay.
 
 #### smartctl_exporter and Debian backports
 

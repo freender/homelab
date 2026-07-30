@@ -9,15 +9,9 @@ SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD_DIR="$SCRIPT_DIR/build/$HOST"
 FORCE_UPDATE=${FORCE_UPDATE:-false}
 EXPORTER_RUNTIME=${EXPORTER_RUNTIME:-native}
-IGPU_TMP_DIR=""
 NODE_EXPORTER_CHANGED=false
 SMARTCTL_OVERRIDE_CHANGED=false
-
-cleanup_tmp_dirs() {
-    rm -rf "$IGPU_TMP_DIR"
-}
-
-trap cleanup_tmp_dirs EXIT
+IGPU_EXPORTER_CHANGED=false
 
 if [[ -f "$SCRIPT_DIR/lib/utils.sh" ]]; then
     # shellcheck source=/dev/null
@@ -135,11 +129,11 @@ missing_pkgs=()
 if [[ "$EXPORTER_RUNTIME" != "docker" ]]; then
     command -v prometheus-node-exporter &>/dev/null || missing_pkgs+=(prometheus-node-exporter)
 fi
+# python3 runs apcupsd-exporter and igpu-exporter. Nothing here downloads
+# anything any more (smartctl_exporter comes from apt, igpu-exporter is our own
+# script), so curl/tar and the golang-go build toolchain are no longer needed.
 command -v python3 &>/dev/null               || missing_pkgs+=(python3)
-command -v curl &>/dev/null                  || missing_pkgs+=(curl)
-command -v tar &>/dev/null                   || missing_pkgs+=(tar)
-if [[ -n "${FILE_MAP_DEST[igpu-exporter.defaults]:-}" ]]; then
-    command -v go &>/dev/null                || missing_pkgs+=(golang-go)
+if [[ -n "${FILE_MAP_DEST[igpu-exporter.py]:-}" ]]; then
     command -v intel_gpu_top &>/dev/null     || missing_pkgs+=(intel-gpu-tools)
 fi
 if [[ ${#missing_pkgs[@]} -gt 0 ]]; then
@@ -180,6 +174,15 @@ else
     ensure_smartctl_exporter_package
 fi
 
+# The exporter script and its env both feed the running process, so either one
+# changing needs a restart; the unit itself is handled by daemon-reload.
+if [[ -n "${FILE_MAP_DEST[igpu-exporter.py]:-}" ]]; then
+    if file_needs_update "$BUILD_DIR/igpu-exporter.py" "$(mapped_dest igpu-exporter.py)" ||
+       file_needs_update "$BUILD_DIR/igpu-exporter.defaults" "$(mapped_dest igpu-exporter.defaults)"; then
+        IGPU_EXPORTER_CHANGED=true
+    fi
+fi
+
 # Retired: this textfile fallback only ever existed because the containerized
 # node_exporter on cinci/cottonwood could not reach dbus and so could not use
 # its native systemd collector. Those containers now bind-mount the host D-Bus
@@ -203,9 +206,10 @@ if [[ -z "${FILE_MAP_DEST[apcupsd-exporter.py]:-}" ]]; then
     rm -f /etc/systemd/system/apcupsd-exporter.service /etc/default/apcupsd-exporter /usr/local/bin/apcupsd-exporter
 fi
 
-if [[ -z "${FILE_MAP_DEST[igpu-exporter.defaults]:-}" ]]; then
+if [[ -z "${FILE_MAP_DEST[igpu-exporter.py]:-}" ]]; then
     systemctl disable --now igpu-exporter 2>/dev/null || true
-    rm -f /etc/systemd/system/igpu-exporter.service /etc/default/igpu-exporter /usr/local/bin/igpu-exporter
+    rm -f /etc/systemd/system/igpu-exporter.service /etc/default/igpu-exporter \
+          /usr/local/bin/igpu-exporter /usr/local/bin/.igpu-exporter.version
 fi
 
 # Install/update every file this host's file-map declares (native node-exporter
@@ -216,35 +220,15 @@ rc=0
 install_file_map "$BUILD_DIR" || rc=$?
 [[ $rc -eq 0 || $rc -eq 1 ]] || exit "$rc"
 
-if [[ -n "${FILE_MAP_DEST[igpu-exporter.defaults]:-}" ]]; then
-    # shellcheck source=/etc/default/igpu-exporter
-    source /etc/default/igpu-exporter
-    IGPU_BIN="/usr/local/bin/igpu-exporter"
-    # go version -m's vcs.revision is only populated when the build happens
-    # inside a git checkout; ours is built from a tarball extracted from a
-    # GitHub archive URL (no .git dir), so vcs.revision is always empty and
-    # that check can never detect a match, forcing a rebuild-from-source on
-    # every single deploy. Track the built version in a sidecar file instead.
-    IGPU_VERSION_FILE="/usr/local/bin/.igpu-exporter.version"
-    IGPU_TMP_DIR="$(mktemp -d)"
-    IGPU_SOURCE_URL="https://github.com/mike1808/igpu-exporter/archive/${IGPU_EXPORTER_VERSION}.tar.gz"
-    installed_igpu_version=""
-    if [[ -x "$IGPU_BIN" && -f "$IGPU_VERSION_FILE" ]]; then
-        installed_igpu_version="$(cat "$IGPU_VERSION_FILE" 2>/dev/null || true)"
-    fi
-    if [[ "$FORCE_UPDATE" == "true" ]] || [[ ! -x "$IGPU_BIN" ]] || [[ "$installed_igpu_version" != "$IGPU_EXPORTER_VERSION" ]]; then
-        print_sub "Installing igpu-exporter ${IGPU_EXPORTER_VERSION} (was: ${installed_igpu_version:-none})"
-        curl -fsSL "$IGPU_SOURCE_URL" -o "$IGPU_TMP_DIR/igpu-exporter.tar.gz"
-        tar -xzf "$IGPU_TMP_DIR/igpu-exporter.tar.gz" -C "$IGPU_TMP_DIR"
-        systemctl stop igpu-exporter 2>/dev/null || true
-        (
-            cd "$IGPU_TMP_DIR/igpu-exporter-${IGPU_EXPORTER_VERSION}" &&
-            go build -o "$IGPU_BIN" ./cmd
-        )
-        chmod 755 "$IGPU_BIN"
-        printf '%s' "$IGPU_EXPORTER_VERSION" > "$IGPU_VERSION_FILE"
-    else
-        print_sub "igpu-exporter ${IGPU_EXPORTER_VERSION} already installed"
+if [[ -n "${FILE_MAP_DEST[igpu-exporter.py]:-}" ]]; then
+    # Retired: igpu-exporter used to be the third-party Go exporter, compiled
+    # from a pinned git revision here because upstream ships no releases and it
+    # is packaged nowhere. /usr/local/bin/igpu-exporter is now our own Python
+    # script (installed via the file map, same path), so the build toolchain and
+    # its version sidecar are no longer needed.
+    if [[ -e /usr/local/bin/.igpu-exporter.version ]]; then
+        rm -f /usr/local/bin/.igpu-exporter.version
+        print_ok "Removed retired igpu-exporter build-version sidecar"
     fi
 fi
 
@@ -269,8 +253,11 @@ if [[ "$EXPORTER_RUNTIME" != "docker" ]]; then
         systemctl restart smartctl_exporter
     fi
 fi
-if [[ -n "${FILE_MAP_DEST[igpu-exporter.defaults]:-}" ]]; then
+if [[ -n "${FILE_MAP_DEST[igpu-exporter.py]:-}" ]]; then
     systemctl enable --now igpu-exporter
+    if [[ "$FORCE_UPDATE" == "true" || "$IGPU_EXPORTER_CHANGED" == "true" ]]; then
+        systemctl restart igpu-exporter
+    fi
     systemctl is-active --quiet igpu-exporter
 fi
 if [[ -n "${FILE_MAP_DEST[apcupsd-exporter.py]:-}" ]]; then

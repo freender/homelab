@@ -47,6 +47,9 @@ FILE_SPECS = (
         feature="apcupsd",
     ),
     FileSpec("apcupsd-exporter.env", "/etc/default/apcupsd-exporter", feature="apcupsd"),
+    FileSpec(
+        "igpu-exporter.py", "/usr/local/bin/igpu-exporter", mode="755", feature="igpu"
+    ),
     FileSpec("igpu-exporter.defaults", "/etc/default/igpu-exporter", feature="igpu"),
     FileSpec("igpu-exporter.service", "/etc/systemd/system/igpu-exporter.service", feature="igpu"),
     FileSpec(
@@ -231,9 +234,8 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
             IGPU_EXPORTER_PORT=str(port),
             IGPU_EXPORTER_REFRESH_PERIOD_MS=str(refresh_period_ms),
             IGPU_EXPORTER_DEVICE=device,
-            IGPU_EXPORTER_VERSION="db2dace1a895c2b950f6d3ba1a2e46729251d124",
         )
-        copy_files(common_dir, build_dir, ["igpu-exporter.service"])
+        copy_files(common_dir, build_dir, ["igpu-exporter.py", "igpu-exporter.service"])
 
     expected_pools = zfs_expected_pools(root, host)
     if expected_pools:
