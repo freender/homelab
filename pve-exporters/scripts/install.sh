@@ -192,13 +192,18 @@ mkdir -p /var/lib/prometheus/node-exporter
 if file_needs_update "$BUILD_DIR/node-exporter.defaults" "$(mapped_dest node-exporter.defaults)"; then
     NODE_EXPORTER_CHANGED=true
 fi
-if file_needs_update "$BUILD_DIR/smartctl-exporter-override.conf" \
-                     "$(mapped_dest smartctl-exporter-override.conf)"; then
-    SMARTCTL_OVERRIDE_CHANGED=true
+# smartctl_exporter is bare-metal only: an unprivileged LXC guest has no disk
+# device nodes for smartctl to probe, so the guest's file map omits the override
+# and nothing here runs.
+if [[ -n "${FILE_MAP_DEST[smartctl-exporter-override.conf]:-}" ]]; then
+    if file_needs_update "$BUILD_DIR/smartctl-exporter-override.conf" \
+                         "$(mapped_dest smartctl-exporter-override.conf)"; then
+        SMARTCTL_OVERRIDE_CHANGED=true
+    fi
+    # Handles the backports repo (Debian only), the availability pre-check, and
+    # tearing down the retired self-managed exporter in the right order.
+    ensure_smartctl_exporter_package
 fi
-# Handles the backports repo (Debian only), the availability pre-check, and
-# tearing down the retired self-managed exporter in the right order.
-ensure_smartctl_exporter_package
 
 # The exporter script and its env both feed the running process, so either one
 # changing needs a restart; the unit itself is handled by daemon-reload.
@@ -263,13 +268,17 @@ systemctl enable --now prometheus-node-exporter
 if [[ "$FORCE_UPDATE" == "true" || "$NODE_EXPORTER_CHANGED" == "true" ]]; then
     systemctl restart prometheus-node-exporter
 fi
-systemctl enable --now zfs-pool-textfile-exporter.timer
-systemctl start zfs-pool-textfile-exporter.service
-# Packaged unit name is smartctl_exporter (underscore), not the
-# smartctl-exporter (hyphen) this module used to ship.
-systemctl enable --now smartctl_exporter
-if [[ "$FORCE_UPDATE" == "true" || "$SMARTCTL_OVERRIDE_CHANGED" == "true" ]]; then
-    systemctl restart smartctl_exporter
+if [[ -n "${FILE_MAP_DEST[zfs-pool-textfile-exporter]:-}" ]]; then
+    systemctl enable --now zfs-pool-textfile-exporter.timer
+    systemctl start zfs-pool-textfile-exporter.service
+fi
+if [[ -n "${FILE_MAP_DEST[smartctl-exporter-override.conf]:-}" ]]; then
+    # Packaged unit name is smartctl_exporter (underscore), not the
+    # smartctl-exporter (hyphen) this module used to ship.
+    systemctl enable --now smartctl_exporter
+    if [[ "$FORCE_UPDATE" == "true" || "$SMARTCTL_OVERRIDE_CHANGED" == "true" ]]; then
+        systemctl restart smartctl_exporter
+    fi
 fi
 if [[ -n "${FILE_MAP_DEST[igpu-exporter.py]:-}" ]]; then
     systemctl enable --now igpu-exporter
@@ -283,5 +292,9 @@ if [[ -n "${FILE_MAP_DEST[apcupsd-exporter.py]:-}" ]]; then
     systemctl is-active --quiet apcupsd-exporter
 fi
 systemctl is-active --quiet prometheus-node-exporter
-systemctl is-active --quiet zfs-pool-textfile-exporter.timer
-systemctl is-active --quiet smartctl_exporter
+if [[ -n "${FILE_MAP_DEST[zfs-pool-textfile-exporter]:-}" ]]; then
+    systemctl is-active --quiet zfs-pool-textfile-exporter.timer
+fi
+if [[ -n "${FILE_MAP_DEST[smartctl-exporter-override.conf]:-}" ]]; then
+    systemctl is-active --quiet smartctl_exporter
+fi

@@ -3,17 +3,51 @@
 Prometheus-native host metrics exporters for Proxmox and ZFS storage hosts.
 
 ## Hosts
-- ace (Proxmox)
-- bray (Proxmox)
-- clovis (Proxmox)
-- osiris (Proxmox)
-- cinci (Ubuntu offsite)
-- cottonwood (Ubuntu offsite)
 
-Every host runs the same host-native exporters; there is no per-host runtime
-mode. On the offsite Ubuntu hosts only `cadvisor` remains containerised, in the
-host-managed compose stack under `/mnt/cache/appdata/<host>-exporters/`, which
-this module never reads or writes.
+Bare metal (`node-exporter` + `smartctl_exporter` + ZFS textfile exporter):
+- ace, bray, clovis, osiris (Proxmox, Debian)
+- cinci, cottonwood (Ubuntu, offsite)
+
+LXC guests, `pve-exporters.lxc_guest: true` (`node-exporter` only):
+- helm (on clovis), neo (on bray), tower (on ace)
+
+Every host runs host-native exporters; there is no per-host runtime mode. Only
+`cadvisor` remains containerised, in the host-managed compose stack under
+`/mnt/cache/appdata/.../compose.yml`, which this module never reads or writes.
+cadvisor stays a container deliberately: it is not packaged for Debian/Ubuntu, it
+needs the docker socket and cgroups, and monitoring containers is its whole job.
+
+### LXC guests (`lxc_guest: true`)
+
+A guest shares the PVE host's kernel, so most "hardware" it can see is not its
+own. It therefore gets a reduced collector set and **no** `smartctl_exporter`
+(there are no disk device nodes to probe) and **no** ZFS textfile exporter
+(`/dev/zfs` is absent, so `zpool` cannot run -- deploying it would just leave a
+failed unit and fire `SystemdUnitFailed`).
+
+Crucially, node_exporter keeps its **default** collectors enabled regardless of
+which `--collector.*` flags are listed, so the host-hardware ones have to be
+negated explicitly. Otherwise the guest republishes the PVE host's data under its
+own `host` label, double-counting anything aggregated across hosts
+(`node_zfs_arc_size` alone is referenced ~193 times in Grafana). Negated for
+guests, each verified against a live guest:
+
+| Collector | Why it is the host's, not the guest's |
+|---|---|
+| `zfs` | `/proc/spl/kstat/zfs` is the host's ARC |
+| `hwmon` | `/sys/class/hwmon` is the host's sensors |
+| `diskstats` | lxcfs passes the host's disks through -- neo showed *bray's* NVMes, plus partitions/loops that bray does not even report itself |
+| `nvme` | `/sys/class/nvme` is the host's controllers |
+| `thermal_zone`, `edac` | host thermal zones and ECC counters |
+
+Kept, because lxcfs virtualises them to the guest's own limits or they are
+genuinely namespaced: `cpu`, `meminfo`, `loadavg`, `filesystem`, `netdev`,
+`systemd`, `textfile`, `uname`.
+
+Going native on the guests also fixed a long-standing bug: the containerised
+exporter reported `/proc/net/dev` from its **own** network namespace, so
+`node_network_*` measured the exporter container's traffic. helm was reporting
+`eth0`/`eth1` while its real interface is `nic0`.
 
 ### Previously: `runtime: docker` on the offsite Ubuntu hosts
 

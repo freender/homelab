@@ -17,6 +17,59 @@ REMOTE_ROOT = "/tmp/homelab-pve-exporters"
 SMARTCTL_BIN = "/usr/sbin/smartctl"
 SMARTCTL_WRAPPER_BIN = "/usr/local/bin/homelab-smartctl-wrapper"
 
+TEXTFILE_DIR = "/var/lib/prometheus/node-exporter"
+
+# node_exporter flags shared by every host.
+_NODE_EXPORTER_COMMON_ARGS = (
+    "--web.listen-address=:9100",
+    "--collector.cpu",
+    "--collector.meminfo",
+    "--collector.loadavg",
+    "--collector.filesystem",
+    "--collector.netdev",
+    "--collector.textfile",
+    f"--collector.textfile.directory={TEXTFILE_DIR}",
+    "--collector.systemd",
+    "--collector.uname",
+    "--no-collector.xfs",
+    # The LXC guests' only real interface is nic0; on the bare-metal hosts this
+    # also keeps per-VM tap/veth/fwbr interfaces out of the netdev series.
+    "--collector.netdev.device-include=^(nic[0-9]+|eth[0-9]+)$",
+)
+
+# Bare metal owns its disks and sensors, so it reports them. (These are all
+# default-on collectors; listed explicitly to document intent and to keep the
+# rendered ARGS identical to what these hosts ran before templating.)
+_NODE_EXPORTER_BAREMETAL_ARGS = (
+    "--collector.diskstats",
+    "--collector.hwmon",
+    "--collector.zfs",
+)
+
+# An LXC guest does not own any of it. node_exporter enables its default
+# collector set regardless of which --collector.* flags are listed, so the
+# host-hardware ones have to be negated explicitly or the guest republishes the
+# PVE host's data under its own `host` label -- double-counting anything that
+# aggregates across hosts (node_zfs_arc_size alone is referenced ~193 times in
+# Grafana). Verified per collector against a live guest:
+#   zfs        /proc/spl/kstat/zfs is the host's ARC
+#   hwmon      /sys/class/hwmon is the host's sensors
+#   diskstats  lxcfs passes the host's disks through (neo showed bray's NVMes,
+#              with partitions/loops on top of what bray reports itself)
+#   nvme       /sys/class/nvme is the host's controllers
+#   thermal_zone, edac  host thermal zones and ECC counters
+# cpu/meminfo/loadavg stay: lxcfs virtualises those to the guest's own limits,
+# which is exactly what we want to see. filesystem, netdev, systemd and textfile
+# are all genuinely guest-scoped.
+_NODE_EXPORTER_LXC_ARGS = (
+    "--no-collector.zfs",
+    "--no-collector.hwmon",
+    "--no-collector.diskstats",
+    "--no-collector.nvme",
+    "--no-collector.thermal_zone",
+    "--no-collector.edac",
+)
+
 # Single source of truth for what this module manages: build_name (file staged
 # under build/<host>/), remote_path, mode, and the feature flag (if any) that
 # gates whether the file is part of a given host's file-map at all. install.sh
@@ -24,14 +77,25 @@ SMARTCTL_WRAPPER_BIN = "/usr/local/bin/homelab-smartctl-wrapper"
 # enable/disable) from the resulting file-map instead of carrying its own copy
 # of this list.
 FILE_SPECS = (
-    FileSpec("zfs-pool-textfile-exporter", "/usr/local/bin/zfs-pool-textfile-exporter", mode="755"),
+    # zfs/smartctl need /dev/zfs and real disk device nodes, neither of which
+    # exists in an unprivileged LXC guest, so both are bare-metal only. install.sh
+    # keys off their presence in the file map, so a guest simply never installs or
+    # enables them.
+    FileSpec(
+        "zfs-pool-textfile-exporter",
+        "/usr/local/bin/zfs-pool-textfile-exporter",
+        mode="755",
+        feature="baremetal",
+    ),
     FileSpec(
         "zfs-pool-textfile-exporter.service",
         "/etc/systemd/system/zfs-pool-textfile-exporter.service",
+        feature="baremetal",
     ),
     FileSpec(
         "zfs-pool-textfile-exporter.timer",
         "/etc/systemd/system/zfs-pool-textfile-exporter.timer",
+        feature="baremetal",
     ),
     FileSpec("node-exporter.defaults", "/etc/default/prometheus-node-exporter"),
     # smartctl_exporter itself comes from the distro package
@@ -41,6 +105,7 @@ FILE_SPECS = (
     FileSpec(
         "smartctl-exporter-override.conf",
         "/etc/systemd/system/smartctl_exporter.service.d/override.conf",
+        feature="baremetal",
     ),
     FileSpec(
         "smartctl-wrapper.sh",
@@ -76,6 +141,7 @@ _TEMPLATED_ONLY_BUILD_NAMES = {
     "apcupsd-exporter.env",
     "zfs-expected-pools.conf",
     "smartctl-exporter-override.conf",
+    "node-exporter.defaults",
 }
 REQUIRED = [
     spec.build_name for spec in FILE_SPECS if spec.build_name not in _TEMPLATED_ONLY_BUILD_NAMES
@@ -113,9 +179,30 @@ def validate(root: Path) -> None:
     pools_template = zfs_expected_pools_template(root)
     if not pools_template.is_file():
         raise ValueError(f"Missing required config: {pools_template}")
-    override_template = smartctl_override_template(root)
-    if not override_template.is_file():
-        raise ValueError(f"Missing required config: {override_template}")
+    for template in (smartctl_override_template(root), node_exporter_defaults_template(root)):
+        if not template.is_file():
+            raise ValueError(f"Missing required config: {template}")
+
+
+def is_lxc_guest(root: Path, host: str) -> bool:
+    """Whether this host is an LXC guest rather than bare metal.
+
+    Guests share the PVE host's kernel: no /dev/zfs, no disk device nodes, and
+    /proc/spl/kstat/zfs plus /sys/class/hwmon belong to the host. So they get a
+    reduced collector set and neither the ZFS textfile exporter nor
+    smartctl_exporter.
+    """
+    registry = default_registry(root)
+    return normalize_bool(
+        registry.get(host, "pve-exporters.lxc_guest", None),
+        False,
+        f"pve-exporters.lxc_guest must be true or false for {host}",
+    )
+
+
+def node_exporter_args(*, lxc_guest: bool) -> str:
+    extra = _NODE_EXPORTER_LXC_ARGS if lxc_guest else _NODE_EXPORTER_BAREMETAL_ARGS
+    return " ".join((*_NODE_EXPORTER_COMMON_ARGS, *extra))
 
 
 def has_smartctl_wrapper(root: Path, host: str) -> bool:
@@ -151,6 +238,10 @@ def smartctl_override_template(root: Path) -> Path:
     return root / "pve-exporters" / "templates" / "smartctl-exporter-override.conf.tpl"
 
 
+def node_exporter_defaults_template(root: Path) -> Path:
+    return root / "pve-exporters" / "templates" / "node-exporter.defaults.tpl"
+
+
 def zfs_expected_pools(root: Path, host: str) -> list[str]:
     registry = default_registry(root)
     configured = registry.get(host, "pve-exporters.zfs_expected_pools", None)
@@ -175,12 +266,14 @@ def build_file_specs(
     has_igpu: bool,
     has_expected_pools: bool,
     has_wrapper: bool,
+    lxc_guest: bool,
 ) -> tuple[FileSpec, ...]:
     enabled_features = {
+        "baremetal": not lxc_guest,
         "apcupsd": has_apcupsd,
         "igpu": has_igpu,
-        "zfs_expected_pools": has_expected_pools,
-        "smartctl_wrapper": has_wrapper,
+        "zfs_expected_pools": has_expected_pools and not lxc_guest,
+        "smartctl_wrapper": has_wrapper and not lxc_guest,
     }
     return tuple(
         spec
@@ -195,21 +288,27 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
     build_dir = root / "pve-exporters" / "build" / host
     prepare_build_dir(build_dir)
 
-    copy_files(common_dir, build_dir, [
-        "zfs-pool-textfile-exporter",
-        "zfs-pool-textfile-exporter.service",
-        "zfs-pool-textfile-exporter.timer",
-        "node-exporter.defaults",
-    ])
-
-    has_wrapper = has_smartctl_wrapper(root, host)
-    if has_wrapper:
-        copy_files(common_dir, build_dir, ["smartctl-wrapper.sh"])
+    lxc_guest = is_lxc_guest(root, host)
     render_file(
-        smartctl_override_template(root),
-        build_dir / "smartctl-exporter-override.conf",
-        SMARTCTL_PATH=SMARTCTL_WRAPPER_BIN if has_wrapper else SMARTCTL_BIN,
+        node_exporter_defaults_template(root),
+        build_dir / "node-exporter.defaults",
+        NODE_EXPORTER_ARGS=node_exporter_args(lxc_guest=lxc_guest),
     )
+
+    has_wrapper = has_smartctl_wrapper(root, host) and not lxc_guest
+    if not lxc_guest:
+        copy_files(common_dir, build_dir, [
+            "zfs-pool-textfile-exporter",
+            "zfs-pool-textfile-exporter.service",
+            "zfs-pool-textfile-exporter.timer",
+        ])
+        if has_wrapper:
+            copy_files(common_dir, build_dir, ["smartctl-wrapper.sh"])
+        render_file(
+            smartctl_override_template(root),
+            build_dir / "smartctl-exporter-override.conf",
+            SMARTCTL_PATH=SMARTCTL_WRAPPER_BIN if has_wrapper else SMARTCTL_BIN,
+        )
 
     connection = HostConnection(
         host,
@@ -259,7 +358,7 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
         )
         copy_files(common_dir, build_dir, ["igpu-exporter.py", "igpu-exporter.service"])
 
-    expected_pools = zfs_expected_pools(root, host)
+    expected_pools = [] if lxc_guest else zfs_expected_pools(root, host)
     if expected_pools:
         render_file(
             zfs_expected_pools_template(root),
@@ -272,6 +371,7 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
         has_igpu=has_igpu,
         has_expected_pools=bool(expected_pools),
         has_wrapper=has_wrapper,
+        lxc_guest=lxc_guest,
     )
     write_file_map(build_dir, file_specs)
 
