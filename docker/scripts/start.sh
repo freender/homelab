@@ -56,16 +56,46 @@ if ! acquire_docker_lock "$ROOT" "start"; then
     exit 1
 fi
 
+# Registry pulls are the one step here that routinely fails for reasons that
+# have nothing to do with this host: a reset connection mid-layer, a registry
+# hiccup, a flaky offsite uplink. Without a retry a single blip fails the stack,
+# which fails the whole nightly run, skips the image prune, and leaves
+# homelab-docker-update.service failed until someone resets it by hand (that is
+# exactly how cinci ended up alerting on a `connection reset by peer` from
+# ghcr.io). Retry the pull a couple of times before giving up; `docker compose
+# pull` is idempotent, and already-pulled layers are skipped, so a retry is
+# cheap. A genuinely broken image/tag still fails after the last attempt.
+PULL_ATTEMPTS="${PULL_ATTEMPTS:-3}"
+PULL_RETRY_DELAY="${PULL_RETRY_DELAY:-15}"
+
+pull_stack_with_retry() {
+    local stack_dir="$1"
+    local attempt=1
+    local code
+
+    while :; do
+        run_compose "$stack_dir" pull
+        code=$?
+        [[ $code -eq 0 ]] && return 0
+        if (( attempt >= PULL_ATTEMPTS )); then
+            return "$code"
+        fi
+        echo ">>> pull failed in $stack_dir (exit $code); retrying in ${PULL_RETRY_DELAY}s (attempt $((attempt + 1))/$PULL_ATTEMPTS)"
+        sleep "$PULL_RETRY_DELAY"
+        attempt=$((attempt + 1))
+    done
+}
+
 start_stack() {
     local stack_dir="$1"
     local stack_name="$2"
     local code
 
     if [[ "$PULL_IMAGES" == "true" ]]; then
-        run_compose "$stack_dir" pull
+        pull_stack_with_retry "$stack_dir"
         code=$?
         if [[ $code -ne 0 ]]; then
-            echo "!! failed in $stack_dir during pull (exit $code)"
+            echo "!! failed in $stack_dir during pull (exit $code after $PULL_ATTEMPTS attempt(s))"
             failed_stacks+=("$stack_name")
             return 1
         fi
