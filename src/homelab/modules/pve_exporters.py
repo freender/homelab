@@ -29,10 +29,13 @@ FILE_SPECS = (
         "/etc/systemd/system/zfs-pool-textfile-exporter.timer",
     ),
     FileSpec("node-exporter.defaults", "/etc/default/prometheus-node-exporter", feature="native"),
-    FileSpec("smartctl-exporter.defaults", "/etc/default/smartctl-exporter", feature="native"),
+    # smartctl_exporter itself comes from the distro package
+    # (prometheus-smartctl-exporter, <codename>-backports); we only override the
+    # packaged unit's argument-less ExecStart. See README for why apt owns the
+    # binary here but igpu-exporter is still built from source.
     FileSpec(
-        "smartctl-exporter.service",
-        "/etc/systemd/system/smartctl-exporter.service",
+        "smartctl-exporter-override.conf",
+        "/etc/systemd/system/smartctl_exporter.service.d/override.conf",
         feature="native",
     ),
     FileSpec(
@@ -180,8 +183,7 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
     if runtime != "docker":
         copy_files(common_dir, build_dir, [
             "node-exporter.defaults",
-            "smartctl-exporter.defaults",
-            "smartctl-exporter.service",
+            "smartctl-exporter-override.conf",
         ])
 
     connection = HostConnection(

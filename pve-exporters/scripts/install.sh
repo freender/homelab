@@ -9,12 +9,12 @@ SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD_DIR="$SCRIPT_DIR/build/$HOST"
 FORCE_UPDATE=${FORCE_UPDATE:-false}
 EXPORTER_RUNTIME=${EXPORTER_RUNTIME:-native}
-TMP_DIR=""
 IGPU_TMP_DIR=""
 NODE_EXPORTER_CHANGED=false
+SMARTCTL_OVERRIDE_CHANGED=false
 
 cleanup_tmp_dirs() {
-    rm -rf "$TMP_DIR" "$IGPU_TMP_DIR"
+    rm -rf "$IGPU_TMP_DIR"
 }
 
 trap cleanup_tmp_dirs EXIT
@@ -31,11 +31,109 @@ require_dir "$BUILD_DIR" "$BUILD_DIR" || exit 1
 require_file "$BUILD_DIR/file-map.conf" "$BUILD_DIR/file-map.conf" || exit 1
 load_file_map "$BUILD_DIR/file-map.conf"
 
+# Legacy: this module used to fetch the upstream smartctl_exporter release
+# tarball into /usr/local/bin and ship its own smartctl-exporter.service. It is
+# now the distro package (see ensure_smartctl_exporter_package). Tear the old
+# copy down BEFORE the package is installed: both bind :9633, and the package's
+# postinst starts the service, which would fail on the port clash.
+remove_legacy_smartctl_exporter() {
+    local path
+    local removed=false
+
+    if [[ -e /etc/systemd/system/smartctl-exporter.service ]]; then
+        systemctl disable --now smartctl-exporter.service 2>/dev/null || true
+        systemctl reset-failed smartctl-exporter.service 2>/dev/null || true
+        removed=true
+    fi
+
+    for path in /etc/systemd/system/smartctl-exporter.service \
+                /etc/default/smartctl-exporter \
+                /usr/local/bin/smartctl_exporter; do
+        [[ -e "$path" ]] || continue
+        rm -f "$path"
+        removed=true
+    done
+
+    if [[ "$removed" == "true" ]]; then
+        print_ok "Removed legacy self-managed smartctl-exporter (now distro-packaged)"
+    fi
+}
+
+# smartctl_exporter is packaged as prometheus-smartctl-exporter, but only in
+# <codename>-backports for Debian stable (it is in main on Ubuntu). The backport
+# is the same upstream version this module used to download by hand, so apt can
+# own the binary and its smartmontools dependency instead of a hand-rolled
+# download + version check. Debian backports sets NotAutomatic +
+# ButAutomaticUpgrades, so enabling it never pulls anything else in on its own,
+# but does keep this package updated once installed.
+ensure_smartctl_exporter_package() {
+    local codename repo_file="/etc/apt/sources.list.d/debian-backports.sources"
+    local staged repo_changed=false already_installed=false
+
+    if [[ ! -r /etc/os-release ]]; then
+        print_error "cannot read /etc/os-release; unable to resolve backports suite"
+        return 1
+    fi
+    # shellcheck source=/dev/null
+    codename="$(. /etc/os-release && printf '%s' "${VERSION_CODENAME:-}")"
+    if [[ -z "$codename" ]]; then
+        print_error "VERSION_CODENAME missing from /etc/os-release"
+        return 1
+    fi
+
+    # Rendered here rather than staged as a config file so the suite always
+    # tracks the running release; a hardcoded suite would break at the next
+    # Debian major upgrade.
+    staged="$(mktemp)"
+    cat > "$staged" <<EOF
+# Managed by homelab (pve-exporters): provides prometheus-smartctl-exporter,
+# which Debian stable ships only via backports.
+Types: deb
+URIs: http://deb.debian.org/debian/
+Suites: ${codename}-backports
+Components: main
+Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
+EOF
+    if ! cmp -s "$staged" "$repo_file"; then
+        install -m 644 "$staged" "$repo_file"
+        repo_changed=true
+        print_ok "Enabled ${codename}-backports for prometheus-smartctl-exporter"
+    fi
+    rm -f "$staged"
+
+    dpkg -s prometheus-smartctl-exporter >/dev/null 2>&1 && already_installed=true
+
+    if [[ "$repo_changed" == "true" ]] || [[ "$already_installed" != "true" ]]; then
+        apt-get update -qq
+    fi
+
+    if [[ "$already_installed" == "true" ]]; then
+        print_sub "prometheus-smartctl-exporter already installed"
+        remove_legacy_smartctl_exporter
+        return 0
+    fi
+
+    # Confirm the package is actually installable BEFORE tearing down the
+    # self-managed exporter. Otherwise an unavailable backport (suite not yet
+    # populated after a Debian major upgrade, mirror issue) would leave the host
+    # with no SMART exporter at all instead of failing with the old one intact.
+    if ! apt-cache policy prometheus-smartctl-exporter 2>/dev/null | grep -qE '^  Candidate: [^(]'; then
+        print_error "prometheus-smartctl-exporter has no installation candidate in ${codename}-backports"
+        print_sub "Leaving the existing smartctl exporter untouched; resolve the repo before retrying."
+        return 1
+    fi
+
+    # Both bind :9633 and the package postinst starts the service, so the old
+    # unit has to be gone first.
+    remove_legacy_smartctl_exporter
+    apt-get install -y -qq -t "${codename}-backports" prometheus-smartctl-exporter
+    print_ok "prometheus-smartctl-exporter installed from ${codename}-backports"
+}
+
 # Install packages only when missing
 missing_pkgs=()
 if [[ "$EXPORTER_RUNTIME" != "docker" ]]; then
     command -v prometheus-node-exporter &>/dev/null || missing_pkgs+=(prometheus-node-exporter)
-    command -v smartctl &>/dev/null              || missing_pkgs+=(smartmontools)
 fi
 command -v python3 &>/dev/null               || missing_pkgs+=(python3)
 command -v curl &>/dev/null                  || missing_pkgs+=(curl)
@@ -61,14 +159,25 @@ if [[ "$EXPORTER_RUNTIME" == "docker" ]]; then
     # owns those services instead (see README). Actively remove any leftovers
     # from an earlier native deploy so no unit is left installed-and-disabled
     # pointing at a binary this mode never installs.
-    systemctl disable --now prometheus-node-exporter smartctl-exporter 2>/dev/null || true
-    systemctl stop prometheus-node-exporter smartctl-exporter 2>/dev/null || true
-    systemctl reset-failed prometheus-node-exporter.service smartctl-exporter.service 2>/dev/null || true
+    systemctl disable --now prometheus-node-exporter smartctl-exporter smartctl_exporter 2>/dev/null || true
+    systemctl stop prometheus-node-exporter smartctl-exporter smartctl_exporter 2>/dev/null || true
+    systemctl reset-failed prometheus-node-exporter.service smartctl-exporter.service smartctl_exporter.service 2>/dev/null || true
     rm -f /etc/default/prometheus-node-exporter /etc/default/smartctl-exporter \
           /etc/systemd/system/smartctl-exporter.service /usr/local/bin/smartctl_exporter
-elif [[ -n "${FILE_MAP_DEST[node-exporter.defaults]:-}" ]] && \
-     file_needs_update "$BUILD_DIR/node-exporter.defaults" "$(mapped_dest node-exporter.defaults)"; then
-    NODE_EXPORTER_CHANGED=true
+    rm -rf /etc/systemd/system/smartctl_exporter.service.d
+else
+    if [[ -n "${FILE_MAP_DEST[node-exporter.defaults]:-}" ]] && \
+       file_needs_update "$BUILD_DIR/node-exporter.defaults" "$(mapped_dest node-exporter.defaults)"; then
+        NODE_EXPORTER_CHANGED=true
+    fi
+    if [[ -n "${FILE_MAP_DEST[smartctl-exporter-override.conf]:-}" ]] && \
+       file_needs_update "$BUILD_DIR/smartctl-exporter-override.conf" \
+                         "$(mapped_dest smartctl-exporter-override.conf)"; then
+        SMARTCTL_OVERRIDE_CHANGED=true
+    fi
+    # Handles the backports repo, the availability pre-check, and tearing down
+    # the retired self-managed exporter in the right order.
+    ensure_smartctl_exporter_package
 fi
 
 # Retired: this textfile fallback only ever existed because the containerized
@@ -139,43 +248,7 @@ if [[ -n "${FILE_MAP_DEST[igpu-exporter.defaults]:-}" ]]; then
     fi
 fi
 
-if [[ "$EXPORTER_RUNTIME" != "docker" ]]; then
-    # Install smartctl_exporter binary (version-aware)
-    # shellcheck source=/etc/default/smartctl-exporter
-    source /etc/default/smartctl-exporter
-    ARCH="$(dpkg --print-architecture)"
-    case "$ARCH" in
-        amd64) ARCH_TAG="amd64" ;;
-        arm64) ARCH_TAG="arm64" ;;
-        *) echo "Unsupported architecture: $ARCH" >&2; exit 1 ;;
-    esac
-
-    SMART_BIN="/usr/local/bin/smartctl_exporter"
-    SMART_URL="https://github.com/prometheus-community/smartctl_exporter/releases/download/v${SMARTCTL_EXPORTER_VERSION}/smartctl_exporter-${SMARTCTL_EXPORTER_VERSION}.linux-${ARCH_TAG}.tar.gz"
-    TMP_DIR="$(mktemp -d)"
-
-    # Detect installed version. smartctl_exporter writes --version output to
-    # stderr, not stdout (confirmed empirically); redirecting stderr away here
-    # silently discards it, leaving installed_version always empty and forcing
-    # a redownload+reinstall on every single deploy regardless of whether the
-    # binary is already current. Merge stderr into the pipe instead.
-    installed_version=""
-    if [[ -x "$SMART_BIN" ]]; then
-        installed_version=$("$SMART_BIN" --version 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)
-    fi
-
-    if [[ "$FORCE_UPDATE" == "true" ]] || [[ ! -x "$SMART_BIN" ]] || [[ "$installed_version" != "$SMARTCTL_EXPORTER_VERSION" ]]; then
-        print_sub "Installing smartctl_exporter v${SMARTCTL_EXPORTER_VERSION} (was: ${installed_version:-none})"
-        curl -fsSL "$SMART_URL" -o "$TMP_DIR/smartctl-exporter.tar.gz"
-        tar -xzf "$TMP_DIR/smartctl-exporter.tar.gz" -C "$TMP_DIR"
-        # Stop service before replacing binary to avoid "Text file busy"
-        systemctl stop smartctl-exporter 2>/dev/null || true
-        cp "$TMP_DIR/smartctl_exporter-${SMARTCTL_EXPORTER_VERSION}.linux-${ARCH_TAG}/smartctl_exporter" "$SMART_BIN"
-        chmod 755 "$SMART_BIN"
-    else
-        print_sub "smartctl_exporter v${SMARTCTL_EXPORTER_VERSION} already installed"
-    fi
-else
+if [[ "$EXPORTER_RUNTIME" == "docker" ]]; then
     print_sub "Docker exporter compose is host-managed; not modified by this installer"
 fi
 
@@ -189,7 +262,12 @@ fi
 systemctl enable --now zfs-pool-textfile-exporter.timer
 systemctl start zfs-pool-textfile-exporter.service
 if [[ "$EXPORTER_RUNTIME" != "docker" ]]; then
-    systemctl enable --now smartctl-exporter
+    # Packaged unit name is smartctl_exporter (underscore), not the
+    # smartctl-exporter (hyphen) this module used to ship.
+    systemctl enable --now smartctl_exporter
+    if [[ "$FORCE_UPDATE" == "true" || "$SMARTCTL_OVERRIDE_CHANGED" == "true" ]]; then
+        systemctl restart smartctl_exporter
+    fi
 fi
 if [[ -n "${FILE_MAP_DEST[igpu-exporter.defaults]:-}" ]]; then
     systemctl enable --now igpu-exporter
@@ -204,5 +282,5 @@ if [[ "$EXPORTER_RUNTIME" != "docker" ]]; then
 fi
 systemctl is-active --quiet zfs-pool-textfile-exporter.timer
 if [[ "$EXPORTER_RUNTIME" != "docker" ]]; then
-    systemctl is-active --quiet smartctl-exporter
+    systemctl is-active --quiet smartctl_exporter
 fi

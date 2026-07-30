@@ -102,14 +102,57 @@ no dbus access. `scripts/install.sh` now removes that fallback wherever it was i
 - `configs/common/zfs-pool-textfile-exporter`
 - `configs/common/zfs-pool-textfile-exporter.service`
 - `configs/common/zfs-pool-textfile-exporter.timer`
-- `configs/common/smartctl-exporter.defaults`
-- `configs/common/smartctl-exporter.service`
+- `configs/common/smartctl-exporter-override.conf`
 - `configs/common/apcupsd-exporter.py`
 - `configs/common/apcupsd-exporter.service`
 - `configs/common/apcupsd-exporter.env`
 - `../deploy`
 
-`prometheus-node-exporter`, `smartmontools`, `python3`, `intel-gpu-tools`, and `golang-go` are installed via `apt` as needed. `smartctl_exporter` is fetched from the upstream GitHub release. `igpu-exporter` is built from the pinned upstream source revision because no release artifacts are published.
+### Where each exporter binary comes from
+
+`apt` owns every binary it can. Only `igpu-exporter` is built by hand, and only
+because there is no packaged or released artifact to use.
+
+| Exporter | Source | Why |
+|---|---|---|
+| `prometheus-node-exporter` | `apt`, Debian `main` | packaged |
+| `smartctl_exporter` | `apt`, `<codename>-backports` (`prometheus-smartctl-exporter`) | packaged, but Debian stable ships it only in backports |
+| `igpu-exporter` | built from pinned upstream git revision | upstream publishes **zero** releases and it is packaged nowhere |
+| `apcupsd-exporter` | this repo (`configs/common/apcupsd-exporter.py`) | homelab-specific script |
+
+`prometheus-node-exporter`, `python3`, `intel-gpu-tools`, and `golang-go` are
+installed via `apt` as needed; `smartmontools` arrives as a dependency of
+`prometheus-smartctl-exporter`.
+
+#### smartctl_exporter and Debian backports
+
+`install.sh` writes `/etc/apt/sources.list.d/debian-backports.sources` (suite
+derived from `/etc/os-release` at install time, so it survives a Debian major
+upgrade) and installs `prometheus-smartctl-exporter` with
+`-t <codename>-backports`. The backport is the same upstream version this module
+previously downloaded by hand, so nothing regresses by letting `apt` own it, and
+in exchange:
+
+- `apt` handles upgrades, so there is no hand-rolled download + version-detection
+  logic to get wrong (that check was silently broken and reinstalled the binary
+  on every deploy).
+- The package is signed and integrity-checked; the old path fetched a tarball
+  over HTTPS and ran it as root with no checksum verification.
+- `smartmontools` is a declared dependency instead of a separate `apt` call.
+
+Enabling backports is safe next to the Proxmox repos: Debian backports sets
+`NotAutomatic: yes` with `ButAutomaticUpgrades: yes`, so nothing is ever pulled
+from it implicitly, but this package does stay current once installed.
+
+The packaged unit is `smartctl_exporter.service` (underscore) and its `ExecStart`
+takes no arguments, so the module installs a drop-in at
+`/etc/systemd/system/smartctl_exporter.service.d/override.conf` to set the flags
+it needs — notably `--smartctl.interval=10s` (matching the `pve-smartctl`
+`scrape_interval` in `vmagent/scrape.yml` on `helm`) and
+`--smartctl.powermode-check=standby`, which keeps the exporter from waking disks
+that the `disk-spindown` module has parked. Deploys migrate off the old
+self-managed `smartctl-exporter.service` (hyphen) automatically, tearing it down
+before the package installs so the two never fight over `:9633`.
 
 ## Deployment
 
