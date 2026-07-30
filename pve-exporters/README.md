@@ -7,66 +7,64 @@ Prometheus-native host metrics exporters for Proxmox and ZFS storage hosts.
 - bray (Proxmox)
 - clovis (Proxmox)
 - osiris (Proxmox)
-- cinci (Ubuntu offsite, `runtime: docker`)
-- cottonwood (Ubuntu offsite, `runtime: docker`)
+- cinci (Ubuntu offsite)
+- cottonwood (Ubuntu offsite)
 
-### Offsite Ubuntu hosts (`runtime: docker`)
+Every host runs the same host-native exporters; there is no per-host runtime
+mode. On the offsite Ubuntu hosts only `cadvisor` remains containerised, in the
+host-managed compose stack under `/mnt/cache/appdata/<host>-exporters/`, which
+this module never reads or writes.
 
-Offsite hosts `cinci` and `cottonwood` set `pve-exporters.runtime: docker` in
-`hosts.conf`. In this mode the module does **not** install native
-`prometheus-node-exporter`/`smartctl-exporter` packages and does **not** own the
-Docker exporter stack: `node-exporter`, `smartctl-exporter`, and `cadvisor` remain
-host-managed under `/mnt/cache/appdata/<host>-exporters/compose.yml` and are scraped
-by `vmagent` on `helm` (targets in `vmagent/scrape.yml`).
+### Previously: `runtime: docker` on the offsite Ubuntu hosts
 
-What the module **does** manage on these hosts:
-- The host-native `zfs-pool-textfile-exporter` script + systemd service/timer that
-  writes `homelab_zpool_*` metrics to `/var/lib/prometheus/node-exporter/zfs-pools.prom`.
+`cinci` and `cottonwood` used to run node-exporter and smartctl-exporter as
+containers, with the module installing only `zfs-pool-textfile-exporter`
+natively. That is retired, because running them natively removed several
+fragile, invisible dependencies:
 
-It does not modify the `node-exporter`/`smartctl-exporter`/`cadvisor` compose services,
-networks, or any other host-specific compose tuning. The compose file itself is entirely
-host-managed — the module never reads or writes it.
+- **The dbus + AppArmor workaround is gone.** The containerised node-exporter
+  needed `security_opt: apparmor=unconfined` plus a bind-mount of
+  `/run/dbus/system_bus_socket` to `/var/run/dbus/system_bus_socket` purely so
+  `--collector.systemd` would work, because Ubuntu's `docker-default` profile
+  denies the D-Bus `Hello` call. Natively there is nothing to work around.
+- **The textfile bind-mount requirement is gone.** `homelab_zpool_*` reached
+  Prometheus only because compose mounted
+  `/var/lib/prometheus/node-exporter` into the container and set
+  `--collector.textfile.directory` to the mounted path. Native node-exporter
+  reads that directory directly.
+- **Both of those were manual, undeclared compose settings.** Dropping any of
+  them in a future compose edit silently lost `node_systemd_units` or
+  `homelab_zpool_*` while the container stayed `up` — the failure mode
+  `SystemdCollectorFailing` exists to catch.
+- **Host network metrics were simply wrong.** `/proc/net/dev` is
+  network-namespace-scoped, so the container's netdev collector reported its own
+  `eth0`/`lo` rather than the host's interfaces. Natively these hosts now report
+  real uplink traffic on `nic0`.
 
-#### Required manual compose settings (host compose, not repo-managed)
+`systemd-failed-textfile-exporter`, a host-native fallback that existed only
+because the container had no dbus access, was retired earlier;
+`scripts/install.sh` still removes it wherever it was installed.
 
-Because the module writes the ZFS textfile metrics to
-`/var/lib/prometheus/node-exporter/` but does not touch compose, the `node-exporter`
-service in both host compose files must be configured **manually** with the settings
-below for those metrics — and the systemd collector — to actually reach Prometheus. They
-are load-bearing for the fleet-wide `SystemdUnitFailed` vmalert rule on `helm` and for
-`homelab_zpool_*` visibility:
-
-```yaml
-    security_opt:
-      - apparmor=unconfined
-    command:
-      - '--collector.systemd'
-      - '--collector.textfile'
-      - '--collector.textfile.directory=/host/var/lib/prometheus/node-exporter'
-    volumes:
-      - /run/dbus/system_bus_socket:/var/run/dbus/system_bus_socket
-      - /var/lib/prometheus/node-exporter:/host/var/lib/prometheus/node-exporter:ro
-```
-
-- The mount destination must be `/var/run/...`, not `/run/...`: go-systemd dials the
-  `/var/run` path and the image is scratch-based with no `/var/run` -> `/run` symlink.
-- `apparmor=unconfined` is required because Ubuntu's `docker-default` profile denies the
-  D-Bus `Hello` method call (`An AppArmor policy prevents this sender from sending this
-  message to this recipient`).
-- The container still runs as the image's unprivileged `nobody` user. Reading unit state
-  over the system bus is allowed for unprivileged callers; polkit denies unit start/stop,
-  so this is read-only access in practice.
-- If any of these settings is missing or dropped in a future compose edit,
-  `homelab_zpool_*` and/or `node_systemd_units` silently disappear from Prometheus while
-  the container itself stays `up`. The `SystemdCollectorFailing` rule on `helm` exists to
-  catch the systemd-collector case (`node_scrape_collector_success{collector="systemd"}
-  == 0`); there is no equivalent alert yet for the textfile collector going missing.
-
-This replaced `systemd-failed-textfile-exporter`, a host-native textfile fallback that
-emitted `homelab_systemd_units_failed_total` purely because the containerized exporter had
-no dbus access. `scripts/install.sh` now removes that fallback wherever it was installed. Deploy is over the offsite root SSH path (`config.user: root`,
+Deploy to these hosts is over the offsite root SSH path (`config.user: root`,
 `sshkey: offsite`), which requires the offsite key loaded in the shared agent
 (`addoffsitekey` on `riven`).
+
+### Migrating a host off containerised exporters
+
+`install.sh` refuses to run while a container named `node-exporter` or
+`smartctl-exporter` is up, because the native units cannot bind `:9100`/`:9633`
+underneath it and the package postinst would fail half-way. The compose file is
+host-managed, so removing those two services is a manual step:
+
+```bash
+cd /mnt/cache/appdata/<host>-exporters
+cp -a compose.yml compose.yml.bak-pre-native-$(date +%Y%m%d%H%M%S)
+# delete the node-exporter and smartctl-exporter service blocks; keep cadvisor
+docker compose config --services      # expect: cadvisor
+docker compose up -d --remove-orphans
+```
+
+Then `./deploy pve-exporters <host>` from the repo.
 
 ## What It Collects
 - Host metrics via node_exporter (CPU, memory, load, uptime, disk, network, hwmon, ZFS)
@@ -119,7 +117,7 @@ because there is no packaged or released artifact to use.
 | Exporter | Source | Why |
 |---|---|---|
 | `prometheus-node-exporter` | `apt`, Debian `main` | packaged |
-| `smartctl_exporter` | `apt`, `<codename>-backports` (`prometheus-smartctl-exporter`) | packaged, but Debian stable ships it only in backports |
+| `smartctl_exporter` | `apt` (`prometheus-smartctl-exporter`) | packaged; Ubuntu has it in the normal archive, Debian stable only in `<codename>-backports` |
 | `igpu-exporter` | this repo (`configs/common/igpu-exporter.py`) | not packaged anywhere and upstream ships **zero** releases; a ~40-line wrapper over `intel_gpu_top` beats compiling a Go project on every host |
 | `apcupsd-exporter` | this repo (`configs/common/apcupsd-exporter.py`) | homelab-specific script |
 
@@ -166,10 +164,12 @@ must stay.
 
 #### smartctl_exporter and Debian backports
 
-`install.sh` writes `/etc/apt/sources.list.d/debian-backports.sources` (suite
-derived from `/etc/os-release` at install time, so it survives a Debian major
-upgrade) and installs `prometheus-smartctl-exporter` with
-`-t <codename>-backports`. The backport is the same upstream version this module
+On Debian, `install.sh` writes
+`/etc/apt/sources.list.d/debian-backports.sources` (suite derived from
+`/etc/os-release` at install time, so it survives a Debian major upgrade) and
+installs `prometheus-smartctl-exporter` with `-t <codename>-backports`. On Ubuntu
+the package is in the normal archive, so no extra repo is added — and a
+backports file left by an earlier Debian-shaped deploy is removed. The backport is the same upstream version this module
 previously downloaded by hand, so nothing regresses by letting `apt` own it, and
 in exchange:
 
@@ -190,7 +190,20 @@ takes no arguments, so the module installs a drop-in at
 it needs — notably `--smartctl.interval=10s` (matching the `pve-smartctl`
 `scrape_interval` in `vmagent/scrape.yml` on `helm`) and
 `--smartctl.powermode-check=standby`, which keeps the exporter from waking disks
-that the `disk-spindown` module has parked. Deploys migrate off the old
+that the `disk-spindown` module has parked. `--smartctl.path` is per-host: hosts
+setting `pve-exporters.smartctl_wrapper: true` get
+`/usr/local/bin/homelab-smartctl-wrapper` instead of `smartctl` itself.
+
+##### smartctl_wrapper (cottonwood)
+
+`cottonwood` sets `pve-exporters.smartctl_wrapper: true`, which deploys
+`configs/common/smartctl-wrapper.sh`. Its USB-attached NVMe disks sit behind
+ASMedia bridges that (a) `smartctl --scan` does not report at all, so the
+exporter would never probe them, and (b) return `exit_status 4` with "Read 1
+entries from Error Information Log failed" even when the SMART data is fine,
+which the exporter treats as a dead device. The wrapper injects the two devices
+into the scan output as `type: sntasmedia` and downgrades that one benign error.
+Without it this host reports 2 SMART devices instead of 4. Deploys migrate off the old
 self-managed `smartctl-exporter.service` (hyphen) automatically, tearing it down
 before the package installs so the two never fight over `:9633`.
 
@@ -206,8 +219,8 @@ Deploy to specific hosts:
 ```bash
 ./deploy pve-exporters ace
 ./deploy pve-exporters bray
-./deploy pve-exporters cinci        # runtime: docker; offsite key must be loaded
-./deploy pve-exporters cottonwood   # runtime: docker; offsite key must be loaded
+./deploy pve-exporters cinci        # offsite key must be loaded
+./deploy pve-exporters cottonwood   # offsite key must be loaded
 ```
 
 ## Verification

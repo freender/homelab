@@ -13,7 +13,9 @@
 #                                  module: "standby" makes the exporter skip
 #                                  (not wake) a spun-down disk.
 #   --web.listen-address=:9633     the port vmagent scrapes.
-#   --smartctl.path                explicit so a PATH change cannot break it.
+#   --smartctl.path                normally /usr/sbin/smartctl; hosts setting
+#                                  pve-exporters.smartctl_wrapper get the
+#                                  wrapper instead (see README).
 [Service]
 ExecStart=
-ExecStart=/usr/bin/smartctl_exporter --web.listen-address=:9633 --smartctl.path=/usr/sbin/smartctl --smartctl.interval=10s --smartctl.powermode-check=standby
+ExecStart=/usr/bin/smartctl_exporter --web.listen-address=:9633 --smartctl.path={{ SMARTCTL_PATH }} --smartctl.interval=10s --smartctl.powermode-check=standby

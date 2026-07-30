@@ -5,19 +5,24 @@ from pathlib import Path
 from ..build import copy_files, render_file
 from ..deploy import DeploySession, force_env, prepare_build_dir, stage_and_run_remote_installer
 from ..hosts import HostLookupError, default_registry
-from ..module_support import FileSpec, write_file_map
+from ..module_support import FileSpec, normalize_bool, write_file_map
 from ..output import print_action, print_sub
 from ..ssh import HostConnection, diff_many
 
 REMOTE_ROOT = "/tmp/homelab-pve-exporters"
-ALLOWED_RUNTIMES = {"native", "docker"}
+
+# Path smartctl_exporter is pointed at. Hosts whose disks need the scan/exit-code
+# workaround (pve-exporters.smartctl_wrapper) get the wrapper instead of smartctl
+# itself; see README.
+SMARTCTL_BIN = "/usr/sbin/smartctl"
+SMARTCTL_WRAPPER_BIN = "/usr/local/bin/homelab-smartctl-wrapper"
 
 # Single source of truth for what this module manages: build_name (file staged
 # under build/<host>/), remote_path, mode, and the feature flag (if any) that
 # gates whether the file is part of a given host's file-map at all. install.sh
 # derives everything it needs (which packages to check for, which units to
-# enable/disable, which binaries to fetch) from the resulting file-map instead
-# of carrying its own copy of this list.
+# enable/disable) from the resulting file-map instead of carrying its own copy
+# of this list.
 FILE_SPECS = (
     FileSpec("zfs-pool-textfile-exporter", "/usr/local/bin/zfs-pool-textfile-exporter", mode="755"),
     FileSpec(
@@ -28,15 +33,20 @@ FILE_SPECS = (
         "zfs-pool-textfile-exporter.timer",
         "/etc/systemd/system/zfs-pool-textfile-exporter.timer",
     ),
-    FileSpec("node-exporter.defaults", "/etc/default/prometheus-node-exporter", feature="native"),
+    FileSpec("node-exporter.defaults", "/etc/default/prometheus-node-exporter"),
     # smartctl_exporter itself comes from the distro package
-    # (prometheus-smartctl-exporter, <codename>-backports); we only override the
-    # packaged unit's argument-less ExecStart. See README for why apt owns the
-    # binary here but igpu-exporter is still built from source.
+    # (prometheus-smartctl-exporter); we only override the packaged unit's
+    # argument-less ExecStart. See README for why apt owns the binary here but
+    # igpu-exporter is our own script.
     FileSpec(
         "smartctl-exporter-override.conf",
         "/etc/systemd/system/smartctl_exporter.service.d/override.conf",
-        feature="native",
+    ),
+    FileSpec(
+        "smartctl-wrapper.sh",
+        SMARTCTL_WRAPPER_BIN,
+        mode="755",
+        feature="smartctl_wrapper",
     ),
     FileSpec(
         "apcupsd-exporter.py", "/usr/local/bin/apcupsd-exporter", mode="755", feature="apcupsd"
@@ -62,7 +72,11 @@ FILE_SPECS = (
 # apcupsd-exporter.env and zfs-expected-pools.conf are rendered purely from
 # templates/ (per-host values, no static common_dir counterpart), so they're
 # excluded from the repo-file existence check in validate().
-_TEMPLATED_ONLY_BUILD_NAMES = {"apcupsd-exporter.env", "zfs-expected-pools.conf"}
+_TEMPLATED_ONLY_BUILD_NAMES = {
+    "apcupsd-exporter.env",
+    "zfs-expected-pools.conf",
+    "smartctl-exporter-override.conf",
+}
 REQUIRED = [
     spec.build_name for spec in FILE_SPECS if spec.build_name not in _TEMPLATED_ONLY_BUILD_NAMES
 ]
@@ -99,17 +113,18 @@ def validate(root: Path) -> None:
     pools_template = zfs_expected_pools_template(root)
     if not pools_template.is_file():
         raise ValueError(f"Missing required config: {pools_template}")
+    override_template = smartctl_override_template(root)
+    if not override_template.is_file():
+        raise ValueError(f"Missing required config: {override_template}")
 
 
-def exporter_runtime(root: Path, host: str) -> str:
+def has_smartctl_wrapper(root: Path, host: str) -> bool:
     registry = default_registry(root)
-    runtime = str(registry.get(host, "pve-exporters.runtime", "native"))
-    if runtime not in ALLOWED_RUNTIMES:
-        raise ValueError(
-            f"{host}: pve-exporters.runtime must be one of "
-            f"{sorted(ALLOWED_RUNTIMES)}, got {runtime!r}"
-        )
-    return runtime
+    return normalize_bool(
+        registry.get(host, "pve-exporters.smartctl_wrapper", None),
+        False,
+        f"pve-exporters.smartctl_wrapper must be true or false for {host}",
+    )
 
 
 def has_apcupsd_exporter(root: Path, host: str) -> bool:
@@ -132,6 +147,10 @@ def zfs_expected_pools_template(root: Path) -> Path:
     return root / "pve-exporters" / "templates" / "zfs-expected-pools.conf.tpl"
 
 
+def smartctl_override_template(root: Path) -> Path:
+    return root / "pve-exporters" / "templates" / "smartctl-exporter-override.conf.tpl"
+
+
 def zfs_expected_pools(root: Path, host: str) -> list[str]:
     registry = default_registry(root)
     configured = registry.get(host, "pve-exporters.zfs_expected_pools", None)
@@ -151,13 +170,17 @@ def zfs_expected_pools(root: Path, host: str) -> list[str]:
 
 
 def build_file_specs(
-    *, runtime: str, has_apcupsd: bool, has_igpu: bool, has_expected_pools: bool
+    *,
+    has_apcupsd: bool,
+    has_igpu: bool,
+    has_expected_pools: bool,
+    has_wrapper: bool,
 ) -> tuple[FileSpec, ...]:
     enabled_features = {
-        "native": runtime != "docker",
         "apcupsd": has_apcupsd,
         "igpu": has_igpu,
         "zfs_expected_pools": has_expected_pools,
+        "smartctl_wrapper": has_wrapper,
     }
     return tuple(
         spec
@@ -168,7 +191,6 @@ def build_file_specs(
 
 def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
     registry = default_registry(root)
-    runtime = exporter_runtime(root, host)
     common_dir = root / "pve-exporters" / "configs" / "common"
     build_dir = root / "pve-exporters" / "build" / host
     prepare_build_dir(build_dir)
@@ -177,17 +199,17 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
         "zfs-pool-textfile-exporter",
         "zfs-pool-textfile-exporter.service",
         "zfs-pool-textfile-exporter.timer",
+        "node-exporter.defaults",
     ])
-    # native node-exporter/smartctl-exporter are not managed in docker mode: the
-    # host-managed compose stack owns those services instead (see README). Skip
-    # staging them so the file-map (and install.sh) has nothing to install for
-    # these files, and a leftover unit from an earlier native deploy gets
-    # actively cleaned up instead of merely installed-then-disabled.
-    if runtime != "docker":
-        copy_files(common_dir, build_dir, [
-            "node-exporter.defaults",
-            "smartctl-exporter-override.conf",
-        ])
+
+    has_wrapper = has_smartctl_wrapper(root, host)
+    if has_wrapper:
+        copy_files(common_dir, build_dir, ["smartctl-wrapper.sh"])
+    render_file(
+        smartctl_override_template(root),
+        build_dir / "smartctl-exporter-override.conf",
+        SMARTCTL_PATH=SMARTCTL_WRAPPER_BIN if has_wrapper else SMARTCTL_BIN,
+    )
 
     connection = HostConnection(
         host,
@@ -246,10 +268,10 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
         )
 
     file_specs = build_file_specs(
-        runtime=runtime,
         has_apcupsd=has_apcupsd,
         has_igpu=has_igpu,
         has_expected_pools=bool(expected_pools),
+        has_wrapper=has_wrapper,
     )
     write_file_map(build_dir, file_specs)
 
@@ -262,9 +284,6 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
         print_sub(f"[DRY-RUN] Would deploy to {host}:{REMOTE_ROOT}/")
         return
 
-    env = force_env(force)
-    env["EXPORTER_RUNTIME"] = runtime
-
     stage_and_run_remote_installer(
         root,
         connection,
@@ -275,7 +294,7 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
         ],
         "scripts/install.sh",
         host,
-        env=env,
+        env=force_env(force),
         require_root=True,
         remote_subdirs=("build", "lib"),
     )

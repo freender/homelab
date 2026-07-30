@@ -8,7 +8,6 @@ HOST=${1:-$(hostname)}
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD_DIR="$SCRIPT_DIR/build/$HOST"
 FORCE_UPDATE=${FORCE_UPDATE:-false}
-EXPORTER_RUNTIME=${EXPORTER_RUNTIME:-native}
 NODE_EXPORTER_CHANGED=false
 SMARTCTL_OVERRIDE_CHANGED=false
 IGPU_EXPORTER_CHANGED=false
@@ -24,6 +23,45 @@ fi
 require_dir "$BUILD_DIR" "$BUILD_DIR" || exit 1
 require_file "$BUILD_DIR/file-map.conf" "$BUILD_DIR/file-map.conf" || exit 1
 load_file_map "$BUILD_DIR/file-map.conf"
+
+if [[ ! -r /etc/os-release ]]; then
+    print_error "cannot read /etc/os-release"
+    exit 1
+fi
+# shellcheck source=/dev/null
+OS_ID="$(. /etc/os-release && printf '%s' "${ID:-}")"
+# shellcheck source=/dev/null
+OS_CODENAME="$(. /etc/os-release && printf '%s' "${VERSION_CODENAME:-}")"
+if [[ -z "$OS_ID" || -z "$OS_CODENAME" ]]; then
+    print_error "ID/VERSION_CODENAME missing from /etc/os-release"
+    exit 1
+fi
+
+# node-exporter and smartctl-exporter are host-native on every host now. Where a
+# containerised copy used to serve those ports (the retired runtime: docker mode
+# on the offsite Ubuntu hosts), it has to be removed from the host-managed
+# compose stack first -- otherwise the native units cannot bind :9100/:9633 and
+# the package postinst fails half-way through. cadvisor is unaffected and stays
+# in compose. Fail before touching anything rather than leaving a half-migrated
+# host.
+assert_no_conflicting_containers() {
+    local name conflicting=()
+
+    command -v docker >/dev/null 2>&1 || return 0
+    for name in node-exporter smartctl-exporter; do
+        if [[ -n "$(docker ps --quiet --filter "name=^${name}$" 2>/dev/null)" ]]; then
+            conflicting+=("$name")
+        fi
+    done
+    [[ ${#conflicting[@]} -eq 0 ]] && return 0
+
+    print_error "container(s) still bound to the native exporter ports: ${conflicting[*]}"
+    print_sub "Remove those services from this host's exporters compose file (keep cadvisor),"
+    print_sub "run 'docker compose up -d --remove-orphans', then deploy pve-exporters again."
+    return 1
+}
+
+assert_no_conflicting_containers || exit 1
 
 # Legacy: this module used to fetch the upstream smartctl_exporter release
 # tarball into /usr/local/bin and ship its own smartctl-exporter.service. It is
@@ -53,26 +91,24 @@ remove_legacy_smartctl_exporter() {
     fi
 }
 
-# smartctl_exporter is packaged as prometheus-smartctl-exporter, but only in
-# <codename>-backports for Debian stable (it is in main on Ubuntu). The backport
-# is the same upstream version this module used to download by hand, so apt can
-# own the binary and its smartmontools dependency instead of a hand-rolled
-# download + version check. Debian backports sets NotAutomatic +
-# ButAutomaticUpgrades, so enabling it never pulls anything else in on its own,
+# smartctl_exporter is packaged as prometheus-smartctl-exporter. Ubuntu carries
+# it in the normal archive; Debian stable ships it only in <codename>-backports,
+# so the repo is added there and only there. Debian backports sets NotAutomatic
+# + ButAutomaticUpgrades, so enabling it never pulls anything else in on its own
 # but does keep this package updated once installed.
-ensure_smartctl_exporter_package() {
-    local codename repo_file="/etc/apt/sources.list.d/debian-backports.sources"
-    local staged repo_changed=false already_installed=false
+ensure_backports_repo_if_debian() {
+    local repo_file="/etc/apt/sources.list.d/debian-backports.sources"
+    local staged
 
-    if [[ ! -r /etc/os-release ]]; then
-        print_error "cannot read /etc/os-release; unable to resolve backports suite"
-        return 1
-    fi
-    # shellcheck source=/dev/null
-    codename="$(. /etc/os-release && printf '%s' "${VERSION_CODENAME:-}")"
-    if [[ -z "$codename" ]]; then
-        print_error "VERSION_CODENAME missing from /etc/os-release"
-        return 1
+    if [[ "$OS_ID" != "debian" ]]; then
+        # Ubuntu (and anything else): package comes from the default archive, so
+        # remove a backports file a previous Debian-shaped deploy may have left.
+        if [[ -e "$repo_file" ]]; then
+            rm -f "$repo_file"
+            REPO_CHANGED=true
+            print_ok "Removed Debian backports repo (not applicable on $OS_ID)"
+        fi
+        return 0
     fi
 
     # Rendered here rather than staged as a config file so the suite always
@@ -84,20 +120,28 @@ ensure_smartctl_exporter_package() {
 # which Debian stable ships only via backports.
 Types: deb
 URIs: http://deb.debian.org/debian/
-Suites: ${codename}-backports
+Suites: ${OS_CODENAME}-backports
 Components: main
 Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
 EOF
     if ! cmp -s "$staged" "$repo_file"; then
         install -m 644 "$staged" "$repo_file"
-        repo_changed=true
-        print_ok "Enabled ${codename}-backports for prometheus-smartctl-exporter"
+        REPO_CHANGED=true
+        print_ok "Enabled ${OS_CODENAME}-backports for prometheus-smartctl-exporter"
     fi
     rm -f "$staged"
+}
+
+ensure_smartctl_exporter_package() {
+    local already_installed=false apt_target=()
+
+    REPO_CHANGED=false
+    ensure_backports_repo_if_debian || return 1
+    [[ "$OS_ID" == "debian" ]] && apt_target=(-t "${OS_CODENAME}-backports")
 
     dpkg -s prometheus-smartctl-exporter >/dev/null 2>&1 && already_installed=true
 
-    if [[ "$repo_changed" == "true" ]] || [[ "$already_installed" != "true" ]]; then
+    if [[ "$REPO_CHANGED" == "true" ]] || [[ "$already_installed" != "true" ]]; then
         apt-get update -qq
     fi
 
@@ -112,7 +156,7 @@ EOF
     # populated after a Debian major upgrade, mirror issue) would leave the host
     # with no SMART exporter at all instead of failing with the old one intact.
     if ! apt-cache policy prometheus-smartctl-exporter 2>/dev/null | grep -qE '^  Candidate: [^(]'; then
-        print_error "prometheus-smartctl-exporter has no installation candidate in ${codename}-backports"
+        print_error "prometheus-smartctl-exporter has no installation candidate"
         print_sub "Leaving the existing smartctl exporter untouched; resolve the repo before retrying."
         return 1
     fi
@@ -120,15 +164,13 @@ EOF
     # Both bind :9633 and the package postinst starts the service, so the old
     # unit has to be gone first.
     remove_legacy_smartctl_exporter
-    apt-get install -y -qq -t "${codename}-backports" prometheus-smartctl-exporter
-    print_ok "prometheus-smartctl-exporter installed from ${codename}-backports"
+    apt-get install -y -qq "${apt_target[@]}" prometheus-smartctl-exporter
+    print_ok "prometheus-smartctl-exporter installed"
 }
 
 # Install packages only when missing
 missing_pkgs=()
-if [[ "$EXPORTER_RUNTIME" != "docker" ]]; then
-    command -v prometheus-node-exporter &>/dev/null || missing_pkgs+=(prometheus-node-exporter)
-fi
+command -v prometheus-node-exporter &>/dev/null || missing_pkgs+=(prometheus-node-exporter)
 # python3 runs apcupsd-exporter and igpu-exporter. Nothing here downloads
 # anything any more (smartctl_exporter comes from apt, igpu-exporter is our own
 # script), so curl/tar and the golang-go build toolchain are no longer needed.
@@ -147,32 +189,16 @@ fi
 mkdir -p /etc/default
 mkdir -p /var/lib/prometheus/node-exporter
 
-if [[ "$EXPORTER_RUNTIME" == "docker" ]]; then
-    # Native node-exporter/smartctl-exporter are not managed in docker mode: the
-    # host-managed compose stack under /mnt/cache/appdata/<host>-exporters/
-    # owns those services instead (see README). Actively remove any leftovers
-    # from an earlier native deploy so no unit is left installed-and-disabled
-    # pointing at a binary this mode never installs.
-    systemctl disable --now prometheus-node-exporter smartctl-exporter smartctl_exporter 2>/dev/null || true
-    systemctl stop prometheus-node-exporter smartctl-exporter smartctl_exporter 2>/dev/null || true
-    systemctl reset-failed prometheus-node-exporter.service smartctl-exporter.service smartctl_exporter.service 2>/dev/null || true
-    rm -f /etc/default/prometheus-node-exporter /etc/default/smartctl-exporter \
-          /etc/systemd/system/smartctl-exporter.service /usr/local/bin/smartctl_exporter
-    rm -rf /etc/systemd/system/smartctl_exporter.service.d
-else
-    if [[ -n "${FILE_MAP_DEST[node-exporter.defaults]:-}" ]] && \
-       file_needs_update "$BUILD_DIR/node-exporter.defaults" "$(mapped_dest node-exporter.defaults)"; then
-        NODE_EXPORTER_CHANGED=true
-    fi
-    if [[ -n "${FILE_MAP_DEST[smartctl-exporter-override.conf]:-}" ]] && \
-       file_needs_update "$BUILD_DIR/smartctl-exporter-override.conf" \
-                         "$(mapped_dest smartctl-exporter-override.conf)"; then
-        SMARTCTL_OVERRIDE_CHANGED=true
-    fi
-    # Handles the backports repo, the availability pre-check, and tearing down
-    # the retired self-managed exporter in the right order.
-    ensure_smartctl_exporter_package
+if file_needs_update "$BUILD_DIR/node-exporter.defaults" "$(mapped_dest node-exporter.defaults)"; then
+    NODE_EXPORTER_CHANGED=true
 fi
+if file_needs_update "$BUILD_DIR/smartctl-exporter-override.conf" \
+                     "$(mapped_dest smartctl-exporter-override.conf)"; then
+    SMARTCTL_OVERRIDE_CHANGED=true
+fi
+# Handles the backports repo (Debian only), the availability pre-check, and
+# tearing down the retired self-managed exporter in the right order.
+ensure_smartctl_exporter_package
 
 # The exporter script and its env both feed the running process, so either one
 # changing needs a restart; the unit itself is handled by daemon-reload.
@@ -232,26 +258,18 @@ if [[ -n "${FILE_MAP_DEST[igpu-exporter.py]:-}" ]]; then
     fi
 fi
 
-if [[ "$EXPORTER_RUNTIME" == "docker" ]]; then
-    print_sub "Docker exporter compose is host-managed; not modified by this installer"
-fi
-
 systemctl daemon-reload
-if [[ "$EXPORTER_RUNTIME" != "docker" ]]; then
-    systemctl enable --now prometheus-node-exporter
-    if [[ "$FORCE_UPDATE" == "true" || "$NODE_EXPORTER_CHANGED" == "true" ]]; then
-        systemctl restart prometheus-node-exporter
-    fi
+systemctl enable --now prometheus-node-exporter
+if [[ "$FORCE_UPDATE" == "true" || "$NODE_EXPORTER_CHANGED" == "true" ]]; then
+    systemctl restart prometheus-node-exporter
 fi
 systemctl enable --now zfs-pool-textfile-exporter.timer
 systemctl start zfs-pool-textfile-exporter.service
-if [[ "$EXPORTER_RUNTIME" != "docker" ]]; then
-    # Packaged unit name is smartctl_exporter (underscore), not the
-    # smartctl-exporter (hyphen) this module used to ship.
-    systemctl enable --now smartctl_exporter
-    if [[ "$FORCE_UPDATE" == "true" || "$SMARTCTL_OVERRIDE_CHANGED" == "true" ]]; then
-        systemctl restart smartctl_exporter
-    fi
+# Packaged unit name is smartctl_exporter (underscore), not the
+# smartctl-exporter (hyphen) this module used to ship.
+systemctl enable --now smartctl_exporter
+if [[ "$FORCE_UPDATE" == "true" || "$SMARTCTL_OVERRIDE_CHANGED" == "true" ]]; then
+    systemctl restart smartctl_exporter
 fi
 if [[ -n "${FILE_MAP_DEST[igpu-exporter.py]:-}" ]]; then
     systemctl enable --now igpu-exporter
@@ -264,10 +282,6 @@ if [[ -n "${FILE_MAP_DEST[apcupsd-exporter.py]:-}" ]]; then
     systemctl enable --now apcupsd-exporter
     systemctl is-active --quiet apcupsd-exporter
 fi
-if [[ "$EXPORTER_RUNTIME" != "docker" ]]; then
-    systemctl is-active --quiet prometheus-node-exporter
-fi
+systemctl is-active --quiet prometheus-node-exporter
 systemctl is-active --quiet zfs-pool-textfile-exporter.timer
-if [[ "$EXPORTER_RUNTIME" != "docker" ]]; then
-    systemctl is-active --quiet smartctl_exporter
-fi
+systemctl is-active --quiet smartctl_exporter
