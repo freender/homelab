@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -51,6 +52,158 @@ def check_feature_registry(root: Path) -> None:
         print_warn(f"module '{module}' is registered but no host enables it; it deploys nowhere")
 
     print_ok(f"{len(declared)} feature(s) map to registered modules")
+
+
+# --- Public repo leak check -------------------------------------------------
+#
+# This repo is public (AGENTS.md "Public Repo Boundary"). These checks are the
+# mechanical half of that rule.
+#
+# Note the deliberate asymmetry: the private domain is NOT hardcoded here,
+# because writing it into a public file is the very leak we are preventing.
+# Instead we flag any externally routable URL host that is not a known vendor,
+# which catches the domain without naming it (and catches future ones too).
+# Exact strings can additionally be supplied out-of-band via
+# HOMELAB_LEAK_DOMAINS or ~/.config/homelab/leak-domains (CI: a repo secret).
+
+_SECRET_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    # Require real base64 key material after the header: `.tpl.example` files
+    # legitimately ship an empty BEGIN/END block around the word "placeholder".
+    (
+        "private key block",
+        re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----[^-]*?[A-Za-z0-9+/]{40,}"),
+    ),
+    ("1Password service-account token", re.compile(r"\bops_[A-Za-z0-9]{40,}")),
+    ("Telegram bot token", re.compile(r"\b\d{9,10}:AA[A-Za-z0-9_-]{32,}\b")),
+    ("GitHub token", re.compile(r"\bgh[pousr]_[A-Za-z0-9]{36,}\b")),
+    ("AWS access key id", re.compile(r"\bAKIA[0-9A-Z]{16}\b")),
+)
+
+_URL_HOST = re.compile(r"https?://([A-Za-z0-9._~-]+)")
+
+# Hostnames under these TLDs never leave the homelab, so they are safe to commit.
+_INTERNAL_TLDS = frozenset({"internal", "local", "invalid", "localdomain", "lan", "test"})
+
+# Registrable domains we intentionally reference (package repos, APIs, docs).
+_VENDOR_DOMAINS = frozenset(
+    {
+        "astral.sh",
+        "debian.org",
+        "docker.com",
+        "example.com",
+        "example.net",
+        "example.org",
+        "github.com",
+        "githubusercontent.com",
+        "grafana.com",
+        "kernel.org",
+        "microsoft.com",
+        "opencode.ai",
+        "openssh.com",
+        "proxmox.com",
+        "pypi.org",
+        "python.org",
+        "plex.tv",
+        "telegram.org",
+        "ubuntu.com",
+    }
+)
+
+
+def _redacting() -> bool:
+    """CI logs on a public repo are themselves public, so never echo findings there."""
+    return bool(os.environ.get("CI"))
+
+
+def _redact(value: str) -> str:
+    """Show the offending host locally; withhold it from public CI output."""
+    return "<redacted>" if _redacting() else f"'{value}'"
+
+
+def _registrable(host: str) -> str:
+    parts = host.lower().strip(".").split(".")
+    return ".".join(parts[-2:]) if len(parts) >= 2 else host.lower()
+
+
+def _configured_leak_domains() -> list[str]:
+    """Extra literal strings to ban, supplied out-of-band so they stay unpublished."""
+    raw = os.environ.get("HOMELAB_LEAK_DOMAINS", "")
+    if not raw:
+        config = Path.home() / ".config" / "homelab" / "leak-domains"
+        if config.is_file():
+            raw = config.read_text(encoding="utf-8")
+    separators = str.maketrans({",": "\n", " ": "\n"})
+    return [line.strip().lower() for line in raw.translate(separators).splitlines() if line.strip()]
+
+
+def _tracked_files(root: Path) -> list[Path]:
+    """Files that are, or are about to be, published.
+
+    `--others --exclude-standard` includes untracked-but-not-ignored files. Without
+    them the check only sees committed content, so `./validate` passes on a new file
+    and then fails the moment it is committed -- the gate would change scope exactly
+    when it stops being useful. Ignored files stay out: they are never published.
+    """
+    result = subprocess.run(
+        ["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        return []
+    return [root / name for name in result.stdout.split("\0") if name]
+
+
+def check_public_repo_leaks(root: Path) -> None:
+    """Fail the build on anything that must never be published from this repo."""
+    banned = _configured_leak_domains()
+    findings: list[str] = []
+
+    tracked = _tracked_files(root)
+    if not tracked:
+        print_warn("git not available; skipping leak check")
+        return
+
+    for path in tracked:
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue  # binary or unreadable; nothing scannable
+        rel = path.relative_to(root)
+
+        for label, pattern in _SECRET_PATTERNS:
+            if pattern.search(text):
+                findings.append(f"{rel}: {label}")
+
+        lowered = text.lower()
+        for domain in banned:
+            if domain in lowered:
+                findings.append(f"{rel}: banned domain")
+
+        for host in set(_URL_HOST.findall(text)):
+            host = host.lower().strip(".")
+            if "." not in host or host == "localhost":
+                continue
+            if re.fullmatch(r"[\d.]+", host):
+                continue  # bare IP literal
+            if host.rsplit(".", 1)[-1] in _INTERNAL_TLDS:
+                continue
+            if _registrable(host) in _VENDOR_DOMAINS:
+                continue
+            findings.append(f"{rel}: external host {_redact(host)}")
+
+    if findings:
+        raise click.ClickException(
+            "public-repo leak check failed (see AGENTS.md 'Public Repo Boundary'):\n  "
+            + "\n  ".join(sorted(set(findings)))
+            + "\n\nUse an example.net placeholder for route hosts, or add a genuine"
+            " vendor domain to _VENDOR_DOMAINS in src/homelab/cli.py."
+            + ("\nRe-run locally for unredacted detail." if _redacting() else "")
+        )
+
+    print_ok(f"{len(tracked)} tracked file(s) clean of secrets and external hosts")
 
 
 @click.group()
@@ -140,6 +293,9 @@ def validate() -> None:
 
     print_action("Inventory")
     check_feature_registry(root)
+
+    print_action("Leak Check")
+    check_public_repo_leaks(root)
 
     shellcheck = shutil.which("shellcheck")
     if shellcheck:

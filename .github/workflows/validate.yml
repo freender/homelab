@@ -35,6 +35,12 @@ jobs:
         run: python -m pip install '.[dev]'
       - name: Run pytest
         run: python -m pytest
+        env:
+          # Extra literal strings the leak check must ban. Kept in repo secrets so
+          # the value itself is never committed. Unset is safe: the check still
+          # runs its vendor-allowlist scan. GitHub sets CI=true, which makes the
+          # checker redact findings so they never land in public build logs.
+          HOMELAB_LEAK_DOMAINS: ${{ secrets.HOMELAB_LEAK_DOMAINS }}
 
   shellcheck:
     name: ShellCheck
@@ -80,3 +86,7 @@ jobs:
         run: |
           export HOMELAB_OFFLINE=true
           PYTHONPATH=src python -m homelab.cli validate
+        env:
+          # See the pytest job: value lives in repo secrets, findings are redacted
+          # in CI because build logs on a public repo are themselves public.
+          HOMELAB_LEAK_DOMAINS: ${{ secrets.HOMELAB_LEAK_DOMAINS }}

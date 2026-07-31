@@ -13,6 +13,49 @@
 This repository is Python-orchestrated automation for a Proxmox homelab.
 Use this file to make coding agents consistent with existing patterns.
 
+## Public Repo Boundary
+
+**`freender/homelab` is a public GitHub repo.** Everything committed is
+world-readable and permanent, including history. Treat every edit as publication.
+
+**Never commit:**
+- The real public domain used for homelab service routes, or any externally
+  reachable route host/URL. Do not spell that domain out anywhere in this repo —
+  not in docs, comments, tests, or CI config. It currently appears zero times;
+  keep it that way. Use `example.net` placeholders, as templates already do
+  (`traefik-tower.example.net`).
+- Secrets in any form: `.env`, rendered secret files, tokens, API keys, passwords,
+  SSH private keys, PBS encryption keys **or their escrow locations**.
+- Third-party detail for `cinci`/`cottonwood` beyond what inventory needs — physical
+  location, LAN topology, or the owners' personal data. These are other people's
+  networks.
+- Live security posture: WireGuard/Pi-KVM route topology, Crowdsec/middleware
+  allowlists, per-host SSH auth matrices, agent socket paths, credential file
+  locations.
+
+**Intentionally public — do NOT "sanitize" these:** `*.freender.internal` hostnames,
+RFC1918 IPs, usernames, NIC MACs, SSH *public* keys, PBS account/token *names*, and
+schedules. `hosts.conf` depends on them; scrubbing them breaks deploys.
+
+`*.freender.internal` is **internal split-horizon DNS**, resolvable only on the LAN
+and never from the internet. It is deploy metadata, not attack surface, and is safe
+to commit — do not confuse it with the public route domain above, which is the one
+that must never appear here. Same rule for RFC1918 addresses: unroutable, so they
+carry no external exposure. The leak check treats `.internal` (and `.local`,
+`.lan`, `.invalid`, `.test`) as internal TLDs and ignores them by design.
+
+Vendor URLs (`github.com`, `download.proxmox.com`, `get.docker.com`,
+`api.telegram.org`) are fine.
+
+**Agent instructions and skills:** only repo-scoped tooling docs belong here (see
+`.opencode/skill/deploy-module/`). Topology, storage, backup, SSH, offsite,
+monitoring, and secret-handling skills stay host-local in
+`~/.config/opencode/skills/` — they are credential and recon maps, not repo
+documentation.
+
+`./validate` enforces the domain/secret half of this mechanically (`leak check`); the
+judgment calls above are still yours.
+
 ## Repo Summary
 - Languages: Python + Bash + YAML.
 - Inventory: `hosts.conf`.
@@ -56,8 +99,8 @@ Run `find .` only from the repository root; never adapt this pattern to `/`, `/m
 ```bash
 .venv/bin/python -m pytest tests/
 ```
-Test coverage detail (golden renders, pause semantics, network-critical modules) and
-module-specific check scripts are documented in the `deploy-module` skill. Add or update
+The `deploy-module` skill carries the test coverage map (golden renders, pause
+semantics, network-critical modules) and which test owns which area. Add or update
 tests when touching those areas.
 
 ### Single-file lint (fast targeted check)
@@ -166,7 +209,7 @@ before touching anything else.
 - In `hosts.conf`, prefer full systemd calendar expressions like `*-*-* HH:MM:SS` for schedule-like fields.
 - Do not leave backup, disabled, or timestamped copies inside active config include directories such as `/etc/apt/apt.conf.d/`; use `/var/backups/homelab/<module>/` or remove superseded files.
 
-For module shape, helper APIs, module-boundary decisions, SSH staging, logging, ShellCheck examples, and targeted validation workflow, load the `deploy-module` skill.
+For module shape, helper APIs, module-boundary decisions, SSH staging, logging, and ShellCheck examples, load the `deploy-module` skill. It lives in this repo at `.opencode/skill/deploy-module/` and is versioned alongside the code it describes.
 
 ## Inventory And Secrets
 
