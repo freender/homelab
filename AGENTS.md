@@ -102,6 +102,41 @@ Three distinct "off/freeze" switches in `hosts.conf` — do not conflate them:
 For the implementation how-to (adding `paused` to a module: Python flag read, the
 `homelab_apply_pause` bash helper, unit-file semantics), load the `deploy-module` skill.
 
+## Shipping Strategy (`/ship`)
+
+`/ship` (`.opencode/command/ship.md`) runs validate -> dry-run -> deploy -> verify ->
+commit -> push autonomously. It is for **routine, incremental changes to modules that
+already deploy successfully**. It is invoked explicitly and never triggered
+automatically — deciding to deploy is a human decision.
+
+**Renames and first-ever deploys are fine to `/ship`** as long as the dry-run diff
+is actually reviewed before deploying (read it, don't skim it) and the deploy still
+goes canary-first — a rename or a module's first deploy has no prior baseline to
+diff against, so the dry-run output itself is the review.
+
+**Do not use `/ship` for:** multi-module working trees (module inference is
+unreliable — if the dirty tree mixes an unrelated change, split it into its own
+commit before shipping); incident response (you want a tight manual feedback
+loop); offsite hosts (`cinci`, `cottonwood`).
+
+**Risk tiers — govern the host argument:**
+
+| Tier | Modules | Rule |
+| --- | --- | --- |
+| 1 routine | `apcupsd`, `metrics-exporters`, `pve-notifications`, `disk-spindown`, `apt-upgrade`, `pve-http-boot`, `ubuntu-setup`, `wsl-conf` | `/ship` defaults are fine; idempotent and restart-safe. |
+| 2 stateful | `zfs-automation`, `pbs-client-backup`, `pve-backup`, `docker`, `pve-postinstall`, `pve-gpu-passthrough` | Always name a host; canary mandatory; never bare `all`. Failure interrupts replication, backups, or running containers. |
+| 3 control-path | `ssh-config`, `keepalived`, `pve-interface-pinning`, `pve-realtek-r8152-dkms`, `pve-upgrade`, `pve-autoinstall`, `pve-zfs-*-patch`, `pve-lxc-pre-replication-patch` | **Do not use `/ship`.** Deploy manually with console access confirmed. Failure severs SSH, networking, or the VIP, and the pipeline cannot verify or recover from a host it can no longer reach. |
+
+**Escalation ladder — never skip a rung:**
+
+1. `./deploy --dry-run <module> <host>` manually; read the diff yourself.
+2. `/ship <module> <one-host>` as canary; read the quoted evidence, not "verified OK".
+3. `/ship <module> all` — Tier 1 only, and only after step 2 was clean.
+
+A **host diverged** report is the highest-priority outcome: deploy succeeded but the
+predicate failed, so the host matches neither git nor its pre-state. Resolve that
+before touching anything else.
+
 ## Module Retirement / Archival
 
 - Before retiring a module, confirm it deploys nowhere: no `<module>:` feature blocks in
