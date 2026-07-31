@@ -1,4 +1,4 @@
-# Managed by homelab (pve-exporters). Drop-in for the distro
+# Managed by homelab (metrics-exporters). Drop-in for the distro
 # prometheus-smartctl-exporter unit, whose packaged ExecStart takes no
 # arguments at all. ExecStart must be cleared first: it is a non-list
 # directive, so an unreset second assignment would be a startup error.
@@ -14,7 +14,7 @@
 #                                  (not wake) a spun-down disk.
 #   --web.listen-address=:9633     the port vmagent scrapes.
 #   --smartctl.path                normally /usr/sbin/smartctl; hosts setting
-#                                  pve-exporters.smartctl_wrapper get the
+#                                  metrics-exporters.smartctl_wrapper get the
 #                                  wrapper instead (see README).
 [Service]
 ExecStart=

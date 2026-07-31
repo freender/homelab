@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from homelab.modules import pbs_client_backup, pve_exporters
+from homelab.modules import metrics_exporters, pbs_client_backup
 
 
 def write_secret_catalog(
@@ -42,16 +42,16 @@ def test_pbs_client_backup_uses_example_secret_in_offline_mode(
     assert pbs_client_backup.secret_path(tmp_path, "backup-main") == example
 
 
-def test_pve_exporters_uses_module_template(tmp_path: Path) -> None:
-    expected = tmp_path / "pve-exporters" / "templates" / "apcupsd-exporter.env.tpl"
+def test_metrics_exporters_uses_module_template(tmp_path: Path) -> None:
+    expected = tmp_path / "metrics-exporters" / "templates" / "apcupsd-exporter.env.tpl"
 
-    assert pve_exporters.apcupsd_exporter_env_template(tmp_path) == expected
+    assert metrics_exporters.apcupsd_exporter_env_template(tmp_path) == expected
 
 
-def test_pve_exporters_ignores_legacy_secret_override(tmp_path: Path) -> None:
+def test_metrics_exporters_ignores_legacy_secret_override(tmp_path: Path) -> None:
     legacy = tmp_path / "secrets" / "apcupsd-exporter.env"
     legacy.parent.mkdir(parents=True)
     legacy.write_text("override\n", encoding="utf-8")
-    expected = tmp_path / "pve-exporters" / "templates" / "apcupsd-exporter.env.tpl"
+    expected = tmp_path / "metrics-exporters" / "templates" / "apcupsd-exporter.env.tpl"
 
-    assert pve_exporters.apcupsd_exporter_env_template(tmp_path) == expected
+    assert metrics_exporters.apcupsd_exporter_env_template(tmp_path) == expected

@@ -57,7 +57,7 @@ assert_no_conflicting_containers() {
 
     print_error "container(s) still bound to the native exporter ports: ${conflicting[*]}"
     print_sub "Remove those services from this host's exporters compose file (keep cadvisor),"
-    print_sub "run 'docker compose up -d --remove-orphans', then deploy pve-exporters again."
+    print_sub "run 'docker compose up -d --remove-orphans', then deploy metrics-exporters again."
     return 1
 }
 
@@ -116,7 +116,7 @@ ensure_backports_repo_if_debian() {
     # Debian major upgrade.
     staged="$(mktemp)"
     cat > "$staged" <<EOF
-# Managed by homelab (pve-exporters): provides prometheus-smartctl-exporter,
+# Managed by homelab (metrics-exporters): provides prometheus-smartctl-exporter,
 # which Debian stable ships only via backports.
 Types: deb
 URIs: http://deb.debian.org/debian/
@@ -246,7 +246,7 @@ fi
 # Install/update every file this host's file-map declares (native node-exporter
 # and smartctl-exporter config are simply absent from the map in docker mode;
 # apcupsd/igpu config are absent unless those features are configured for the
-# host; see pve_exporters.py:build_file_specs).
+# host; see metrics_exporters.py:build_file_specs).
 rc=0
 install_file_map "$BUILD_DIR" || rc=$?
 [[ $rc -eq 0 || $rc -eq 1 ]] || exit "$rc"

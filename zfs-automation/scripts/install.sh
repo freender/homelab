@@ -94,7 +94,7 @@ cleanup_obsolete_replication_units() {
     shopt -u nullglob
 }
 
-# Retired: homelab-zfs-health-check was a strict subset of the pve-exporters
+# Retired: homelab-zfs-health-check was a strict subset of the metrics-exporters
 # homelab_zpool_healthy textfile metric (same "health column != ONLINE" check,
 # 60x the latency, and unlike the exporter it can't detect an un-imported pool
 # at all since `zpool list` only reports pools that actually imported). Cleans

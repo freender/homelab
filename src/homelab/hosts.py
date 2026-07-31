@@ -210,7 +210,7 @@ def validate_host_config(host: str, config: dict[str, Any]) -> None:
 def validate_host_features(host: str, features: object) -> None:
     # NOTE: only the shape of the `features:` mapping itself is validated here
     # (must be a mapping). The value under each feature key (e.g.
-    # `pve-exporters.runtime`, `zfs-automation.manage_scrub`) is entirely
+    # `metrics-exporters.lxc_guest`, `zfs-automation.manage_scrub`) is entirely
     # unvalidated at this layer -- there is no generic per-module config
     # schema. A typo'd value silently falls through to whatever default the
     # module's own `registry.get(host, key, default)` call happens to use.
@@ -219,8 +219,8 @@ def validate_host_features(host: str, features: object) -> None:
     #
     # Individual modules can (and where the blast radius warrants it, should)
     # add their own targeted validation instead of waiting for a generic
-    # framework here -- see pve_exporters.exporter_runtime(), which validates
-    # `pve-exporters.runtime` against an explicit allowed set, as the pattern
+    # framework here -- see disk_spindown's `command_type` check, which
+    # validates a single key against an explicit allowed set, as the pattern
     # to follow for other high-risk single keys.
     if features is not None and not isinstance(features, dict):
         raise ValueError(f"features must be a mapping for {host}")

@@ -10,10 +10,10 @@ from .apt_upgrade import deploy as deploy_apt_upgrade
 from .disk_spindown import deploy as deploy_disk_spindown
 from .docker import deploy as deploy_docker
 from .keepalived import deploy as deploy_keepalived
+from .metrics_exporters import deploy as deploy_metrics_exporters
 from .pbs_client_backup import deploy as deploy_pbs_client_backup
 from .pve_autoinstall import deploy as deploy_pve_autoinstall
 from .pve_backup import deploy as deploy_pve_backup
-from .pve_exporters import deploy as deploy_pve_exporters
 from .pve_gpu_passthrough import deploy as deploy_pve_gpu_passthrough
 from .pve_http_boot import deploy as deploy_pve_http_boot
 from .pve_interface_pinning import deploy as deploy_pve_interface_pinning
@@ -66,9 +66,9 @@ MODULES: dict[str, ModuleDefinition] = {
         name="PVE Backup",
         deploy=deploy_pve_backup,
     ),
-    "pve-exporters": ModuleDefinition(
-        name="PVE Prometheus Exporters",
-        deploy=deploy_pve_exporters,
+    "metrics-exporters": ModuleDefinition(
+        name="Prometheus Metrics Exporters",
+        deploy=deploy_metrics_exporters,
     ),
     "pve-autoinstall": ModuleDefinition(
         name="PVE Automated Install (PDM Answers)",
@@ -141,7 +141,7 @@ MODULE_ORDER = [
     "pbs-client-backup",
     "pve-backup",
     "apcupsd",
-    "pve-exporters",
+    "metrics-exporters",
     "pve-zfs-large-block-patch",
     "pve-zfs-migration-sync-patch",
     "pve-lxc-pre-replication-patch",

@@ -1,6 +1,6 @@
-# homelab/pve-exporters
+# homelab/metrics-exporters
 
-Prometheus-native host metrics exporters for Proxmox and ZFS storage hosts.
+Prometheus-native host metrics exporters for Proxmox, Ubuntu, and LXC guest hosts.
 
 ## Hosts
 
@@ -8,7 +8,7 @@ Bare metal (`node-exporter` + `smartctl_exporter` + ZFS textfile exporter):
 - ace, bray, clovis, osiris (Proxmox, Debian)
 - cinci, cottonwood (Ubuntu, offsite)
 
-LXC guests, `pve-exporters.lxc_guest: true` (`node-exporter` only):
+LXC guests, `metrics-exporters.lxc_guest: true` (`node-exporter` only):
 - helm (on clovis), neo (on bray), tower (on ace)
 
 Every host runs host-native exporters; there is no per-host runtime mode. Only
@@ -98,7 +98,7 @@ docker compose config --services      # expect: cadvisor
 docker compose up -d --remove-orphans
 ```
 
-Then `./deploy pve-exporters <host>` from the repo.
+Then `./deploy metrics-exporters <host>` from the repo.
 
 ## What It Collects
 - Host metrics via node_exporter (CPU, memory, load, uptime, disk, network, hwmon, ZFS)
@@ -225,12 +225,12 @@ it needs — notably `--smartctl.interval=10s` (matching the `pve-smartctl`
 `scrape_interval` in `vmagent/scrape.yml` on `helm`) and
 `--smartctl.powermode-check=standby`, which keeps the exporter from waking disks
 that the `disk-spindown` module has parked. `--smartctl.path` is per-host: hosts
-setting `pve-exporters.smartctl_wrapper: true` get
+setting `metrics-exporters.smartctl_wrapper: true` get
 `/usr/local/bin/homelab-smartctl-wrapper` instead of `smartctl` itself.
 
 ##### smartctl_wrapper (cottonwood)
 
-`cottonwood` sets `pve-exporters.smartctl_wrapper: true`, which deploys
+`cottonwood` sets `metrics-exporters.smartctl_wrapper: true`, which deploys
 `configs/common/smartctl-wrapper.sh`. Its USB-attached NVMe disks sit behind
 ASMedia bridges that (a) `smartctl --scan` does not report at all, so the
 exporter would never probe them, and (b) return `exit_status 4` with "Read 1
@@ -246,15 +246,15 @@ before the package installs so the two never fight over `:9633`.
 Deploy to all supported hosts:
 ```bash
 cd ~/homelab
-./deploy pve-exporters all
+./deploy metrics-exporters all
 ```
 
 Deploy to specific hosts:
 ```bash
-./deploy pve-exporters ace
-./deploy pve-exporters bray
-./deploy pve-exporters cinci        # offsite key must be loaded
-./deploy pve-exporters cottonwood   # offsite key must be loaded
+./deploy metrics-exporters ace
+./deploy metrics-exporters bray
+./deploy metrics-exporters cinci        # offsite key must be loaded
+./deploy metrics-exporters cottonwood   # offsite key must be loaded
 ```
 
 ## Verification

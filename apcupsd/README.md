@@ -89,7 +89,7 @@ ssh clovis "apcaccess status | grep STATUS"
 
 **UPS alerting:**
 This module no longer sends Telegram messages. UPS state is exported by
-`apcupsd-exporter` (deployed by `pve-exporters` on the UPS master hosts) and
+`apcupsd-exporter` (deployed by `metrics-exporters` on the UPS master hosts) and
 alerted on by the `ups` rule group in vmalert on helm. To check what the
 alerting stack currently sees:
 ```bash

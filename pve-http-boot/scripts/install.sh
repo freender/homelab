@@ -80,7 +80,7 @@ chmod 755 /srv/httpboot/iso
 
 # Retired: iso-autobuild/pve-http-boot-autoupdate used to write node_exporter
 # textfile metrics here, but this host has no node_exporter to ever read them
-# (it's outside the pve-exporters host list). Remove any stale metric files
+# (it's outside the metrics-exporters host list). Remove any stale metric files
 # from earlier deploys.
 rm -rf /var/lib/node_exporter/textfile
 

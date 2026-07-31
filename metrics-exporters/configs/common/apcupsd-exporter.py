@@ -51,7 +51,7 @@ def render_labels(labels):
 def identity_labels():
     # Only the labels that are known without a working apcaccess call, so
     # apcupsd_up keeps one stable series identity across success and failure.
-    # These come from the deploy-time env (see pve_exporters.py), not the probe.
+    # These come from the deploy-time env (see metrics_exporters.py), not the probe.
     return {
         "host": UPS_HOST,
         "ups_name": UPS_NAME,

@@ -9,10 +9,10 @@ from ..module_support import FileSpec, normalize_bool, write_file_map
 from ..output import print_action, print_sub
 from ..ssh import HostConnection, diff_many
 
-REMOTE_ROOT = "/tmp/homelab-pve-exporters"
+REMOTE_ROOT = "/tmp/homelab-metrics-exporters"
 
 # Path smartctl_exporter is pointed at. Hosts whose disks need the scan/exit-code
-# workaround (pve-exporters.smartctl_wrapper) get the wrapper instead of smartctl
+# workaround (metrics-exporters.smartctl_wrapper) get the wrapper instead of smartctl
 # itself; see README.
 SMARTCTL_BIN = "/usr/sbin/smartctl"
 SMARTCTL_WRAPPER_BIN = "/usr/local/bin/homelab-smartctl-wrapper"
@@ -156,10 +156,10 @@ def deploy(
     session: DeploySession,
 ) -> int:
     registry = default_registry(root)
-    supported_hosts = registry.list_hosts(feature="pve-exporters")
+    supported_hosts = registry.list_hosts(feature="metrics-exporters")
     hosts = registry.filter_hosts(requested_host, supported_hosts)
     if not hosts:
-        print_action(f"Skipping pve-exporters (not applicable to {requested_host})")
+        print_action(f"Skipping metrics-exporters (not applicable to {requested_host})")
         return 0
     validate(root)
     session.run(lambda host: deploy_host(root, host, dry_run=dry_run, force=force), hosts)
@@ -167,7 +167,7 @@ def deploy(
 
 
 def validate(root: Path) -> None:
-    common_dir = root / "pve-exporters" / "configs" / "common"
+    common_dir = root / "metrics-exporters" / "configs" / "common"
     if not common_dir.is_dir():
         raise ValueError(f"configs/common not found: {common_dir}")
     for name in REQUIRED:
@@ -194,9 +194,9 @@ def is_lxc_guest(root: Path, host: str) -> bool:
     """
     registry = default_registry(root)
     return normalize_bool(
-        registry.get(host, "pve-exporters.lxc_guest", None),
+        registry.get(host, "metrics-exporters.lxc_guest", None),
         False,
-        f"pve-exporters.lxc_guest must be true or false for {host}",
+        f"metrics-exporters.lxc_guest must be true or false for {host}",
     )
 
 
@@ -208,9 +208,9 @@ def node_exporter_args(*, lxc_guest: bool) -> str:
 def has_smartctl_wrapper(root: Path, host: str) -> bool:
     registry = default_registry(root)
     return normalize_bool(
-        registry.get(host, "pve-exporters.smartctl_wrapper", None),
+        registry.get(host, "metrics-exporters.smartctl_wrapper", None),
         False,
-        f"pve-exporters.smartctl_wrapper must be true or false for {host}",
+        f"metrics-exporters.smartctl_wrapper must be true or false for {host}",
     )
 
 
@@ -222,40 +222,42 @@ def has_apcupsd_exporter(root: Path, host: str) -> bool:
 
 def has_igpu_exporter(root: Path, host: str) -> bool:
     registry = default_registry(root)
-    exporter_config = registry.get(host, "pve-exporters.intel_gpu_exporter", None)
+    exporter_config = registry.get(host, "metrics-exporters.intel_gpu_exporter", None)
     return isinstance(exporter_config, dict)
 
 
 def apcupsd_exporter_env_template(root: Path) -> Path:
-    return root / "pve-exporters" / "templates" / "apcupsd-exporter.env.tpl"
+    return root / "metrics-exporters" / "templates" / "apcupsd-exporter.env.tpl"
 
 
 def zfs_expected_pools_template(root: Path) -> Path:
-    return root / "pve-exporters" / "templates" / "zfs-expected-pools.conf.tpl"
+    return root / "metrics-exporters" / "templates" / "zfs-expected-pools.conf.tpl"
 
 
 def smartctl_override_template(root: Path) -> Path:
-    return root / "pve-exporters" / "templates" / "smartctl-exporter-override.conf.tpl"
+    return root / "metrics-exporters" / "templates" / "smartctl-exporter-override.conf.tpl"
 
 
 def node_exporter_defaults_template(root: Path) -> Path:
-    return root / "pve-exporters" / "templates" / "node-exporter.defaults.tpl"
+    return root / "metrics-exporters" / "templates" / "node-exporter.defaults.tpl"
 
 
 def zfs_expected_pools(root: Path, host: str) -> list[str]:
     registry = default_registry(root)
-    configured = registry.get(host, "pve-exporters.zfs_expected_pools", None)
+    configured = registry.get(host, "metrics-exporters.zfs_expected_pools", None)
     if configured is None:
         return []
     if not isinstance(configured, list):
         raise ValueError(
-            f"{host}: pve-exporters.zfs_expected_pools must be a list of pool names"
+            f"{host}: metrics-exporters.zfs_expected_pools must be a list of pool names"
         )
     pools: list[str] = []
     for entry in configured:
         pool = str(entry).strip()
         if not pool:
-            raise ValueError(f"{host}: pve-exporters.zfs_expected_pools contains an empty entry")
+            raise ValueError(
+                f"{host}: metrics-exporters.zfs_expected_pools contains an empty entry"
+            )
         pools.append(pool)
     return pools
 
@@ -284,8 +286,8 @@ def build_file_specs(
 
 def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
     registry = default_registry(root)
-    common_dir = root / "pve-exporters" / "configs" / "common"
-    build_dir = root / "pve-exporters" / "build" / host
+    common_dir = root / "metrics-exporters" / "configs" / "common"
+    build_dir = root / "metrics-exporters" / "build" / host
     prepare_build_dir(build_dir)
 
     lxc_guest = is_lxc_guest(root, host)
@@ -344,11 +346,11 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
 
     has_igpu = has_igpu_exporter(root, host)
     if has_igpu:
-        port = int(registry.get(host, "pve-exporters.intel_gpu_exporter.port", 9400))
+        port = int(registry.get(host, "metrics-exporters.intel_gpu_exporter.port", 9400))
         refresh_period_ms = int(
-            registry.get(host, "pve-exporters.intel_gpu_exporter.refresh_period_ms", 1000)
+            registry.get(host, "metrics-exporters.intel_gpu_exporter.refresh_period_ms", 1000)
         )
-        device = str(registry.get(host, "pve-exporters.intel_gpu_exporter.device", "")).strip()
+        device = str(registry.get(host, "metrics-exporters.intel_gpu_exporter.device", "")).strip()
         render_file(
             common_dir / "igpu-exporter.defaults",
             build_dir / "igpu-exporter.defaults",
@@ -390,7 +392,7 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
         REMOTE_ROOT,
         [
             (build_dir, f"{REMOTE_ROOT}/build/{host}"),
-            (root / "pve-exporters" / "scripts", f"{REMOTE_ROOT}/scripts"),
+            (root / "metrics-exporters" / "scripts", f"{REMOTE_ROOT}/scripts"),
         ],
         "scripts/install.sh",
         host,

@@ -72,14 +72,14 @@ USAGE
     esac
 done
 
-read -r -a SUPPORTED_HOSTS <<< "$(list_feature_hosts pve-exporters)"
+read -r -a SUPPORTED_HOSTS <<< "$(list_feature_hosts metrics-exporters)"
 if ! HOSTS=$(filter_hosts "${1:-all}" "${SUPPORTED_HOSTS[@]}"); then
-    print_action "Skipping pve-exporters removal (not applicable to $1)"
+    print_action "Skipping metrics-exporters removal (not applicable to $1)"
     exit 0
 fi
 
 if [[ "$SKIP_CONFIRM" == "false" ]]; then
-    print_header "pve-exporters Removal Plan"
+    print_header "metrics-exporters Removal Plan"
     print_sub "Hosts: $HOSTS"
     print_sub "Actions: stop services, backup and remove smartctl/apcupsd exporter files"
     [[ "$PURGE" == "true" ]] && print_sub "Also purge prometheus-node-exporter package"
@@ -90,10 +90,10 @@ if [[ "$SKIP_CONFIRM" == "false" ]]; then
 fi
 
 for HOST in $HOSTS; do
-    if ! ssh "$HOST" "rm -rf /tmp/homelab-pve-exporters-remove && mkdir -p /tmp/homelab-pve-exporters-remove/lib"; then
+    if ! ssh "$HOST" "rm -rf /tmp/homelab-metrics-exporters-remove && mkdir -p /tmp/homelab-metrics-exporters-remove/lib"; then
         print_warn "Failed to stage utils on $HOST"
     else
-        scp -q "$HOMELAB_ROOT/lib/print.sh" "$HOMELAB_ROOT/lib/utils.sh" "$HOST:/tmp/homelab-pve-exporters-remove/lib/" || true
+        scp -q "$HOMELAB_ROOT/lib/print.sh" "$HOMELAB_ROOT/lib/utils.sh" "$HOST:/tmp/homelab-metrics-exporters-remove/lib/" || true
     fi
 done
 
@@ -112,7 +112,7 @@ for HOST in $HOSTS; do
 
     print_sub "Backing up configs..."
     if ! ssh "$HOST" bash <<'EOF'
-source /tmp/homelab-pve-exporters-remove/lib/utils.sh
+source /tmp/homelab-metrics-exporters-remove/lib/utils.sh
 backup_config /etc/systemd/system/smartctl-exporter.service
 backup_config /etc/default/smartctl-exporter
 backup_config /usr/local/bin/smartctl_exporter
@@ -135,7 +135,7 @@ EOF
         ssh "$HOST" "rm -f /etc/apt/sources.list.d/debian-backports.sources" || host_failed=true
     fi
 
-    ssh "$HOST" "rm -rf /tmp/homelab-pve-exporters-remove" >/dev/null 2>&1 || true
+    ssh "$HOST" "rm -rf /tmp/homelab-metrics-exporters-remove" >/dev/null 2>&1 || true
 
     if [[ "$host_failed" == "true" ]]; then
         print_warn "Removal completed with errors on $HOST"

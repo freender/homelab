@@ -17,7 +17,7 @@ source /etc/homelab-http-boot/http-boot-mgmt.conf
 
 log()    { echo "pve-http-boot-autoupdate: $*"; }
 # No node_exporter textfile metric here: arc (this host) has no node_exporter
-# installed/scraped (it's outside the pve-exporters host list), so a metric
+# installed/scraped (it's outside the metrics-exporters host list), so a metric
 # would just be written and never read. Failures surface via `systemctl status
 # pve-http-boot-autoupdate`/journalctl (this is a oneshot unit; a failed run is
 # visible as a failed unit) rather than a Prometheus alert. If alerting on this

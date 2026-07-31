@@ -38,13 +38,13 @@ UPS monitoring with coordinated cluster shutdown
 ./deploy apcupsd all
 ```
 
-### [pve-exporters](pve-exporters/)
-Prometheus-native host metrics for Proxmox nodes, including UPS metrics on apcupsd master nodes
+### [metrics-exporters](metrics-exporters/)
+Prometheus-native host metrics for Proxmox, Ubuntu, and LXC guest hosts, including UPS metrics on apcupsd master nodes
 - Exposes local UPS metrics on `:9162`
 - Scraped by vmagent/VictoriaMetrics
 
 ```bash
-./deploy pve-exporters all
+./deploy metrics-exporters all
 ```
 
 ### [apt-upgrade](apt-upgrade/)

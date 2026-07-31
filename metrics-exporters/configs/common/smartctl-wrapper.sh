@@ -1,6 +1,6 @@
 #!/bin/sh
-# Managed by homelab (pve-exporters). Deployed only to hosts setting
-# pve-exporters.smartctl_wrapper: true, and used as smartctl_exporter's
+# Managed by homelab (metrics-exporters). Deployed only to hosts setting
+# metrics-exporters.smartctl_wrapper: true, and used as smartctl_exporter's
 # --smartctl.path.
 #
 # Works around two quirks of USB-attached NVMe disks behind ASMedia bridges
