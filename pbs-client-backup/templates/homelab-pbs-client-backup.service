@@ -2,7 +2,11 @@
 Description=Homelab PBS client backup
 Wants=network-online.target
 After=network-online.target
+StartLimitIntervalSec=30min
+StartLimitBurst=3
 
 [Service]
 Type=oneshot
 ExecStart=/usr/local/sbin/homelab-pbs-client-backup
+Restart=on-failure
+RestartSec=5min

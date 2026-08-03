@@ -25,7 +25,6 @@ print_header "PBS Client Backup"
 for required in \
     homelab-pbs-client-backup \
     homelab-pbs-client-backup.conf \
-    homelab-pbs-client-backup.env \
     homelab-pbs-client-backup.service \
     homelab-pbs-client-backup.timer; do
     require_file "$BUILD_DIR/$required" "$BUILD_DIR/$required" || exit 1
@@ -33,6 +32,16 @@ done
 
 # shellcheck source=/dev/null
 source "$BUILD_DIR/homelab-pbs-client-backup.conf"
+
+destination_count="${DESTINATION_COUNT:-0}"
+if [[ ! "$destination_count" =~ ^[1-9][0-9]*$ ]]; then
+    print_error "DESTINATION_COUNT must be a positive integer"
+    exit 1
+fi
+for ((i = 0; i < destination_count; i++)); do
+    require_file "$BUILD_DIR/destination-$i.env" "$BUILD_DIR/destination-$i.env" || exit 1
+    install -m 0600 "$BUILD_DIR/destination-$i.env" "/etc/homelab/pbs-client-backup-destination-$i.env"
+done
 
 # Ensure proxmox-backup-client is present.
 #  - PVE hosts: ships via the PVE apt repo (managed by pve-postinstall); presence check only.

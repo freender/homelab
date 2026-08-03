@@ -26,6 +26,7 @@ def _base_plan(**overrides: object) -> pbs_client_backup.BackupPlan:
                 name="etc", dataset="", path="/etc", excludes=()
             ),
         ),
+        "fallback_destinations": (),
     }
     defaults.update(overrides)
     return pbs_client_backup.BackupPlan(**defaults)  # type: ignore[arg-type]
@@ -45,6 +46,23 @@ def test_write_config_emits_encrypt_enabled(tmp_path: Path) -> None:
     text = path.read_text(encoding="utf-8")
     assert 'ENCRYPT="true"' in text
     assert f'KEYFILE="{pbs_client_backup.KEYFILE_REMOTE_PATH}"' in text
+
+
+def test_write_config_emits_ordered_fallback_destinations(tmp_path: Path) -> None:
+    path = tmp_path / "conf"
+    plan = _base_plan(
+        fallback_destinations=(
+            pbs_client_backup.BackupDestination(
+                repository="user@pbs@fallback:backup",
+                secret_profile="backup-xur-cottonwood",
+            ),
+        )
+    )
+    pbs_client_backup.write_config(path, plan)
+    text = path.read_text(encoding="utf-8")
+    assert 'DESTINATION_COUNT="2"' in text
+    assert 'DESTINATION_0_REPOSITORY="user@pbs@host:backup"' in text
+    assert 'DESTINATION_1_REPOSITORY="user@pbs@fallback:backup"' in text
 
 
 def test_stage_encryption_keyfile_writes_raw_json(

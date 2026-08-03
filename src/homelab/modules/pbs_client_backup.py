@@ -40,6 +40,7 @@ PROFILE_TO_SECRET = {
     "host-backup-cottonwood": "pbs-host-backup-cottonwood",
     "backup-xur-cinci": "pbs-backup-xur-cinci",
     "backup-xur-cottonwood": "pbs-backup-xur-cottonwood",
+    "backup-osiris-cottonwood": "pbs-backup-osiris-cottonwood",
 }
 
 
@@ -49,6 +50,12 @@ class ArchivePlan:
     dataset: str
     path: str
     excludes: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class BackupDestination:
+    repository: str
+    secret_profile: str
 
 
 @dataclass(frozen=True)
@@ -64,12 +71,12 @@ class BackupPlan:
     host_type: str
     encrypt: bool
     archives: tuple[ArchivePlan, ...]
+    fallback_destinations: tuple[BackupDestination, ...]
 
 
 FILE_SPECS = (
     FileSpec("homelab-pbs-client-backup", "/usr/local/sbin/homelab-pbs-client-backup", "700"),
     FileSpec("homelab-pbs-client-backup.conf", "/etc/homelab/pbs-client-backup.conf", "600"),
-    FileSpec("homelab-pbs-client-backup.env", "/etc/homelab/pbs-client-backup.env", "600"),
     FileSpec(SERVICE_NAME, f"/etc/systemd/system/{SERVICE_NAME}"),
     FileSpec(TIMER_NAME, f"/etc/systemd/system/{TIMER_NAME}"),
 )
@@ -112,14 +119,15 @@ def validate(root: Path, hosts: list[str]) -> None:
         plan = normalize_backup_plan(root, registry, host)
         if not plan.enabled:
             continue
-        try:
-            secret = secret_path(root, plan.secret_profile)
-        except (ValueError, op_secrets.OpSecretsError) as exc:
-            raise ValueError(f"{host}: {exc}") from exc
-        if not secret.is_file():
-            raise ValueError(
-                f"{host}: missing secret file for profile '{plan.secret_profile}'"
-            )
+        for destination in destinations_for(plan):
+            try:
+                secret = secret_path(root, destination.secret_profile)
+            except (ValueError, op_secrets.OpSecretsError) as exc:
+                raise ValueError(f"{host}: {exc}") from exc
+            if not secret.is_file():
+                raise ValueError(
+                    f"{host}: missing secret file for profile '{destination.secret_profile}'"
+                )
         if plan.encrypt:
             try:
                 validate_secret_reference(root, ENCRYPTION_KEY_SECRET)
@@ -175,6 +183,35 @@ def normalize_backup_plan(root: Path, registry, host: str) -> BackupPlan:
             f"{prefix} for {host} requires config.type of 'ubuntu' or 'pve'"
         )
 
+    fallback_config = registry.get(host, f"{prefix}.fallback_destinations", [])
+    if not isinstance(fallback_config, list):
+        raise ValueError(f"{prefix}.fallback_destinations must be a list for {host}")
+    fallback_destinations: list[BackupDestination] = []
+    for index, destination in enumerate(fallback_config):
+        if not isinstance(destination, dict):
+            raise ValueError(
+                f"invalid {prefix}.fallback_destinations entry at index {index} for {host}"
+            )
+        fallback_destinations.append(
+            BackupDestination(
+                repository=require_text(
+                    destination.get("repository", ""),
+                    f"fallback repository required for {host}",
+                ),
+                secret_profile=require_text(
+                    destination.get("secret_profile", ""),
+                    f"fallback secret_profile required for {host}",
+                ),
+            )
+        )
+
+    repository = require_text(
+        registry.get(host, f"{prefix}.repository", ""),
+        f"{prefix}.repository required for {host}",
+    )
+    if any(destination.repository == repository for destination in fallback_destinations):
+        raise ValueError(f"duplicate PBS repository for {host}")
+
     return BackupPlan(
         enabled=normalize_bool(
             registry.get(host, f"{prefix}.enabled", None),
@@ -183,10 +220,7 @@ def normalize_backup_plan(root: Path, registry, host: str) -> BackupPlan:
         ),
         paused=feature_paused(registry, host, prefix),
         schedule=str(registry.get(host, f"{prefix}.schedule", "*-*-* 00:20:00")),
-        repository=require_text(
-            registry.get(host, f"{prefix}.repository", ""),
-            f"{prefix}.repository required for {host}",
-        ),
+        repository=repository,
         namespace=str(registry.get(host, f"{prefix}.namespace", "")).strip(),
         secret_profile=require_text(
             registry.get(host, f"{prefix}.secret_profile", ""),
@@ -204,6 +238,7 @@ def normalize_backup_plan(root: Path, registry, host: str) -> BackupPlan:
             f"{prefix}.encrypt for {host} must be true or false",
         ),
         archives=tuple(archives),
+        fallback_destinations=tuple(fallback_destinations),
     )
 
 
@@ -234,16 +269,15 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
         hostname=str(registry.get(host, "config.hostname", host)),
     )
     print_sub("Comparing with remote configs...")
-    secret = secret_path(root, plan.secret_profile)
+    destinations = destinations_for(plan)
     for message in diff_many(
         connection,
         [
-            (
-                secret if spec.build_name == "homelab-pbs-client-backup.env"
-                else build_dir / spec.build_name,
-                spec.remote_path,
-            )
+            (build_dir / spec.build_name, spec.remote_path)
             for spec in FILE_SPECS
+        ] + [
+            (secret_path(root, destination.secret_profile), destination_env_path(index))
+            for index, destination in enumerate(destinations)
         ],
     ):
         print_sub(message)
@@ -261,17 +295,20 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
         return
 
     with tmpfs_secret_stage("homelab-pbs-client-backup.") as secret_dir:
-        secret_stage = copy_cached_secret(
-            root,
-            secret_name_for_profile(plan.secret_profile),
-            secret_dir / "homelab-pbs-client-backup.env",
-        )
         upload_paths = [
             (build_dir, f"{REMOTE_ROOT}/build/{host}"),
-            (secret_stage, f"{REMOTE_ROOT}/build/{host}/homelab-pbs-client-backup.env"),
             (root / MODULE_DIR / "configs", f"{REMOTE_ROOT}/configs"),
             (root / MODULE_DIR / "scripts", f"{REMOTE_ROOT}/scripts"),
         ]
+        for index, destination in enumerate(destinations):
+            upload_paths.append((
+                copy_cached_secret(
+                    root,
+                    secret_name_for_profile(destination.secret_profile),
+                    secret_dir / f"destination-{index}.env",
+                ),
+                f"{REMOTE_ROOT}/build/{host}/destination-{index}.env",
+            ))
         if plan.encrypt:
             keyfile_stage = stage_encryption_keyfile(
                 root,
@@ -317,7 +354,6 @@ def build_host_bundle(root: Path, host: str, plan: BackupPlan, build_dir: Path) 
 
 def write_config(path: Path, plan: BackupPlan) -> None:
     lines = [
-        f'REPOSITORY="{plan.repository}"',
         f'NAMESPACE="{plan.namespace}"',
         f'BACKUP_ID="{plan.backup_id}"',
         f'BACKUP_TYPE="{plan.backup_type}"',
@@ -327,7 +363,13 @@ def write_config(path: Path, plan: BackupPlan) -> None:
         f'KEYFILE="{KEYFILE_REMOTE_PATH}"',
         f'RETIRE_PVE_CONFIG_BACKUP="{str(plan.host_type == "pve").lower()}"',
         f'ARCHIVE_COUNT="{len(plan.archives)}"',
+        f'DESTINATION_COUNT="{len(destinations_for(plan))}"',
     ]
+    for index, destination in enumerate(destinations_for(plan)):
+        lines.extend([
+            f'DESTINATION_{index}_REPOSITORY="{destination.repository}"',
+            f'DESTINATION_{index}_ENV_FILE="{destination_env_path(index)}"',
+        ])
     for index, archive in enumerate(plan.archives):
         lines.extend(
             [
@@ -340,3 +382,11 @@ def write_config(path: Path, plan: BackupPlan) -> None:
         for exclude_index, exclude in enumerate(archive.excludes):
             lines.append(f'ARCHIVE_{index}_EXCLUDE_{exclude_index}="{exclude}"')
     path.write_text("\n".join([*lines, ""]), encoding="utf-8")
+
+
+def destinations_for(plan: BackupPlan) -> tuple[BackupDestination, ...]:
+    return (BackupDestination(plan.repository, plan.secret_profile), *plan.fallback_destinations)
+
+
+def destination_env_path(index: int) -> str:
+    return f"/etc/homelab/pbs-client-backup-destination-{index}.env"

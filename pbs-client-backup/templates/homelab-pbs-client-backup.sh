@@ -3,38 +3,15 @@
 set -euo pipefail
 
 CONFIG_FILE="/etc/homelab/pbs-client-backup.conf"
-ENV_FILE="/etc/homelab/pbs-client-backup.env"
 
 if [[ ! -f "$CONFIG_FILE" ]]; then
     echo "Missing config: $CONFIG_FILE" >&2
     exit 1
 fi
 
-if [[ ! -f "$ENV_FILE" ]]; then
-    echo "Missing env file: $ENV_FILE" >&2
-    exit 1
-fi
-
 # shellcheck source=/dev/null
 source "$CONFIG_FILE"
-# shellcheck source=/dev/null
-source "$ENV_FILE"
-
-if [[ -z "${PBS_PASSWORD:-}" && -z "${PBS_TOKEN_SECRET:-}" ]]; then
-    echo "PBS_PASSWORD or PBS_TOKEN_SECRET is not set" >&2
-    exit 1
-fi
-
-if [[ "$REPOSITORY" == *'!'* && -z "${PBS_TOKEN_SECRET:-}" ]]; then
-    PBS_TOKEN_SECRET="$PBS_PASSWORD"
-fi
-if [[ "$REPOSITORY" == *'!'* && -z "${PBS_PASSWORD:-}" ]]; then
-    PBS_PASSWORD="$PBS_TOKEN_SECRET"
-fi
-
-export PBS_PASSWORD PBS_TOKEN_SECRET PBS_FINGERPRINT
-
-if [[ -z "${REPOSITORY:-}" || -z "${BACKUP_ID:-}" || -z "${BACKUP_TYPE:-}" ]]; then
+if [[ -z "${BACKUP_ID:-}" || -z "${BACKUP_TYPE:-}" ]]; then
     echo "Missing required PBS backup configuration" >&2
     exit 1
 fi
@@ -66,6 +43,8 @@ latest_snapshot_path() {
 }
 
 backup_with_client() {
+    local repository="$1"
+    local env_file="$2"
     local archive_specs=("${HOST_ARCHIVE_SPECS[@]}")
     local exclude_args=("${PBS_EXCLUDE_ARGS[@]}")
     local namespace_args=()
@@ -88,9 +67,23 @@ backup_with_client() {
         echo "Client-side encryption enabled (keyfile: $KEYFILE)"
     fi
 
+    if [[ ! -f "$env_file" ]]; then
+        echo "Missing destination env file: $env_file" >&2
+        return 1
+    fi
+    unset PBS_PASSWORD PBS_TOKEN_SECRET PBS_FINGERPRINT
+    # shellcheck source=/dev/null
+    source "$env_file"
+    if [[ -z "${PBS_PASSWORD:-}" && -z "${PBS_TOKEN_SECRET:-}" ]]; then
+        echo "PBS_PASSWORD or PBS_TOKEN_SECRET is not set" >&2
+        return 1
+    fi
+    if [[ "$repository" == *'!'* && -z "${PBS_TOKEN_SECRET:-}" ]]; then PBS_TOKEN_SECRET="$PBS_PASSWORD"; fi
+    if [[ "$repository" == *'!'* && -z "${PBS_PASSWORD:-}" ]]; then PBS_PASSWORD="$PBS_TOKEN_SECRET"; fi
+    export PBS_PASSWORD PBS_TOKEN_SECRET PBS_FINGERPRINT
     proxmox-backup-client backup "${archive_specs[@]}" \
         "${exclude_args[@]}" \
-        --repository "$REPOSITORY" \
+        --repository "$repository" \
         "${namespace_args[@]}" \
         "${crypt_args[@]}" \
         --backup-type "$BACKUP_TYPE" \
@@ -150,6 +143,22 @@ for ((i = 0; i < archive_count; i++)); do
     done
 done
 
-backup_with_client
-
-echo "PBS client backup completed: $BACKUP_ID -> $REPOSITORY"
+destination_count="${DESTINATION_COUNT:-0}"
+if [[ ! "$destination_count" =~ ^[1-9][0-9]*$ ]]; then
+    echo "DESTINATION_COUNT must be a positive integer" >&2
+    exit 1
+fi
+failed=0
+for ((i = 0; i < destination_count; i++)); do
+    repository_var="DESTINATION_${i}_REPOSITORY"
+    env_file_var="DESTINATION_${i}_ENV_FILE"
+    repository="${!repository_var:-}"
+    env_file="${!env_file_var:-}"
+    if [[ -z "$repository" || -z "$env_file" ]] || ! backup_with_client "$repository" "$env_file"; then
+        echo "PBS client backup failed: $BACKUP_ID -> ${repository:-<missing destination>}" >&2
+        failed=1
+    else
+        echo "PBS client backup completed: $BACKUP_ID -> $repository"
+    fi
+done
+exit "$failed"

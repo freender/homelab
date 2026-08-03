@@ -78,17 +78,6 @@ def validate_standalone_backup_config(root: Path, host: str) -> None:
         if name in storage_names:
             raise ValueError(f"duplicate PVE backup storage {name!r} for {host}")
         storage_names.add(name)
-        username = str(storage.get("username", "")).strip()
-        password_var = str(storage.get("password_var", "")).strip()
-        xur_token_vars = {
-            "PBS_BACKUP_XUR_CINCI_PASSWORD",
-            "PBS_BACKUP_XUR_COTTONWOOD_PASSWORD",
-        }
-        if password_var in xur_token_vars and "!" not in username:
-            raise ValueError(
-                f"{host}: Xur PBS storage {name!r} must use an API token username"
-            )
-
     seen_jobs: set[tuple[str, str, str, str]] = set()
     for index, job in enumerate(jobs):
         if not isinstance(job, dict):
@@ -167,16 +156,15 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
 
         if (build_dir / "restore-plan.conf").is_file():
             plan = pbs_client_backup.normalize_backup_plan(root, default_registry(root), host)
-            upload_paths.append(
-                (
+            for index, destination in enumerate(pbs_client_backup.destinations_for(plan)):
+                upload_paths.append((
                     copy_cached_secret(
                         root,
-                        pbs_client_backup.secret_name_for_profile(plan.secret_profile),
-                        secret_dir / "pbs.env",
+                        pbs_client_backup.secret_name_for_profile(destination.secret_profile),
+                        secret_dir / f"pbs-{index}.env",
                     ),
-                    f"{REMOTE_ROOT}/build/{host}/pbs.env",
-                )
-            )
+                    f"{REMOTE_ROOT}/build/{host}/pbs-{index}.env",
+                ))
 
         connection = HostConnection(host)
         stage_and_run_remote_installer(
@@ -496,7 +484,6 @@ def build_config_restore_plan(root: Path, host: str, build_dir: Path) -> None:
     (build_dir / "restore-plan.conf").write_text(
         "\n".join(
             [
-                f"REPOSITORY='{shell_quote(plan.repository)}'",
                 f"NAMESPACE='{shell_quote(plan.namespace)}'",
                 f"BACKUP_ID='{shell_quote(plan.backup_id)}'",
                 f"ARCHIVE_NAME='{shell_quote(pve_archive.name)}'",
@@ -505,6 +492,11 @@ def build_config_restore_plan(root: Path, host: str, build_dir: Path) -> None:
                 f"RESTORE_LXC_CONFIGS_ENABLED='{str(restore_lxc_enabled).lower()}'",
                 f"RESTORE_LXC_AUTOSTART='{str(restore_lxc_autostart).lower()}'",
                 f"RESTORE_LXC_CONFIG_COUNT='{len(restore_lxc_vmids)}'",
+                f"DESTINATION_COUNT='{len(pbs_client_backup.destinations_for(plan))}'",
+                *[
+                    f"DESTINATION_{index}_REPOSITORY='{shell_quote(destination.repository)}'"
+                    for index, destination in enumerate(pbs_client_backup.destinations_for(plan))
+                ],
                 *[
                     f"RESTORE_LXC_CONFIG_{index}_VMID='{shell_quote(vmid)}'"
                     for index, vmid in enumerate(restore_lxc_vmids)

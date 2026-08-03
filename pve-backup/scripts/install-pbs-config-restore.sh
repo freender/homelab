@@ -7,7 +7,6 @@ HOST=${1:-$(hostname)}
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD_DIR="$SCRIPT_DIR/build/$HOST"
 PLAN_FILE="$BUILD_DIR/restore-plan.conf"
-ENV_FILE_SOURCE="$BUILD_DIR/pbs.env"
 RESTORE_ROOT="/tmp/pve-config-restore"
 RESTORE_OUTPUT_DIR="/var/lib/homelab/pve-config-restore"
 
@@ -53,13 +52,13 @@ restore_lxc_configs() {
     fi
 
     if [[ ! "$count" =~ ^[0-9]+$ || "$count" -eq 0 ]]; then
-        print_sub "No LXC configs listed for restore; skipping"
-        return 0
+        print_error "No LXC configs listed for restore"
+        return 1
     fi
 
     if [[ ! -d "$source_lxc_dir" ]]; then
-        print_warn "No restored LXC config directory found: $source_lxc_dir"
-        return 0
+        print_error "No restored LXC config directory found: $source_lxc_dir"
+        return 1
     fi
 
     mkdir -p "$live_lxc_dir"
@@ -68,15 +67,15 @@ restore_lxc_configs() {
         vmid_var="RESTORE_LXC_CONFIG_${index}_VMID"
         vmid="${!vmid_var:-}"
         if [[ ! "$vmid" =~ ^[1-9][0-9]{0,8}$ ]]; then
-            print_warn "Invalid LXC VMID in restore plan at index $index; skipping"
-            continue
+            print_error "Invalid LXC VMID in restore plan at index $index"
+            return 1
         fi
 
         source_config="$source_lxc_dir/$vmid.conf"
         live_config="$live_lxc_dir/$vmid.conf"
         if [[ ! -f "$source_config" ]]; then
-            print_warn "Restored LXC config missing: $source_config"
-            continue
+            print_error "Restored LXC config missing: $source_config"
+            return 1
         fi
 
         desired_config="$(prepare_lxc_config "$source_config")"
@@ -91,13 +90,13 @@ restore_lxc_configs() {
             continue
         fi
 
-        warn_missing_lxc_volumes "$desired_config" "$vmid"
+        warn_missing_lxc_volumes "$desired_config" "$vmid" || return 1
         copy_lxc_config "$desired_config" "$live_config"
         rm -f "$desired_config"
         print_sub "Restored LXC $vmid config"
 
         if [[ "${RESTORE_LXC_AUTOSTART:-false}" == "true" ]]; then
-            pct start "$vmid" || print_warn "failed to start LXC $vmid"
+            pct start "$vmid" || return 1
         fi
     done
 }
@@ -117,7 +116,8 @@ warn_missing_lxc_volumes() {
         value="${value# }"
         volume="${value%%,*}"
         if [[ "$volume" == *":"* ]] && ! pvesm path "$volume" >/dev/null 2>&1; then
-            print_warn "LXC $vmid references missing volume: $volume"
+            print_error "LXC $vmid references missing volume: $volume"
+            return 1
         fi
     done < "$config"
 }
@@ -161,47 +161,17 @@ if [[ ! -f "$PLAN_FILE" ]]; then
     exit 0
 fi
 
-if [[ ! -f "$ENV_FILE_SOURCE" ]]; then
-    print_warn "Missing PBS env file: $ENV_FILE_SOURCE"
-    exit 0
-fi
-
 if ! command -v proxmox-backup-client >/dev/null 2>&1; then
-    print_warn "proxmox-backup-client not found; skipping PBS config restore"
-    exit 0
+    print_error "proxmox-backup-client not found"
+    exit 1
 fi
 
 # shellcheck disable=SC1090
 source "$PLAN_FILE"
-set -a
-# shellcheck disable=SC1090
-source "$ENV_FILE_SOURCE"
-set +a
 
-if [[ -z "${REPOSITORY:-}" || -z "${BACKUP_ID:-}" || -z "${ARCHIVE_NAME:-}" ]]; then
-    print_warn "Restore plan missing required values; skipping"
-    exit 0
-fi
-
-if [[ -z "${PBS_PASSWORD:-}" ]]; then
-    if [[ "${REPOSITORY:-}" == *'!'* && -n "${PBS_TOKEN_SECRET:-}" ]]; then
-        PBS_PASSWORD="$PBS_TOKEN_SECRET"
-    fi
-fi
-
-if [[ -z "${PBS_PASSWORD:-}" ]]; then
-    print_warn "PBS_PASSWORD missing in $ENV_FILE_SOURCE; skipping"
-    exit 0
-fi
-
-if [[ "${REPOSITORY:-}" == *'!'* && -z "${PBS_TOKEN_SECRET:-}" ]]; then
-    PBS_TOKEN_SECRET="$PBS_PASSWORD"
-fi
-
-export PBS_PASSWORD PBS_TOKEN_SECRET PBS_FINGERPRINT
-
-if [[ -z "${PBS_FINGERPRINT:-}" ]]; then
-    print_warn "PBS_FINGERPRINT missing in $ENV_FILE_SOURCE; proceeding without fingerprint pin check"
+if [[ -z "${BACKUP_ID:-}" || -z "${ARCHIVE_NAME:-}" ]]; then
+    print_error "Restore plan missing required values"
+    exit 1
 fi
 
 # Client-side encryption: if the /etc/pve archive was written encrypted, the
@@ -211,8 +181,8 @@ crypt_args=()
 if [[ "${ENCRYPT:-false}" == "true" ]]; then
     keyfile="${KEYFILE:-/etc/homelab/pbs-encryption.key}"
     if [[ ! -f "$keyfile" ]]; then
-        print_warn "Restore plan marks encryption but keyfile missing: $keyfile; skipping restore"
-        exit 0
+        print_error "Restore plan marks encryption but keyfile missing: $keyfile"
+        exit 1
     fi
     crypt_args=(--keyfile "$keyfile")
 fi
@@ -222,8 +192,44 @@ if [[ -n "${NAMESPACE:-}" ]]; then
     namespace_args=(--ns "$NAMESPACE")
 fi
 
-print_sub "Searching PBS snapshots for backup id '$BACKUP_ID'..."
-snapshot=$(proxmox-backup-client snapshots --repository "$REPOSITORY" "${namespace_args[@]}" 2>/dev/null | awk -F'│' -v backup_id="$BACKUP_ID" '
+all_lxc_configs_present() {
+    local count="${RESTORE_LXC_CONFIG_COUNT:-0}" index vmid
+    [[ "${RESTORE_LXC_CONFIGS_ENABLED:-false}" != "true" ]] && return 0
+    [[ "$count" =~ ^[0-9]+$ ]] || return 1
+    for ((index = 0; index < count; index++)); do
+        vmid_var="RESTORE_LXC_CONFIG_${index}_VMID"
+        vmid="${!vmid_var:-}"
+        [[ -f "/etc/pve/nodes/$HOST/lxc/$vmid.conf" ]] || return 1
+    done
+}
+
+if [[ "${FORCE_UPDATE:-false}" != "true" ]] && all_lxc_configs_present; then
+    print_sub "All requested LXC configs already exist; skipping PBS config restore"
+    exit 0
+fi
+
+restore_from_destination() {
+    local repository="$1" env_file="$2" snapshot
+    if [[ ! -f "$env_file" ]]; then
+        print_warn "Missing PBS env file: $env_file"
+        return 1
+    fi
+    unset PBS_PASSWORD PBS_TOKEN_SECRET PBS_FINGERPRINT
+    set -a
+    # shellcheck disable=SC1090
+    source "$env_file"
+    set +a
+    if [[ -z "${PBS_PASSWORD:-}" ]]; then
+        PBS_PASSWORD="${PBS_TOKEN_SECRET:-}"
+    fi
+    if [[ -z "${PBS_PASSWORD:-}" ]]; then
+        print_warn "PBS credentials missing for $repository"
+        return 1
+    fi
+    if [[ "$repository" == *'!'* && -z "${PBS_TOKEN_SECRET:-}" ]]; then PBS_TOKEN_SECRET="$PBS_PASSWORD"; fi
+    export PBS_PASSWORD PBS_TOKEN_SECRET PBS_FINGERPRINT
+    print_sub "Searching $repository for backup id '$BACKUP_ID'..."
+    snapshot=$(proxmox-backup-client snapshots --repository "$repository" "${namespace_args[@]}" 2>/dev/null | awk -F'│' -v backup_id="$BACKUP_ID" '
     NF >= 2 {
         snap=$2
         gsub(/^[[:space:]]+|[[:space:]]+$/, "", snap)
@@ -232,26 +238,48 @@ snapshot=$(proxmox-backup-client snapshots --repository "$REPOSITORY" "${namespa
         }
     }
 ' | sort | tail -n 1)
+    if [[ -z "$snapshot" ]]; then
+        print_warn "No PBS snapshot found for host/$BACKUP_ID on $repository"
+        return 1
+    fi
+    print_sub "Restoring snapshot $snapshot from $repository..."
+    rm -rf "$RESTORE_ROOT"
+    mkdir -p "$RESTORE_ROOT/etc-pve"
+    if ! proxmox-backup-client restore "$snapshot" "${ARCHIVE_NAME}.pxar" "$RESTORE_ROOT/etc-pve" --repository "$repository" "${namespace_args[@]}" "${crypt_args[@]}"; then
+        print_warn "Restore failed from $repository"
+        return 1
+    fi
+    return 0
+}
 
-if [[ -z "$snapshot" ]]; then
-    print_sub "No PBS snapshot found for host/$BACKUP_ID; skipping restore"
-    exit 0
-fi
-
-print_sub "Restoring snapshot $snapshot..."
 rm -rf "$RESTORE_ROOT"
-mkdir -p "$RESTORE_ROOT/etc-pve"
 mkdir -p "$RESTORE_OUTPUT_DIR"
-
-proxmox-backup-client restore "$snapshot" "${ARCHIVE_NAME}.pxar" "$RESTORE_ROOT/etc-pve" --repository "$REPOSITORY" "${namespace_args[@]}" "${crypt_args[@]}"
+destination_count="${DESTINATION_COUNT:-0}"
+if [[ ! "$destination_count" =~ ^[1-9][0-9]*$ ]]; then
+    print_error "Restore plan has no PBS destinations"
+    exit 1
+fi
+restored=false
+for ((index = 0; index < destination_count; index++)); do
+    repository_var="DESTINATION_${index}_REPOSITORY"
+    repository="${!repository_var:-}"
+    if [[ -n "$repository" ]] && restore_from_destination "$repository" "$BUILD_DIR/pbs-$index.env"; then
+        restored=true
+        break
+    fi
+done
+if [[ "$restored" != true ]]; then
+    print_error "No configured PBS destination restored host/$BACKUP_ID"
+    exit 1
+fi
 
 if [[ -d "$RESTORE_ROOT/etc-pve/etc/pve" ]]; then
     src_pve="$RESTORE_ROOT/etc-pve/etc/pve"
 elif [[ -d "$RESTORE_ROOT/etc-pve" ]]; then
     src_pve="$RESTORE_ROOT/etc-pve"
 else
-    print_warn "Restored archive did not contain /etc/pve layout; skipping"
-    exit 0
+    print_error "Restored archive did not contain /etc/pve layout"
+    exit 1
 fi
 
 rm -rf "$RESTORE_OUTPUT_DIR/latest"
@@ -259,6 +287,6 @@ cp -r "$src_pve" "$RESTORE_OUTPUT_DIR/latest"
 print_sub "Fetched /etc/pve backup to $RESTORE_OUTPUT_DIR/latest"
 
 apply_restored_notifications "$RESTORE_OUTPUT_DIR/latest"
-restore_lxc_configs "$RESTORE_OUTPUT_DIR/latest"
+restore_lxc_configs "$RESTORE_OUTPUT_DIR/latest" || exit 1
 
 print_sub "PBS config restore completed"
