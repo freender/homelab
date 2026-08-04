@@ -121,3 +121,13 @@ def test_host_has_encrypted_storage(
         lambda root: _storage_registry([{"name": "s"}]),
     )
     assert pve_backup.host_has_encrypted_storage(tmp_path, "ace") is False
+
+
+def test_osiris_config_restore_plan_uses_encryption_key(tmp_path: Path) -> None:
+    root = Path(__file__).resolve().parents[1]
+    pve_backup.build_config_restore_plan(root, "osiris", tmp_path)
+
+    text = (tmp_path / "restore-plan.conf").read_text(encoding="utf-8")
+    assert "ENCRYPT='true'" in text
+    assert "KEYFILE='/etc/homelab/pbs-encryption.key'" in text
+    assert "ARCHIVE_NAME='etc-pve'" in text

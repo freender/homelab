@@ -10,6 +10,7 @@ PLAN_FILE="$BUILD_DIR/storage-plan.conf"
 TOKENS_FILE="/etc/homelab/pbs-tokens.env"
 STAGED_TOKENS_FILE="$BUILD_DIR/pbs-tokens.env"
 STAGED_KEYFILE="$BUILD_DIR/pbs-encryption.key"
+PERSISTENT_KEYFILE="/etc/homelab/pbs-encryption.key"
 STATE_DIR="/run/homelab-pve-backup"
 STATE_FILE="$STATE_DIR/backup-state.env"
 
@@ -43,6 +44,17 @@ cleanup_staged_tokens() {
     done
 }
 trap cleanup_staged_tokens EXIT
+
+# Keep the shared key available for encrypted host-archive restores. This also
+# makes a direct `pve-backup` deploy safe during rebuilds instead of relying on
+# `pbs-client-backup` having run first.
+if [[ -f "$STAGED_KEYFILE" ]]; then
+    install -d -m 0700 "$(dirname "$PERSISTENT_KEYFILE")"
+    if [[ ! -f "$PERSISTENT_KEYFILE" ]] || ! cmp -s "$STAGED_KEYFILE" "$PERSISTENT_KEYFILE"; then
+        install -m 0600 "$STAGED_KEYFILE" "$PERSISTENT_KEYFILE"
+        print_sub "Installed PBS encryption keyfile at $PERSISTENT_KEYFILE"
+    fi
+fi
 
 # Apply (idempotently) the PBS client-side encryption key to a storage. PVE stores
 # the key at /etc/pve/priv/storage/<name>.enc and records `encryption-key <fp>` in
