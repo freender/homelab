@@ -24,5 +24,7 @@ print_header "Installing SSH config on $HOST"
 mkdir -p ~/.ssh
 chmod 700 ~/.ssh
 
-backup_and_copy_if_changed "$BUILD_DIR/config" ~/.ssh/config "$HOME/.ssh/config" || true
+rc=0
+backup_and_copy_if_changed "$BUILD_DIR/config" ~/.ssh/config "$HOME/.ssh/config" || rc=$?
+[[ $rc -eq 0 || $rc -eq 1 ]] || exit "$rc"
 chmod 600 ~/.ssh/config

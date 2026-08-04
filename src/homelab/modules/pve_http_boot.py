@@ -11,7 +11,13 @@ from .. import op_secrets
 from ..build import copy_files, render_file
 from ..deploy import DeploySession, force_env, prepare_build_dir, stage_and_run_remote_installer
 from ..hosts import HostLookupError, default_registry
-from ..module_support import FileSpec, tmpfs_secret_stage, validate_secret_reference, write_file_map
+from ..module_support import (
+    FileSpec,
+    normalize_bool,
+    tmpfs_secret_stage,
+    validate_secret_reference,
+    write_file_map,
+)
 from ..output import print_action, print_error, print_sub
 from ..ssh import HostConnection, diff_many, offline_mode
 from .pve_autoinstall import (
@@ -303,10 +309,11 @@ def _iso_target_hosts(registry: Any) -> list[str]:
 
 
 def _wants_iso(registry: Any, host: str) -> bool:
-    try:
-        return bool(registry.get(host, "pve-autoinstall.iso_build"))
-    except HostLookupError:
-        return False
+    return normalize_bool(
+        registry.get(host, "pve-autoinstall.iso_build", None),
+        False,
+        f"pve-autoinstall.iso_build must be true or false for {host}",
+    )
 
 
 def _find_pdm_host(registry: Any) -> str | None:

@@ -5,7 +5,7 @@ from pathlib import Path
 from ..build import write_env_file
 from ..deploy import DeploySession, force_env, prepare_build_dir, stage_and_run_remote_installer
 from ..hosts import HostLookupError, default_registry
-from ..module_support import feature_paused
+from ..module_support import feature_paused, normalize_bool
 from ..output import print_action, print_sub
 from ..ssh import HostConnection
 
@@ -43,7 +43,8 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
         print_sub(f"Skipping {host}: apt-upgrade supports type ubuntu only")
         return
 
-    autoupgrade = str(registry.get(host, "apt-upgrade.autoupgrade", "false")).lower()
+    autoupgrade_enabled = normalize_autoupgrade(registry, host)
+    autoupgrade = "true" if autoupgrade_enabled else "false"
     schedule = str(registry.get(host, "apt-upgrade.schedule", "*-*-* 09:00:00"))
     paused = feature_paused(registry, host, "apt-upgrade")
 
@@ -85,6 +86,14 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
         return
 
     stage_and_install(root, build_dir, connection, force=force)
+
+
+def normalize_autoupgrade(registry, host: str) -> bool:
+    return normalize_bool(
+        registry.get(host, "apt-upgrade.autoupgrade", None),
+        False,
+        f"apt-upgrade.autoupgrade must be true or false for {host}",
+    )
 
 
 def write_service(build_dir: Path, cleanup: bool) -> None:

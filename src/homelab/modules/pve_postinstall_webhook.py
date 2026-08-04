@@ -6,7 +6,7 @@ from pathlib import Path
 from .. import op_secrets
 from ..deploy import DeploySession, force_env, prepare_build_dir, stage_and_run_remote_installer
 from ..hosts import default_registry
-from ..module_support import tmpfs_secret_stage, validate_secret_reference
+from ..module_support import normalize_bool, tmpfs_secret_stage, validate_secret_reference
 from ..output import print_action, print_error, print_sub
 from ..ssh import HostConnection, diff_many
 
@@ -70,7 +70,8 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
     listen_host = str(registry.get(host, f"{FEATURE}.listen_host", "0.0.0.0"))
     listen_port = str(registry.get(host, f"{FEATURE}.listen_port", "9443"))
     repo_dir = str(registry.get(host, f"{FEATURE}.repo_dir", "/root/homelab"))
-    webhook_dry_run = str(registry.get(host, f"{FEATURE}.dry_run", "true")).lower()
+    webhook_dry_run_enabled = normalize_webhook_dry_run(registry, host)
+    webhook_dry_run = "true" if webhook_dry_run_enabled else "false"
     ssh_timeout = str(registry.get(host, f"{FEATURE}.ssh_timeout_seconds", "1200"))
     deploy_timeout = str(registry.get(host, f"{FEATURE}.deploy_timeout_seconds", "3600"))
 
@@ -157,6 +158,14 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
             require_root=True,
             remote_subdirs=("build", "lib", "scripts"),
         )
+
+
+def normalize_webhook_dry_run(registry, host: str) -> bool:
+    return normalize_bool(
+        registry.get(host, f"{FEATURE}.dry_run", None),
+        True,
+        f"{FEATURE}.dry_run must be true or false for {host}",
+    )
 
 
 def _env_values(

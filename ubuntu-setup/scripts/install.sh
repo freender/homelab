@@ -136,6 +136,7 @@ if ! visudo -cf "$BUILD_DIR/sudoers" >/dev/null; then
 fi
 rc=0
 install_build_file "sudoers" || rc=$?
+[[ $rc -eq 0 || $rc -eq 1 ]] || exit "$rc"
 
 print_action "SSH hardening"
 sshd_changed=false
@@ -153,7 +154,7 @@ rc=0
 # merged config, and roll back on failure — otherwise a bad drop-in survives on disk
 # and locks us out at the next sshd restart.
 install_build_file_validated "sshd-hardening.conf" sshd -t || rc=$?
-if [[ $rc -eq 2 ]]; then
+if [[ $rc -gt 1 ]]; then
     print_error "sshd hardening config rejected by sshd -t; rolled back"
     exit 1
 fi
@@ -166,6 +167,7 @@ fi
 print_action "ZFS ARC limit"
 rc=0
 install_build_file "zfs.conf" || rc=$?
+[[ $rc -eq 0 || $rc -eq 1 ]] || exit "$rc"
 if [[ $rc -eq 0 ]]; then
     update-initramfs -u
     echo "$ZFS_ARC_MAX" > /sys/module/zfs/parameters/zfs_arc_max
@@ -175,6 +177,7 @@ fi
 print_action "Inotify limits"
 rc=0
 install_build_file "99-inotify.conf" || rc=$?
+[[ $rc -eq 0 || $rc -eq 1 ]] || exit "$rc"
 if [[ $rc -eq 0 ]]; then
     sysctl --system >/dev/null
     print_ok "Inotify limits applied"
@@ -193,6 +196,7 @@ if [[ "$WIREGUARD_ENABLED" == "true" ]]; then
     print_action "WireGuard sysctl"
     rc=0
     install_build_file "99-wireguard.conf" || rc=$?
+    [[ $rc -eq 0 || $rc -eq 1 ]] || exit "$rc"
     if [[ $rc -eq 0 ]]; then
         sysctl --system >/dev/null
         print_ok "WireGuard sysctl applied"

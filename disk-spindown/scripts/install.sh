@@ -93,6 +93,7 @@ for file_name in \
     homelab-disk-wakeup.timer; do
     rc=0
     install_build_file "$file_name" || rc=$?
+    [[ $rc -eq 0 || $rc -eq 1 ]] || exit "$rc"
     [[ $rc -eq 0 ]] && config_changed=true
     if [[ $rc -eq 0 ]]; then
         case "$file_name" in

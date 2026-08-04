@@ -176,7 +176,9 @@ def test_filter_hosts_returns_requested_subset(hosts_file: Path) -> None:
 
     assert registry.filter_hosts("all", supported) == supported
     assert registry.filter_hosts("ace", supported) == ["ace"]
-    assert registry.filter_hosts("orbit", supported) == []
+    assert registry.filter_hosts("nullbox", supported) == []
+    with pytest.raises(HostLookupError, match="unknown host 'orbit'"):
+        registry.filter_hosts("orbit", supported)
 
 
 def test_registry_rejects_non_mapping_hosts_file(tmp_path: Path) -> None:

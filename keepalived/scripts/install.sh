@@ -38,10 +38,12 @@ install -d -m 755 /etc/keepalived
 units_changed=false
 rc=0
 install_build_file "healthcheck.sh" || rc=$?
+[[ $rc -eq 0 || $rc -eq 1 ]] || exit "$rc"
 [[ $rc -eq 0 ]] && units_changed=true
 
 rc=0
 install_build_file "keepalived.conf" || rc=$?
+[[ $rc -eq 0 || $rc -eq 1 ]] || exit "$rc"
 [[ $rc -eq 0 ]] && units_changed=true
 
 if [[ "$units_changed" == "true" ]]; then

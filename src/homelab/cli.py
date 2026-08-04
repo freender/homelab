@@ -230,6 +230,9 @@ def list_hosts(feature: str | None) -> None:
 @click.argument("module")
 @click.argument("host")
 def deploy(dry_run: bool, force: bool, module: str, host: str) -> None:
+    if host != "all" and host not in default_registry(repo_root()).list_hosts():
+        raise click.ClickException(f"unknown host '{host}'")
+
     if module == "all":
         failed_modules: list[str] = []
         print_action(f"Deploying homelab to: {host}")

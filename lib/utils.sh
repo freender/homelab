@@ -386,7 +386,8 @@ ensure_timer_state() {
     local units_changed="${3:-false}"
 
     if [[ "$enabled_flag" != "true" ]]; then
-        if systemctl is-enabled --quiet "$timer" 2>/dev/null; then
+        if systemctl is-enabled --quiet "$timer" 2>/dev/null \
+            || systemctl is-active --quiet "$timer" 2>/dev/null; then
             systemctl disable --now "$timer"
             print_ok "$timer disabled"
         else
@@ -406,6 +407,29 @@ ensure_timer_state() {
     fi
 }
 
+# Stop, disable, and remove a managed systemd unit if it exists.
+# Usage: retire_systemd_unit unit-name /etc/systemd/system/unit-name
+retire_systemd_unit() {
+    local unit="$1"
+    local unit_path="$2"
+    local changed=false
+
+    if systemctl is-enabled --quiet "$unit" 2>/dev/null \
+        || systemctl is-active --quiet "$unit" 2>/dev/null; then
+        systemctl disable --now "$unit"
+        changed=true
+        print_sub "Retired $unit"
+    fi
+    if [[ -e "$unit_path" ]]; then
+        rm -f "$unit_path"
+        changed=true
+        print_sub "Removed $unit_path"
+    fi
+    if [[ "$changed" == "true" ]]; then
+        systemctl daemon-reload
+    fi
+}
+
 # Apply the shared module "paused" convention.
 #
 # When paused, stop and disable the given systemd units so the module's managed
@@ -413,14 +437,8 @@ ensure_timer_state() {
 # flipping the flag back. This is distinct from the host-level `deploy: false`
 # targeting gate, which skips deployment entirely and never touches the units.
 #
-# Usage:
-#   if homelab_apply_pause "$PAUSED" unit1.timer unit2.service; then
-#       print_header "My Module Complete (paused)"
-#       exit 0
-#   fi
-#
-# Returns 0 when paused (caller should stop further work / early-exit), and
-# 1 when not paused (caller should continue with normal enable logic).
+# Returns 0 when paused, 1 when not paused, and 2 if a unit could not be stopped.
+# Callers that pass a variable flag must distinguish all three statuses.
 homelab_apply_pause() {
     local paused="$1"
     shift
@@ -435,8 +453,12 @@ homelab_apply_pause() {
         [[ -n "$unit" ]] || continue
         if systemctl is-active --quiet "$unit" 2>/dev/null \
             || systemctl is-enabled --quiet "$unit" 2>/dev/null; then
-            systemctl disable --now "$unit" 2>/dev/null || true
-            print_ok "$unit stopped and disabled"
+            if systemctl disable --now "$unit"; then
+                print_ok "$unit stopped and disabled"
+            else
+                print_error "failed to stop and disable $unit"
+                return 2
+            fi
         else
             print_sub "$unit already stopped"
         fi

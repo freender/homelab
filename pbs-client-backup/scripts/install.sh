@@ -211,10 +211,13 @@ fi
 # Paused: keep the backup script/units installed and current, but stop and
 # disable the timer so no backups run. Flip pbs-client-backup.paused back to
 # false to resume.
-if homelab_apply_pause "${PAUSED:-false}" homelab-pbs-client-backup.timer; then
+pause_rc=0
+homelab_apply_pause "${PAUSED:-false}" homelab-pbs-client-backup.timer || pause_rc=$?
+if [[ $pause_rc -eq 0 ]]; then
     print_header "PBS Client Backup paused"
     exit 0
 fi
+[[ $pause_rc -eq 1 ]] || exit "$pause_rc"
 
 systemctl enable --now homelab-pbs-client-backup.timer >/dev/null
 print_ok "homelab-pbs-client-backup.timer enabled"

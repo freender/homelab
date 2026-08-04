@@ -5,9 +5,15 @@ from pathlib import Path
 
 from .. import op_secrets
 from ..build import render_file
-from ..deploy import DeploySession, force_env, prepare_build_dir, stage_and_run_remote_installer
+from ..deploy import DeploySession, force_env, stage_and_run_remote_installer
 from ..hosts import HostLookupError, default_registry
-from ..module_support import FileSpec, HostArtifacts, require_text, write_file_map
+from ..module_support import (
+    FileSpec,
+    HostArtifacts,
+    require_text,
+    tmpfs_secret_stage,
+    write_file_map,
+)
 from ..output import print_action, print_error, print_sub
 from ..ssh import HostConnection, build_files, diff_many
 
@@ -160,12 +166,10 @@ def normalize_config(root: Path, registry, host: str) -> KeepalivedConfig:
     )
 
 
-def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
+def build_host_artifacts(root: Path, host: str, build_dir: Path) -> HostArtifacts:
     registry = default_registry(root)
     config = normalize_config(root, registry, host)
     module_dir = root / "keepalived"
-    build_dir = module_dir / "build" / host
-    prepare_build_dir(build_dir)
 
     render_file(
         module_dir / "templates" / "healthcheck.sh",
@@ -229,34 +233,35 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
     ssh_user = str(registry.get(host, "config.user"))
     ssh_hostname = str(registry.get(host, "config.hostname", host))
     connection = HostConnection(host, user=ssh_user, hostname=ssh_hostname)
-    artifacts = build_host_artifacts(root, host)
+    with tmpfs_secret_stage(f"homelab-keepalived-{host}.") as build_dir:
+        artifacts = build_host_artifacts(root, host, build_dir)
 
-    print_sub("Comparing with remote configs...")
-    diff_pairs = [
-        (artifacts.build_dir / spec.build_name, spec.remote_path)
-        for spec in artifacts.file_specs
-    ]
-    for message in diff_many(connection, diff_pairs):
-        print_sub(message)
+        print_sub("Comparing with remote configs...")
+        diff_pairs = [
+            (artifacts.build_dir / spec.build_name, spec.remote_path)
+            for spec in artifacts.file_specs
+        ]
+        for message in diff_many(connection, diff_pairs):
+            print_sub(message)
 
-    if dry_run:
-        print_sub(f"[DRY-RUN] Would deploy to {host}:{REMOTE_ROOT}/")
-        print_sub("Build files:")
-        for file_name in build_files(artifacts.build_dir):
-            print_sub(f"    {file_name}")
-        return
+        if dry_run:
+            print_sub(f"[DRY-RUN] Would deploy to {host}:{REMOTE_ROOT}/")
+            print_sub("Build files (tmpfs):")
+            for file_name in build_files(artifacts.build_dir):
+                print_sub(f"    {file_name}")
+            return
 
-    stage_and_run_remote_installer(
-        root,
-        connection,
-        REMOTE_ROOT,
-        [
-            (artifacts.build_dir, f"{REMOTE_ROOT}/build/{host}"),
-            (root / "keepalived" / "scripts", f"{REMOTE_ROOT}/scripts"),
-        ],
-        "scripts/install.sh",
-        host,
-        env=force_env(force),
-        require_root=False,
-        remote_subdirs=("build", "lib"),
-    )
+        stage_and_run_remote_installer(
+            root,
+            connection,
+            REMOTE_ROOT,
+            [
+                (artifacts.build_dir, f"{REMOTE_ROOT}/build/{host}"),
+                (root / "keepalived" / "scripts", f"{REMOTE_ROOT}/scripts"),
+            ],
+            "scripts/install.sh",
+            host,
+            env=force_env(force),
+            require_root=False,
+            remote_subdirs=("build", "lib"),
+        )

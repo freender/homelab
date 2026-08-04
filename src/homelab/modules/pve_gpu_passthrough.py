@@ -7,6 +7,7 @@ from invoke.exceptions import UnexpectedExit
 from ..build import copy_files, render_file
 from ..deploy import DeploySession, prepare_build_dir, stage_and_run_remote_installer
 from ..hosts import default_registry
+from ..module_support import normalize_bool
 from ..output import print_action, print_error, print_sub
 from ..ssh import HostConnection, build_files, offline_mode
 
@@ -68,7 +69,7 @@ def deploy_host(root: Path, host: str, dry_run: bool) -> None:
     configs_dir = module_dir / "configs"
     build_dir = module_dir / "build" / host
     root_dataset = REQUIRED_ROOT_TOKEN.removeprefix("root=ZFS=")
-    isolate_host_gpu = bool(registry.get(host, "pve-gpu-passthrough.isolate_host_gpu", False))
+    isolate_host_gpu = normalize_isolate_host_gpu(registry, host)
     pci_ids = str(registry.get(host, "pve-gpu-passthrough.pci_ids", "")).strip()
 
     connection = HostConnection(host)
@@ -104,6 +105,14 @@ def deploy_host(root: Path, host: str, dry_run: bool) -> None:
         return
 
     stage_and_install(root, host, build_dir, connection)
+
+
+def normalize_isolate_host_gpu(registry, host: str) -> bool:
+    return normalize_bool(
+        registry.get(host, "pve-gpu-passthrough.isolate_host_gpu", None),
+        False,
+        f"pve-gpu-passthrough.isolate_host_gpu must be true or false for {host}",
+    )
 
 
 def dataset_exists(connection: HostConnection, dataset: str) -> bool:

@@ -33,9 +33,10 @@ fi
 
 # Always install the service unit (used both on-demand and by the timer)
 local_changed=false
-if copy_if_changed "$BUILD_DIR/service" "$SERVICE_PATH" "$SERVICE_NAME"; then
-    local_changed=true
-fi
+rc=0
+copy_if_changed "$BUILD_DIR/service" "$SERVICE_PATH" "$SERVICE_NAME" || rc=$?
+[[ $rc -eq 0 || $rc -eq 1 ]] || exit "$rc"
+[[ $rc -eq 0 ]] && local_changed=true
 
 if [[ "$local_changed" == true ]]; then
     systemctl daemon-reload
@@ -43,19 +44,23 @@ fi
 
 # Paused: keep the service unit installed but stop/disable the timer and skip
 # any on-demand upgrade. Flip apt-upgrade.paused back to false to resume.
-if homelab_apply_pause "$PAUSED" "$TIMER_NAME"; then
+pause_rc=0
+homelab_apply_pause "$PAUSED" "$TIMER_NAME" || pause_rc=$?
+if [[ $pause_rc -eq 0 ]]; then
     print_header "apt-upgrade paused"
     if [[ -f /var/run/reboot-required ]]; then
         print_warn "Reboot required on $(hostname)"
     fi
     exit 0
 fi
+[[ $pause_rc -eq 1 ]] || exit "$pause_rc"
 
 if [[ "$AUTOUPGRADE" == "true" ]]; then
     # Install and enable the daily timer
-    if copy_if_changed "$BUILD_DIR/timer" "$TIMER_PATH" "$TIMER_NAME"; then
-        local_changed=true
-    fi
+    rc=0
+    copy_if_changed "$BUILD_DIR/timer" "$TIMER_PATH" "$TIMER_NAME" || rc=$?
+    [[ $rc -eq 0 || $rc -eq 1 ]] || exit "$rc"
+    [[ $rc -eq 0 ]] && local_changed=true
 
     if [[ "$local_changed" == true ]]; then
         systemctl daemon-reload
@@ -75,7 +80,8 @@ if [[ "$AUTOUPGRADE" == "true" ]]; then
 
     systemctl list-timers --all --no-pager | grep -F "$TIMER_NAME" || true
 else
-    # autoupgrade not enabled: install service only, run upgrade now
+    # Autoupgrade not enabled: retire any previous timer, then run once now.
+    retire_systemd_unit "$TIMER_NAME" "$TIMER_PATH"
     print_sub "Running apt upgrade now (autoupgrade not enabled)..."
     systemctl start "$SERVICE_NAME"
     print_sub "Upgrade complete"

@@ -94,6 +94,8 @@ class HostRegistry:
     def filter_hosts(self, requested: str | None, supported: list[str]) -> list[str]:
         if requested in (None, "", "all"):
             return list(supported)
+        if requested not in self.load():
+            raise HostLookupError(f"unknown host '{requested}'")
         if requested in supported:
             return [requested]
         return []
