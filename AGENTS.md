@@ -109,32 +109,29 @@ semantics): `deploy-module` skill.
 
 ## Shipping (`/ship`)
 
-`.opencode/command/ship.md` runs validate -> dry-run -> deploy -> verify -> commit -> push
-autonomously. It is for **routine, incremental changes to modules that already deploy
-successfully**, and is always invoked explicitly — deciding to deploy is a human decision.
+`.opencode/command/ship.md` runs validate -> dry-run -> deploy/canary -> verify -> commit ->
+push -> CI. It is always invoked explicitly, so invocation is the human decision to run a
+live deploy; it does not impose separate module risk tiers.
 
-Renames, retirements, and a module's first-ever deploy are fine to ship **if** the dry-run
-diff is actually read (read it, don't skim it — with no prior baseline to diff against,
-that output is the only review) and the deploy still goes canary-first.
+1. **Validate.** Infer the module from the arguments or related working-tree changes and
+   run `./validate`. Fix a direct in-scope failure and rerun; otherwise stop. Unrelated
+   dirty files do not block shipping and must not be staged.
+2. **Dry-run.** Run `./deploy --dry-run <module> <host>` and read the diff. Stop on an
+   unresolved failure. Record unrelated config drift and continue.
+3. **Deploy/canary.** Deploy a named host directly. For `all`, deploy and verify one
+   suitable host before the rest. Offsite targets are allowed when their key is loaded;
+   skip and report them when the key is unavailable or encrypted.
+4. **Verify.** Check the specific value or behavior changed, not only service activity.
+   Capture pre-state when useful, but it is not mandatory. For renames or retirements,
+   also verify that the old object is gone. Deploy success plus verification failure means
+   the host is **diverged**: stop before commit and push and report the observed state.
+5. **Commit.** Stage only files belonging to the requested change and create a concise
+   commit.
+6. **Push.** Push the commit; stop and report if the push fails.
+7. **CI.** Watch the matching Actions run through completion and investigate failures.
 
-**Not for:** multi-module dirty trees (module inference is unreliable — split the
-unrelated change into its own commit first), incident response (you want a tight manual
-feedback loop), or offsite hosts (`cinci`, `cottonwood`).
-
-| Tier | Modules | Rule |
-| --- | --- | --- |
-| 1 routine | `apcupsd`, `metrics-exporters`, `pve-notifications`, `disk-spindown`, `apt-upgrade`, `pve-http-boot`, `ubuntu-setup`, `wsl-conf` | `/ship` defaults are fine; idempotent and restart-safe. |
-| 2 stateful | `zfs-automation`, `pbs-client-backup`, `pve-backup`, `docker`, `pve-postinstall`, `pve-gpu-passthrough` | Always name a host; canary mandatory; never bare `all`. Failure interrupts replication, backups, or running containers. |
-| 3 control-path | `ssh-config`, `keepalived`, `pve-interface-pinning`, `pve-realtek-r8152-dkms`, `pve-upgrade`, `pve-autoinstall`, `pve-zfs-*-patch`, `pve-lxc-pre-replication-patch` | **Never `/ship`.** Deploy manually with console access confirmed. Failure severs SSH, networking, or the VIP, and the pipeline cannot verify or recover a host it can no longer reach. |
-
-**Escalation ladder — never skip a rung:** manual `./deploy --dry-run <module> <host>`,
-reading the diff yourself -> `/ship <module> <one-host>` as canary, reading the quoted
-evidence rather than "verified OK" -> `/ship <module> all`, Tier 1 only and only after a
-clean canary.
-
-A **host diverged** report is the highest-priority outcome: deploy succeeded but the
-predicate failed, so the host matches neither git nor its pre-state. Resolve that before
-touching anything else.
+Report what shipped or was skipped, the verification and observed value, commit hash, and
+CI status. If stopped, name the failed step and whether a host was left diverged.
 
 ## Module Retirement
 

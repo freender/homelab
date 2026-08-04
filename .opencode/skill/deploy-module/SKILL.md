@@ -169,43 +169,6 @@ deploy` discovery needed.
 
 ## Shipping (`/ship` pipeline)
 
-`/ship` wraps this CLI in validate -> dry-run -> deploy -> verify -> commit -> push.
-**When** to use it, the module risk tiers, and the escalation ladder live in
-`AGENTS.md` ("Shipping Strategy"). This section covers the execution detail.
-
-### Writing a success predicate
-
-Every ship run must state, before deploying, a specific assertion the change makes
-true on the host. `systemctl is-active` alone is never sufficient — a service runs
-happily on the old config. Assert on the *changed value*:
-
-```bash
-systemctl show <unit> -p ExecStart          # new flag/arg present
-grep -q '<new value>' /etc/<path>           # rendered config landed
-systemctl list-timers --all '<timer>'       # next elapse matches new schedule
-systemctl is-enabled <unit>                 # paused: true -> disabled + inactive
-curl -sf localhost:<port>/metrics | grep -q '<metric>'   # exporter actually serving
-docker inspect -f '{{.Config.Image}}' <ctr> # container on the new image
-```
-
-Capture the same value *before* deploying. Without a pre-state there is nothing to
-compare against, and "verified" degrades into "the installer exited 0".
-
-For renames, retirements, and path migrations the predicate must also assert the
-**negative** — old unit gone, old path absent. A predicate that only checks the new
-state passes while the host still carries the old one.
-
-### Stop-reason playbook
-
-| Report says | Action |
-| --- | --- |
-| Precondition failed | Clean the working tree or name the module explicitly, then re-run. |
-| No predicate statable | The change isn't verifiable — a design gap. Fix before shipping. |
-| Validate/dry-run failed after 3 auto-fixes | Real problem. Go back to editing; don't re-run `/ship`. |
-| Transient exhausted its retry | Check host reachability, then re-run — idempotent up to the deploy step. |
-| **Host diverged** | Highest priority. Host matches neither git nor pre-state. Decide re-deploy from HEAD vs. manual revert before touching anything else. |
-| CI red after push | `./validate` claims CI parity, so red means flake or environment drift. Investigate; the change is already live. |
-
-Auto-fix boundary: before deploy (validate, dry-run) everything is repo-only and
-reversible, so fixing and re-running is safe. Once deploy has touched a host, never
-auto-fix — recover and report.
+`/ship` wraps this CLI in validate -> dry-run -> deploy/canary -> verify -> commit -> push
+-> CI. `AGENTS.md` owns the behavior and stop conditions for every step; this skill only
+provides the deployment CLI and implementation mechanics used by that pipeline.
