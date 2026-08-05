@@ -1,0 +1,30 @@
+groups:
+  - name: zfs-pools
+    interval: 1m
+    rules:
+      - alert: ZfsPoolDegraded
+        expr: homelab_zpool_healthy == 0
+        for: 3m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.host }} zpool {{ $labels.zpool }} is not ONLINE"
+          description: "homelab_zpool_healthy is 0 for {{ $labels.host }}/{{ $labels.zpool }} (tier={{ $labels.tier }}, role={{ $labels.role }}). Check `zpool status -x {{ $labels.zpool }}` on {{ $labels.host }}."
+
+      - alert: ZfsPoolMetricsMissing
+        expr: absent_over_time(homelab_zpool_healthy{host=~"ace|bray|clovis|osiris"}[15m])
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "ZFS pool health metrics missing"
+          description: "homelab_zpool_healthy has produced no samples for any ace/bray/clovis/osiris pool in 15 minutes; the zfs-pool-textfile-exporter timer may be stopped or node_exporter may be down."
+
+      - alert: ZfsPoolMetricsMissingOffsite
+        expr: absent_over_time(homelab_zpool_healthy{host=~"cinci|cottonwood"}[1h])
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Offsite ZFS pool health metrics missing"
+          description: "homelab_zpool_healthy has produced no samples for any cinci/cottonwood pool in 1 hour; longer window than the on-prem rule to tolerate offsite link flaps. Could mean the exporter/link is down, or that host is genuinely unreachable."

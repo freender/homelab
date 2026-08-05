@@ -1,0 +1,52 @@
+groups:
+  - name: important-containers
+    interval: 30s
+    rules:
+      - alert: ImportantContainerMissing
+        expr: absent_over_time(container_last_seen{job="cadvisor", host="tower", name="radarr"}[5m])
+        labels: {severity: warning, category: docker, site: home, host: tower, name: radarr}
+        annotations: {summary: "tower / radarr is missing", description: "Important app container has not been seen by cAdvisor for 5 minutes."}
+      - alert: ImportantContainerMissing
+        expr: absent_over_time(container_last_seen{job="cadvisor", host="tower", name="radarr4k"}[5m])
+        labels: {severity: warning, category: docker, site: home, host: tower, name: radarr4k}
+        annotations: {summary: "tower / radarr4k is missing", description: "Important app container has not been seen by cAdvisor for 5 minutes."}
+      - alert: ImportantContainerMissing
+        expr: absent_over_time(container_last_seen{job="cadvisor", host="tower", name="sonarr"}[5m])
+        labels: {severity: warning, category: docker, site: home, host: tower, name: sonarr}
+        annotations: {summary: "tower / sonarr is missing", description: "Important app container has not been seen by cAdvisor for 5 minutes."}
+      - alert: ImportantContainerMissing
+        expr: absent_over_time(container_last_seen{job="cadvisor", host="tower", name="sonarr4k"}[5m])
+        labels: {severity: warning, category: docker, site: home, host: tower, name: sonarr4k}
+        annotations: {summary: "tower / sonarr4k is missing", description: "Important app container has not been seen by cAdvisor for 5 minutes."}
+      - alert: ImportantContainerMissing
+        expr: absent_over_time(container_last_seen{job="cadvisor", host="tower", name="bazarr"}[5m])
+        labels: {severity: warning, category: docker, site: home, host: tower, name: bazarr}
+        annotations: {summary: "tower / bazarr is missing", description: "Important app container has not been seen by cAdvisor for 5 minutes."}
+      - alert: ImportantContainerMissing
+        expr: absent_over_time(container_last_seen{job="cadvisor", host="tower", name="bazarr4k"}[5m])
+        labels: {severity: warning, category: docker, site: home, host: tower, name: bazarr4k}
+        annotations: {summary: "tower / bazarr4k is missing", description: "Important app container has not been seen by cAdvisor for 5 minutes."}
+      - alert: ImportantContainerMissing
+        expr: absent_over_time(container_last_seen{job="cadvisor", host="tower", name="prowlarr"}[5m])
+        labels: {severity: warning, category: docker, site: home, host: tower, name: prowlarr}
+        annotations: {summary: "tower / prowlarr is missing", description: "Important app container has not been seen by cAdvisor for 5 minutes."}
+      - alert: ImportantContainerMissing
+        expr: absent_over_time(container_last_seen{job="cadvisor", host="tower", name="sabnzbd"}[5m])
+        labels: {severity: warning, category: docker, site: home, host: tower, name: sabnzbd}
+        annotations: {summary: "tower / sabnzbd is missing", description: "Important app container has not been seen by cAdvisor for 5 minutes."}
+      - alert: ImportantContainerMissing
+        expr: absent_over_time(container_last_seen{job="cadvisor", host="tower", name="qbittorrent"}[5m])
+        labels: {severity: warning, category: docker, site: home, host: tower, name: qbittorrent}
+        annotations: {summary: "tower / qbittorrent is missing", description: "Important app container has not been seen by cAdvisor for 5 minutes."}
+      - alert: ImportantContainerMissing
+        expr: absent_over_time(container_last_seen{job="cadvisor", host="tower", name="tautulli"}[5m])
+        labels: {severity: warning, category: docker, site: home, host: tower, name: tautulli}
+        annotations: {summary: "tower / tautulli is missing", description: "Important app container has not been seen by cAdvisor for 5 minutes."}
+      - alert: ImportantContainerMissing
+        expr: absent_over_time(container_last_seen{job="cadvisor", host="tower", name="jellyfin"}[5m])
+        labels: {severity: warning, category: docker, site: home, host: tower, name: jellyfin}
+        annotations: {summary: "tower / jellyfin is missing", description: "Important app container has not been seen by cAdvisor for 5 minutes."}
+      - alert: ImportantContainerMissing
+        expr: absent_over_time(container_last_seen{job="cadvisor", host="tower", name="nzbhydra"}[5m])
+        labels: {severity: warning, category: docker, site: home, host: tower, name: nzbhydra}
+        annotations: {summary: "tower / nzbhydra is missing", description: "Important app container has not been seen by cAdvisor for 5 minutes."}

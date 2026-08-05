@@ -1,0 +1,140 @@
+global:
+  scrape_interval: 10s
+  scrape_timeout: 8s
+
+scrape_configs:
+  - job_name: pve-node
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: endpoint
+      - source_labels: [host]
+        target_label: instance
+    static_configs:
+      - targets: ["ace.freender.internal:9100"]
+        labels:
+          host: ace
+      - targets: ["bray.freender.internal:9100"]
+        labels:
+          host: bray
+      - targets: ["clovis.freender.internal:9100"]
+        labels:
+          host: clovis
+      - targets: ["osiris.freender.internal:9100"]
+        labels:
+          host: osiris
+      - targets: ["tower.freender.internal:9100"]
+        labels:
+          host: tower
+      - targets: ["helm.freender.internal:9100"]
+        labels:
+          host: helm
+      - targets: ["cottonwood.internal:9100"]
+        labels:
+          host: cottonwood
+      - targets: ["cinci.internal:9100"]
+        labels:
+          host: cinci
+      - targets: ["neo.freender.internal:9100"]
+        labels:
+          host: neo
+
+  - job_name: pve-smartctl
+    scrape_interval: 10s
+    scrape_timeout: 20s
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: endpoint
+      - source_labels: [host]
+        target_label: instance
+    static_configs:
+      - targets: ["ace.freender.internal:9633"]
+        labels:
+          host: ace
+      - targets: ["bray.freender.internal:9633"]
+        labels:
+          host: bray
+      - targets: ["clovis.freender.internal:9633"]
+        labels:
+          host: clovis
+      - targets: ["osiris.freender.internal:9633"]
+        labels:
+          host: osiris
+      - targets: ["cottonwood.internal:9633"]
+        labels:
+          host: cottonwood
+      - targets: ["cinci.internal:9633"]
+        labels:
+          host: cinci
+
+  - job_name: cadvisor
+    scrape_interval: 10s
+    scrape_timeout: 8s
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: endpoint
+      - source_labels: [host]
+        target_label: instance
+    static_configs:
+      - targets: ["tower-cadvisor:8080"]
+        labels:
+          host: tower
+      - targets: ["helm-cadvisor:8080"]
+        labels:
+          host: helm
+      - targets: ["cottonwood.internal:9080"]
+        labels:
+          host: cottonwood
+      - targets: ["cinci.internal:9080"]
+        labels:
+          host: cinci
+      - targets: ["neo-cadvisor:8080"]
+        labels:
+          host: neo
+
+  - job_name: apcupsd
+    scrape_interval: 10s
+    scrape_timeout: 8s
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: endpoint
+      - source_labels: [host]
+        target_label: instance
+    static_configs:
+      - targets: ["bray.freender.internal:9162"]
+        labels:
+          host: bray
+      - targets: ["osiris.freender.internal:9162"]
+        labels:
+          host: osiris
+
+  - job_name: intel-gpu
+    scrape_interval: 10s
+    scrape_timeout: 8s
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: endpoint
+      - source_labels: [host]
+        target_label: instance
+    static_configs:
+      - targets: ["ace.freender.internal:9400"]
+        labels:
+          host: ace
+      - targets: ["bray.freender.internal:9400"]
+        labels:
+          host: bray
+      - targets: ["clovis.freender.internal:9400"]
+        labels:
+          host: clovis
+
+  - job_name: victoria-logs
+    scrape_interval: 10s
+    scrape_timeout: 8s
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: endpoint
+      - source_labels: [host]
+        target_label: instance
+    static_configs:
+      - targets: ["victoria-logs:9428"]
+        labels:
+          host: helm

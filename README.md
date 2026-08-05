@@ -47,6 +47,20 @@ Prometheus-native host metrics for Proxmox, Ubuntu, and LXC guest hosts, includi
 ./deploy metrics-exporters all
 ```
 
+### [vmalert-rules](vmalert-rules/)
+VictoriaMetrics alert rules for the monitoring stack on Helm
+
+```bash
+./deploy vmalert-rules helm
+```
+
+### [monitoring-config](monitoring-config/)
+Shared vmagent scrape targets and the secret-free Alertmanager template
+
+```bash
+./deploy monitoring-config all
+```
+
 ### [apt-upgrade](apt-upgrade/)
 Remote apt dist-upgrade across PVE and Ubuntu hosts
 

@@ -11,6 +11,7 @@ from .disk_spindown import deploy as deploy_disk_spindown
 from .docker import deploy as deploy_docker
 from .keepalived import deploy as deploy_keepalived
 from .metrics_exporters import deploy as deploy_metrics_exporters
+from .monitoring_config import deploy as deploy_monitoring_config
 from .pbs_client_backup import deploy as deploy_pbs_client_backup
 from .pve_autoinstall import deploy as deploy_pve_autoinstall
 from .pve_backup import deploy as deploy_pve_backup
@@ -27,6 +28,7 @@ from .pve_zfs_large_block_patch import deploy as deploy_pve_zfs_large_block_patc
 from .pve_zfs_migration_sync_patch import deploy as deploy_pve_zfs_migration_sync_patch
 from .ssh_config import deploy as deploy_ssh_config
 from .ubuntu_setup import deploy as deploy_ubuntu_setup
+from .vmalert_rules import deploy as deploy_vmalert_rules
 from .wsl_conf import deploy as deploy_wsl_conf
 from .zfs_automation import deploy as deploy_zfs_automation
 
@@ -69,6 +71,10 @@ MODULES: dict[str, ModuleDefinition] = {
     "metrics-exporters": ModuleDefinition(
         name="Prometheus Metrics Exporters",
         deploy=deploy_metrics_exporters,
+    ),
+    "monitoring-config": ModuleDefinition(
+        name="VictoriaMetrics and Alertmanager Config",
+        deploy=deploy_monitoring_config,
     ),
     "pve-autoinstall": ModuleDefinition(
         name="PVE Automated Install (PDM Answers)",
@@ -120,6 +126,7 @@ MODULES: dict[str, ModuleDefinition] = {
     ),
     "ssh-config": ModuleDefinition(name="SSH Config", deploy=deploy_ssh_config),
     "ubuntu-setup": ModuleDefinition(name="Ubuntu OS Setup", deploy=deploy_ubuntu_setup),
+    "vmalert-rules": ModuleDefinition(name="vmalert Rules", deploy=deploy_vmalert_rules),
     "wsl-conf": ModuleDefinition(name="WSL Conf", deploy=deploy_wsl_conf),
     "zfs-automation": ModuleDefinition(name="ZFS Automation", deploy=deploy_zfs_automation),
 }
@@ -138,6 +145,8 @@ MODULE_ORDER = [
     "pve-backup",
     "apcupsd",
     "metrics-exporters",
+    "monitoring-config",
+    "vmalert-rules",
     "pve-zfs-large-block-patch",
     "pve-zfs-migration-sync-patch",
     "pve-lxc-pre-replication-patch",

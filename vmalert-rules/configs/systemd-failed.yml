@@ -1,0 +1,42 @@
+groups:
+  - name: systemd-failed
+    interval: 1m
+    rules:
+      # Failed-unit coverage from node_exporter's native systemd collector.
+      - alert: SystemdUnitFailed
+        expr: node_systemd_units{host=~"ace|bray|clovis|osiris|cinci|cottonwood",state="failed"} > 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.host }} has a failed systemd unit"
+          description: "node_systemd_units{state=\"failed\"} is {{ $value }} on {{ $labels.host }}. Run `systemctl --failed` on {{ $labels.host }}; node_systemd_unit_state{state=\"failed\"} == 1 carries the specific unit name(s)."
+
+      # Detect an exporter that remains reachable while its systemd collector
+      # is failing, which would otherwise make failed-unit alerting blind.
+      - alert: SystemdCollectorFailing
+        expr: node_scrape_collector_success{host=~"ace|bray|clovis|osiris|cinci|cottonwood",collector="systemd"} == 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.host }} node_exporter systemd collector is failing"
+          description: "node_scrape_collector_success{collector=\"systemd\"} is 0 on {{ $labels.host }}, so failed-unit alerting is blind there. Check node_exporter health and collector configuration."
+
+      - alert: SystemdUnitMetricsMissing
+        expr: absent_over_time(node_systemd_units{host=~"ace|bray|clovis|osiris",state="failed"}[15m])
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "systemd failed-unit metrics missing"
+          description: "node_systemd_units has produced no samples for any of ace/bray/clovis/osiris in 15 minutes; node_exporter may be down or its systemd collector disabled."
+
+      - alert: SystemdUnitMetricsMissingOffsite
+        expr: absent_over_time(node_systemd_units{host=~"cinci|cottonwood",state="failed"}[1h])
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Offsite systemd failed-unit metrics missing"
+          description: "node_systemd_units has produced no samples for cinci/cottonwood in 1 hour; the longer window tolerates offsite link flaps. The node_exporter systemd collector may be unavailable, or the host may be unreachable."

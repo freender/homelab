@@ -1,0 +1,132 @@
+groups:
+  - name: ups
+    # 15s (not the 1m used by the other groups): this group replaces apcupsd's
+    # event-driven Telegram push, so detection latency is now part of the
+    # shutdown budget. apcupsd on bray/osiris begins shutdown at MINUTES 10 /
+    # BATTERYLEVEL 20. bray is the tight case -- ~16 min total runtime, so only
+    # ~6 min of headroom between ONBATTERY and shutdown. At 15s eval plus
+    # Alertmanager's 30s group_wait the notification lands ~45s in, which keeps
+    # a comfortable margin. osiris has ~27 min of headroom.
+    interval: 15s
+    rules:
+      # --- Replaces the apcupsd event notifications (apcupsd.notify) ---
+
+      # The direct replacement for the ONBATTERY event push. for: 0s because
+      # this is the one alert whose whole value is arriving before the host
+      # powers off; there is no flap concern worth trading latency for, since
+      # a mains blip that recovers within one eval simply never fires.
+      # Matches ONBATT substring rather than status!="ONLINE" so that benign
+      # regulation states (TRIM/BOOST) do not page.
+      - alert: UpsOnBattery
+        expr: apcupsd_status{status=~".*ONBATT.*"} == 1
+        for: 0s
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.host }} UPS {{ $labels.ups_name }} is on battery"
+          description: "Mains power lost on {{ $labels.host }} ({{ $labels.ups_name }}, {{ $labels.model }}). apcupsd will begin a clean shutdown at 10 minutes remaining or 20% charge. Check apcupsd_time_left_minutes for the current runtime estimate."
+
+      # Replaces the doshutdown Telegram messages ("initiating cluster
+      # shutdown"). Fires only while actually on battery, so the low absolute
+      # runtime of bray-ups at idle cannot trigger it.
+      - alert: UpsShutdownImminent
+        expr: apcupsd_time_left_minutes <= 12 and on(host) apcupsd_status{status=~".*ONBATT.*"} == 1
+        for: 0s
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.host }} UPS shutdown imminent ({{ $value }} min left)"
+          description: "{{ $labels.ups_name }} has {{ $value }} minutes of runtime left and is on battery. apcupsd triggers shutdown at 10 minutes. On bray this shuts down the whole cluster (ace/clovis are NIS slaves of bray-ups), which includes helm and therefore this alerting stack."
+
+      # --- Gaps the event-driven mechanism structurally could not cover ---
+
+      # apcupsd itself is dead or not talking to the UPS: the exporter answers
+      # but apcaccess fails. This only became detectable after the exporter was
+      # changed to serve that payload with HTTP 200 -- it previously used 500,
+      # so the scraper discarded the body and apcupsd_up 0 never landed.
+      - alert: UpsDaemonDown
+        expr: apcupsd_up == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.host }} apcupsd is not responding"
+          description: "The apcupsd-exporter on {{ $labels.host }} is running but `apcaccess status` is failing, so {{ $labels.ups_name }} is unmonitored and no on-battery alert can fire. Check `systemctl status apcupsd` on {{ $labels.host }}."
+
+      # The exporter process itself is gone. Distinct from UpsDaemonDown: that
+      # one requires the exporter to be alive enough to answer.
+      - alert: UpsExporterDown
+        expr: up{job="apcupsd"} == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.instance }} apcupsd-exporter is down"
+          description: "vmagent cannot scrape apcupsd-exporter on {{ $labels.instance }}:9162, so UPS state is unknown there. Check `systemctl status apcupsd-exporter`."
+
+      # Catches the case where both hosts stop reporting at once, which the
+      # per-instance rules above would miss if the targets vanish from
+      # discovery entirely.
+      - alert: UpsMetricsMissing
+        expr: absent_over_time(apcupsd_up{host=~"bray|osiris"}[15m])
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "UPS metrics missing"
+          description: "apcupsd_up has produced no samples for bray or osiris in 15 minutes. UPS alerting is blind; this is now the only mechanism watching the UPSes."
+
+      # apcupsd has lost the serial/USB link to the UPS.
+      - alert: UpsCommLost
+        expr: apcupsd_status{status=~".*COMMLOST.*"} == 1
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.host }} lost communication with UPS"
+          description: "apcupsd on {{ $labels.host }} cannot reach {{ $labels.ups_name }}. The UPS will still cut power on battery exhaustion but no clean shutdown will be triggered. Check the USB/serial cable."
+
+      - alert: UpsBatteryNeedsReplacement
+        expr: apcupsd_status{status=~".*REPLACEBATT.*"} == 1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.host }} UPS battery needs replacement"
+          description: "{{ $labels.ups_name }} ({{ $labels.model }}) is reporting REPLACEBATT after its self-test. Runtime is no longer trustworthy."
+
+      # Battery not holding charge while on mains -- the slow-degradation
+      # signal that an event-driven mechanism can never produce, because
+      # nothing "happens" until the outage you are unprepared for.
+      - alert: UpsBatteryNotCharged
+        expr: apcupsd_battery_charge_percent < 90 and on(host) apcupsd_status{status=~"ONLINE.*"} == 1
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.host }} UPS battery at {{ $value }}% on mains power"
+          description: "{{ $labels.ups_name }} has been below 90% charge for 30 minutes while on mains. Expect a recharge after a recent outage or self-test; sustained low charge means a failing battery."
+
+      # Load creep shortens runtime non-linearly. bray already sits at ~35% of
+      # 900W with only ~16 min of runtime, so this is the early warning that
+      # the shutdown budget is eroding.
+      - alert: UpsOverloaded
+        expr: apcupsd_load_percent > 80
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.host }} UPS load at {{ $value }}%"
+          description: "{{ $labels.ups_name }} ({{ $labels.model }}) has been above 80% load for 10 minutes. Runtime falls sharply with load; verify the remaining runtime still covers a clean cluster shutdown."
+
+      # Capacity planning, deliberately long for: -- bray-ups normally reports
+      # ~16 min against a 10 min shutdown threshold, so the margin is already
+      # thin and worth knowing about before it disappears.
+      - alert: UpsRuntimeHeadroomLow
+        expr: apcupsd_time_left_minutes < 13 and on(host) apcupsd_status{status=~"ONLINE.*"} == 1
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.host }} UPS runtime headroom low ({{ $value }} min on mains)"
+          description: "{{ $labels.ups_name }} reports only {{ $value }} minutes of runtime while on mains, against apcupsd's 10 minute shutdown threshold. Either load has grown or the battery is aging; there is little margin left for a clean shutdown."

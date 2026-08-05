@@ -1,0 +1,83 @@
+groups:
+  - name: docker-hosts
+    interval: 30s
+    rules:
+      - alert: DockerMetricsTargetDown
+        expr: up{job=~"cadvisor|pve-node", host=~"tower|helm|neo"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.host }} {{ $labels.job }} metrics target is down"
+          description: "{{ $labels.endpoint }} has not been scrapeable for 2 minutes."
+
+      - alert: ContainerRestartLoop
+        expr: changes(container_start_time_seconds{job="cadvisor", host=~"tower|helm|neo", name!="", image!=""}[15m]) >= 3
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.host }} / {{ $labels.name }} is restarting repeatedly"
+          description: "Container start time changed at least 3 times in 15 minutes."
+
+      - alert: ContainerCrashLoopCritical
+        expr: changes(container_start_time_seconds{job="cadvisor", host=~"tower|helm|neo", name!="", image!=""}[10m]) >= 5
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.host }} / {{ $labels.name }} is crash-looping"
+          description: "Container start time changed at least 5 times in 10 minutes."
+
+      - alert: DockerHostLowMemory
+        expr: 1 - (node_memory_MemAvailable_bytes{job="pve-node", host=~"tower|helm|neo"} / node_memory_MemTotal_bytes{job="pve-node", host=~"tower|helm|neo"}) > 0.90
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.host }} memory pressure is high"
+          description: "Available memory has stayed below 10 percent for 15 minutes."
+
+      - alert: DockerHostFilesystemLowSpace
+        expr: |
+          node_filesystem_avail_bytes{job="pve-node", host=~"tower|helm|neo", fstype!="tmpfs", mountpoint=~"/|/mnt/cache/appdata|/mnt/cache/downloads|/mnt/cache/pictures|/mnt/cache/documents|/mnt/cache/obsidian|/mnt/cache/logseq|/mnt/cache/games|/mnt/tank/media"}
+          /
+          node_filesystem_size_bytes{job="pve-node", host=~"tower|helm|neo", fstype!="tmpfs", mountpoint=~"/|/mnt/cache/appdata|/mnt/cache/downloads|/mnt/cache/pictures|/mnt/cache/documents|/mnt/cache/obsidian|/mnt/cache/logseq|/mnt/cache/games|/mnt/tank/media"}
+          < 0.10
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.host }} {{ $labels.mountpoint }} is low on space"
+          description: "Filesystem has less than 10 percent free space for 10 minutes."
+
+      - alert: DockerHostFilesystemAlmostFull
+        expr: |
+          node_filesystem_avail_bytes{job="pve-node", host=~"tower|helm|neo", fstype!="tmpfs", mountpoint=~"/|/mnt/cache/appdata|/mnt/cache/downloads|/mnt/cache/pictures|/mnt/cache/documents|/mnt/cache/obsidian|/mnt/cache/logseq|/mnt/cache/games|/mnt/tank/media"}
+          /
+          node_filesystem_size_bytes{job="pve-node", host=~"tower|helm|neo", fstype!="tmpfs", mountpoint=~"/|/mnt/cache/appdata|/mnt/cache/downloads|/mnt/cache/pictures|/mnt/cache/documents|/mnt/cache/obsidian|/mnt/cache/logseq|/mnt/cache/games|/mnt/tank/media"}
+          < 0.05
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.host }} {{ $labels.mountpoint }} is almost full"
+          description: "Filesystem has less than 5 percent free space for 5 minutes."
+
+      - alert: ContainerMemoryNearLimit
+        expr: |
+          (
+            container_memory_working_set_bytes{job="cadvisor", host=~"tower|helm|neo", name!="", name!~"cadvisor.*|node-exporter.*|socket-proxy.*", image!=""}
+            /
+            container_spec_memory_limit_bytes{job="cadvisor", host=~"tower|helm|neo", name!="", name!~"cadvisor.*|node-exporter.*|socket-proxy.*", image!=""}
+          ) > 0.90
+          and
+          container_spec_memory_limit_bytes{job="cadvisor", host=~"tower|helm|neo", name!="", name!~"cadvisor.*|node-exporter.*|socket-proxy.*", image!=""} > 0
+          and
+          container_spec_memory_limit_bytes{job="cadvisor", host=~"tower|helm|neo", name!="", name!~"cadvisor.*|node-exporter.*|socket-proxy.*", image!=""} < 1000000000000000
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.host }} / {{ $labels.name }} memory is near its limit"
+          description: "Container memory working set has stayed above 90 percent of its configured limit for 10 minutes."
