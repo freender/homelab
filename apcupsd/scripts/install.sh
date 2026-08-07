@@ -51,6 +51,32 @@ else
     [[ $rc -eq 1 ]] || exit "$rc"
 fi
 
+if [[ "$ROLE" == "master" || "$ROLE" == "slave" ]]; then
+    ha_rearm_changed=false
+    if copy_if_changed "$BUILD_DIR/homelab-ha-rearm" /usr/local/sbin/homelab-ha-rearm "homelab-ha-rearm"; then
+        ha_rearm_changed=true
+    else
+        rc=$?
+        [[ $rc -eq 1 ]] || exit "$rc"
+    fi
+    if copy_if_changed "$BUILD_DIR/homelab-ha-rearm.service" /etc/systemd/system/homelab-ha-rearm.service "homelab-ha-rearm.service"; then
+        ha_rearm_changed=true
+    else
+        rc=$?
+        [[ $rc -eq 1 ]] || exit "$rc"
+    fi
+    chmod 755 /usr/local/sbin/homelab-ha-rearm
+    chmod 644 /etc/systemd/system/homelab-ha-rearm.service
+    if [[ "$ha_rearm_changed" == "true" ]]; then
+        systemctl daemon-reload
+    fi
+    systemctl enable homelab-ha-rearm.service
+else
+    systemctl disable --now homelab-ha-rearm.service 2>/dev/null || true
+    rm -f /usr/local/sbin/homelab-ha-rearm /etc/systemd/system/homelab-ha-rearm.service
+    systemctl daemon-reload
+fi
+
 # Set permissions
 chmod +x /etc/apcupsd/doshutdown
 chmod 644 /etc/apcupsd/apcupsd.conf

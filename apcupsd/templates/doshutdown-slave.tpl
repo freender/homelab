@@ -1,20 +1,24 @@
 #!/bin/bash
 # {{ HOST }} doshutdown - Slave node
-# Backup VM/container shutdown if master action fails
+# Disarm HA then let Proxmox perform its native local shutdown.
 
 LOGGER="logger -t apcupsd-shutdown"
 $LOGGER "Slave shutdown triggered on {{ HOST }}"
 
-{% include "_guest-functions.tpl" %}
+{% include "_ha-functions.tpl" %}
 
-# Backup: shutdown local VMs and containers
-shutdown_running_guests "{{ HOST }}"
+# The master normally gets here first, but each slave must be safe if it receives
+# the UPS event before the master's cluster-wide shutdown command.
+if ! disarm_ha; then
+  $LOGGER "ERROR: Failed to disarm HA; refusing local guest shutdown to avoid migration"
+  exit 1
+fi
 
-$LOGGER "Waiting for shutdown command from master"
+$LOGGER "Scheduling local poweroff; Proxmox will stop local guests"
+nohup sh -c 'sleep 2 && logger -t apcupsd-shutdown "Executing poweroff on {{ HOST }}" && systemctl poweroff' >/dev/null 2>&1 &
 
-# Log that we're exiting without triggering host shutdown
-$LOGGER "Exiting with code 99 to prevent apccontrol default shutdown (master will shutdown host)"
+# Log that we're exiting without triggering apccontrol's duplicate shutdown path.
+$LOGGER "Exiting with code 99 ({{ HOST }} poweroff scheduled)"
 
-# Prevent apccontrol default shutdown handling
-# Host shutdown will come from master via SSH
+# Prevent apccontrol default shutdown handling.
 exit 99

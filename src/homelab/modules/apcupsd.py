@@ -49,7 +49,9 @@ def validate(root: Path) -> None:
         "doshutdown-master.tpl",
         "doshutdown-slave.tpl",
         "doshutdown-master-standalone.tpl",
-        "_guest-functions.tpl",
+        "homelab-ha-rearm.service.tpl",
+        "homelab-ha-rearm.tpl",
+        "_ha-functions.tpl",
     ]
     for name in required:
         if not (templates_dir / name).is_file():
@@ -79,10 +81,19 @@ def deploy_host(root: Path, host: str, slave_hosts: str, dry_run: bool, force: b
 
     connection = HostConnection(host)
     print_sub("Comparing with remote configs...")
-    for message in diff_many(connection, [
+    files = [
         (build_dir / "apcupsd.conf", "/etc/apcupsd/apcupsd.conf"),
         (build_dir / "doshutdown", "/etc/apcupsd/doshutdown"),
-    ]):
+    ]
+    if role in {"master", "slave"}:
+        files.extend([
+            (build_dir / "homelab-ha-rearm", "/usr/local/sbin/homelab-ha-rearm"),
+            (
+                build_dir / "homelab-ha-rearm.service",
+                "/etc/systemd/system/homelab-ha-rearm.service",
+            ),
+        ])
+    for message in diff_many(connection, files):
         print_sub(message)
 
     if dry_run:
@@ -134,6 +145,18 @@ def render_configs(
     }
     render_file(conf_template, build_dir / "apcupsd.conf", **context)
     render_file(shutdown_template, build_dir / "doshutdown", **context)
+    if role in {"master", "slave"}:
+        render_file(
+            templates_dir / "homelab-ha-rearm.tpl",
+            build_dir / "homelab-ha-rearm",
+            **context,
+        )
+        render_file(
+            templates_dir / "homelab-ha-rearm.service.tpl",
+            build_dir / "homelab-ha-rearm.service",
+            **context,
+        )
+        (build_dir / "homelab-ha-rearm").chmod(0o755)
     (build_dir / "doshutdown").chmod(0o755)
     write_env_file(build_dir / "env", {"ROLE": role, "HOST": host})
     return build_dir

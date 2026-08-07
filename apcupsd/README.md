@@ -29,9 +29,11 @@ Per-host settings live in `hosts.conf` using `apcupsd.*` keys.
 
 ## Shutdown Sequence (bray UPS)
 
-1. bray enables HA maintenance on bray/ace/clovis
-2. bray runs shutdown now on ace and clovis
-3. bray runs shutdown now on itself (last)
+1. bray, ace, or clovis disarms HA with `ignore` mode before stopping any guest.
+2. Proxmox's normal system shutdown stops each node's local guests without HA restarts or migrations.
+3. bray powers off ace and clovis, then itself; a slave event also schedules that node's local poweroff.
+4. On power return, `homelab-ha-rearm.service` waits for cluster quorum and re-arms HA.
+   Managed resources retain their `started` desired state and recover automatically.
 
 ## Deployment
 
