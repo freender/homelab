@@ -3,9 +3,13 @@ Description=Homelab docker update
 Wants=network-online.target
 After=network-online.target docker.service{% if DOCKER_DEPENDENCY_UNITS %} {{ DOCKER_DEPENDENCY_UNITS }}
 Requires={{ DOCKER_DEPENDENCY_UNITS }}{% endif %}
+StartLimitIntervalSec=1h
+StartLimitBurst=3
 
 [Service]
 Type=oneshot
 ExecStart=/mnt/cache/appdata/start.sh
+Restart=on-failure
+RestartSec=10min
 StandardOutput=journal
 StandardError=journal

@@ -8,6 +8,17 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def test_docker_update_service_retries_transient_failures() -> None:
+    service = (ROOT / "docker" / "templates" / "homelab-docker-update.service").read_text(
+        encoding="utf-8"
+    )
+
+    assert "Restart=on-failure" in service
+    assert "RestartSec=10min" in service
+    assert "StartLimitIntervalSec=1h" in service
+    assert "StartLimitBurst=3" in service
+
+
 def prepare_start_root(tmp_path: Path) -> tuple[Path, Path]:
     appdata = tmp_path / "appdata"
     appdata.mkdir()
