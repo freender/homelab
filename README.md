@@ -199,15 +199,6 @@ Post-install webhook that triggers a deploy when a node finishes autoinstall
 ./deploy pve-postinstall-webhook all
 ```
 
-### [pve-realtek-r8152-dkms](pve-realtek-r8152-dkms/)
-DKMS build of the Realtek r8152 USB NIC driver
-- The generic drivers are blacklisted only when the DKMS build succeeds, so a failed
-  build can never leave the host without a working NIC driver
-
-```bash
-./deploy pve-realtek-r8152-dkms all
-```
-
 ### Proxmox Upstream Patches
 Local patches for Proxmox behavior that should be removed when equivalent
 upstream fixes ship:

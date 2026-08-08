@@ -212,13 +212,23 @@ def build_network_interfaces_bundle(root: Path, host: str, build_dir: Path) -> N
     try:
         mgmt_ip = str(registry.get(host, "pve-postinstall.interfaces.mgmt_ip"))
         gateway = str(registry.get(host, "pve-postinstall.interfaces.gateway"))
-        storage_ip = str(registry.get(host, "pve-postinstall.interfaces.storage_ip"))
-        mgmt_iface = str(registry.get(host, "pve-postinstall.interfaces.mgmt_iface", "nic0"))
-        storage_iface = str(registry.get(host, "pve-postinstall.interfaces.storage_iface", "nic1"))
     except HostLookupError as exc:
         raise ValueError(
-            f"pve-postinstall.interfaces.{{mgmt_ip,gateway,storage_ip}} required for {host}"
+            f"pve-postinstall.interfaces.{{mgmt_ip,gateway}} required for {host}"
         ) from exc
+    mgmt_iface = str(registry.get(host, "pve-postinstall.interfaces.mgmt_iface", "nic0"))
+
+    # storage_ip/storage_iface are an optional pair: a host with no dedicated
+    # storage NIC (e.g. osiris after its USB storage dongle was retired) omits
+    # both, and the template renders management-only (no nic1/vmbr1 stanza).
+    storage_ip_raw = registry.get(host, "pve-postinstall.interfaces.storage_ip", None)
+    has_storage = storage_ip_raw is not None
+    storage_ip = str(storage_ip_raw) if has_storage else ""
+    storage_iface = (
+        str(registry.get(host, "pve-postinstall.interfaces.storage_iface", "nic1"))
+        if has_storage
+        else ""
+    )
 
     render_file(
         root / "pve-postinstall" / "templates" / "pve-interfaces",

@@ -13,10 +13,10 @@ auto lo
 iface lo inet loopback
 
 iface {{ NET_MGMT_IFACE }} inet manual
-
+{% if NET_STORAGE_IFACE %}
 iface {{ NET_STORAGE_IFACE }} inet manual
 	mtu 9000
-
+{% endif %}
 auto vmbr0
 iface vmbr0 inet static
 	address {{ NET_MGMT_IP }}
@@ -26,7 +26,7 @@ iface vmbr0 inet static
 	bridge-fd 0
 	bridge-vlan-aware yes
 	bridge-vids 2-4094
-
+{% if NET_STORAGE_IFACE %}
 auto vmbr1
 iface vmbr1 inet static
 	address {{ NET_STORAGE_IP }}
@@ -34,5 +34,5 @@ iface vmbr1 inet static
 	bridge-stp off
 	bridge-fd 0
 	mtu 9000
-
+{% endif %}
 source /etc/network/interfaces.d/*

@@ -79,12 +79,17 @@ def validate_postinstall_alignment(registry, host: str, pins: tuple[InterfacePin
     pinned_names = {pin.name for pin in pins}
 
     mgmt_iface = str(registry.get(host, "pve-postinstall.interfaces.mgmt_iface", "nic0"))
-    storage_iface = str(registry.get(host, "pve-postinstall.interfaces.storage_iface", "nic1"))
-
     _require_iface_pinned(host, "mgmt_iface", mgmt_iface, pinned_names)
-    _require_iface_pinned(host, "storage_iface", storage_iface, pinned_names)
     _require_role_matches_iface(host, "management", "mgmt_iface", mgmt_iface, pins_by_role)
-    _require_role_matches_iface(host, "storage", "storage_iface", storage_iface, pins_by_role)
+
+    # storage_iface only needs to align when the host actually declares a
+    # storage_ip; a host with no dedicated storage NIC omits both and has
+    # nothing to cross-check here.
+    has_storage = registry.get(host, "pve-postinstall.interfaces.storage_ip", None) is not None
+    if has_storage:
+        storage_iface = str(registry.get(host, "pve-postinstall.interfaces.storage_iface", "nic1"))
+        _require_iface_pinned(host, "storage_iface", storage_iface, pinned_names)
+        _require_role_matches_iface(host, "storage", "storage_iface", storage_iface, pins_by_role)
 
 
 def _require_iface_pinned(host: str, key: str, iface: str, pinned_names: set[str]) -> None:

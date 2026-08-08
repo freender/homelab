@@ -1,0 +1,61 @@
+groups:
+  - name: nic-link
+    interval: 1m
+    rules:
+      # Link down: the device is visible to node_exporter's netclass
+      # collector but carrier is not up. Does not cover a device that has
+      # disappeared entirely (e.g. a USB NIC failing to enumerate) --
+      # that's NicMissing below, since node_network_up simply has no
+      # samples for a device the kernel never created.
+      #
+      # osiris nic1 (a USB-attached 10Gb r8152 dongle on the storage VLAN)
+      # was retired 2026-08 after persistent USB enumeration failures
+      # (`device descriptor read/64, error -71`, surviving a reboot and a
+      # port power-cycle) -- osiris is management-only (nic0, 2.5Gb) now,
+      # so it is deliberately absent from device=~"nic0|nic1" below.
+      - alert: NicLinkDown
+        expr: |
+          node_network_up{host=~"ace|bray|clovis", device=~"nic0|nic1"} == 0
+          or node_network_up{host="osiris", device="nic0"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.host }} {{ $labels.device }} link is down"
+          description: "node_network_up is 0 for {{ $labels.device }} on {{ $labels.host }}. Check `ethtool {{ $labels.device }}` and the physical cable/SFP/USB connection on {{ $labels.host }}."
+
+      # Device missing entirely, e.g. a USB dongle that fails to enumerate.
+      # One absent_over_time() per exact host+device combo: regex label
+      # matchers do not reliably detect partial absence with
+      # absent()/absent_over_time(), only full-vector absence. osiris nic1
+      # is retired (see NicLinkDown comment) and intentionally excluded.
+      - alert: NicMissing
+        expr: |
+          absent_over_time(node_network_up{host="ace",device="nic0"}[15m])
+          or absent_over_time(node_network_up{host="ace",device="nic1"}[15m])
+          or absent_over_time(node_network_up{host="bray",device="nic0"}[15m])
+          or absent_over_time(node_network_up{host="bray",device="nic1"}[15m])
+          or absent_over_time(node_network_up{host="clovis",device="nic0"}[15m])
+          or absent_over_time(node_network_up{host="clovis",device="nic1"}[15m])
+          or absent_over_time(node_network_up{host="osiris",device="nic0"}[15m])
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.host }} {{ $labels.device }} is missing"
+          description: "node_network_up has produced no samples for {{ $labels.device }} on {{ $labels.host }} in 15 minutes. The NIC/USB dongle may have failed to enumerate, or node_exporter's netclass collector cannot see it. Check `ip -br link show {{ $labels.device }}` and `dmesg -T` on {{ $labels.host }}."
+
+      # Speed mismatch against expected link speed. ace/bray/clovis
+      # nic0+nic1 are expected at 10Gb (1.25e9 B/s); osiris nic0 is the
+      # one intentional exception at 2.5Gb (onboard Intel I225-V,
+      # 3.125e8 B/s), and is osiris's only NIC now that nic1 is retired.
+      - alert: NicSpeedMismatch
+        expr: |
+          (node_network_speed_bytes{host=~"ace|bray|clovis", device=~"nic0|nic1"} != 1.25e9)
+          or (node_network_speed_bytes{host="osiris", device="nic0"} != 3.125e8)
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.host }} {{ $labels.device }} speed is {{ $value }} B/s, not the expected link speed"
+          description: "node_network_speed_bytes for {{ $labels.device }} on {{ $labels.host }} does not match its expected speed (ace/bray/clovis nic0+nic1: 10Gb == 1.25e9 B/s; osiris nic0: 2.5Gb == 3.125e8 B/s). Check `ethtool {{ $labels.device }}` for negotiated speed/duplex and cabling/SFP on {{ $labels.host }}."

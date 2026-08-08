@@ -22,7 +22,6 @@ from .pve_lxc_pre_replication_patch import deploy as deploy_pve_lxc_pre_replicat
 from .pve_notifications import deploy as deploy_pve_notifications
 from .pve_postinstall import deploy as deploy_pve_postinstall
 from .pve_postinstall_webhook import deploy as deploy_pve_postinstall_webhook
-from .pve_realtek_r8152_dkms import deploy as deploy_pve_realtek_r8152_dkms
 from .pve_upgrade import deploy as deploy_pve_upgrade
 from .pve_zfs_large_block_patch import deploy as deploy_pve_zfs_large_block_patch
 from .pve_zfs_migration_sync_patch import deploy as deploy_pve_zfs_migration_sync_patch
@@ -96,10 +95,6 @@ MODULES: dict[str, ModuleDefinition] = {
         name="PVE HTTP Boot",
         deploy=deploy_pve_http_boot,
     ),
-    "pve-realtek-r8152-dkms": ModuleDefinition(
-        name="PVE Realtek r8152 DKMS Driver",
-        deploy=deploy_pve_realtek_r8152_dkms,
-    ),
     "pve-upgrade": ModuleDefinition(
         name="PVE/PBS/PDM Upgrade",
         deploy=deploy_pve_upgrade,
@@ -137,7 +132,6 @@ MODULE_ORDER = [
     "pve-notifications",
     "pve-postinstall-webhook",
     "pve-autoinstall",
-    "pve-realtek-r8152-dkms",
     "pve-http-boot",
     # Install the host archive/key before its restore consumer. pve-backup also
     # persists its own staged key so a direct module deploy remains rebuild-safe.

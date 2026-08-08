@@ -69,12 +69,20 @@ def test_interfaces_render_is_complete_and_addressed(host: str, tmp_path: Path) 
 
     mgmt_ip = str(registry.get(host, "pve-postinstall.interfaces.mgmt_ip"))
     gateway = str(registry.get(host, "pve-postinstall.interfaces.gateway"))
-    storage_ip = str(registry.get(host, "pve-postinstall.interfaces.storage_ip"))
+    storage_ip = registry.get(host, "pve-postinstall.interfaces.storage_ip", None)
 
     # The management address and gateway are what we come back on after a reboot.
     assert mgmt_ip in rendered, f"{host}: mgmt_ip {mgmt_ip} missing from rendered interfaces"
     assert gateway in rendered, f"{host}: gateway {gateway} missing from rendered interfaces"
-    assert storage_ip in rendered, f"{host}: storage_ip {storage_ip} missing"
+    # storage_ip is optional: a host with no dedicated storage NIC omits it and
+    # renders management-only, with no vmbr1 stanza at all.
+    if storage_ip is not None:
+        assert str(storage_ip) in rendered, f"{host}: storage_ip {storage_ip} missing"
+        assert re.search(r"^\s*auto vmbr1\b", rendered, re.MULTILINE), f"{host}: no vmbr1 iface"
+    else:
+        assert not re.search(
+            r"^\s*auto vmbr1\b", rendered, re.MULTILINE
+        ), f"{host}: unexpected vmbr1 iface with no storage_ip configured"
 
     # A loopback stanza and the mgmt bridge must exist, or the node boots unreachable.
     assert re.search(r"^\s*auto lo\b", rendered, re.MULTILINE), f"{host}: no loopback stanza"
