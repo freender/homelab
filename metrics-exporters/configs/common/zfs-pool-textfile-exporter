@@ -75,6 +75,54 @@ write_labeled_metric() {
         "$metric" "$HOST" "$pool" "$tier" "$role" "$extra_label" "$extra_value" "$value"
 }
 
+# Per-device state, which pool-level health does not cover. A raidz1 vdev with a
+# FAULTED member still reports the pool as ONLINE via `zpool list`, so
+# `homelab_zpool_healthy` stays 1 while the vdev has no redundancy left. That is
+# not hypothetical: ace/vault-hdd lost a disk on 2026-08-09 and raised nothing.
+#
+# `zpool status -Pp` prints leaf vdevs as full /dev paths and container vdevs
+# (raidz1-0, mirror-0) as bare names, so a leading slash identifies real devices
+# without depending on indentation. -p keeps error counters unabbreviated.
+write_pool_device_metrics() {
+    local pool="$1"
+    local total=0 unhealthy=0
+    local name state read write cksum device
+
+    while read -r name state read write cksum; do
+        [[ "$name" == /* ]] || continue
+        device="${name##*/}"
+        device="${device%-part[0-9]*}"
+        total=$((total + 1))
+        [[ "$state" != "ONLINE" ]] && unhealthy=$((unhealthy + 1))
+        write_device_state_info "$pool" "$device" "$state"
+        write_device_errors "$pool" "$device" read "$read"
+        write_device_errors "$pool" "$device" write "$write"
+        write_device_errors "$pool" "$device" cksum "$cksum"
+    done < <(zpool status -Pp "$pool" 2>/dev/null | awk '/^\t/ {print $1, $2, $3, $4, $5}')
+
+    write_metric homelab_zpool_devices_total "$pool" "$total"
+    write_metric homelab_zpool_devices_unhealthy "$pool" "$unhealthy"
+}
+
+write_device_state_info() {
+    local pool="$1" device="$2" state="$3"
+    local tier role
+    tier="$(pool_tier "$pool")"
+    role="$(pool_role "$pool")"
+    printf 'homelab_zpool_device_state_info{host="%s",zpool="%s",tier="%s",role="%s",device="%s",state="%s"} 1\n' \
+        "$HOST" "$pool" "$tier" "$role" "$device" "$state"
+}
+
+write_device_errors() {
+    local pool="$1" device="$2" kind="$3" value="$4"
+    [[ "$value" =~ ^[0-9]+$ ]] || return 0
+    local tier role
+    tier="$(pool_tier "$pool")"
+    role="$(pool_role "$pool")"
+    printf 'homelab_zpool_device_errors{host="%s",zpool="%s",tier="%s",role="%s",device="%s",type="%s"} %s\n' \
+        "$HOST" "$pool" "$tier" "$role" "$device" "$kind" "$value"
+}
+
 {
     printf '# HELP homelab_zpool_size_bytes ZFS pool total size in bytes.\n'
     printf '# TYPE homelab_zpool_size_bytes gauge\n'
@@ -84,10 +132,18 @@ write_labeled_metric() {
     printf '# TYPE homelab_zpool_free_bytes gauge\n'
     printf '# HELP homelab_zpool_used_percent ZFS pool allocated percentage.\n'
     printf '# TYPE homelab_zpool_used_percent gauge\n'
-    printf '# HELP homelab_zpool_healthy Whether the ZFS pool health state is ONLINE (1) or not (0).\n'
+    printf '# HELP homelab_zpool_healthy Whether the ZFS pool health state is ONLINE (1) or not (0). Pool level only: a raidz vdev with a faulted member can still report ONLINE, so alert on homelab_zpool_devices_unhealthy as well.\n'
     printf '# TYPE homelab_zpool_healthy gauge\n'
     printf '# HELP homelab_zpool_state_info ZFS pool health state as reported by zpool list, or MISSING when an expected pool is not imported; value is always 1, state is a label.\n'
     printf '# TYPE homelab_zpool_state_info gauge\n'
+    printf '# HELP homelab_zpool_devices_total Number of leaf devices in the ZFS pool.\n'
+    printf '# TYPE homelab_zpool_devices_total gauge\n'
+    printf '# HELP homelab_zpool_devices_unhealthy Number of leaf devices whose state is not ONLINE.\n'
+    printf '# TYPE homelab_zpool_devices_unhealthy gauge\n'
+    printf '# HELP homelab_zpool_device_state_info ZFS leaf device state; value is always 1, state is a label.\n'
+    printf '# TYPE homelab_zpool_device_state_info gauge\n'
+    printf '# HELP homelab_zpool_device_errors ZFS per-device error counters as reported by zpool status.\n'
+    printf '# TYPE homelab_zpool_device_errors gauge\n'
 
     # Process substitution rather than a pipe: a piped `while` runs in a subshell,
     # so seen_marker would not survive the loop.
@@ -104,6 +160,7 @@ write_labeled_metric() {
         write_metric homelab_zpool_used_percent "$pool" "$used_percent"
         write_metric homelab_zpool_healthy "$pool" "$healthy"
         write_labeled_metric homelab_zpool_state_info "$pool" state "$health" 1
+        write_pool_device_metrics "$pool"
     done < <(zpool list -Hp -o name,size,alloc,free,health)
 
     # Expected pools that never showed up in `zpool list`. Deliberately no
