@@ -34,15 +34,22 @@ route:
       matchers:
         - name=~"plex|seerr"
       mute_time_intervals:
-        - uptime-kuma-maintenance
+        - scheduled-maintenance
       continue: false
     - receiver: mwbot
       mute_time_intervals:
-        - uptime-kuma-maintenance
+        - scheduled-maintenance
       continue: false
 
+# These windows mute the expected churn from the repo's own scheduled jobs in
+# hosts.conf, so they are load-bearing despite predating the retirement of
+# Uptime Kuma (which they were originally named after):
+#   02:00 -- docker `update_schedule`, container image updates
+#   08:00-08:06 -- `apt-upgrade` schedules, staggered across hosts
+# Deleting them restores nightly alert noise during both windows. Keep them in
+# step with those schedules rather than removing them.
 time_intervals:
-  - name: uptime-kuma-maintenance
+  - name: scheduled-maintenance
     time_intervals:
       - times:
           - start_time: "02:00"
