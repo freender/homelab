@@ -36,5 +36,19 @@ def test_validate_rejects_missing_chat_id_placeholder(tmp_path: Path) -> None:
     template = tmp_path / "monitoring-config" / "configs" / "alertmanager.yml.tpl"
     template.write_text("chat_id: __TELEGRAM_CHATID__\n", encoding="utf-8")
 
-    with pytest.raises(ValueError, match="__TELEGRAM_CHATID_PLEX__ exactly once"):
+    with pytest.raises(ValueError, match="must contain __TELEGRAM_CHATID_PLEX__"):
         monitoring_config.validate(tmp_path)
+
+
+def test_validate_allows_a_chat_id_reused_by_several_receivers(tmp_path: Path) -> None:
+    """The private chat backs both the default and the Proxmox receiver."""
+    write_module_files(tmp_path)
+    template = tmp_path / "monitoring-config" / "configs" / "alertmanager.yml.tpl"
+    template.write_text(
+        "chat_id: __TELEGRAM_CHATID__\n"
+        "chat_id: __TELEGRAM_CHATID__\n"
+        "chat_id: __TELEGRAM_CHATID_PLEX__\n",
+        encoding="utf-8",
+    )
+
+    monitoring_config.validate(tmp_path)

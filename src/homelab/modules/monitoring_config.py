@@ -49,9 +49,12 @@ def validate(root: Path) -> None:
         raise ValueError(f"missing installer: {installer}")
 
     alertmanager_template = (configs_dir / "alertmanager.yml.tpl").read_text(encoding="utf-8")
+    # The installer substitutes globally, so a chat ID may back more than one receiver
+    # (the private chat serves both the default and the Proxmox receiver). Only the
+    # absence of a placeholder is a real error.
     for placeholder in ("__TELEGRAM_CHATID__", "__TELEGRAM_CHATID_PLEX__"):
-        if alertmanager_template.count(placeholder) != 1:
-            raise ValueError(f"alertmanager template must contain {placeholder} exactly once")
+        if placeholder not in alertmanager_template:
+            raise ValueError(f"alertmanager template must contain {placeholder}")
 
 
 def alertmanager_enabled(root: Path, host: str) -> bool:

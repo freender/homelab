@@ -18,6 +18,22 @@ MODULE_DIR = "pve-notifications"
 REMOTE_ROOT = "/tmp/homelab-pve-notifications"
 TELEGRAM_SECRET = "telegram"
 
+NOTIFY_TARGETS = ("alertmanager", "telegram")
+
+# Per-target defaults so a host only has to declare `target:` to switch pipelines.
+TARGET_DEFAULTS = {
+    "alertmanager": {
+        "target_name": "Alertmanager",
+        "matcher_name": "alertmanager-matcher",
+        "matcher_comment": "Route notifications to Alertmanager",
+    },
+    "telegram": {
+        "target_name": "Telegram",
+        "matcher_name": "telegram-matcher",
+        "matcher_comment": "Route all notifications to Telegram",
+    },
+}
+
 
 def deploy(
     root: Path,
@@ -43,17 +59,21 @@ def validate(root: Path, hosts: list[str]) -> None:
     if not install_script.is_file():
         raise ValueError(f"missing install script: {install_script}")
 
-    secret = op_secrets.secret_file(root, TELEGRAM_SECRET)
-    env = op_secrets.parse_env_file(secret)
-    for key in ("TELEGRAM_TOKEN", "TELEGRAM_CHATID"):
-        if not env.get(key, "").strip():
-            raise ValueError(f"{TELEGRAM_SECRET}: {key} is empty")
-
     registry = default_registry(root)
+    plans = {}
     for host in hosts:
         if str(registry.get(host, "config.type")) != "pve":
             raise ValueError(f"{MODULE_DIR} supports PVE hosts only: {host}")
-        normalize_plan(root, host)
+        plans[host] = normalize_plan(root, host)
+
+    # Only the Telegram pipeline needs the bot secret; the Alertmanager webhook is
+    # an unauthenticated POST to the LAN-local Alertmanager.
+    if any(plan["notify_target"] == "telegram" for plan in plans.values()):
+        secret = op_secrets.secret_file(root, TELEGRAM_SECRET)
+        env = op_secrets.parse_env_file(secret)
+        for key in ("TELEGRAM_TOKEN", "TELEGRAM_CHATID"):
+            if not env.get(key, "").strip():
+                raise ValueError(f"{TELEGRAM_SECRET}: {key} is empty")
 
 
 def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
@@ -61,15 +81,38 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
     if str(registry.get(host, "config.type")) != "pve":
         raise ValueError(f"{MODULE_DIR} supports PVE hosts only: {host}")
 
+    plan = normalize_plan(root, host)
     build_dir = root / MODULE_DIR / "build" / host
     prepare_build_dir(build_dir)
-    write_plan(build_dir / "notification-plan.conf", normalize_plan(root, host))
+    write_plan(build_dir / "notification-plan.conf", plan)
 
     if dry_run:
         print_sub(f"[DRY-RUN] Would deploy PVE notifications to {host}:{REMOTE_ROOT}/")
+        print_sub(f"Notification target: {plan['notify_target']}")
+        if plan["notify_target"] == "alertmanager":
+            print_sub(f"Alertmanager URL: {plan['alertmanager_url']}")
         print_sub("Build files:")
         for file_name in build_files(build_dir):
             print_sub(f"    {file_name}")
+        return
+
+    uploads = [
+        (build_dir, f"{REMOTE_ROOT}/build/{host}"),
+        (root / MODULE_DIR / "scripts", f"{REMOTE_ROOT}/scripts"),
+    ]
+
+    if plan["notify_target"] != "telegram":
+        stage_and_run_remote_installer(
+            root,
+            HostConnection(host),
+            REMOTE_ROOT,
+            uploads,
+            "scripts/install.sh",
+            host,
+            env=force_env(force),
+            require_root=True,
+            remote_subdirs=("build", "lib", "scripts"),
+        )
         return
 
     with tmpfs_secret_stage("homelab-pve-notifications.") as secret_dir:
@@ -82,11 +125,7 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
             root,
             HostConnection(host),
             REMOTE_ROOT,
-            [
-                (build_dir, f"{REMOTE_ROOT}/build/{host}"),
-                (secret_stage, f"{REMOTE_ROOT}/build/{host}/telegram.env"),
-                (root / MODULE_DIR / "scripts", f"{REMOTE_ROOT}/scripts"),
-            ],
+            [*uploads, (secret_stage, f"{REMOTE_ROOT}/build/{host}/telegram.env")],
             "scripts/install.sh",
             host,
             env=force_env(force),
@@ -98,17 +137,40 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
 def normalize_plan(root: Path, host: str) -> dict[str, object]:
     registry = default_registry(root)
     prefix = MODULE_DIR
+
+    notify_target = text_value(registry.get(host, f"{prefix}.target", "telegram")).lower()
+    if notify_target not in NOTIFY_TARGETS:
+        raise ValueError(
+            f"{prefix}.target must be one of {', '.join(NOTIFY_TARGETS)} for {host}"
+        )
+    defaults = TARGET_DEFAULTS[notify_target]
+
+    alertmanager_url = str(registry.get(host, f"{prefix}.alertmanager_url", "")).strip()
+    if notify_target == "alertmanager":
+        if not alertmanager_url:
+            raise ValueError(f"{prefix}.alertmanager_url is required for {host}")
+        if not alertmanager_url.startswith(("http://", "https://")):
+            raise ValueError(
+                f"{prefix}.alertmanager_url must be an http(s) URL for {host}"
+            )
+
     return {
-        "target_name": text_value(registry.get(host, f"{prefix}.target_name", "Telegram")),
+        "notify_target": notify_target,
+        "alertmanager_url": alertmanager_url,
+        "alertmanager_severity": text_value(
+            registry.get(host, f"{prefix}.alertmanager_severity", "critical")
+        ),
+        "alertmanager_alertname": text_value(
+            registry.get(host, f"{prefix}.alertmanager_alertname", "ProxmoxNotification")
+        ),
+        "target_name": text_value(
+            registry.get(host, f"{prefix}.target_name", defaults["target_name"])
+        ),
         "matcher_name": text_value(
-            registry.get(host, f"{prefix}.matcher_name", "telegram-matcher")
+            registry.get(host, f"{prefix}.matcher_name", defaults["matcher_name"])
         ),
         "matcher_comment": text_value(
-            registry.get(
-                host,
-                f"{prefix}.matcher_comment",
-                "Route all notifications to Telegram",
-            )
+            registry.get(host, f"{prefix}.matcher_comment", defaults["matcher_comment"])
         ),
         "match_severity": normalize_string_list(
             registry.get(host, f"{prefix}.match_severity", ["error"]),
@@ -151,6 +213,10 @@ def write_plan(path: Path, plan: dict[str, object]) -> None:
     remove_matchers = tuple(str(value) for value in plan["remove_matchers"])
     remove_webhook_targets = tuple(str(value) for value in plan["remove_webhook_targets"])
     lines = [
+        f"NOTIFY_TARGET='{shell_quote(plan['notify_target'])}'",
+        f"ALERTMANAGER_URL='{shell_quote(plan['alertmanager_url'])}'",
+        f"ALERTMANAGER_SEVERITY='{shell_quote(plan['alertmanager_severity'])}'",
+        f"ALERTMANAGER_ALERTNAME='{shell_quote(plan['alertmanager_alertname'])}'",
         f"TARGET_NAME='{shell_quote(plan['target_name'])}'",
         f"MATCHER_NAME='{shell_quote(plan['matcher_name'])}'",
         f"MATCHER_COMMENT='{shell_quote(plan['matcher_comment'])}'",
