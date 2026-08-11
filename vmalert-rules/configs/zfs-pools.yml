@@ -2,30 +2,28 @@ groups:
   - name: zfs-pools
     interval: 1m
     rules:
-      - alert: ZfsPoolDegraded
-        expr: homelab_zpool_healthy == 0
+      # Pool-level health alone does not see a failed disk inside a redundant
+      # vdev: `zpool list` can keep reporting ONLINE while a raidz1 member is
+      # FAULTED and the vdev has no redundancy left. ace/vault-hdd failed
+      # exactly this way on 2026-08-09 and a pool-health-only check never
+      # fired. Rather than splitting pool-health and device-health into two
+      # alerts that both fire for one failing disk (as TrueNAS's middleware
+      # deliberately does not -- it folds both into a single VolumeStatusAlert
+      # per pool, see truenas/middleware src/middlewared/middlewared/alert/
+      # source/volume_status.py), this rule combines both signals: it fires if
+      # the pool itself isn't ONLINE, or if any leaf device isn't ONLINE, or
+      # both -- one alert either way.
+      - alert: ZfsPoolUnhealthy
+        expr: (1 - homelab_zpool_healthy) + homelab_zpool_devices_unhealthy > 0
         for: 3m
         labels:
           severity: critical
         annotations:
-          summary: "{{ $labels.host }} zpool {{ $labels.zpool }} is not ONLINE"
-          description: "homelab_zpool_healthy is 0 for {{ $labels.host }}/{{ $labels.zpool }} (tier={{ $labels.tier }}, role={{ $labels.role }}). Check `zpool status -x {{ $labels.zpool }}` on {{ $labels.host }}."
-
-      # Pool-level health does not see a failed disk inside a redundant vdev:
-      # `zpool list` keeps reporting ONLINE while a raidz1 member is FAULTED and
-      # the vdev has no redundancy left. ace/vault-hdd failed exactly this way on
-      # 2026-08-09 and ZfsPoolDegraded never fired.
-      - alert: ZfsPoolDeviceUnhealthy
-        expr: homelab_zpool_devices_unhealthy > 0
-        for: 3m
-        labels:
-          severity: critical
-        annotations:
-          summary: "{{ $labels.host }} zpool {{ $labels.zpool }} has {{ $value }} device(s) not ONLINE"
-          description: "A leaf device in {{ $labels.host }}/{{ $labels.zpool }} (tier={{ $labels.tier }}, role={{ $labels.role }}) is not ONLINE. Redundancy is reduced or gone even if the pool still reports ONLINE. Run `zpool status -x` on {{ $labels.host }} and check homelab_zpool_device_state_info for the failing device."
+          summary: "{{ $labels.host }} zpool {{ $labels.zpool }} is unhealthy"
+          description: "{{ $labels.host }}/{{ $labels.zpool }} (tier={{ $labels.tier }}, role={{ $labels.role }}) is not fully healthy: pool-level state isn't ONLINE and/or one or more leaf devices aren't ONLINE. Redundancy may be reduced or gone even if `zpool list` still shows ONLINE. Run `zpool status -x` on {{ $labels.host }} and check homelab_zpool_device_state_info for the failing device(s)."
 
       # Error counters climb before a device is dropped, so this is the early
-      # warning that precedes ZfsPoolDeviceUnhealthy.
+      # warning that precedes ZfsPoolUnhealthy.
       - alert: ZfsPoolDeviceErrors
         expr: homelab_zpool_device_errors > 0
         for: 10m
