@@ -1,0 +1,56 @@
+groups:
+  - name: smart-disks
+    interval: 1m
+    rules:
+      # Mirrors TrueNAS's smart.py: overall SMART self-assessment failed.
+      - alert: SmartStatusFailed
+        expr: smartctl_device_smart_status == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.host }} disk {{ $labels.device }} failed SMART overall-health check"
+          description: "smartctl reports SMART overall-health self-assessment as FAILED for {{ $labels.device }} on {{ $labels.host }}. The drive itself considers failure imminent. Check `smartctl -a /dev/{{ $labels.device }}` on {{ $labels.host }}."
+
+      # smartctl_exporter doesn't expose each drive's own reported critical
+      # temperature threshold (unlike TrueNAS, which alerts against that
+      # drive-specific value), so these are fixed thresholds. NVMe runs
+      # meaningfully hotter than HDD/SATA-SSD under normal load in this fleet
+      # (checked live: NVMe 42-59C vs HDD/SATA 33-54C across all hosts), so
+      # device names starting "nvme" get a higher bound to avoid false
+      # positives on normal NVMe operating temperatures.
+      - alert: SmartDeviceTemperatureHigh
+        expr: smartctl_device_temperature{temperature_type="current", device!~"nvme.*"} >= 58 or smartctl_device_temperature{temperature_type="current", device=~"nvme.*"} >= 75
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.host }} disk {{ $labels.device }} is {{ $value }}C"
+          description: "{{ $labels.device }} on {{ $labels.host }} has been hot for 10+ minutes. Check airflow/cooling and `smartctl -a /dev/{{ $labels.device }}`."
+
+      # Mirrors TrueNAS's "Uncorrected Errors Detected": the standard set of
+      # ATA pre-fail attributes whose raw value should normally stay at 0.
+      # Unlike ZfsPoolDeviceErrors (vmalert-rules/configs/zfs-pools.yml), this
+      # is drive-reported SMART data rather than ZFS's own read/write/cksum
+      # counters, so it can catch (or corroborate) problems independently of
+      # what ZFS itself has noticed -- and vice versa: the disk that failed on
+      # ace/vault-hdd on 2026-08-10 stopped responding to smartctl entirely
+      # once it dropped offline, so SMART alone would have caught nothing for
+      # that specific failure.
+      - alert: SmartAttributeUncorrectable
+        expr: smartctl_device_attribute{attribute_value_type="raw", attribute_name=~"Reallocated_Sector_Ct|Current_Pending_Sector|Offline_Uncorrectable|Reported_Uncorrect"} > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.host }} disk {{ $labels.device }} has {{ $labels.attribute_name }} = {{ $value }}"
+          description: "SMART attribute {{ $labels.attribute_name }} (id {{ $labels.attribute_id }}) is {{ $value }} (raw) on {{ $labels.device }}/{{ $labels.host }}. This should normally be 0; a nonzero value means the drive has already remapped or failed to read/verify sectors. Check `smartctl -a /dev/{{ $labels.device }}` on {{ $labels.host }}."
+
+      - alert: SmartMetricsMissing
+        expr: absent_over_time(smartctl_device_smart_status{host=~"ace|bray|clovis|osiris"}[15m])
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "SMART metrics missing"
+          description: "smartctl_device_smart_status has produced no samples for any ace/bray/clovis/osiris disk in 15 minutes; smartctl_exporter may be down."

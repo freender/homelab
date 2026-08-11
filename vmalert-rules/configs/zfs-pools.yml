@@ -33,6 +33,28 @@ groups:
           summary: "{{ $labels.host }} zpool {{ $labels.zpool }} device {{ $labels.device }} has {{ $labels.type }} errors"
           description: "{{ $value }} {{ $labels.type }} error(s) on {{ $labels.device }} in {{ $labels.host }}/{{ $labels.zpool }}. Checksum errors mean returned-but-wrong data; read/write errors mean the device is not answering. Check `zpool status -v` and SMART on {{ $labels.host }}."
 
+      # Mirrors TrueNAS's "Pool space usage is above N%" alert
+      # (zpool_capacity.py), which checks 85/90/95%. We only use two severity
+      # tiers (warning/critical) since that's the only scheme the rest of this
+      # repo's alerting uses.
+      - alert: ZfsPoolSpaceHigh
+        expr: homelab_zpool_used_percent >= 90 and homelab_zpool_used_percent < 95
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.host }} zpool {{ $labels.zpool }} is {{ $value }}% full"
+          description: "{{ $labels.host }}/{{ $labels.zpool }} (tier={{ $labels.tier }}, role={{ $labels.role }}) is at {{ $value }}% capacity. ZFS performance degrades and free-space fragmentation gets worse as pools fill; plan to expand or clean up."
+
+      - alert: ZfsPoolSpaceCritical
+        expr: homelab_zpool_used_percent >= 95
+        for: 15m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.host }} zpool {{ $labels.zpool }} is {{ $value }}% full"
+          description: "{{ $labels.host }}/{{ $labels.zpool }} (tier={{ $labels.tier }}, role={{ $labels.role }}) is at {{ $value }}% capacity. ZFS pools become unstable and writes can fail as they approach 100%; free space or expand now."
+
       - alert: ZfsPoolMetricsMissing
         expr: absent_over_time(homelab_zpool_healthy{host=~"ace|bray|clovis|osiris"}[15m])
         for: 5m

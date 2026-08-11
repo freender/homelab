@@ -16,6 +16,7 @@ RULE_FILES = (
     "docker.yml",
     "important-containers.yml",
     "nic-link.yml",
+    "smart-disks.yml",
     "systemd-failed.yml",
     "ups.yml",
     "zfs-pools.yml",
