@@ -110,6 +110,34 @@ deployed.
 Keep unit files installed when paused. Removing them is retirement
 (`enabled: false`), not pause, and breaks resume.
 
+## Clearing systemd failed-unit state
+
+A unit left in `systemctl --failed` after a fix is redeployed stays "failed" until
+its next successful run or an explicit `reset-failed` — that gap is what
+container-alerting/vmalert failed-unit checks see. Three shared `lib/utils.sh`
+helpers cover the situations where a module should clear that state; use them
+instead of hand-rolling `systemctl reset-failed`:
+
+- **`homelab_reset_failed_if_changed "$changed" unit1 [unit2 ...]`** — clear a
+  unit's failed record only when the caller has confirmed its backing content
+  actually changed this run (e.g. `install_file_map`'s `changed=true`). Call it
+  from inside that `if [[ "$changed" == true ]]` branch, next to
+  `systemctl daemon-reload`. Never call it unconditionally on every deploy —
+  that would silently hide a real ongoing failure until the next redeploy.
+- **`homelab_mask_unwanted_service unit.service "reason"`** — mask a unit that
+  should never run on this host (LSB init script with no matching hardware, an
+  unwanted distro default) and clear its failed record. Idempotent; a no-op
+  when the unit isn't installed. Used by `pve-postinstall` and `ubuntu-setup`
+  for `openipmi.service`.
+- **`retire_systemd_unit unit-name /path/to/unit-file`** — stop, disable,
+  remove, and clear the failed record for a unit being fully retired from a
+  host. Prefer this over hand-rolled multi-file retirement for the common
+  single-unit case (`apt-upgrade` uses it for its timer); a retirement that
+  also removes several supporting files (script, multiple unit files) is
+  reasonable to keep inline, as `zfs-automation`'s
+  `cleanup_retired_health_check` and `metrics-exporters`' legacy-exporter
+  cleanup do — just keep the `reset-failed` call when doing so.
+
 ## Test coverage map
 
 Add or update tests when touching these areas:

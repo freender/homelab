@@ -79,21 +79,7 @@ fi
 print_action "Unwanted default services"
 # openipmi: LSB init script that fails at boot on hardware with no BMC/IPMI
 # device. Masks cleanly as a no-op if the package is not installed (e.g. cinci).
-if systemctl list-unit-files openipmi.service >/dev/null 2>&1; then
-    if [[ "$(systemctl is-enabled openipmi.service 2>/dev/null)" == "masked" ]]; then
-        # Idempotent even if already masked: a stale failed record from before
-        # it was masked would otherwise trip a failed-unit alert.
-        systemctl reset-failed openipmi.service >/dev/null 2>&1 || true
-        print_sub "openipmi.service already masked"
-    else
-        systemctl disable --now openipmi.service >/dev/null 2>&1 || true
-        systemctl mask openipmi.service
-        systemctl reset-failed openipmi.service >/dev/null 2>&1 || true
-        print_ok "openipmi.service masked"
-    fi
-else
-    print_sub "openipmi.service not installed; nothing to mask"
-fi
+homelab_mask_unwanted_service openipmi.service "no IPMI hardware on this host"
 
 print_action "Primary NIC pinning"
 mkdir -p /etc/udev/rules.d

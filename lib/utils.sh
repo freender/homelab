@@ -407,7 +407,9 @@ ensure_timer_state() {
     fi
 }
 
-# Stop, disable, and remove a managed systemd unit if it exists.
+# Stop, disable, and remove a managed systemd unit if it exists. Also clears
+# any failed record for the unit, so a unit retired while in a failed state
+# does not linger in `systemctl --failed` and trip an alert forever.
 # Usage: retire_systemd_unit unit-name /etc/systemd/system/unit-name
 retire_systemd_unit() {
     local unit="$1"
@@ -420,6 +422,7 @@ retire_systemd_unit() {
         changed=true
         print_sub "Retired $unit"
     fi
+    systemctl reset-failed "$unit" >/dev/null 2>&1 || true
     if [[ -e "$unit_path" ]]; then
         rm -f "$unit_path"
         changed=true
@@ -465,4 +468,60 @@ homelab_apply_pause() {
     done
 
     return 0
+}
+
+# Clear a stale systemd "failed" record for units whose backing content was
+# just redeployed.
+#
+# Do NOT call this unconditionally on every deploy run. An unwitnessed
+# reset-failed on a unit that did not actually change would silently hide a
+# real, ongoing failure from `systemctl --failed`-based alerting (see
+# container-alerting). Only call this once the caller has confirmed new
+# content was written for the unit (e.g. install_file_map's changed=true), so
+# the reset is tied to "a fix was just deployed", not "a deploy happened to
+# run".
+#
+# Usage: homelab_reset_failed_if_changed "$changed" unit1.service [unit2.timer ...]
+homelab_reset_failed_if_changed() {
+    local changed="$1"
+    shift
+
+    [[ "$changed" == "true" ]] || return 0
+
+    local unit
+    for unit in "$@"; do
+        [[ -n "$unit" ]] || continue
+        systemctl reset-failed "$unit" 2>/dev/null || true
+    done
+}
+
+# Mask a systemd unit that should never run on this host (an LSB init script
+# with no matching hardware, an unwanted distro default, etc.), and clear any
+# stale failed record left over from before it was masked (or a spurious
+# start attempt) so it does not trip a failed-unit alert.
+#
+# Idempotent and safe to call every run, including when the unit is not
+# installed at all (returns 0 as a no-op).
+#
+# Usage: homelab_mask_unwanted_service unit.service "reason for masking"
+homelab_mask_unwanted_service() {
+    local unit="$1"
+    local reason="${2:-}"
+
+    if ! systemctl list-unit-files "$unit" >/dev/null 2>&1; then
+        return 0
+    fi
+    if [[ "$(systemctl is-enabled "$unit" 2>/dev/null)" == "masked" ]]; then
+        systemctl reset-failed "$unit" >/dev/null 2>&1 || true
+        print_sub "$unit already masked"
+        return 0
+    fi
+    systemctl disable --now "$unit" >/dev/null 2>&1 || true
+    systemctl mask "$unit"
+    systemctl reset-failed "$unit" >/dev/null 2>&1 || true
+    if [[ -n "$reason" ]]; then
+        print_ok "$unit masked ($reason)"
+    else
+        print_ok "$unit masked"
+    fi
 }
