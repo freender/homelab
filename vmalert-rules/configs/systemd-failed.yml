@@ -2,9 +2,8 @@ groups:
   - name: systemd-failed
     interval: 1m
     rules:
-      # Repo-deployed units, by name. Deliberately has no host filter: an
-      # intermittent host (ghost) simply produces no series while it is away,
-      # so this stays quiet instead of alerting on absence.
+      # Repo-deployed units, split out from SystemdUnitFailed below only to
+      # carry module-specific remediation; the check itself is identical.
       - alert: HomelabUnitFailed
         expr: node_systemd_unit_state{name=~"homelab-.*",state="failed"} == 1
         for: 15m
@@ -18,12 +17,17 @@ groups:
       # name, for every non-homelab unit (homelab-* is covered above with
       # module-specific recovery guidance). Fires once per failed unit instead
       # of a bare count, so the alert itself names the unit -- no separate
-      # `systemctl --failed` lookup needed. Host list must track every host
-      # running metrics-exporters; helm/neo/tower were previously omitted and
-      # their permanently-failed openipmi.service went unnoticed for that
-      # reason.
+      # `systemctl --failed` lookup needed.
+      #
+      # No host filter, deliberately. The series only exists for hosts vmagent
+      # already scrapes, so scrape.yml is the gate; a host list here is a
+      # hand-maintained second copy of it that can only drift out of sync.
+      # It did: helm/neo/tower were omitted and their permanently-failed
+      # openipmi.service went unnoticed for exactly that reason. An absent or
+      # intermittent host (ghost) produces no series and so stays quiet --
+      # missing metrics are the absence rules' job, below.
       - alert: SystemdUnitFailed
-        expr: node_systemd_unit_state{host=~"ace|bray|clovis|osiris|cinci|cottonwood|helm|neo|tower|riven|ghost",name!~"homelab-.*",state="failed"} == 1
+        expr: node_systemd_unit_state{name!~"homelab-.*",state="failed"} == 1
         for: 15m
         labels:
           severity: warning
@@ -33,8 +37,9 @@ groups:
 
       # Detect an exporter that remains reachable while its systemd collector
       # is failing, which would otherwise make failed-unit alerting blind.
+      # Unfiltered for the same reason as SystemdUnitFailed above.
       - alert: SystemdCollectorFailing
-        expr: node_scrape_collector_success{host=~"ace|bray|clovis|osiris|cinci|cottonwood|helm|neo|tower|riven|ghost",collector="systemd"} == 0
+        expr: node_scrape_collector_success{collector="systemd"} == 0
         for: 15m
         labels:
           severity: warning
@@ -42,10 +47,12 @@ groups:
           summary: "{{ $labels.host }} node_exporter systemd collector is failing"
           description: "node_scrape_collector_success{collector=\"systemd\"} is 0 on {{ $labels.host }}, so failed-unit alerting is blind there. Check node_exporter health and collector configuration."
 
-      # One absent_over_time() per exact host: a regex matcher only detects
-      # full-vector absence, so the previous single-selector form stayed silent
-      # unless every listed host went dark at once. ghost is deliberately absent
-      # from this list — it is a roaming laptop, so missing metrics there mean
+      # The only rules that legitimately enumerate hosts: absence cannot be
+      # detected without naming what should be present. One absent_over_time()
+      # per exact host, because a regex matcher only detects full-vector
+      # absence, so the previous single-selector form stayed silent unless
+      # every listed host went dark at once. ghost is deliberately absent from
+      # this list — it is a roaming laptop, so missing metrics there mean
       # "away", not "monitoring broken". Offsite hosts keep their own longer
       # window below.
       - alert: SystemdUnitMetricsMissing
