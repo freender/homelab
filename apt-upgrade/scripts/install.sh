@@ -81,7 +81,8 @@ if [[ "$AUTOUPGRADE" == "true" ]]; then
     systemctl list-timers --all --no-pager | grep -F "$TIMER_NAME" || true
 else
     # Autoupgrade not enabled: retire any previous timer, then run once now.
-    retire_systemd_unit "$TIMER_NAME" "$TIMER_PATH"
+    # Status is intentionally discarded: no previous timer is the normal case.
+    retire_systemd_unit "$TIMER_NAME" "$TIMER_PATH" || true
     print_sub "Running apt upgrade now (autoupgrade not enabled)..."
     systemctl start "$SERVICE_NAME"
     print_sub "Upgrade complete"

@@ -410,6 +410,13 @@ ensure_timer_state() {
 # Stop, disable, and remove a managed systemd unit if it exists. Also clears
 # any failed record for the unit, so a unit retired while in a failed state
 # does not linger in `systemctl --failed` and trip an alert forever.
+#
+# Returns 0 when something was actually retired (unit stopped, or unit file
+# removed) and 1 when there was nothing to do, matching the 0=changed /
+# 1=unchanged convention used by copy_if_changed and install_if_changed.
+# Callers running under `set -e` must consume the status (`|| true`, an `if`,
+# or assignment to a flag) or a no-op retirement will abort the script.
+#
 # Usage: retire_systemd_unit unit-name /etc/systemd/system/unit-name
 retire_systemd_unit() {
     local unit="$1"
@@ -430,7 +437,9 @@ retire_systemd_unit() {
     fi
     if [[ "$changed" == "true" ]]; then
         systemctl daemon-reload
+        return 0
     fi
+    return 1
 }
 
 # Apply the shared module "paused" convention.
@@ -470,23 +479,32 @@ homelab_apply_pause() {
     return 0
 }
 
-# Clear a stale systemd "failed" record for units whose backing content was
-# just redeployed.
+# Reload systemd and clear stale "failed" records after a module reinstalls
+# its units — the standard follow-up to install_file_map.
 #
-# Do NOT call this unconditionally on every deploy run. An unwitnessed
-# reset-failed on a unit that did not actually change would silently hide a
-# real, ongoing failure from `systemctl --failed`-based alerting (see
-# container-alerting). Only call this once the caller has confirmed new
-# content was written for the unit (e.g. install_file_map's changed=true), so
-# the reset is tied to "a fix was just deployed", not "a deploy happened to
-# run".
+# Pass the caller's own changed flag; this helper owns the gate, so call it
+# unguarded rather than wrapping it in another `if`. When the flag is not
+# "true" it does nothing at all: no reload, no reset.
 #
-# Usage: homelab_reset_failed_if_changed "$changed" unit1.service [unit2.timer ...]
-homelab_reset_failed_if_changed() {
+# The gate matters. An unconditional reset-failed on a unit that did not
+# change would silently hide a real, ongoing failure from `systemctl
+# --failed`-based alerting (see container-alerting). Tying it to "new content
+# was just written" keeps the reset meaning "a fix was deployed", not "a
+# deploy happened to run".
+#
+# Note this clears failure state without proving the fix works — the unit is
+# moved from "known failed" to "unknown" until its next run. Where a verdict
+# is needed immediately, follow this with an explicit `systemctl start` and
+# check the result (zfs-automation's replication recovery does exactly that).
+#
+# Usage: homelab_reload_and_clear_failed "$changed" unit1.service [unit2.timer ...]
+homelab_reload_and_clear_failed() {
     local changed="$1"
     shift
 
     [[ "$changed" == "true" ]] || return 0
+
+    systemctl daemon-reload
 
     local unit
     for unit in "$@"; do
@@ -509,6 +527,7 @@ homelab_mask_unwanted_service() {
     local reason="${2:-}"
 
     if ! systemctl list-unit-files "$unit" >/dev/null 2>&1; then
+        print_sub "$unit not installed; nothing to mask"
         return 0
     fi
     if [[ "$(systemctl is-enabled "$unit" 2>/dev/null)" == "masked" ]]; then

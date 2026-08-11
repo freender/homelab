@@ -115,28 +115,51 @@ Keep unit files installed when paused. Removing them is retirement
 A unit left in `systemctl --failed` after a fix is redeployed stays "failed" until
 its next successful run or an explicit `reset-failed` — that gap is what
 container-alerting/vmalert failed-unit checks see. Three shared `lib/utils.sh`
-helpers cover the situations where a module should clear that state; use them
-instead of hand-rolling `systemctl reset-failed`:
+helpers cover this; reach for them before writing `systemctl reset-failed` by hand.
 
-- **`homelab_reset_failed_if_changed "$changed" unit1 [unit2 ...]`** — clear a
-  unit's failed record only when the caller has confirmed its backing content
-  actually changed this run (e.g. `install_file_map`'s `changed=true`). Call it
-  from inside that `if [[ "$changed" == true ]]` branch, next to
-  `systemctl daemon-reload`. Never call it unconditionally on every deploy —
-  that would silently hide a real ongoing failure until the next redeploy.
-- **`homelab_mask_unwanted_service unit.service "reason"`** — mask a unit that
+- **`homelab_reload_and_clear_failed "$changed" unit1 [unit2 ...]`** — the
+  standard follow-up to `install_file_map`. Runs `daemon-reload` and clears the
+  named units' failed records, but only when the caller's changed flag is
+  `true`. **The helper owns the gate — call it unguarded**, not inside another
+  `if [[ "$changed" == true ]]`:
+
+  ```bash
+  changed=false
+  install_file_map || rc=$?
+  [[ $rc -eq 0 ]] && changed=true
+
+  homelab_reload_and_clear_failed "$changed" homelab-mymodule.service
+  ```
+
+  The gate is load-bearing: an unconditional reset would hide a real ongoing
+  failure until the next redeploy. Note it clears failure state without proving
+  the fix works — the unit goes from "known failed" to "unknown" until its next
+  run. Where an immediate verdict matters, follow it with an explicit
+  `systemctl start` and check the result, as `zfs-automation`'s replication
+  recovery does.
+- **`homelab_mask_unwanted_service unit.service ["reason"]`** — mask a unit that
   should never run on this host (LSB init script with no matching hardware, an
-  unwanted distro default) and clear its failed record. Idempotent; a no-op
-  when the unit isn't installed. Used by `pve-postinstall` and `ubuntu-setup`
-  for `openipmi.service`.
+  unwanted distro default) and clear its failed record. Idempotent, and a
+  reported no-op when the unit isn't installed. The reason is optional and
+  echoed to output — omit it rather than asserting something host-specific you
+  haven't verified. Used by `pve-postinstall` and `ubuntu-setup`.
 - **`retire_systemd_unit unit-name /path/to/unit-file`** — stop, disable,
-  remove, and clear the failed record for a unit being fully retired from a
-  host. Prefer this over hand-rolled multi-file retirement for the common
-  single-unit case (`apt-upgrade` uses it for its timer); a retirement that
-  also removes several supporting files (script, multiple unit files) is
-  reasonable to keep inline, as `zfs-automation`'s
-  `cleanup_retired_health_check` and `metrics-exporters`' legacy-exporter
-  cleanup do — just keep the `reset-failed` call when doing so.
+  remove, and clear the failed record for a unit being retired. Returns **0
+  when it retired something, 1 when there was nothing to do** (the
+  `copy_if_changed` convention). Under `set -e` a bare call therefore aborts
+  the installer on the common no-op path — consume the status with `if ...;
+  then`, a flag assignment, or an explicit `|| true`. Call it once per unit for
+  multi-unit retirements and delete any remaining non-unit files (script,
+  textfile-collector output) alongside it; `zfs-automation`'s
+  `cleanup_retired_health_check` and both `metrics-exporters` cleanups follow
+  that shape.
+
+Two hand-rolled `reset-failed` call sites remain on purpose, both outside this
+model: `zfs-automation`'s replication recovery (resets *and* starts, to get a
+verdict) and `docker/scripts/rebuild.sh` (not a module installer).
+
+All three helpers are covered in `tests/test_safety_regressions.py` using a
+stubbed-`systemctl` bash harness — extend it when changing their behavior.
 
 ## Test coverage map
 
@@ -149,6 +172,7 @@ Add or update tests when touching these areas:
 | `tests/test_hosts.py`, `tests/test_cli_validate.py` | Inventory parsing and the validate command. |
 | `tests/test_build_and_templates.py`, `tests/test_module_fallbacks.py` | Build/render plumbing and module fallback behavior. |
 | `tests/test_pbs_client_backup.py`, `tests/test_pve_backup.py`, `tests/test_pve_http_boot.py`, `tests/test_docker_start.py`, `tests/test_ssh_helpers.py` | Module-specific behavior. |
+| `tests/test_safety_regressions.py` | Shared `lib/utils.sh` bash helpers (`retire_systemd_unit`, `homelab_apply_pause`, `homelab_reload_and_clear_failed`, `homelab_mask_unwanted_service`) plus assorted footgun regressions. Runs real bash against a stubbed `systemctl` via `run_utils_snippet`, so it is the place to cover anything added to `lib/utils.sh` — that code runs as root on every host. |
 
 If a new module can take a host off the network or off SSH, it belongs in the
 golden-render set.

@@ -105,15 +105,16 @@ cleanup_retired_health_check() {
 
     RETIRED_HEALTH_CHECK_CLEANED=false
 
-    if systemctl is-enabled --quiet homelab-zfs-health-check.timer 2>/dev/null; then
-        systemctl disable --now homelab-zfs-health-check.timer
+    if retire_systemd_unit homelab-zfs-health-check.timer \
+        /etc/systemd/system/homelab-zfs-health-check.timer; then
+        RETIRED_HEALTH_CHECK_CLEANED=true
     fi
-    systemctl stop homelab-zfs-health-check.service 2>/dev/null || true
-    systemctl reset-failed homelab-zfs-health-check.service homelab-zfs-health-check.timer 2>/dev/null || true
+    if retire_systemd_unit homelab-zfs-health-check.service \
+        /etc/systemd/system/homelab-zfs-health-check.service; then
+        RETIRED_HEALTH_CHECK_CLEANED=true
+    fi
 
     for path in \
-        /etc/systemd/system/homelab-zfs-health-check.service \
-        /etc/systemd/system/homelab-zfs-health-check.timer \
         /usr/local/bin/homelab-zfs-health-check \
         "$MANAGED_DIR/homelab-zfs-health-check.service" \
         "$MANAGED_DIR/homelab-zfs-health-check.timer" \

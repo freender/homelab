@@ -72,14 +72,12 @@ remove_legacy_smartctl_exporter() {
     local path
     local removed=false
 
-    if [[ -e /etc/systemd/system/smartctl-exporter.service ]]; then
-        systemctl disable --now smartctl-exporter.service 2>/dev/null || true
-        systemctl reset-failed smartctl-exporter.service 2>/dev/null || true
+    if retire_systemd_unit smartctl-exporter.service \
+        /etc/systemd/system/smartctl-exporter.service; then
         removed=true
     fi
 
-    for path in /etc/systemd/system/smartctl-exporter.service \
-                /etc/default/smartctl-exporter \
+    for path in /etc/default/smartctl-exporter \
                 /usr/local/bin/smartctl_exporter; do
         [[ -e "$path" ]] || continue
         rm -f "$path"
@@ -222,12 +220,13 @@ fi
 # was previously installed.
 if [[ -e /usr/local/bin/systemd-failed-textfile-exporter ]] ||
    [[ -e /etc/systemd/system/systemd-failed-textfile-exporter.timer ]]; then
-    systemctl disable --now systemd-failed-textfile-exporter.timer 2>/dev/null || true
-    systemctl stop systemd-failed-textfile-exporter.service 2>/dev/null || true
-    systemctl reset-failed systemd-failed-textfile-exporter.service 2>/dev/null || true
-    rm -f /etc/systemd/system/systemd-failed-textfile-exporter.service \
-          /etc/systemd/system/systemd-failed-textfile-exporter.timer \
-          /usr/local/bin/systemd-failed-textfile-exporter \
+    # Status discarded: the enclosing guard already established that at least
+    # one artifact exists, and either unit may legitimately be absent.
+    retire_systemd_unit systemd-failed-textfile-exporter.timer \
+        /etc/systemd/system/systemd-failed-textfile-exporter.timer || true
+    retire_systemd_unit systemd-failed-textfile-exporter.service \
+        /etc/systemd/system/systemd-failed-textfile-exporter.service || true
+    rm -f /usr/local/bin/systemd-failed-textfile-exporter \
           /var/lib/prometheus/node-exporter/systemd-failed.prom
     print_sub "Removed retired systemd-failed-textfile-exporter"
 fi

@@ -79,7 +79,7 @@ fi
 print_action "Unwanted default services"
 # openipmi: LSB init script that fails at boot on hardware with no BMC/IPMI
 # device. Masks cleanly as a no-op if the package is not installed (e.g. cinci).
-homelab_mask_unwanted_service openipmi.service "no IPMI hardware on this host"
+homelab_mask_unwanted_service openipmi.service
 
 print_action "Primary NIC pinning"
 mkdir -p /etc/udev/rules.d

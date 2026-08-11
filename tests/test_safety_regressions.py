@@ -129,6 +129,150 @@ retire_systemd_unit homelab-test.timer "$UNIT_PATH"
     log = log_path.read_text(encoding="utf-8")
     assert "disable --now homelab-test.timer" in log
     assert "daemon-reload" in log
+    # A unit retired while failed must not linger in `systemctl --failed`.
+    assert "reset-failed homelab-test.timer" in log
+
+
+def run_utils_snippet(
+    snippet: str, log_path: Path, extra_env: dict[str, str] | None = None
+) -> subprocess.CompletedProcess[str]:
+    """Run a bash snippet with lib/utils.sh sourced and systemctl stubbed.
+
+    The stub appends every invocation to $SYSTEMCTL_LOG so tests can assert on
+    which systemctl calls were (and were not) made. Per-case behavior is driven
+    by SYSTEMCTL_IS_ENABLED / SYSTEMCTL_UNIT_KNOWN.
+    """
+    script = f"""
+source {shlex.quote(str(ROOT / 'lib' / 'utils.sh'))}
+systemctl() {{
+    printf '%s\n' "$*" >> "$SYSTEMCTL_LOG"
+    case "$1" in
+        list-unit-files) [[ "${{SYSTEMCTL_UNIT_KNOWN:-1}}" == "1" ]] && return 0 || return 1 ;;
+        is-enabled)
+            # Mirrors systemd: prints the state on stdout (read by the mask
+            # helper) and exits non-zero unless actually enabled (checked by
+            # retire_systemd_unit via --quiet).
+            printf '%s\n' "${{SYSTEMCTL_IS_ENABLED:-enabled}}"
+            [[ "${{SYSTEMCTL_IS_ENABLED:-enabled}}" == "enabled" ]] || return 1
+            ;;
+        is-active) return 1 ;;
+    esac
+    return 0
+}}
+{snippet}
+"""
+    env = {**os.environ, "SYSTEMCTL_LOG": str(log_path), **(extra_env or {})}
+    return subprocess.run(
+        ["bash", "-c", script],
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def test_retire_systemd_unit_reports_nothing_to_do(tmp_path: Path) -> None:
+    """Returns 1 when there is nothing to retire.
+
+    Callers under `set -e` must consume this status; a bare call would abort
+    the installer on the common no-op path.
+    """
+    log_path = tmp_path / "systemctl.log"
+
+    result = run_utils_snippet(
+        'retire_systemd_unit homelab-absent.timer "$UNIT_PATH"; echo "rc=$?"',
+        log_path,
+        {
+            "UNIT_PATH": str(tmp_path / "does-not-exist.timer"),
+            "SYSTEMCTL_IS_ENABLED": "disabled",
+        },
+    )
+
+    assert "rc=1" in result.stdout, result.stderr
+    assert "daemon-reload" not in log_path.read_text(encoding="utf-8")
+
+
+def test_reload_and_clear_failed_is_inert_when_unchanged(tmp_path: Path) -> None:
+    """The gate is the whole point: no change means no reload and no reset.
+
+    An unconditional reset-failed would hide a real ongoing failure from
+    failed-unit alerting until the next scheduled run.
+    """
+    log_path = tmp_path / "systemctl.log"
+    log_path.touch()
+
+    result = run_utils_snippet(
+        "homelab_reload_and_clear_failed false homelab-test.service", log_path
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert log_path.read_text(encoding="utf-8") == ""
+
+
+def test_reload_and_clear_failed_resets_changed_units(tmp_path: Path) -> None:
+    log_path = tmp_path / "systemctl.log"
+
+    result = run_utils_snippet(
+        "homelab_reload_and_clear_failed true homelab-a.service homelab-b.timer",
+        log_path,
+    )
+
+    assert result.returncode == 0, result.stderr
+    log = log_path.read_text(encoding="utf-8")
+    assert "daemon-reload" in log
+    assert "reset-failed homelab-a.service" in log
+    assert "reset-failed homelab-b.timer" in log
+
+
+def test_mask_unwanted_service_masks_and_clears_failed(tmp_path: Path) -> None:
+    log_path = tmp_path / "systemctl.log"
+
+    result = run_utils_snippet(
+        'homelab_mask_unwanted_service openipmi.service "no IPMI hardware"',
+        log_path,
+        {"SYSTEMCTL_IS_ENABLED": "enabled"},
+    )
+
+    assert result.returncode == 0, result.stderr
+    log = log_path.read_text(encoding="utf-8")
+    assert "mask openipmi.service" in log
+    assert "reset-failed openipmi.service" in log
+    assert "no IPMI hardware" in result.stdout
+
+
+def test_mask_unwanted_service_clears_failed_when_already_masked(tmp_path: Path) -> None:
+    """Idempotent re-run must still clear a stale failed record.
+
+    A unit masked while failed keeps its failed record, which would otherwise
+    trip a failed-unit alert forever.
+    """
+    log_path = tmp_path / "systemctl.log"
+
+    result = run_utils_snippet(
+        "homelab_mask_unwanted_service openipmi.service",
+        log_path,
+        {"SYSTEMCTL_IS_ENABLED": "masked"},
+    )
+
+    assert result.returncode == 0, result.stderr
+    log = log_path.read_text(encoding="utf-8")
+    assert "reset-failed openipmi.service" in log
+    assert "mask openipmi.service" not in log
+
+
+def test_mask_unwanted_service_skips_uninstalled_unit(tmp_path: Path) -> None:
+    log_path = tmp_path / "systemctl.log"
+
+    result = run_utils_snippet(
+        "homelab_mask_unwanted_service openipmi.service",
+        log_path,
+        {"SYSTEMCTL_UNIT_KNOWN": "0"},
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "nothing to mask" in result.stdout
+    assert "mask openipmi.service" not in log_path.read_text(encoding="utf-8")
 
 
 def test_ssh_config_installer_propagates_copy_failure(tmp_path: Path) -> None:

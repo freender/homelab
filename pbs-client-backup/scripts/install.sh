@@ -174,10 +174,7 @@ install_file_map || rc=$?
 [[ $rc -eq 0 || $rc -eq 1 ]] || exit "$rc"
 [[ $rc -eq 0 ]] && changed=true
 
-if [[ "$changed" == true ]]; then
-    systemctl daemon-reload
-    homelab_reset_failed_if_changed "$changed" homelab-pbs-client-backup.service
-fi
+homelab_reload_and_clear_failed "$changed" homelab-pbs-client-backup.service
 
 if [[ "${RETIRE_PVE_CONFIG_BACKUP:-false}" == "true" ]]; then
     retired_changed=false
