@@ -262,6 +262,16 @@ if [[ -n "${FILE_MAP_DEST[igpu-exporter.py]:-}" ]]; then
     fi
 fi
 
+# This module owns failed-unit *visibility* (it retired the textfile fallback in
+# favour of node_exporter's systemd collector), so it also keeps that signal
+# clean. openipmi is an LSB init script that tries to load IPMI kernel modules;
+# it can never succeed on a host with no BMC, and never inside an LXC guest,
+# where it leaves a permanently-failed unit that masks real failures in
+# SystemdUnitFailed. Masking here covers hosts that get neither pve-postinstall
+# nor ubuntu-setup (helm/neo/tower); it is idempotent where those already ran.
+print_action "Unwanted default services"
+homelab_mask_unwanted_service openipmi.service
+
 systemctl daemon-reload
 systemctl enable --now prometheus-node-exporter
 if [[ "$FORCE_UPDATE" == "true" || "$NODE_EXPORTER_CHANGED" == "true" ]]; then

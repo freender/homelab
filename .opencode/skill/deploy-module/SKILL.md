@@ -114,8 +114,12 @@ Keep unit files installed when paused. Removing them is retirement
 
 A unit left in `systemctl --failed` after a fix is redeployed stays "failed" until
 its next successful run or an explicit `reset-failed` — that gap is what
-container-alerting/vmalert failed-unit checks see. Three shared `lib/utils.sh`
+container-alerting/vmalert failed-unit checks see. Four shared `lib/utils.sh`
 helpers cover this; reach for them before writing `systemctl reset-failed` by hand.
+Which one you want depends on whether the redeploy changed anything:
+changed content -> `homelab_reload_and_clear_failed`; unchanged content but a
+transient fault -> `homelab_recover_failed_units`; unit going away ->
+`retire_systemd_unit`.
 
 - **`homelab_reload_and_clear_failed "$changed" unit1 [unit2 ...]`** — the
   standard follow-up to `install_file_map`. Runs `daemon-reload` and clears the
@@ -143,6 +147,25 @@ helpers cover this; reach for them before writing `systemctl reset-failed` by ha
   reported no-op when the unit isn't installed. The reason is optional and
   echoed to output — omit it rather than asserting something host-specific you
   haven't verified. Used by `pve-postinstall` and `ubuntu-setup`.
+- **`homelab_recover_failed_units unit1 [unit2 ...]`** — for units that fail
+  from *transient external* causes (registry rate limits, network blips), where
+  a redeploy sees no file change and so the gated helper above does nothing.
+  Acts only on units currently in the failed state: resets them (which also
+  clears the `StartLimitBurst` limiter that otherwise makes systemd refuse the
+  start outright) and then starts them, so the unit's own run decides the
+  outcome — transient faults recover, persistent ones fail again immediately
+  and stay visible. Healthy units are never touched, and a still-failing unit
+  warns rather than failing the deploy.
+
+  Only for units that are cheap, idempotent, and safe to run off-schedule.
+  `docker` uses it for `homelab-docker-update.service` (a `docker compose up -d`
+  oneshot whose `start.sh` pulls images). Deliberately **not** used by
+  `pbs-client-backup` (multi-hour backup) or `apt-upgrade` (a start there means
+  running a dist-upgrade at deploy time); those have daily timers that clear a
+  stale failure on their next successful run, and keeping a possibly-real
+  failure visible beats silencing it. Waits up to `HOMELAB_RECOVER_TIMEOUT`
+  seconds (default 300), since a `Type=oneshot` start blocks and oneshot
+  disables `TimeoutStartSec` by default.
 - **`retire_systemd_unit unit-name /path/to/unit-file`** — stop, disable,
   remove, and clear the failed record for a unit being retired. Returns **0
   when it retired something, 1 when there was nothing to do** (the
@@ -172,7 +195,7 @@ Add or update tests when touching these areas:
 | `tests/test_hosts.py`, `tests/test_cli_validate.py` | Inventory parsing and the validate command. |
 | `tests/test_build_and_templates.py`, `tests/test_module_fallbacks.py` | Build/render plumbing and module fallback behavior. |
 | `tests/test_pbs_client_backup.py`, `tests/test_pve_backup.py`, `tests/test_pve_http_boot.py`, `tests/test_docker_start.py`, `tests/test_ssh_helpers.py` | Module-specific behavior. |
-| `tests/test_safety_regressions.py` | Shared `lib/utils.sh` bash helpers (`retire_systemd_unit`, `homelab_apply_pause`, `homelab_reload_and_clear_failed`, `homelab_mask_unwanted_service`) plus assorted footgun regressions. Runs real bash against a stubbed `systemctl` via `run_utils_snippet`, so it is the place to cover anything added to `lib/utils.sh` — that code runs as root on every host. |
+| `tests/test_safety_regressions.py` | Shared `lib/utils.sh` bash helpers (`retire_systemd_unit`, `homelab_apply_pause`, `homelab_reload_and_clear_failed`, `homelab_recover_failed_units`, `homelab_mask_unwanted_service`) plus assorted footgun regressions. Runs real bash against a stubbed `systemctl` via `run_utils_snippet`, so it is the place to cover anything added to `lib/utils.sh` — that code runs as root on every host. |
 
 If a new module can take a host off the network or off SSH, it belongs in the
 golden-render set.

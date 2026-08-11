@@ -37,6 +37,16 @@ scrape_configs:
       - targets: ["neo.freender.internal:9100"]
         labels:
           host: neo
+      - targets: ["riven.freender.internal:9100"]
+        labels:
+          host: riven
+      # ghost is a WSL2 userland on a roaming laptop, reachable only over the
+      # WireGuard tunnel. Expect this target to be down whenever the laptop is
+      # away; failed-unit alerting for it is written to fire only when metrics
+      # are present, and it is excluded from metrics-missing alerts.
+      - targets: ["ghost.freender.internal:9100"]
+        labels:
+          host: ghost
 
   - job_name: pve-smartctl
     scrape_interval: 10s

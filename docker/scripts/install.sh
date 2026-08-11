@@ -104,3 +104,14 @@ if [[ "$units_changed" == "true" ]]; then
 fi
 
 ensure_timer_state "homelab-docker-update.timer" "$ENABLE_DOCKER_UPDATE_TIMER" "$units_changed"
+
+# start.sh pulls images, so homelab-docker-update.service fails on transient
+# registry faults (GHCR rate limiting in particular) with no file change to
+# trigger a reset on redeploy. Worse, Restart=on-failure with StartLimitBurst=3
+# means systemd refuses to start it at all once the burst is exhausted, so it
+# stays wedged until the next timer fire. The unit is a cheap idempotent
+# oneshot (`docker compose up -d`), so a redeploy is the right moment to retry
+# it and find out whether the fault has cleared.
+if [[ "$ENABLE_DOCKER_UPDATE_TIMER" == "true" ]]; then
+    homelab_recover_failed_units homelab-docker-update.service
+fi

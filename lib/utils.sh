@@ -513,6 +513,57 @@ homelab_reload_and_clear_failed() {
     done
 }
 
+# Recover units that are currently in a failed state, regardless of whether
+# this deploy changed anything.
+#
+# This is the counterpart to homelab_reload_and_clear_failed, covering the case
+# that helper deliberately does not: a unit that failed for a transient external
+# reason (container registry rate limit, network blip) and whose files are
+# therefore byte-identical on redeploy. A redeploy is an explicit operator
+# action to make the host right, so it should un-wedge such a unit rather than
+# leave it failed until its next timer fire.
+#
+# It does not clear failure state blindly. reset-failed also clears systemd's
+# StartLimitBurst rate limiter — without which `start` is refused outright for a
+# unit with Restart=on-failure that exhausted its burst — and the subsequent
+# start decides the outcome: a transient fault recovers and the alert clears
+# with evidence, while a persistent one fails again immediately and stays
+# visible to failed-unit alerting. Healthy units are never touched.
+#
+# Only use for units that are cheap, idempotent, and safe to run off-schedule.
+# Do NOT use it for expensive or side-effecting jobs (backups, dist-upgrades);
+# leave those to their timer.
+#
+# Waits up to HOMELAB_RECOVER_TIMEOUT seconds (default 300) because a
+# Type=oneshot start blocks until the job finishes and oneshot disables
+# TimeoutStartSec by default. On timeout it stops waiting; the job keeps running
+# and the unit's own result remains authoritative. Always returns 0 — a
+# still-failing unit is reported and left failed for alerting to catch, rather
+# than aborting an otherwise good deploy over an external outage.
+#
+# Usage: homelab_recover_failed_units unit1.service [unit2.service ...]
+homelab_recover_failed_units() {
+    local timeout_s="${HOMELAB_RECOVER_TIMEOUT:-300}"
+    local unit
+
+    for unit in "$@"; do
+        [[ -n "$unit" ]] || continue
+        systemctl is-failed --quiet "$unit" 2>/dev/null || continue
+
+        print_action "Recovering failed $unit"
+        systemctl reset-failed "$unit" 2>/dev/null || true
+        if timeout "$timeout_s" systemctl start "$unit"; then
+            print_ok "$unit recovered"
+        elif systemctl is-failed --quiet "$unit" 2>/dev/null; then
+            print_warn "$unit still failing after restart; left failed for alerting"
+        else
+            print_warn "$unit did not settle within ${timeout_s}s; job still running"
+        fi
+    done
+
+    return 0
+}
+
 # Mask a systemd unit that should never run on this host (an LSB init script
 # with no matching hardware, an unwanted distro default, etc.), and clear any
 # stale failed record left over from before it was masked (or a spurious

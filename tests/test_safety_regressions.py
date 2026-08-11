@@ -261,6 +261,132 @@ def test_mask_unwanted_service_clears_failed_when_already_masked(tmp_path: Path)
     assert "mask openipmi.service" not in log
 
 
+def run_recover_snippet(
+    snippet: str,
+    log_path: Path,
+    tmp_path: Path,
+    *,
+    failed_units: str = "",
+    start_rc: int = 0,
+) -> subprocess.CompletedProcess[str]:
+    """Harness for homelab_recover_failed_units.
+
+    The stub is a real executable on PATH, not a bash function: the helper runs
+    `timeout ... systemctl start`, and timeout execs the binary directly, so a
+    shell function would be bypassed entirely.
+
+    Failed units live in a state file so `start` can clear one and have a later
+    `is-failed` observe the recovery across process boundaries.
+    """
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    failed_file = tmp_path / "failed-units"
+    failed_file.write_text(
+        "".join(f"{u}\n" for u in failed_units.split() if u), encoding="utf-8"
+    )
+
+    stub = bin_dir / "systemctl"
+    stub.write_text(
+        """#!/bin/bash
+printf '%s\\n' "$*" >> "$SYSTEMCTL_LOG"
+case "$1" in
+    is-failed)
+        grep -qxF "$3" "$FAILED_FILE" 2>/dev/null && exit 0 || exit 1
+        ;;
+    start)
+        if [[ "${START_RC:-0}" == "0" ]]; then
+            grep -vxF "$2" "$FAILED_FILE" > "$FAILED_FILE.tmp" 2>/dev/null || true
+            mv -f "$FAILED_FILE.tmp" "$FAILED_FILE" 2>/dev/null || true
+            exit 0
+        fi
+        exit "$START_RC"
+        ;;
+esac
+exit 0
+""",
+        encoding="utf-8",
+    )
+    stub.chmod(0o755)
+
+    script = f"""
+source {shlex.quote(str(ROOT / 'lib' / 'utils.sh'))}
+{snippet}
+"""
+    env = {
+        **os.environ,
+        "PATH": f"{bin_dir}:{os.environ['PATH']}",
+        "SYSTEMCTL_LOG": str(log_path),
+        "FAILED_FILE": str(failed_file),
+        "START_RC": str(start_rc),
+    }
+    return subprocess.run(
+        ["bash", "-c", script],
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def test_recover_failed_units_ignores_healthy_units(tmp_path: Path) -> None:
+    """Healthy units must never be reset or restarted.
+
+    This is the safety property that separates recovery from a blind
+    reset-failed sweep on every deploy.
+    """
+    log_path = tmp_path / "systemctl.log"
+    log_path.touch()
+
+    result = run_recover_snippet(
+        "homelab_recover_failed_units homelab-docker-update.service",
+        log_path,
+        tmp_path,
+        failed_units="",
+    )
+
+    assert result.returncode == 0, result.stderr
+    log = log_path.read_text(encoding="utf-8")
+    assert "reset-failed" not in log
+    assert "start" not in log
+
+
+def test_recover_failed_units_resets_then_starts(tmp_path: Path) -> None:
+    """reset-failed must precede start: it clears the StartLimitBurst limiter
+    that would otherwise make systemd refuse the start outright."""
+    log_path = tmp_path / "systemctl.log"
+
+    result = run_recover_snippet(
+        "homelab_recover_failed_units homelab-docker-update.service",
+        log_path,
+        tmp_path,
+        failed_units="homelab-docker-update.service",
+    )
+
+    assert result.returncode == 0, result.stderr
+    log = log_path.read_text(encoding="utf-8")
+    assert "reset-failed homelab-docker-update.service" in log
+    assert log.index("reset-failed") < log.index("start homelab-docker-update.service")
+    assert "recovered" in result.stdout
+
+
+def test_recover_failed_units_leaves_persistent_failure_visible(tmp_path: Path) -> None:
+    """A unit that fails again must stay failed so alerting still sees it,
+    and must not abort the deploy."""
+    log_path = tmp_path / "systemctl.log"
+
+    result = run_recover_snippet(
+        "homelab_recover_failed_units homelab-docker-update.service",
+        log_path,
+        tmp_path,
+        failed_units="homelab-docker-update.service",
+        start_rc=1,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "still failing" in result.stdout or "still failing" in result.stderr
+
+
 def test_mask_unwanted_service_skips_uninstalled_unit(tmp_path: Path) -> None:
     log_path = tmp_path / "systemctl.log"
 
