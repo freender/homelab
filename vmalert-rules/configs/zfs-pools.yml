@@ -22,16 +22,17 @@ groups:
           summary: "{{ $labels.host }} zpool {{ $labels.zpool }} is unhealthy"
           description: "{{ $labels.host }}/{{ $labels.zpool }} (tier={{ $labels.tier }}, role={{ $labels.role }}) is not fully healthy: pool-level state isn't ONLINE and/or one or more leaf devices aren't ONLINE. Redundancy may be reduced or gone even if `zpool list` still shows ONLINE. Run `zpool status -x` on {{ $labels.host }} and check homelab_zpool_device_state_info for the failing device(s)."
 
-      # Error counters climb before a device is dropped, so this is the early
-      # warning that precedes ZfsPoolUnhealthy.
-      - alert: ZfsPoolDeviceErrors
-        expr: homelab_zpool_device_errors > 0
-        for: 10m
-        labels:
-          severity: warning
-        annotations:
-          summary: "{{ $labels.host }} zpool {{ $labels.zpool }} device {{ $labels.device }} has {{ $labels.type }} errors"
-          description: "{{ $value }} {{ $labels.type }} error(s) on {{ $labels.device }} in {{ $labels.host }}/{{ $labels.zpool }}. Checksum errors mean returned-but-wrong data; read/write errors mean the device is not answering. Check `zpool status -v` and SMART on {{ $labels.host }}."
+      # No error-counter early-warning alert here on purpose, matching
+      # TrueNAS's own model (truenas/middleware src/middlewared/middlewared/
+      # alert/source/volume_status.py): it alerts purely on pool/device health
+      # state, never on raw read/write/cksum counters. We tried that as
+      # ZfsPoolDeviceErrors and dropped it 2026-08-11 -- it fired once per
+      # device per error type (read+write+cksum), so a single failing disk
+      # paged 2-3 extra warnings on top of the one ZfsPoolUnhealthy critical
+      # that already covers the "pool ONLINE, device FAULTED/OFFLINE" case via
+      # homelab_zpool_devices_unhealthy above. homelab_zpool_device_errors
+      # still ships to VictoriaMetrics for Grafana/manual triage, it just
+      # doesn't page on its own.
 
       # Mirrors TrueNAS's "Pool space usage is above N%" alert
       # (zpool_capacity.py), which checks 85/90/95%. We only use two severity
