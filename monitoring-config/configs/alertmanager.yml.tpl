@@ -67,11 +67,11 @@ receivers:
         chat_id: __TELEGRAM_CHATID__
         send_resolved: true
         message: |-
-          {{ if eq .Status "resolved" }}&#128994;{{ else if eq .CommonLabels.severity "critical" }}&#128308;{{ else if eq .CommonLabels.severity "warning" }}&#128993;{{ else }}&#128309;{{ end }} [{{ .Status | toUpper }}] {{ .CommonLabels.alertname }}
+          {{ if eq .Status "resolved" }}&#128994;{{ else if eq .CommonLabels.severity "critical" }}&#128308;{{ else if eq .CommonLabels.severity "warning" }}&#128993;{{ else }}&#128309;{{ end }} [{{ .Status | toUpper }}] {{ .CommonLabels.alertname }}{{ if .CommonLabels.name }}: {{ .CommonLabels.name }}{{ end }}
           {{ range .Alerts }}
           Severity: {{ .Labels.severity }}
           {{ if .Labels.host }}Host: {{ .Labels.host }}{{ end }}
-          {{ if .Labels.name }}Container: {{ .Labels.name }}{{ end }}
+          {{ if .Labels.name }}Name: {{ .Labels.name }}{{ end }}
           {{ .Annotations.summary }}
           {{ if .Annotations.description }}{{ .Annotations.description }}{{ end }}
           {{ end }}
@@ -96,7 +96,7 @@ receivers:
         chat_id: __TELEGRAM_CHATID_PLEX__
         send_resolved: true
         message: |-
-          {{ if eq .Status "resolved" }}&#128994;{{ else if eq .CommonLabels.severity "critical" }}&#128308;{{ else if eq .CommonLabels.severity "warning" }}&#128993;{{ else }}&#128309;{{ end }} [{{ .Status | toUpper }}] {{ .CommonLabels.alertname }}
+          {{ if eq .Status "resolved" }}&#128994;{{ else if eq .CommonLabels.severity "critical" }}&#128308;{{ else if eq .CommonLabels.severity "warning" }}&#128993;{{ else }}&#128309;{{ end }} [{{ .Status | toUpper }}] {{ .CommonLabels.alertname }}{{ if .CommonLabels.name }}: {{ .CommonLabels.name }}{{ end }}
           {{ range .Alerts }}
           Severity: {{ .Labels.severity }}
           {{ if .Labels.host }}Host: {{ .Labels.host }}{{ end }}
