@@ -2,13 +2,9 @@ groups:
   - name: systemd-failed
     interval: 1m
     rules:
-      # Repo-deployed units, by name. The per-host SystemdUnitFailed rule below
-      # is a count and cannot say which unit broke; this one names it, and
-      # covers every host reporting systemd metrics rather than a host list, so
-      # a homelab-* unit can never be deployed somewhere it is not watched.
-      # Deliberately has no host filter: an intermittent host (ghost) simply
-      # produces no series while it is away, so this stays quiet instead of
-      # alerting on absence.
+      # Repo-deployed units, by name. Deliberately has no host filter: an
+      # intermittent host (ghost) simply produces no series while it is away,
+      # so this stays quiet instead of alerting on absence.
       - alert: HomelabUnitFailed
         expr: node_systemd_unit_state{name=~"homelab-.*",state="failed"} == 1
         for: 15m
@@ -18,18 +14,22 @@ groups:
           summary: "{{ $labels.name }} failed on {{ $labels.host }}"
           description: "The repo-deployed unit {{ $labels.name }} is in the failed state on {{ $labels.host }}. Check `systemctl status {{ $labels.name }}` and `journalctl -u {{ $labels.name }}`. A redeploy of the owning module clears transient failures for units wired to homelab_recover_failed_units."
 
-      # Failed-unit coverage from node_exporter's native systemd collector.
-      # Host list must track every host running metrics-exporters; helm/neo/
-      # tower were previously omitted and their permanently-failed
-      # openipmi.service went unnoticed for that reason.
+      # Failed-unit coverage from node_exporter's native systemd collector, by
+      # name, for every non-homelab unit (homelab-* is covered above with
+      # module-specific recovery guidance). Fires once per failed unit instead
+      # of a bare count, so the alert itself names the unit -- no separate
+      # `systemctl --failed` lookup needed. Host list must track every host
+      # running metrics-exporters; helm/neo/tower were previously omitted and
+      # their permanently-failed openipmi.service went unnoticed for that
+      # reason.
       - alert: SystemdUnitFailed
-        expr: node_systemd_units{host=~"ace|bray|clovis|osiris|cinci|cottonwood|helm|neo|tower|riven|ghost",state="failed"} > 0
+        expr: node_systemd_unit_state{host=~"ace|bray|clovis|osiris|cinci|cottonwood|helm|neo|tower|riven|ghost",name!~"homelab-.*",state="failed"} == 1
         for: 15m
         labels:
           severity: warning
         annotations:
-          summary: "{{ $labels.host }} has a failed systemd unit"
-          description: "node_systemd_units{state=\"failed\"} is {{ $value }} on {{ $labels.host }}. Run `systemctl --failed` on {{ $labels.host }}; node_systemd_unit_state{state=\"failed\"} == 1 carries the specific unit name(s)."
+          summary: "{{ $labels.name }} failed on {{ $labels.host }}"
+          description: "The unit {{ $labels.name }} is in the failed state on {{ $labels.host }}. Check `systemctl status {{ $labels.name }}` and `journalctl -u {{ $labels.name }}` on {{ $labels.host }}."
 
       # Detect an exporter that remains reachable while its systemd collector
       # is failing, which would otherwise make failed-unit alerting blind.
