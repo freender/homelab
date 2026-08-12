@@ -36,6 +36,25 @@ route:
       mute_time_intervals:
         - scheduled-maintenance
       continue: false
+    # A degraded pool is a slow-moving hardware condition, not an incident that
+    # changes between notifications: once ZfsPoolUnhealthy fires, the only thing
+    # that clears it is physically replacing a disk and waiting out a resilver,
+    # which is days of lead time. At the parent's 4h repeat that paged 6 times a
+    # day with identical content, which is the pressure that makes someone
+    # silence the alert outright -- and this rule is deliberately the *only* ZFS
+    # health signal (see the ZfsPoolDeviceErrors note in vmalert's
+    # zfs-pools.yml), so silencing it is a total blind spot on a pool that may
+    # have no redundancy left. Daily re-notification keeps the pool visible for
+    # the whole replacement window at a volume worth leaving unsilenced.
+    # Scoped to this alert, not all of alertgroup="zfs-pools": the capacity and
+    # metrics-missing rules have different urgency and should keep the default.
+    - receiver: mwbot
+      matchers:
+        - alertname="ZfsPoolUnhealthy"
+      repeat_interval: 24h
+      mute_time_intervals:
+        - scheduled-maintenance
+      continue: false
     - receiver: mwbot
       mute_time_intervals:
         - scheduled-maintenance
