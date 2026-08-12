@@ -50,3 +50,175 @@ groups:
         expr: absent_over_time(container_last_seen{job="cadvisor", host="tower", name="nzbhydra"}[5m])
         labels: {severity: warning, category: docker, site: home, host: tower, name: nzbhydra}
         annotations: {summary: "tower / nzbhydra is missing", description: "Important app container has not been seen by cAdvisor for 5 minutes."}
+      - alert: ImportantContainerMissing
+        expr: absent_over_time(container_last_seen{job="cadvisor", host="tower", name="alloy-tower"}[5m])
+        labels: {severity: warning, category: docker, site: home, host: tower, name: alloy-tower}
+        annotations: {summary: "tower / alloy-tower is missing", description: "Important app container has not been seen by cAdvisor for 5 minutes."}
+      - alert: ImportantContainerMissing
+        expr: absent_over_time(container_last_seen{job="cadvisor", host="tower", name="cloudflared"}[5m])
+        labels: {severity: warning, category: docker, site: home, host: tower, name: cloudflared}
+        annotations: {summary: "tower / cloudflared is missing", description: "Important app container has not been seen by cAdvisor for 5 minutes."}
+      - alert: ImportantContainerMissing
+        expr: absent_over_time(container_last_seen{job="cadvisor", host="tower", name="filebot"}[5m])
+        labels: {severity: warning, category: docker, site: home, host: tower, name: filebot}
+        annotations: {summary: "tower / filebot is missing", description: "Important app container has not been seen by cAdvisor for 5 minutes."}
+      - alert: ImportantContainerMissing
+        expr: absent_over_time(container_last_seen{job="cadvisor", host="tower", name="geoipupdate"}[5m])
+        labels: {severity: warning, category: docker, site: home, host: tower, name: geoipupdate}
+        annotations: {summary: "tower / geoipupdate is missing", description: "Important app container has not been seen by cAdvisor for 5 minutes."}
+      - alert: ImportantContainerMissing
+        expr: absent_over_time(container_last_seen{job="cadvisor", host="tower", name="hawser-tower"}[5m])
+        labels: {severity: warning, category: docker, site: home, host: tower, name: hawser-tower}
+        annotations: {summary: "tower / hawser-tower is missing", description: "Important app container has not been seen by cAdvisor for 5 minutes."}
+      - alert: ImportantContainerMissing
+        expr: absent_over_time(container_last_seen{job="cadvisor", host="tower", name="varken"}[5m])
+        labels: {severity: warning, category: docker, site: home, host: tower, name: varken}
+        annotations: {summary: "tower / varken is missing", description: "Important app container has not been seen by cAdvisor for 5 minutes."}
+      - alert: ImportantContainerMissing
+        expr: absent_over_time(container_last_seen{job="cadvisor", host="tower", name="watchstate"}[5m])
+        labels: {severity: warning, category: docker, site: home, host: tower, name: watchstate}
+        annotations: {summary: "tower / watchstate is missing", description: "Important app container has not been seen by cAdvisor for 5 minutes."}
+      - alert: ImportantContainerMissing
+        expr: absent_over_time(container_last_seen{job="cadvisor", host="helm", name="alloy-helm"}[5m])
+        labels: {severity: warning, category: docker, site: home, host: helm, name: alloy-helm}
+        annotations: {summary: "helm / alloy-helm is missing", description: "Important app container has not been seen by cAdvisor for 5 minutes."}
+      - alert: ImportantContainerMissing
+        expr: absent_over_time(container_last_seen{job="cadvisor", host="helm", name="cloudfirewall"}[5m])
+        labels: {severity: warning, category: docker, site: home, host: helm, name: cloudfirewall}
+        annotations: {summary: "helm / cloudfirewall is missing", description: "Important app container has not been seen by cAdvisor for 5 minutes."}
+      - alert: ImportantContainerMissing
+        expr: absent_over_time(container_last_seen{job="cadvisor", host="helm", name="cloudflared"}[5m])
+        labels: {severity: warning, category: docker, site: home, host: helm, name: cloudflared}
+        annotations: {summary: "helm / cloudflared is missing", description: "Important app container has not been seen by cAdvisor for 5 minutes."}
+      - alert: ImportantContainerMissing
+        expr: absent_over_time(container_last_seen{job="cadvisor", host="helm", name="dockhand"}[5m])
+        labels: {severity: warning, category: docker, site: home, host: helm, name: dockhand}
+        annotations: {summary: "helm / dockhand is missing", description: "Important app container has not been seen by cAdvisor for 5 minutes."}
+      - alert: ImportantContainerMissing
+        expr: absent_over_time(container_last_seen{job="cadvisor", host="helm", name="food"}[5m])
+        labels: {severity: warning, category: docker, site: home, host: helm, name: food}
+        annotations: {summary: "helm / food is missing", description: "Important app container has not been seen by cAdvisor for 5 minutes."}
+      - alert: ImportantContainerMissing
+        expr: absent_over_time(container_last_seen{job="cadvisor", host="helm", name="geoipupdate"}[5m])
+        labels: {severity: warning, category: docker, site: home, host: helm, name: geoipupdate}
+        annotations: {summary: "helm / geoipupdate is missing", description: "Important app container has not been seen by cAdvisor for 5 minutes."}
+      - alert: ImportantContainerMissing
+        expr: absent_over_time(container_last_seen{job="cadvisor", host="helm", name="grafana"}[5m])
+        labels: {severity: warning, category: docker, site: home, host: helm, name: grafana}
+        annotations: {summary: "helm / grafana is missing", description: "Important app container has not been seen by cAdvisor for 5 minutes."}
+      - alert: ImportantContainerMissing
+        expr: absent_over_time(container_last_seen{job="cadvisor", host="helm", name="homeassistant"}[5m])
+        labels: {severity: warning, category: docker, site: home, host: helm, name: homeassistant}
+        annotations: {summary: "helm / homeassistant is missing", description: "Important app container has not been seen by cAdvisor for 5 minutes."}
+      - alert: ImportantContainerMissing
+        expr: absent_over_time(container_last_seen{job="cadvisor", host="helm", name="homepage"}[5m])
+        labels: {severity: warning, category: docker, site: home, host: helm, name: homepage}
+        annotations: {summary: "helm / homepage is missing", description: "Important app container has not been seen by cAdvisor for 5 minutes."}
+      - alert: ImportantContainerMissing
+        expr: absent_over_time(container_last_seen{job="cadvisor", host="helm", name="meshcmd"}[5m])
+        labels: {severity: warning, category: docker, site: home, host: helm, name: meshcmd}
+        annotations: {summary: "helm / meshcmd is missing", description: "Important app container has not been seen by cAdvisor for 5 minutes."}
+      - alert: ImportantContainerMissing
+        expr: absent_over_time(container_last_seen{job="cadvisor", host="helm", name="mwbot"}[5m])
+        labels: {severity: warning, category: docker, site: home, host: helm, name: mwbot}
+        annotations: {summary: "helm / mwbot is missing", description: "Important app container has not been seen by cAdvisor for 5 minutes."}
+      - alert: ImportantContainerMissing
+        expr: absent_over_time(container_last_seen{job="cadvisor", host="helm", name="victoria-logs"}[5m])
+        labels: {severity: warning, category: docker, site: home, host: helm, name: victoria-logs}
+        annotations: {summary: "helm / victoria-logs is missing", description: "Important app container has not been seen by cAdvisor for 5 minutes."}
+      - alert: ImportantContainerMissing
+        expr: absent_over_time(container_last_seen{job="cadvisor", host="neo", name="alloy-neo"}[5m])
+        labels: {severity: warning, category: docker, site: home, host: neo, name: alloy-neo}
+        annotations: {summary: "neo / alloy-neo is missing", description: "Important app container has not been seen by cAdvisor for 5 minutes."}
+      - alert: ImportantContainerMissing
+        expr: absent_over_time(container_last_seen{job="cadvisor", host="neo", name="hawser-neo"}[5m])
+        labels: {severity: warning, category: docker, site: home, host: neo, name: hawser-neo}
+        annotations: {summary: "neo / hawser-neo is missing", description: "Important app container has not been seen by cAdvisor for 5 minutes."}
+      - alert: ImportantContainerMissing
+        expr: absent_over_time(container_last_seen{job="cadvisor", host="neo", name="immich"}[5m])
+        labels: {severity: warning, category: docker, site: home, host: neo, name: immich}
+        annotations: {summary: "neo / immich is missing", description: "Important app container has not been seen by cAdvisor for 5 minutes."}
+      - alert: ImportantContainerMissing
+        expr: absent_over_time(container_last_seen{job="cadvisor", host="neo", name="immich-machine-learning"}[5m])
+        labels: {severity: warning, category: docker, site: home, host: neo, name: immich-machine-learning}
+        annotations: {summary: "neo / immich-machine-learning is missing", description: "Important app container has not been seen by cAdvisor for 5 minutes."}
+      - alert: ImportantContainerMissing
+        expr: absent_over_time(container_last_seen{job="cadvisor", host="neo", name="immich-postgresql"}[5m])
+        labels: {severity: warning, category: docker, site: home, host: neo, name: immich-postgresql}
+        annotations: {summary: "neo / immich-postgresql is missing", description: "Important app container has not been seen by cAdvisor for 5 minutes."}
+      - alert: ImportantContainerMissing
+        expr: absent_over_time(container_last_seen{job="cadvisor", host="neo", name="immich-redis"}[5m])
+        labels: {severity: warning, category: docker, site: home, host: neo, name: immich-redis}
+        annotations: {summary: "neo / immich-redis is missing", description: "Important app container has not been seen by cAdvisor for 5 minutes."}
+      - alert: ImportantContainerMissing
+        expr: absent_over_time(container_last_seen{job="cadvisor", host="neo", name="syncthing"}[5m])
+        labels: {severity: warning, category: docker, site: home, host: neo, name: syncthing}
+        annotations: {summary: "neo / syncthing is missing", description: "Important app container has not been seen by cAdvisor for 5 minutes."}
+      - alert: ImportantContainerMissing
+        expr: absent_over_time(container_last_seen{job="cadvisor", host="cinci", name="cloudflare-ddns"}[5m])
+        labels: {severity: warning, category: docker, site: offsite, host: cinci, name: cloudflare-ddns}
+        annotations: {summary: "cinci / cloudflare-ddns is missing", description: "Important app container has not been seen by cAdvisor for 5 minutes."}
+      - alert: ImportantContainerMissing
+        expr: absent_over_time(container_last_seen{job="cadvisor", host="cinci", name="cloudflared"}[5m])
+        labels: {severity: warning, category: docker, site: offsite, host: cinci, name: cloudflared}
+        annotations: {summary: "cinci / cloudflared is missing", description: "Important app container has not been seen by cAdvisor for 5 minutes."}
+      - alert: ImportantContainerMissing
+        expr: absent_over_time(container_last_seen{job="cadvisor", host="cinci", name="geoipupdate"}[5m])
+        labels: {severity: warning, category: docker, site: offsite, host: cinci, name: geoipupdate}
+        annotations: {summary: "cinci / geoipupdate is missing", description: "Important app container has not been seen by cAdvisor for 5 minutes."}
+      - alert: ImportantContainerMissing
+        expr: absent_over_time(container_last_seen{job="cadvisor", host="cinci", name="hawser"}[5m])
+        labels: {severity: warning, category: docker, site: offsite, host: cinci, name: hawser}
+        annotations: {summary: "cinci / hawser is missing", description: "Important app container has not been seen by cAdvisor for 5 minutes."}
+      - alert: ImportantContainerMissing
+        expr: absent_over_time(container_last_seen{job="cadvisor", host="cinci", name="immich-machine-learning"}[5m])
+        labels: {severity: warning, category: docker, site: offsite, host: cinci, name: immich-machine-learning}
+        annotations: {summary: "cinci / immich-machine-learning is missing", description: "Important app container has not been seen by cAdvisor for 5 minutes."}
+      - alert: ImportantContainerMissing
+        expr: absent_over_time(container_last_seen{job="cadvisor", host="cinci", name="immich-postgres"}[5m])
+        labels: {severity: warning, category: docker, site: offsite, host: cinci, name: immich-postgres}
+        annotations: {summary: "cinci / immich-postgres is missing", description: "Important app container has not been seen by cAdvisor for 5 minutes."}
+      - alert: ImportantContainerMissing
+        expr: absent_over_time(container_last_seen{job="cadvisor", host="cinci", name="immich-redis"}[5m])
+        labels: {severity: warning, category: docker, site: offsite, host: cinci, name: immich-redis}
+        annotations: {summary: "cinci / immich-redis is missing", description: "Important app container has not been seen by cAdvisor for 5 minutes."}
+      - alert: ImportantContainerMissing
+        expr: absent_over_time(container_last_seen{job="cadvisor", host="cinci", name="syncthing"}[5m])
+        labels: {severity: warning, category: docker, site: offsite, host: cinci, name: syncthing}
+        annotations: {summary: "cinci / syncthing is missing", description: "Important app container has not been seen by cAdvisor for 5 minutes."}
+      - alert: ImportantContainerMissing
+        expr: absent_over_time(container_last_seen{job="cadvisor", host="cinci", name="uptime"}[5m])
+        labels: {severity: warning, category: docker, site: offsite, host: cinci, name: uptime}
+        annotations: {summary: "cinci / uptime is missing", description: "Important app container has not been seen by cAdvisor for 5 minutes."}
+      - alert: ImportantContainerMissing
+        expr: absent_over_time(container_last_seen{job="cadvisor", host="cottonwood", name="cloudflared"}[5m])
+        labels: {severity: warning, category: docker, site: offsite, host: cottonwood, name: cloudflared}
+        annotations: {summary: "cottonwood / cloudflared is missing", description: "Important app container has not been seen by cAdvisor for 5 minutes."}
+      - alert: ImportantContainerMissing
+        expr: absent_over_time(container_last_seen{job="cadvisor", host="cottonwood", name="hawser"}[5m])
+        labels: {severity: warning, category: docker, site: offsite, host: cottonwood, name: hawser}
+        annotations: {summary: "cottonwood / hawser is missing", description: "Important app container has not been seen by cAdvisor for 5 minutes."}
+      - alert: ImportantContainerMissing
+        expr: absent_over_time(container_last_seen{job="cadvisor", host="cottonwood", name="homeassistant"}[5m])
+        labels: {severity: warning, category: docker, site: offsite, host: cottonwood, name: homeassistant}
+        annotations: {summary: "cottonwood / homeassistant is missing", description: "Important app container has not been seen by cAdvisor for 5 minutes."}
+      - alert: ImportantContainerMissing
+        expr: absent_over_time(container_last_seen{job="cadvisor", host="cottonwood", name="immich"}[5m])
+        labels: {severity: warning, category: docker, site: offsite, host: cottonwood, name: immich}
+        annotations: {summary: "cottonwood / immich is missing", description: "Important app container has not been seen by cAdvisor for 5 minutes."}
+      - alert: ImportantContainerMissing
+        expr: absent_over_time(container_last_seen{job="cadvisor", host="cottonwood", name="immich-machine-learning"}[5m])
+        labels: {severity: warning, category: docker, site: offsite, host: cottonwood, name: immich-machine-learning}
+        annotations: {summary: "cottonwood / immich-machine-learning is missing", description: "Important app container has not been seen by cAdvisor for 5 minutes."}
+      - alert: ImportantContainerMissing
+        expr: absent_over_time(container_last_seen{job="cadvisor", host="cottonwood", name="immich-postgresql"}[5m])
+        labels: {severity: warning, category: docker, site: offsite, host: cottonwood, name: immich-postgresql}
+        annotations: {summary: "cottonwood / immich-postgresql is missing", description: "Important app container has not been seen by cAdvisor for 5 minutes."}
+      - alert: ImportantContainerMissing
+        expr: absent_over_time(container_last_seen{job="cadvisor", host="cottonwood", name="immich-redis"}[5m])
+        labels: {severity: warning, category: docker, site: offsite, host: cottonwood, name: immich-redis}
+        annotations: {summary: "cottonwood / immich-redis is missing", description: "Important app container has not been seen by cAdvisor for 5 minutes."}
+      - alert: ImportantContainerMissing
+        expr: absent_over_time(container_last_seen{job="cadvisor", host="cottonwood", name="syncthing"}[5m])
+        labels: {severity: warning, category: docker, site: offsite, host: cottonwood, name: syncthing}
+        annotations: {summary: "cottonwood / syncthing is missing", description: "Important app container has not been seen by cAdvisor for 5 minutes."}

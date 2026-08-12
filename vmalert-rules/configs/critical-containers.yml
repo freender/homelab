@@ -27,6 +27,22 @@ groups:
         labels: {severity: critical, category: docker, site: home, host: tower, name: cadvisor-tower}
         annotations: {summary: "tower / cadvisor-tower is missing", description: "Critical container has not been seen by cAdvisor for 5 minutes."}
       - alert: CriticalContainerMissing
+        expr: absent_over_time(container_last_seen{job="cadvisor", host="tower", name="traefik-kop-tower"}[5m])
+        labels: {severity: critical, category: docker, site: home, host: tower, name: traefik-kop-tower}
+        annotations: {summary: "tower / traefik-kop-tower is missing", description: "Critical container has not been seen by cAdvisor for 5 minutes."}
+      - alert: CriticalContainerMissing
+        expr: absent_over_time(container_last_seen{job="cadvisor", host="tower", name="traefik-kop-tower-to-neo"}[5m])
+        labels: {severity: critical, category: docker, site: home, host: tower, name: traefik-kop-tower-to-neo}
+        annotations: {summary: "tower / traefik-kop-tower-to-neo is missing", description: "Critical container has not been seen by cAdvisor for 5 minutes."}
+      - alert: CriticalContainerMissing
+        expr: absent_over_time(container_last_seen{job="cadvisor", host="tower", name="traefik-redis-tower"}[5m])
+        labels: {severity: critical, category: docker, site: home, host: tower, name: traefik-redis-tower}
+        annotations: {summary: "tower / traefik-redis-tower is missing", description: "Critical container has not been seen by cAdvisor for 5 minutes."}
+      - alert: CriticalContainerMissing
+        expr: absent_over_time(container_last_seen{job="cadvisor", host="tower", name="traefik-sync-tower"}[5m])
+        labels: {severity: critical, category: docker, site: home, host: tower, name: traefik-sync-tower}
+        annotations: {summary: "tower / traefik-sync-tower is missing", description: "Critical container has not been seen by cAdvisor for 5 minutes."}
+      - alert: CriticalContainerMissing
         expr: absent_over_time(container_last_seen{job="cadvisor", host="helm", name="traefik-helm"}[5m])
         labels: {severity: critical, category: docker, site: home, host: helm, name: traefik-helm}
         annotations: {summary: "helm / traefik-helm is missing", description: "Critical container has not been seen by cAdvisor for 5 minutes."}
@@ -55,6 +71,26 @@ groups:
         labels: {severity: critical, category: docker, site: home, host: helm, name: alertmanager}
         annotations: {summary: "helm / alertmanager is missing", description: "Critical container has not been seen by cAdvisor for 5 minutes."}
       - alert: CriticalContainerMissing
+        expr: absent_over_time(container_last_seen{job="cadvisor", host="helm", name="crowdsec"}[5m])
+        labels: {severity: critical, category: docker, site: home, host: helm, name: crowdsec}
+        annotations: {summary: "helm / crowdsec is missing", description: "Critical container has not been seen by cAdvisor for 5 minutes."}
+      - alert: CriticalContainerMissing
+        expr: absent_over_time(container_last_seen{job="cadvisor", host="helm", name="traefik-kop-helm"}[5m])
+        labels: {severity: critical, category: docker, site: home, host: helm, name: traefik-kop-helm}
+        annotations: {summary: "helm / traefik-kop-helm is missing", description: "Critical container has not been seen by cAdvisor for 5 minutes."}
+      - alert: CriticalContainerMissing
+        expr: absent_over_time(container_last_seen{job="cadvisor", host="helm", name="traefik-kop-helm-to-neo"}[5m])
+        labels: {severity: critical, category: docker, site: home, host: helm, name: traefik-kop-helm-to-neo}
+        annotations: {summary: "helm / traefik-kop-helm-to-neo is missing", description: "Critical container has not been seen by cAdvisor for 5 minutes."}
+      - alert: CriticalContainerMissing
+        expr: absent_over_time(container_last_seen{job="cadvisor", host="helm", name="traefik-redis-helm"}[5m])
+        labels: {severity: critical, category: docker, site: home, host: helm, name: traefik-redis-helm}
+        annotations: {summary: "helm / traefik-redis-helm is missing", description: "Critical container has not been seen by cAdvisor for 5 minutes."}
+      - alert: CriticalContainerMissing
+        expr: absent_over_time(container_last_seen{job="cadvisor", host="helm", name="traefik-sync-helm"}[5m])
+        labels: {severity: critical, category: docker, site: home, host: helm, name: traefik-sync-helm}
+        annotations: {summary: "helm / traefik-sync-helm is missing", description: "Critical container has not been seen by cAdvisor for 5 minutes."}
+      - alert: CriticalContainerMissing
         expr: absent_over_time(container_last_seen{job="cadvisor", host="neo", name="traefik-neo"}[5m])
         labels: {severity: critical, category: docker, site: home, host: neo, name: traefik-neo}
         annotations: {summary: "neo / traefik-neo is missing", description: "Critical container has not been seen by cAdvisor for 5 minutes."}
@@ -70,3 +106,66 @@ groups:
         expr: absent_over_time(container_last_seen{job="cadvisor", host="neo", name="vmagent-neo"}[5m])
         labels: {severity: critical, category: docker, site: home, host: neo, name: vmagent-neo}
         annotations: {summary: "neo / vmagent-neo is missing", description: "Critical container has not been seen by cAdvisor for 5 minutes."}
+      - alert: CriticalContainerMissing
+        expr: absent_over_time(container_last_seen{job="cadvisor", host="neo", name="crowdsec"}[5m])
+        labels: {severity: critical, category: docker, site: home, host: neo, name: crowdsec}
+        annotations: {summary: "neo / crowdsec is missing", description: "Critical container has not been seen by cAdvisor for 5 minutes."}
+      - alert: CriticalContainerMissing
+        expr: absent_over_time(container_last_seen{job="cadvisor", host="neo", name="traefik-kop-neo-to-helm"}[5m])
+        labels: {severity: critical, category: docker, site: home, host: neo, name: traefik-kop-neo-to-helm}
+        annotations: {summary: "neo / traefik-kop-neo-to-helm is missing", description: "Critical container has not been seen by cAdvisor for 5 minutes."}
+      - alert: CriticalContainerMissing
+        expr: absent_over_time(container_last_seen{job="cadvisor", host="neo", name="traefik-kop-neo-to-tower"}[5m])
+        labels: {severity: critical, category: docker, site: home, host: neo, name: traefik-kop-neo-to-tower}
+        annotations: {summary: "neo / traefik-kop-neo-to-tower is missing", description: "Critical container has not been seen by cAdvisor for 5 minutes."}
+      - alert: CriticalContainerMissing
+        expr: absent_over_time(container_last_seen{job="cadvisor", host="neo", name="traefik-redis-neo"}[5m])
+        labels: {severity: critical, category: docker, site: home, host: neo, name: traefik-redis-neo}
+        annotations: {summary: "neo / traefik-redis-neo is missing", description: "Critical container has not been seen by cAdvisor for 5 minutes."}
+      - alert: CriticalContainerMissing
+        expr: absent_over_time(container_last_seen{job="cadvisor", host="neo", name="traefik-sync-neo"}[5m])
+        labels: {severity: critical, category: docker, site: home, host: neo, name: traefik-sync-neo}
+        annotations: {summary: "neo / traefik-sync-neo is missing", description: "Critical container has not been seen by cAdvisor for 5 minutes."}
+
+      # Offsite (cinci/cottonwood) are friend-hosted boxes. cadvisor already
+      # scrapes every container there, so full missing-container parity with
+      # tower/helm/neo is cheap and low-churn (their container list rarely
+      # changes). Their PBS containers (zavala/ikora) are additionally our DR
+      # backup targets and plain Docker containers, so SystemdUnitFailed does
+      # not cover them either way.
+      - alert: CriticalContainerMissing
+        expr: absent_over_time(container_last_seen{job="cadvisor", host="cinci", name="zavala"}[5m])
+        labels: {severity: critical, category: docker, site: offsite, host: cinci, name: zavala}
+        annotations: {summary: "cinci / zavala (PBS) is missing", description: "Critical container has not been seen by cAdvisor for 5 minutes."}
+      - alert: CriticalContainerMissing
+        expr: absent_over_time(container_last_seen{job="cadvisor", host="cinci", name="cadvisor"}[5m])
+        labels: {severity: critical, category: docker, site: offsite, host: cinci, name: cadvisor}
+        annotations: {summary: "cinci / cadvisor is missing", description: "Critical container has not been seen by cAdvisor for 5 minutes."}
+      - alert: CriticalContainerMissing
+        expr: absent_over_time(container_last_seen{job="cadvisor", host="cinci", name="docker-socket-proxy"}[5m])
+        labels: {severity: critical, category: docker, site: offsite, host: cinci, name: docker-socket-proxy}
+        annotations: {summary: "cinci / docker-socket-proxy is missing", description: "Critical container has not been seen by cAdvisor for 5 minutes."}
+      - alert: CriticalContainerMissing
+        expr: absent_over_time(container_last_seen{job="cadvisor", host="cinci", name="traefik"}[5m])
+        labels: {severity: critical, category: docker, site: offsite, host: cinci, name: traefik}
+        annotations: {summary: "cinci / traefik is missing", description: "Critical container has not been seen by cAdvisor for 5 minutes."}
+      - alert: CriticalContainerMissing
+        expr: absent_over_time(container_last_seen{job="cadvisor", host="cottonwood", name="ikora"}[5m])
+        labels: {severity: critical, category: docker, site: offsite, host: cottonwood, name: ikora}
+        annotations: {summary: "cottonwood / ikora (PBS) is missing", description: "Critical container has not been seen by cAdvisor for 5 minutes."}
+      - alert: CriticalContainerMissing
+        expr: absent_over_time(container_last_seen{job="cadvisor", host="cottonwood", name="cadvisor"}[5m])
+        labels: {severity: critical, category: docker, site: offsite, host: cottonwood, name: cadvisor}
+        annotations: {summary: "cottonwood / cadvisor is missing", description: "Critical container has not been seen by cAdvisor for 5 minutes."}
+      - alert: CriticalContainerMissing
+        expr: absent_over_time(container_last_seen{job="cadvisor", host="cottonwood", name="socket-proxy"}[5m])
+        labels: {severity: critical, category: docker, site: offsite, host: cottonwood, name: socket-proxy}
+        annotations: {summary: "cottonwood / socket-proxy is missing", description: "Critical container has not been seen by cAdvisor for 5 minutes."}
+      - alert: CriticalContainerMissing
+        expr: absent_over_time(container_last_seen{job="cadvisor", host="cottonwood", name="traefik"}[5m])
+        labels: {severity: critical, category: docker, site: offsite, host: cottonwood, name: traefik}
+        annotations: {summary: "cottonwood / traefik is missing", description: "Critical container has not been seen by cAdvisor for 5 minutes."}
+      - alert: CriticalContainerMissing
+        expr: absent_over_time(container_last_seen{job="cadvisor", host="cottonwood", name="crowdsec"}[5m])
+        labels: {severity: critical, category: docker, site: offsite, host: cottonwood, name: crowdsec}
+        annotations: {summary: "cottonwood / crowdsec is missing", description: "Critical container has not been seen by cAdvisor for 5 minutes."}
