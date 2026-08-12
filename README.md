@@ -146,7 +146,8 @@ Host-level PBS client backups (appdata, `/etc/pve`, system files)
 
 ### [pve-http-boot](pve-http-boot/)
 iPXE/HTTP boot server for unattended Proxmox installs
-- Serves baked ISO artifacts and iPXE scripts
+- Serves the prepared Proxmox VE payload (kernel/initrd/ISO) and iPXE scripts from `arc`
+- `pve-http-boot-autoupdate.timer` tracks the latest upstream ISO and promotes it atomically
 
 ```bash
 ./deploy pve-http-boot all

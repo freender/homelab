@@ -1,9 +1,0 @@
-[Unit]
-Description=Build baked PVE install ISOs for offsite hosts
-After=network.target
-
-[Service]
-Type=oneshot
-ExecStart=/usr/local/sbin/iso-autobuild
-StandardOutput=journal
-StandardError=journal

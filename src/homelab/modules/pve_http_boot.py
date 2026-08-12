@@ -1,37 +1,24 @@
 from __future__ import annotations
 
-import ctypes
-import random
-import string
 from contextlib import nullcontext
 from pathlib import Path
-from typing import Any
 
 from .. import op_secrets
 from ..build import copy_files, render_file
 from ..deploy import DeploySession, force_env, prepare_build_dir, stage_and_run_remote_installer
-from ..hosts import HostLookupError, default_registry
+from ..hosts import default_registry
 from ..module_support import (
     FileSpec,
-    normalize_bool,
     tmpfs_secret_stage,
     validate_secret_reference,
     write_file_map,
 )
 from ..output import print_action, print_error, print_sub
-from ..ssh import HostConnection, diff_many, offline_mode
-from .pve_autoinstall import (
-    _get_mgmt_mac,
-    _is_pdm_host,
-    _read_secret_field,
-    _root_password_secret,
-)
+from ..ssh import HostConnection, diff_many
 
 REMOTE_ROOT = "/tmp/homelab-pve-http-boot"
 SECRET_NAME = "pve-http-boot-token"
-POSTINSTALL_WEBHOOK_SECRET_NAME = "pve-postinstall-webhook"
 HTTP_BOOT_CONFIG_DIR = "/etc/homelab-http-boot"
-ISO_ANSWER_DIR = f"{HTTP_BOOT_CONFIG_DIR}/iso-answers"
 
 # Static iPXE menus copied verbatim. The entry points (boot.ipxe and
 # httpboot-autoexec.ipxe) are rendered from templates because they bake in the
@@ -56,12 +43,10 @@ OPERATIONAL_SCRIPTS = [
     "pve-http-boot-enable",
     "pve-http-boot-disable",
     "pve-http-boot-autoupdate",
-    "iso-autobuild",
 ]
 
 STATIC_UNITS = [
     "pve-http-boot-autoupdate.service",
-    "iso-autobuild.service",
 ]
 
 FILE_SPECS = (
@@ -79,7 +64,6 @@ FILE_SPECS = (
     FileSpec("pve-http-boot-enable", "/usr/local/sbin/pve-http-boot-enable", "755"),
     FileSpec("pve-http-boot-disable", "/usr/local/sbin/pve-http-boot-disable", "755"),
     FileSpec("pve-http-boot-autoupdate", "/usr/local/sbin/pve-http-boot-autoupdate", "755"),
-    FileSpec("iso-autobuild", "/usr/local/sbin/iso-autobuild", "755"),
     FileSpec(
         "pve-http-boot-autoupdate.service",
         "/etc/systemd/system/pve-http-boot-autoupdate.service",
@@ -88,7 +72,6 @@ FILE_SPECS = (
         "pve-http-boot-autoupdate.timer",
         "/etc/systemd/system/pve-http-boot-autoupdate.timer",
     ),
-    FileSpec("iso-autobuild.service", "/etc/systemd/system/iso-autobuild.service"),
 )
 
 
@@ -117,7 +100,6 @@ def deploy(
 
 
 def validate(root: Path) -> None:
-    registry = default_registry(root)
     configs_dir = root / "pve-http-boot" / "configs"
     templates_dir = root / "pve-http-boot" / "templates"
 
@@ -143,21 +125,6 @@ def validate(root: Path) -> None:
     except op_secrets.OpSecretsError as exc:
         raise ValueError(str(exc)) from exc
 
-    iso_hosts = _iso_target_hosts(registry)
-    if not iso_hosts:
-        return
-
-    pdm_host = _find_pdm_host(registry)
-    if pdm_host is None:
-        raise ValueError("pve-http-boot: no PDM host found; cannot load baked ISO globals")
-    _get_iso_global_cfg(registry, pdm_host)
-
-    for host in iso_hosts:
-        try:
-            registry.get(host, "pve-autoinstall.boot_disk_serial")
-        except HostLookupError:
-            raise ValueError(f"pve-autoinstall.boot_disk_serial missing for ISO host {host}")
-        _get_mgmt_mac(registry, host)
 
 def _read_token(root: Path) -> str:
     """Read the PDM answer-auth token from the rendered 1Password secret."""
@@ -250,20 +217,8 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
             token_file.write_text(token, encoding="utf-8")
             token_file.chmod(0o600)
             print_sub("Token resolved from 1Password")
-            iso_build_dir = secret_dir
-        else:
-            if op_secrets.offline_mode():
-                print_sub("[offline] token resolution skipped")
-            iso_build_dir = build_dir
-
-        rendered_iso_hosts = _render_iso_answers(
-            root,
-            registry,
-            iso_build_dir,
-            connection,
-            force=force,
-            dry_run=dry_run,
-        )
+        elif op_secrets.offline_mode():
+            print_sub("[offline] token resolution skipped")
 
         print_sub("Comparing with remote configs...")
         for message in diff_many(
@@ -274,11 +229,6 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
 
         if dry_run:
             print_sub(f"[DRY-RUN] Would deploy to {host}:{REMOTE_ROOT}/")
-            if rendered_iso_hosts:
-                print_sub(
-                    "[DRY-RUN] Would stage baked ISO answers: "
-                    f"{' '.join(rendered_iso_hosts)}"
-                )
             return
 
         upload_paths = [
@@ -299,229 +249,3 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
             require_root=True,
             remote_subdirs=("build", "lib"),
         )
-
-
-def _iso_target_hosts(registry: Any) -> list[str]:
-    return [
-        h for h in registry.list_hosts(feature="pve-autoinstall")
-        if not _is_pdm_host(registry, h) and _wants_iso(registry, h)
-    ]
-
-
-def _wants_iso(registry: Any, host: str) -> bool:
-    return normalize_bool(
-        registry.get(host, "pve-autoinstall.iso_build", None),
-        False,
-        f"pve-autoinstall.iso_build must be true or false for {host}",
-    )
-
-
-def _find_pdm_host(registry: Any) -> str | None:
-    pdm_hosts = [
-        h for h in registry.list_hosts(feature="pve-autoinstall")
-        if _is_pdm_host(registry, h)
-    ]
-    return pdm_hosts[0] if pdm_hosts else None
-
-
-def _get_iso_global_cfg(registry: Any, pdm_host: str) -> dict[str, str]:
-    cfg: dict[str, str] = {}
-    for key in ("mailto", "keyboard", "country", "root_ssh_key"):
-        try:
-            cfg[key] = str(registry.get(pdm_host, f"pve-autoinstall.{key}"))
-        except HostLookupError:
-            raise ValueError(f"pve-autoinstall.{key} missing for PDM host {pdm_host}")
-    try:
-        cfg["post_hook_base_url"] = str(
-            registry.get(pdm_host, "pve-autoinstall.post_hook_base_url")
-        )
-    except HostLookupError:
-        pass
-    return cfg
-
-
-def _render_iso_answers(
-    root: Path,
-    registry: Any,
-    build_dir: Path,
-    connection: HostConnection,
-    *,
-    force: bool,
-    dry_run: bool,
-) -> list[str]:
-    iso_hosts = _iso_target_hosts(registry)
-    if not iso_hosts:
-        return []
-
-    pdm_host = _find_pdm_host(registry)
-    if pdm_host is None:
-        raise ValueError("pve-http-boot: no PDM host found; cannot render baked ISO answers")
-    global_cfg = _get_iso_global_cfg(registry, pdm_host)
-
-    if dry_run:
-        print_sub(f"Baked ISO targets: {' '.join(iso_hosts)}")
-        return iso_hosts
-    if offline_mode():
-        print_sub("[offline] baked ISO answer rendering skipped")
-        return []
-
-    if force:
-        to_render = iso_hosts
-        print_sub("--force: re-rendering all baked ISO answers from 1Password")
-    else:
-        to_render = _check_missing_answer_files(connection, iso_hosts)
-        if to_render:
-            print_sub(f"Missing baked ISO answers: {' '.join(to_render)}")
-        else:
-            print_sub("Baked ISO answers already present on HTTP Boot host; use --force to refresh")
-
-    if not to_render:
-        return []
-
-    answer_dir = build_dir / "iso-answers"
-    answer_dir.mkdir(parents=True, exist_ok=True)
-
-    print_sub("Rendering baked ISO answers...")
-    for iso_host in to_render:
-        secret_name = _root_password_secret(registry, iso_host)
-        plaintext = _read_secret_field(root, secret_name, "PVE_ROOT_PASSWORD")
-        pw_hash = _hash_password(plaintext)
-        postinstall_token = ""
-        if global_cfg.get("post_hook_base_url"):
-            postinstall_token = _read_secret_field(
-                root,
-                POSTINSTALL_WEBHOOK_SECRET_NAME,
-                "PVE_POSTINSTALL_WEBHOOK_TOKEN",
-            )
-        toml = _build_iso_answer_toml(
-            root,
-            registry,
-            iso_host,
-            global_cfg,
-            pw_hash,
-            postinstall_token,
-        )
-        answer_file = answer_dir / f"{iso_host}.toml"
-        answer_file.write_text(toml, encoding="utf-8")
-        answer_file.chmod(0o600)
-        print_sub(f"  rendered {iso_host}.toml")
-
-    return to_render
-
-
-def _check_missing_answer_files(connection: HostConnection, hosts: list[str]) -> list[str]:
-    try:
-        result = connection.connection.run(
-            f"ls {ISO_ANSWER_DIR}/ 2>/dev/null || true",
-            hide=True,
-        )
-        existing = set(result.stdout.strip().split()) if result.stdout.strip() else set()
-    except Exception:
-        existing = set()
-    return [host for host in hosts if f"{host}.toml" not in existing]
-
-
-def _get_timezone(registry: Any, host: str) -> str:
-    for key in (
-        "pve-autoinstall.timezone",
-        "pve-postinstall.timezone",
-        "ubuntu-setup.timezone",
-    ):
-        try:
-            return str(registry.get(host, key))
-        except HostLookupError:
-            continue
-    return "UTC"
-
-
-def _build_iso_answer_toml(
-    root: Path,
-    registry: Any,
-    host: str,
-    global_cfg: dict[str, str],
-    root_password_hash: str,
-    postinstall_token: str,
-) -> str:
-    boot_disk_serial = str(registry.get(host, "pve-autoinstall.boot_disk_serial"))
-
-    try:
-        cidr = str(registry.get(host, "pve-autoinstall.cidr"))
-    except HostLookupError:
-        cidr = str(registry.get(host, "pve-postinstall.interfaces.mgmt_ip"))
-
-    try:
-        gateway = str(registry.get(host, "pve-autoinstall.gateway"))
-    except HostLookupError:
-        gateway = str(registry.get(host, "pve-postinstall.interfaces.gateway"))
-
-    try:
-        dns = str(registry.get(host, "pve-autoinstall.dns"))
-    except HostLookupError:
-        dns = gateway
-
-    fqdn = str(registry.get(host, "config.hostname"))
-    timezone = _get_timezone(registry, host)
-    mgmt_mac = _get_mgmt_mac(registry, host)
-
-    toml = (
-        f"# Auto-generated by homelab pve-http-boot. Do not edit manually.\n"
-        f"# Redeploy with: ./deploy --force pve-http-boot arc\n"
-        f"\n"
-        f"[global]\n"
-        f'keyboard = "{global_cfg["keyboard"]}"\n'
-        f'country = "{global_cfg["country"]}"\n'
-        f'fqdn = "{fqdn}"\n'
-        f'mailto = "{global_cfg["mailto"]}"\n'
-        f'timezone = "{timezone}"\n'
-        f'root-password-hashed = "{root_password_hash}"\n'
-        f'root-ssh-keys = ["{global_cfg["root_ssh_key"]}"]\n'
-        f'reboot-mode = "reboot"\n'
-        f'reboot-on-error = false\n'
-        f"\n"
-        f"[network]\n"
-        f'source = "from-answer"\n'
-        f'cidr = "{cidr}"\n'
-        f'gateway = "{gateway}"\n'
-        f'dns = "{dns}"\n'
-        f'filter = {{ ID_NET_NAME_MAC = "*{mgmt_mac}" }}\n'
-        f"\n"
-        f"[disk-setup]\n"
-        f'filesystem = "zfs"\n'
-        f'filter = {{ ID_SERIAL = "*{boot_disk_serial}*" }}\n'
-        f'filter-match = "all"\n'
-        f"\n"
-        f"[disk-setup.zfs]\n"
-        f'raid = "raid0"\n'
-        f"ashift = 12\n"
-        f'compress = "zstd"\n'
-    )
-
-    post_hook_base_url = global_cfg.get("post_hook_base_url", "")
-    if post_hook_base_url:
-        toml += (
-            f"\n"
-            f"[post-installation-webhook]\n"
-            f'url = "{post_hook_base_url}"\n'
-            f'auth-token = "{postinstall_token}"\n'
-        )
-        if post_hook_base_url.startswith("https://"):
-            cert_fingerprint = _read_pdm_cert_fingerprint(root)
-            toml += f'cert-fingerprint = "{cert_fingerprint}"\n'
-
-    return toml
-
-
-def _hash_password(plaintext: str) -> str:
-    try:
-        lib = ctypes.CDLL("libcrypt.so.1", use_errno=True)
-        lib.crypt.restype = ctypes.c_char_p
-        lib.crypt.argtypes = [ctypes.c_char_p, ctypes.c_char_p]
-        chars = string.ascii_letters + string.digits + "./"
-        salt = "".join(random.choices(chars, k=16))
-        setting = f"$6${salt}".encode()
-        result = lib.crypt(plaintext.encode(), setting)
-        if result:
-            return result.decode()
-        raise RuntimeError(f"crypt() returned null; errno={ctypes.get_errno()}")
-    except OSError as exc:
-        raise RuntimeError(f"libcrypt.so.1 unavailable: {exc}") from exc

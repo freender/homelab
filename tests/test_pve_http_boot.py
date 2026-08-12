@@ -98,12 +98,24 @@ def test_http_boot_autoupdate_rewrites_only_iso_filename_and_validates_payload()
     assert "staged iPXE scripts still contain placeholder ISO references" in updater
 
 
-def test_http_boot_autoupdate_does_not_duplicate_baked_iso_dir() -> None:
+def test_http_boot_autoupdate_cleans_temp_and_promotes_whole_tree() -> None:
     updater = read_config("pve-http-boot-autoupdate")
 
     assert 'trap cleanup_temp EXIT' in updater
     assert 'rm -rf "$STAGE" "$HTTP_BOOT_BUILD"' in updater
-    assert "rsync -a --exclude '/iso/' \"$SRV\"/ \"$STAGE\"/" in updater
-    assert "rsync -a --exclude '/iso/' \"$SRV\"/ \"$SRV.prev\"/" in updater
-    assert "rsync -a --delete --exclude '/iso/' \"$STAGE\"/ \"$SRV\"/" in updater
-    assert "rsync -a --delete --exclude '/iso/' \"$SRV.prev\"/ \"$SRV\"/" in updater
+    assert 'rsync -a "$SRV"/ "$STAGE"/' in updater
+    assert 'rsync -a "$SRV"/ "$SRV.prev"/' in updater
+    assert 'rsync -a --delete "$STAGE"/ "$SRV"/' in updater
+    assert 'rsync -a --delete "$SRV.prev"/ "$SRV"/' in updater
+
+
+def test_baked_offsite_iso_build_is_retired() -> None:
+    """The offsite hosts run Ubuntu now; nothing may rebuild or serve baked ISOs."""
+    assert not (HTTP_BOOT_CONFIGS / "iso-autobuild").exists()
+    assert not (HTTP_BOOT_CONFIGS / "iso-autobuild.service").exists()
+    assert "iso-autobuild" not in read_config("pve-http-boot-autoupdate")
+    assert "location /iso/" not in read_template("nginx-http-boot.conf")
+
+    installer = (ROOT / "pve-http-boot" / "scripts" / "install.sh").read_text(encoding="utf-8")
+    assert "rm -rf /srv/httpboot/iso" in installer
+    assert "rm -rf /etc/homelab-http-boot/iso-answers" in installer

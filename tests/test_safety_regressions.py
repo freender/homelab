@@ -14,7 +14,6 @@ from homelab.modules import (
     apt_upgrade,
     keepalived,
     pve_gpu_passthrough,
-    pve_http_boot,
     pve_postinstall_webhook,
 )
 
@@ -34,7 +33,6 @@ class ValueRegistry:
     [
         apt_upgrade.normalize_autoupgrade,
         pve_gpu_passthrough.normalize_isolate_host_gpu,
-        pve_http_boot._wants_iso,
         pve_postinstall_webhook.normalize_webhook_dry_run,
     ],
 )

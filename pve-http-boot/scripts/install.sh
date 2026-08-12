@@ -2,8 +2,7 @@
 # install.sh - Deploy HTTP Boot service configs.
 # Usage: ./scripts/install.sh [hostname]
 # Installs: nginx vhost, HTTP Boot iPXE loader, iPXE menu files, operational
-#           scripts, pve-http-boot-autoupdate systemd service/timer, and baked
-#           ISO answer files.
+#           scripts, and the pve-http-boot-autoupdate systemd service/timer.
 # Does NOT stage the Proxmox ISO or initrd — those are managed at runtime by pve-http-boot-autoupdate.
 
 set -euo pipefail
@@ -72,13 +71,11 @@ else
 fi
 
 # ── Directory layout ─────────────────────────────────────────────────────────
-mkdir -p /srv/httpboot /srv/httpboot/httpboot /etc/homelab-http-boot /etc/homelab-http-boot/iso-answers /srv/httpboot/iso \
+mkdir -p /srv/httpboot /srv/httpboot/httpboot /etc/homelab-http-boot \
          /etc/nginx/sites-available /etc/nginx/sites-enabled \
          /root/iso
-chmod 700 /etc/homelab-http-boot/iso-answers
-chmod 755 /srv/httpboot/iso
 
-# Retired: iso-autobuild/pve-http-boot-autoupdate used to write node_exporter
+# Retired: pve-http-boot-autoupdate used to write node_exporter
 # textfile metrics here, but this host has no node_exporter to ever read them
 # (it's outside the metrics-exporters host list). Remove any stale metric files
 # from earlier deploys.
@@ -103,6 +100,26 @@ print_action "Disabling legacy proxyPXE/TFTP"
 systemctl disable --now dnsmasq 2>/dev/null || true
 rm -f /srv/tftp/autoexec.ipxe /srv/tftp/ipxe.efi /srv/tftp/snponly.efi /srv/tftp/undionly.kpxe
 rmdir /srv/tftp 2>/dev/null || true
+
+# ── Retire baked offsite install ISOs ────────────────────────────────────────
+# The baked-ISO builder existed only for the offsite hosts (cinci, cottonwood)
+# while they ran Proxmox VE. They are Ubuntu now, so the builder, its answer
+# files, and the served /iso/ tree are retired. Answer TOMLs carry a hashed root
+# password, so shred them rather than plain rm.
+if [[ -e /srv/httpboot/iso || -e /etc/homelab-http-boot/iso-answers \
+      || -e /usr/local/sbin/iso-autobuild || -e /etc/systemd/system/iso-autobuild.service ]]; then
+    print_action "Retiring baked offsite ISO build"
+    systemctl disable --now iso-autobuild.service 2>/dev/null || true
+    rm -f /etc/systemd/system/iso-autobuild.service /etc/systemd/system/iso-autobuild.timer
+    rm -f /usr/local/sbin/iso-autobuild
+    if [[ -d /etc/homelab-http-boot/iso-answers ]]; then
+        find /etc/homelab-http-boot/iso-answers -type f -exec shred -u {} + 2>/dev/null || true
+        rm -rf /etc/homelab-http-boot/iso-answers
+    fi
+    rm -rf /srv/httpboot/iso /srv/httpboot.prev/iso /srv/httpboot.stage/iso
+    systemctl daemon-reload || true
+    print_sub "Removed baked ISO builder, answers, and /srv/httpboot/iso"
+fi
 
 # ── nginx vhost ───────────────────────────────────────────────────────────────
 print_action "Installing nginx vhost"
@@ -162,28 +179,8 @@ else
     fi
 fi
 
-# ── Baked ISO answer TOML files (0600; staged by Python orchestrator) ─────────
-ANSWERS_SRC="$BUILD_DIR/iso-answers"
-if [[ -d "$ANSWERS_SRC" ]] && [[ -n "$(ls -A "$ANSWERS_SRC" 2>/dev/null)" ]]; then
-    print_action "Installing baked ISO answer TOML files"
-    for f in "$ANSWERS_SRC"/*.toml; do
-        name="$(basename "$f")"
-        install -m 0600 "$f" "/etc/homelab-http-boot/iso-answers/$name"
-        print_sub "  installed $name"
-    done
-else
-    print_sub "No new baked ISO answer files staged"
-fi
-
 # ── pve-http-boot-autoupdate systemd service + timer ──────────────────────────
 print_action "Installing pve-http-boot-autoupdate systemd units"
-
-if systemctl list-unit-files --no-legend iso-autobuild.timer 2>/dev/null \
-    | grep -q '^iso-autobuild\.timer'; then
-    systemctl disable --now iso-autobuild.timer || true
-    rm -f /etc/systemd/system/iso-autobuild.timer
-    print_sub "Removed legacy iso-autobuild.timer"
-fi
 
 systemctl daemon-reload || true
 systemctl enable pve-http-boot-autoupdate.timer
@@ -209,4 +206,3 @@ print_sub "UniFi Network Boot filename: http://${HTTP_BOOT_MGMT_IP:-10.0.0.50}/h
 print_sub "Run: pve-http-boot-enable   (to ensure nginx is serving HTTP Boot)"
 print_sub "Run: pve-http-boot-disable  (note: disable UniFi Network Boot to stop clients)"
 print_sub "Run: pve-http-boot-autoupdate  (to detect and promote a new PVE ISO)"
-print_sub "Run: iso-autobuild   (to manually rebuild baked offsite ISOs)"

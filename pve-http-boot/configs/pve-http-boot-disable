@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # pve-http-boot-disable - HTTP Boot is controlled by UniFi Network Boot settings.
-# nginx is kept running to serve /httpboot, /boot.ipxe, payloads, and baked ISOs.
+# nginx is kept running to serve /httpboot, /boot.ipxe, and the boot payload.
 # Safe to run multiple times; idempotent.
 set -euo pipefail
 

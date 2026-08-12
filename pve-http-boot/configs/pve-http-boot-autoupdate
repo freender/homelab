@@ -86,7 +86,7 @@ ver="${latest%.iso}"
 ver="${ver#proxmox-ve_}"
 rm -rf "$STAGE"
 mkdir -p "$STAGE"
-rsync -a --exclude '/iso/' "$SRV"/ "$STAGE"/
+rsync -a "$SRV"/ "$STAGE"/
 rm -f "$STAGE"/proxmox-ve_*.iso
 install -m 0644 "$HTTP_BOOT_BUILD/vmlinuz"    "$STAGE/vmlinuz"
 install -m 0644 "$HTTP_BOOT_BUILD/initrd.img" "$STAGE/initrd.img"
@@ -112,8 +112,8 @@ need_disable=0
 systemctl is-active --quiet nginx || { /usr/local/sbin/pve-http-boot-enable; need_disable=1; }
 rm -rf "$SRV.prev"
 mkdir -p "$SRV.prev"
-rsync -a --exclude '/iso/' "$SRV"/ "$SRV.prev"/
-rsync -a --delete --exclude '/iso/' "$STAGE"/ "$SRV"/
+rsync -a "$SRV"/ "$SRV.prev"/
+rsync -a --delete "$STAGE"/ "$SRV"/
 systemctl reload nginx 2>/dev/null || systemctl restart nginx
 
 # 7. Post-promote HTTP smoke test
@@ -123,20 +123,13 @@ curl -fsI "http://127.0.0.1/initrd.img" >/dev/null || ok=0
 curl -fsI "http://127.0.0.1/boot.ipxe"  >/dev/null || ok=0
 if [[ "$ok" -ne 1 ]]; then
     log "post-promote check failed; rolling back"
-    rsync -a --delete --exclude '/iso/' "$SRV.prev"/ "$SRV"/
+    rsync -a --delete "$SRV.prev"/ "$SRV"/
     systemctl reload nginx 2>/dev/null || systemctl restart nginx
     [[ "$need_disable" -eq 1 ]] && /usr/local/sbin/pve-http-boot-disable || true
     fail "rolled back to previous payload"
 fi
 
-# 8. Rebuild baked offsite ISOs from the newly promoted base ISO.
-if command -v iso-autobuild >/dev/null 2>&1; then
-    iso-autobuild || fail "baked ISO rebuild failed"
-else
-    log "WARN: iso-autobuild not installed; baked ISO rebuild skipped"
-fi
-
-# 9. Clean up: keep current + one previous ISO in /root/iso
+# 8. Clean up: keep current + one previous ISO in /root/iso
 ls -1t "$ISO_DIR"/proxmox-ve_*.iso 2>/dev/null | tail -n +3 | xargs -r rm -f
 [[ "$need_disable" -eq 1 ]] && /usr/local/sbin/pve-http-boot-disable || true
 
