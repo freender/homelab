@@ -258,7 +258,19 @@ CPU package and cores via `coretemp`, NVMe via its own hwmon, the X540 NIC via
 `ixgbe` — but the HBA reported nothing, because `mpt3sas` registers no hwmon
 device. That is the one card with no fan of its own and no airflow guarantee,
 and it was invisible. Measured on first read: **ace 95 °C, clovis 115 °C** IOC
-die temperature, against a 115 °C maximum for the ASIC.
+die temperature, against a 115 °C maximum for the ASIC — clovis confirmed by
+hand the same day, its heatsink too hot to touch, and again when opening the
+case dropped it 116 °C -> 98 °C within minutes while ace, untouched, held at
+95 °C. The sensor tracks airflow in real time.
+
+clovis runs hotter even though it has a slot fan and its GPU is idle
+(vfio-bound), so this is not case airflow. It drives 6 SAS links to ace's 2
+(the card's own `BoardPowerRequirement` says 14 W vs 10 W into the same size
+heatsink), and the two cards are not the same hardware: ace's is a genuine LSI
+(`board_assembly` `H3-25412-00K`, `board_tracer` `SV52978426`, SAS address in
+LSI's `500605b` range) while clovis's reports no board assembly, no serial and
+SAS address `0x56c92bf0...` — a clone or cross-flashed OEM card with
+unprogrammed manufacturing NVDATA.
 
 Nothing off the shelf reads it on Linux:
 
@@ -278,6 +290,14 @@ that passes a config-page request through to firmware — the same interface
 issues that two-step read (`PAGE_HEADER` for the page length, then
 `READ_CURRENT`) and writes
 `/var/lib/prometheus/node-exporter/hba-temp.prom`.
+
+If the temperature ever looks implausible, the same page carries two fields
+that can be checked against ground truth without trusting the sensor:
+`PCIeWidth` / `PCIeSpeed` must match `lspci`'s `LnkSta` (they read x4 @ 8GT/s
+on both hosts, as `lspci` reports), and `BoardPowerRequirement` tracks how many
+SAS links the card is driving. They sit 8 bytes either side of
+`IOCTemperature`, so if those two are right the struct offsets are right and
+the temperature is genuinely what the firmware reports.
 
 Both requests are read-only, and the kernel driver owns the DMA buffer and
 builds the scatter-gather element itself — the script only fills in the first

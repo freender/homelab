@@ -18,11 +18,23 @@ groups:
       #
       # Measured on the day the exporter was added, at idle: ace 96C, clovis
       # 116C. clovis is therefore over the limit and fires the critical rule
-      # immediately; that is the correct behaviour, not a miscalibrated
-      # threshold. Both are passively cooled 9207-8i cards with no directed
-      # airflow, which is the documented way these cards die. clovis is worse
-      # because it drives 6 SAS links to ace's 2 (more SerDes power in the
-      # ASIC) and shares its chassis with an RTX 3080 Ti.
+      # immediately. That is a true positive, confirmed twice by hand the same
+      # day: its heatsink is too hot to touch, and opening the case dropped the
+      # reading 116C -> 98C within minutes while ace, untouched, stayed at 95C.
+      # The sensor tracks airflow in real time; it is not a fixed offset.
+      #
+      # clovis is the hotter one despite having a slot fan and an idle
+      # (vfio-bound) GPU, so this is not case airflow. Two reasons:
+      #   - It drives 6 SAS links to ace's 2, and the card's own
+      #     BoardPowerRequirement reflects it: 14W vs 10W into a heatsink of
+      #     the same size.
+      #   - The two cards are not the same hardware. ace's is a genuine LSI
+      #     (board_assembly H3-25412-00K, board_tracer SV52978426, SAS address
+      #     in LSI's 500605b range); clovis's reports no board assembly, no
+      #     serial, and SAS address 0x56c92bf0..., i.e. a clone or a
+      #     cross-flashed OEM card with unprogrammed manufacturing NVDATA.
+      # A hot heatsink means the die-to-heatsink path is fine and the fins
+      # simply cannot shed 14W without air moving over them specifically.
       #
       # 100C leaves ~15C of warning runway below the ceiling; 110C means only
       # 5C is left and the card should not be left running as-is.
