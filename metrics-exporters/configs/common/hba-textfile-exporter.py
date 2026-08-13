@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Write Broadcom/LSI SAS HBA controller temperatures for the node_exporter
-textfile collector.
+"""Write Broadcom/LSI SAS HBA health metrics for the node_exporter textfile
+collector: controller temperature and per-PHY link state.
 
 The SAS2308/SAS3008 ASIC has an on-die temperature sensor, but the mpt3sas
 driver does not surface it through hwmon or sysfs -- `sensors` shows the CPU,
@@ -27,6 +27,12 @@ Controllers are discovered from sysfs rather than by probing IOC numbers blind:
 scsi_host attributes give the board name, chip, firmware revision and PCI
 address for labelling, and mpt3sas sets `unique_id` to the IOC number the ioctl
 interface expects.
+
+The PHY counters need no ioctl at all -- the SAS transport class publishes them
+under /sys/class/sas_phy. They are the early warning the temperature is not:
+temperature says the card is stressed, invalid dwords and disparity errors say
+a link is actually degrading, which is what a marginal cable, a dying connector
+or a cooked ASIC eventually produces.
 """
 
 from __future__ import annotations
@@ -40,9 +46,10 @@ import tempfile
 from pathlib import Path
 
 OUT_DIR = Path(os.environ.get("TEXTFILE_DIR", "/var/lib/prometheus/node-exporter"))
-OUT_FILE = OUT_DIR / "hba-temp.prom"
+OUT_FILE = OUT_DIR / "hba.prom"
 
 SCSI_HOST_DIR = Path("/sys/class/scsi_host")
+SAS_PHY_DIR = Path("/sys/class/sas_phy")
 MPT_DRIVERS = {"mpt2sas": "/dev/mpt2ctl", "mpt3sas": "/dev/mpt3ctl"}
 
 # _IOWR() from include/uapi/asm-generic/ioctl.h
@@ -92,6 +99,15 @@ TEMP_UNITS_NOT_PRESENT = 0x00
 TEMP_UNITS_FAHRENHEIT = 0x01
 TEMP_UNITS_CELSIUS = 0x02
 
+# sysfs attribute -> the `type` label it is published under. All four are
+# cumulative since the last controller reset, so they are counters.
+PHY_ERROR_COUNTERS = {
+    "invalid_dword_count": "invalid_dword",
+    "running_disparity_error_count": "running_disparity",
+    "loss_of_dword_sync_count": "loss_of_dword_sync",
+    "phy_reset_problem_count": "phy_reset_problem",
+}
+
 
 class HbaError(Exception):
     """A controller was found but its temperature could not be read."""
@@ -127,6 +143,9 @@ def discover_controllers() -> list[dict[str, str]]:
             {
                 "driver": driver,
                 "ioc": unique_id,
+                # scsi host name (hostN); /sys/class/sas_phy entries are named
+                # phy-<N>:<phy>, so this is what ties a PHY to its controller.
+                "scsi_host": host_dir.name,
                 "pci": pci,
                 "board": read_sysfs(host_dir / "board_name") or "unknown",
                 "chip": read_sysfs(host_dir / "version_product") or "unknown",
@@ -134,6 +153,50 @@ def discover_controllers() -> list[dict[str, str]]:
             }
         )
     return controllers
+
+
+def parse_link_rate(value: str) -> float:
+    """'6.0 Gbit' -> 6.0. Anything else ('Unknown', 'Phy disabled') -> 0.
+
+    0 is meaningful rather than missing: an unused PHY and a PHY whose link has
+    dropped both read 0, and a PHY that renegotiates 6.0 -> 3.0 is a signal
+    worth graphing even though it is not worth alerting on (a genuinely
+    SATA-II device would sit at 3.0 legitimately).
+    """
+    head = value.split()[0] if value else ""
+    try:
+        return float(head)
+    except ValueError:
+        return 0.0
+
+
+def discover_phys(controller: dict[str, str]) -> list[dict[str, object]]:
+    """Per-PHY link rate and error counters for one controller."""
+    phys: list[dict[str, object]] = []
+    if not SAS_PHY_DIR.is_dir():
+        return phys
+
+    # phy-0:3 belongs to host0. Match on the exact host index so a second HBA
+    # (phy-1:*) is not attributed to the first.
+    host_index = controller["scsi_host"].removeprefix("host")
+    prefix = f"phy-{host_index}:"
+    for phy_dir in sorted(SAS_PHY_DIR.iterdir()):
+        if not phy_dir.name.startswith(prefix):
+            continue
+        counters = {
+            label: read_sysfs(phy_dir / attr)
+            for attr, label in PHY_ERROR_COUNTERS.items()
+        }
+        phys.append(
+            {
+                "phy": phy_dir.name.split(":", 1)[1],
+                "link_rate": parse_link_rate(read_sysfs(phy_dir / "negotiated_linkrate")),
+                "counters": {
+                    label: int(raw) for label, raw in counters.items() if raw.isdigit()
+                },
+            }
+        )
+    return phys
 
 
 def config_request(
@@ -251,6 +314,13 @@ def render(controllers: list[dict[str, str]]) -> str:
         "# TYPE homelab_hba_temperature_read_success gauge",
         "# HELP homelab_hba_info SAS HBA identity; value is always 1, detail is in labels.",
         "# TYPE homelab_hba_info gauge",
+        "# HELP homelab_hba_phy_errors_total SAS PHY error counters since the last "
+        "controller reset. Sustained growth means a link is degrading -- marginal cable, "
+        "bad connector or a failing controller.",
+        "# TYPE homelab_hba_phy_errors_total counter",
+        "# HELP homelab_hba_phy_link_rate_gbps Negotiated SAS PHY link rate in Gbit/s; "
+        "0 means the PHY is unused, disabled or has lost its link.",
+        "# TYPE homelab_hba_phy_link_rate_gbps gauge",
     ]
     for controller in controllers:
         info_labels = labels(
@@ -259,16 +329,30 @@ def render(controllers: list[dict[str, str]]) -> str:
             firmware=controller["firmware"],
         )
         lines.append(f"homelab_hba_info{{{info_labels}}} 1")
+
+        # Temperature and PHY state are independent: the ioctl can fail (or the
+        # firmware can lack the sensor) while the links are perfectly readable,
+        # so a temperature failure must not cost us the PHY counters.
         try:
             temps = read_temperatures(controller)
         except HbaError as exc:
             print(f"{controller['pci']}: {exc}", file=sys.stderr)
             lines.append(f"homelab_hba_temperature_read_success{{{labels(controller)}}} 0")
-            continue
-        lines.append(f"homelab_hba_temperature_read_success{{{labels(controller)}}} 1")
-        for sensor, celsius in temps.items():
-            temp_labels = labels(controller, sensor=sensor)
-            lines.append(f"homelab_hba_temperature_celsius{{{temp_labels}}} {celsius:g}")
+        else:
+            lines.append(f"homelab_hba_temperature_read_success{{{labels(controller)}}} 1")
+            for sensor, celsius in temps.items():
+                temp_labels = labels(controller, sensor=sensor)
+                lines.append(f"homelab_hba_temperature_celsius{{{temp_labels}}} {celsius:g}")
+
+        for phy in discover_phys(controller):
+            phy_id = str(phy["phy"])
+            rate_labels = labels(controller, phy=phy_id)
+            lines.append(
+                f"homelab_hba_phy_link_rate_gbps{{{rate_labels}}} {phy['link_rate']:g}"
+            )
+            for error_type, count in sorted(phy["counters"].items()):  # type: ignore[union-attr]
+                error_labels = labels(controller, phy=phy_id, type=error_type)
+                lines.append(f"homelab_hba_phy_errors_total{{{error_labels}}} {count}")
     return "\n".join(lines) + "\n"
 
 

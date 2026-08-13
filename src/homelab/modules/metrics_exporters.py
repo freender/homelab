@@ -97,25 +97,26 @@ FILE_SPECS = (
         "/etc/systemd/system/zfs-pool-textfile-exporter.timer",
         feature="baremetal",
     ),
-    # SAS HBA die temperature. Bare metal only for the same reason as the ZFS
-    # exporter: it needs /dev/mpt2ctl and /sys/class/scsi_host, neither of which
-    # an LXC guest owns. Gated on metrics-exporters.hba_temp so the hosts with
-    # no HBA (bray, osiris) never install it.
+    # SAS HBA health: controller temperature and per-PHY link state. Bare metal
+    # only for the same reason as the ZFS exporter -- it needs /dev/mpt2ctl,
+    # /sys/class/scsi_host and /sys/class/sas_phy, none of which an LXC guest
+    # owns. Gated on metrics-exporters.hba so the hosts with no HBA (bray,
+    # osiris) never install it.
     FileSpec(
-        "hba-temp-textfile-exporter.py",
-        "/usr/local/bin/hba-temp-textfile-exporter",
+        "hba-textfile-exporter.py",
+        "/usr/local/bin/hba-textfile-exporter",
         mode="755",
-        feature="hba_temp",
+        feature="hba",
     ),
     FileSpec(
-        "hba-temp-textfile-exporter.service",
-        "/etc/systemd/system/hba-temp-textfile-exporter.service",
-        feature="hba_temp",
+        "hba-textfile-exporter.service",
+        "/etc/systemd/system/hba-textfile-exporter.service",
+        feature="hba",
     ),
     FileSpec(
-        "hba-temp-textfile-exporter.timer",
-        "/etc/systemd/system/hba-temp-textfile-exporter.timer",
-        feature="hba_temp",
+        "hba-textfile-exporter.timer",
+        "/etc/systemd/system/hba-textfile-exporter.timer",
+        feature="hba",
     ),
     FileSpec("node-exporter.defaults", "/etc/default/prometheus-node-exporter"),
     # smartctl_exporter itself comes from the distro package
@@ -240,12 +241,12 @@ def has_apcupsd_exporter(root: Path, host: str) -> bool:
     return role in {"master", "master-standalone"}
 
 
-def has_hba_temp_exporter(root: Path, host: str) -> bool:
+def has_hba_exporter(root: Path, host: str) -> bool:
     registry = default_registry(root)
     return normalize_bool(
-        registry.get(host, "metrics-exporters.hba_temp", None),
+        registry.get(host, "metrics-exporters.hba", None),
         False,
-        f"metrics-exporters.hba_temp must be true or false for {host}",
+        f"metrics-exporters.hba must be true or false for {host}",
     )
 
 
@@ -295,7 +296,7 @@ def build_file_specs(
     *,
     has_apcupsd: bool,
     has_igpu: bool,
-    has_hba_temp: bool,
+    has_hba: bool,
     has_expected_pools: bool,
     has_wrapper: bool,
     lxc_guest: bool,
@@ -304,7 +305,7 @@ def build_file_specs(
         "baremetal": not lxc_guest,
         "apcupsd": has_apcupsd,
         "igpu": has_igpu,
-        "hba_temp": has_hba_temp and not lxc_guest,
+        "hba": has_hba and not lxc_guest,
         "zfs_expected_pools": has_expected_pools and not lxc_guest,
         "smartctl_wrapper": has_wrapper and not lxc_guest,
     }
@@ -391,12 +392,12 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
         )
         copy_files(common_dir, build_dir, ["igpu-exporter.py", "igpu-exporter.service"])
 
-    has_hba_temp = has_hba_temp_exporter(root, host) and not lxc_guest
-    if has_hba_temp:
+    has_hba = has_hba_exporter(root, host) and not lxc_guest
+    if has_hba:
         copy_files(common_dir, build_dir, [
-            "hba-temp-textfile-exporter.py",
-            "hba-temp-textfile-exporter.service",
-            "hba-temp-textfile-exporter.timer",
+            "hba-textfile-exporter.py",
+            "hba-textfile-exporter.service",
+            "hba-textfile-exporter.timer",
         ])
 
     expected_pools = [] if lxc_guest else zfs_expected_pools(root, host)
@@ -410,7 +411,7 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
     file_specs = build_file_specs(
         has_apcupsd=has_apcupsd,
         has_igpu=has_igpu,
-        has_hba_temp=has_hba_temp,
+        has_hba=has_hba,
         has_expected_pools=bool(expected_pools),
         has_wrapper=has_wrapper,
         lxc_guest=lxc_guest,

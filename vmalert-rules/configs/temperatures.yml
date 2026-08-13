@@ -66,7 +66,7 @@ groups:
           severity: warning
         annotations:
           summary: "{{ $labels.host }} cannot read HBA {{ $labels.board }} temperature"
-          description: "hba-temp-textfile-exporter reached the {{ $labels.board }} at {{ $labels.pci }} on {{ $labels.host }} but could not read a temperature from MPI2 IO Unit Page 7. Run /usr/local/bin/hba-temp-textfile-exporter on {{ $labels.host }} for the firmware error."
+          description: "hba-textfile-exporter reached the {{ $labels.board }} at {{ $labels.pci }} on {{ $labels.host }} but could not read a temperature from MPI2 IO Unit Page 7. Run /usr/local/bin/hba-textfile-exporter on {{ $labels.host }} for the firmware error."
 
       # The textfile collector keeps serving whatever is in its directory, so a
       # dead exporter does not produce an absent series -- it produces a frozen
@@ -74,13 +74,13 @@ groups:
       # sits flat at its last good value. The timer runs every minute, so
       # 15 minutes without a rewrite means it is broken.
       - alert: HbaTemperatureStale
-        expr: time() - node_textfile_mtime_seconds{file=~".*/hba-temp\\.prom"} > 900
+        expr: time() - node_textfile_mtime_seconds{file=~".*/hba\\.prom"} > 900
         for: 5m
         labels:
           severity: warning
         annotations:
           summary: "{{ $labels.host }} HBA temperature metrics are stale"
-          description: "hba-temp.prom on {{ $labels.host }} has not been rewritten in over 15 minutes, so homelab_hba_temperature_celsius is frozen at its last value and any threshold on it is meaningless. Check `systemctl status hba-temp-textfile-exporter.timer` on {{ $labels.host }}."
+          description: "hba.prom on {{ $labels.host }} has not been rewritten in over 15 minutes, so homelab_hba_temperature_celsius is frozen at its last value and any threshold on it is meaningless. Check `systemctl status hba-textfile-exporter.timer` on {{ $labels.host }}."
 
       # CPU temperature is judged against each CPU's own reported critical
       # point (node_hwmon_temp_crit_celsius: 100C on ace/bray/clovis/cottonwood,

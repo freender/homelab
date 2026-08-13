@@ -1,0 +1,41 @@
+groups:
+  - name: sas-links
+    interval: 1m
+    rules:
+      # The SAS equivalent of nic-link.yml: link-layer health for the disks
+      # hanging off the HBAs on ace and clovis, from /sys/class/sas_phy via
+      # hba-textfile-exporter.
+      #
+      # This is the signal HBA temperature is not. Temperature says the card is
+      # stressed; these counters say a link is actually failing. They are also
+      # what would distinguish "clovis's clone card runs hot but works fine"
+      # from "clovis's clone card is starting to corrupt traffic" -- all four
+      # counters on all 8 PHYs were 0 when this was written, on both hosts, so
+      # any growth at all is a change from a clean baseline.
+      #
+      # Alert on increase() rather than the raw value: these are cumulative
+      # since the last controller reset, so a bare `> 0` would latch forever on
+      # a single error from a cable reseat years ago. The threshold is
+      # deliberately not 1 -- a couple of invalid dwords around a link reset or
+      # a disk power state change is normal and does not mean anything.
+      # Sustained accumulation does.
+      #
+      # Summed per PHY, not per counter type: one bad cable trips invalid_dword,
+      # running_disparity and loss_of_dword_sync together, and three
+      # notifications for one fault is exactly the noise that got
+      # ZfsPoolDeviceErrors deleted (see zfs-pools.yml).
+      - alert: SasPhyErrorsIncreasing
+        expr: sum by (host, pci, board, phy) (increase(homelab_hba_phy_errors_total[1h])) > 10
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.host }} SAS PHY {{ $labels.phy }} is accumulating link errors"
+          description: "PHY {{ $labels.phy }} on the {{ $labels.board }} at {{ $labels.pci }} ({{ $labels.host }}) has logged {{ $value }} new link errors in the last hour, from a baseline of zero. Usual causes in order of likelihood: a marginal or half-seated SAS breakout cable, a failing connector, or a controller that is overheating. Check `cat /sys/class/sas_phy/phy-*/invalid_dword_count` and homelab_hba_temperature_celsius on {{ $labels.host }}, and reseat the cable for that PHY before suspecting the card."
+
+      # No alert on homelab_hba_phy_link_rate_gbps dropping. It is graphed
+      # because a PHY renegotiating 6.0 -> 3.0 Gbit is a real early sign of
+      # signal trouble, but a legitimately SATA-II device would sit at 3.0
+      # forever and an unused PHY reads 0, so any threshold on it fires on
+      # normal configurations. The error counters above catch the same fault
+      # without that ambiguity.

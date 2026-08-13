@@ -242,18 +242,34 @@ if [[ -z "${FILE_MAP_DEST[igpu-exporter.py]:-}" ]]; then
           /usr/local/bin/igpu-exporter /usr/local/bin/.igpu-exporter.version
 fi
 
-# Drop the HBA temperature exporter on hosts that no longer declare it, and take
-# its stale .prom with it -- the textfile collector keeps serving whatever is in
-# that directory, so a leftover file would report a temperature forever.
-if [[ -z "${FILE_MAP_DEST[hba-temp-textfile-exporter.py]:-}" ]]; then
-    if [[ -e /etc/systemd/system/hba-temp-textfile-exporter.timer ]]; then
-        retire_systemd_unit hba-temp-textfile-exporter.timer \
-            /etc/systemd/system/hba-temp-textfile-exporter.timer || true
-        retire_systemd_unit hba-temp-textfile-exporter.service \
-            /etc/systemd/system/hba-temp-textfile-exporter.service || true
-        rm -f /usr/local/bin/hba-temp-textfile-exporter \
-              /var/lib/prometheus/node-exporter/hba-temp.prom
-        print_sub "Removed hba-temp-textfile-exporter"
+# Legacy: this exporter shipped for one day as hba-temp-textfile-exporter,
+# before it also grew SAS PHY link counters and the "temp" in the name stopped
+# being true. Retire the old unit unconditionally -- leaving it would keep a
+# second timer writing a stale hba-temp.prom that the textfile collector would
+# happily keep serving alongside the new one.
+if [[ -e /etc/systemd/system/hba-temp-textfile-exporter.timer ]] ||
+   [[ -e /usr/local/bin/hba-temp-textfile-exporter ]]; then
+    retire_systemd_unit hba-temp-textfile-exporter.timer \
+        /etc/systemd/system/hba-temp-textfile-exporter.timer || true
+    retire_systemd_unit hba-temp-textfile-exporter.service \
+        /etc/systemd/system/hba-temp-textfile-exporter.service || true
+    rm -f /usr/local/bin/hba-temp-textfile-exporter \
+          /var/lib/prometheus/node-exporter/hba-temp.prom
+    print_sub "Removed superseded hba-temp-textfile-exporter (now hba-textfile-exporter)"
+fi
+
+# Drop the HBA exporter on hosts that no longer declare it, and take its stale
+# .prom with it -- the textfile collector keeps serving whatever is in that
+# directory, so a leftover file would report a temperature forever.
+if [[ -z "${FILE_MAP_DEST[hba-textfile-exporter.py]:-}" ]]; then
+    if [[ -e /etc/systemd/system/hba-textfile-exporter.timer ]]; then
+        retire_systemd_unit hba-textfile-exporter.timer \
+            /etc/systemd/system/hba-textfile-exporter.timer || true
+        retire_systemd_unit hba-textfile-exporter.service \
+            /etc/systemd/system/hba-textfile-exporter.service || true
+        rm -f /usr/local/bin/hba-textfile-exporter \
+              /var/lib/prometheus/node-exporter/hba.prom
+        print_sub "Removed hba-textfile-exporter"
     fi
 fi
 
@@ -296,9 +312,9 @@ if [[ -n "${FILE_MAP_DEST[zfs-pool-textfile-exporter]:-}" ]]; then
     systemctl enable --now zfs-pool-textfile-exporter.timer
     systemctl start zfs-pool-textfile-exporter.service
 fi
-if [[ -n "${FILE_MAP_DEST[hba-temp-textfile-exporter.py]:-}" ]]; then
-    systemctl enable --now hba-temp-textfile-exporter.timer
-    systemctl start hba-temp-textfile-exporter.service
+if [[ -n "${FILE_MAP_DEST[hba-textfile-exporter.py]:-}" ]]; then
+    systemctl enable --now hba-textfile-exporter.timer
+    systemctl start hba-textfile-exporter.service
 fi
 if [[ -n "${FILE_MAP_DEST[smartctl-exporter-override.conf]:-}" ]]; then
     # Packaged unit name is smartctl_exporter (underscore), not the
@@ -323,8 +339,8 @@ systemctl is-active --quiet prometheus-node-exporter
 if [[ -n "${FILE_MAP_DEST[zfs-pool-textfile-exporter]:-}" ]]; then
     systemctl is-active --quiet zfs-pool-textfile-exporter.timer
 fi
-if [[ -n "${FILE_MAP_DEST[hba-temp-textfile-exporter.py]:-}" ]]; then
-    systemctl is-active --quiet hba-temp-textfile-exporter.timer
+if [[ -n "${FILE_MAP_DEST[hba-textfile-exporter.py]:-}" ]]; then
+    systemctl is-active --quiet hba-textfile-exporter.timer
 fi
 if [[ -n "${FILE_MAP_DEST[smartctl-exporter-override.conf]:-}" ]]; then
     systemctl is-active --quiet smartctl_exporter

@@ -106,8 +106,8 @@ Then `./deploy metrics-exporters <host>` from the repo.
 - SMART metrics via smartctl_exporter
 - UPS metrics via apcupsd exporter on `master` / `master-standalone` UPS hosts
 - Intel GPU metrics via `igpu-exporter` on selected PVE hosts
-- SAS HBA controller temperature via node_exporter textfile collector
-  (`homelab_hba_*`) on hosts with `hba_temp: true`
+- SAS HBA controller temperature and per-PHY link health via node_exporter
+  textfile collector (`homelab_hba_*`) on hosts with `hba: true`
 
 ## Ports
 - node_exporter: `:9100`
@@ -130,9 +130,9 @@ Then `./deploy metrics-exporters <host>` from the repo.
 - `/usr/local/bin/igpu-exporter`
 - `/etc/systemd/system/igpu-exporter.service`
 - `/etc/default/igpu-exporter`
-- `/usr/local/bin/hba-temp-textfile-exporter`
-- `/etc/systemd/system/hba-temp-textfile-exporter.service`
-- `/etc/systemd/system/hba-temp-textfile-exporter.timer`
+- `/usr/local/bin/hba-textfile-exporter`
+- `/etc/systemd/system/hba-textfile-exporter.service`
+- `/etc/systemd/system/hba-textfile-exporter.timer`
 
 **In this repo:**
 - `configs/common/node-exporter.defaults`
@@ -146,9 +146,9 @@ Then `./deploy metrics-exporters <host>` from the repo.
 - `configs/common/igpu-exporter.py`
 - `configs/common/igpu-exporter.service`
 - `configs/common/igpu-exporter.defaults`
-- `configs/common/hba-temp-textfile-exporter.py`
-- `configs/common/hba-temp-textfile-exporter.service`
-- `configs/common/hba-temp-textfile-exporter.timer`
+- `configs/common/hba-textfile-exporter.py`
+- `configs/common/hba-textfile-exporter.service`
+- `configs/common/hba-textfile-exporter.timer`
 - `../deploy`
 
 ### Where each exporter binary comes from
@@ -162,7 +162,7 @@ because there is no packaged or released artifact to use.
 | `smartctl_exporter` | `apt` (`prometheus-smartctl-exporter`) | packaged; Ubuntu has it in the normal archive, Debian stable only in `<codename>-backports` |
 | `igpu-exporter` | this repo (`configs/common/igpu-exporter.py`) | not packaged anywhere and upstream ships **zero** releases; a ~40-line wrapper over `intel_gpu_top` beats compiling a Go project on every host |
 | `apcupsd-exporter` | this repo (`configs/common/apcupsd-exporter.py`) | homelab-specific script |
-| `hba-temp-textfile-exporter` | this repo (`configs/common/hba-temp-textfile-exporter.py`) | no exporter and no vendor tool reads a SAS2 HBA's temperature on Linux; see below |
+| `hba-textfile-exporter` | this repo (`configs/common/hba-textfile-exporter.py`) | no exporter and no vendor tool reads a SAS2 HBA's temperature on Linux; see below |
 
 Nothing in this module downloads anything at deploy time any more, so `curl`,
 `tar` and the `golang-go` toolchain are no longer installed. `python3` (runs the
@@ -250,7 +250,7 @@ Without it this host reports 2 SMART devices instead of 4. Deploys migrate off t
 self-managed `smartctl-exporter.service` (hyphen) automatically, tearing it down
 before the package installs so the two never fight over `:9633`.
 
-#### hba-temp-textfile-exporter (`hba_temp: true`)
+#### hba-textfile-exporter (`hba: true`)
 
 `ace` and `clovis` each carry an LSI SAS9207-8i (SAS2308, IT-mode firmware
 P20). Every other hot component on those hosts reports a temperature —
@@ -286,10 +286,10 @@ The value does exist in firmware: MPI2 **IO Unit Page 7** carries
 `IOCTemperature` plus its unit code. `mpt3sas` exposes a message-passing
 character device (`/dev/mpt2ctl` for SAS2 hardware, `/dev/mpt3ctl` for SAS3)
 that passes a config-page request through to firmware — the same interface
-`storcli` uses on the cards it does support. `configs/common/hba-temp-textfile-exporter.py`
+`storcli` uses on the cards it does support. `configs/common/hba-textfile-exporter.py`
 issues that two-step read (`PAGE_HEADER` for the page length, then
 `READ_CURRENT`) and writes
-`/var/lib/prometheus/node-exporter/hba-temp.prom`.
+`/var/lib/prometheus/node-exporter/hba.prom`.
 
 If the temperature ever looks implausible, the same page carries two fields
 that can be checked against ground truth without trusting the sensor:
@@ -316,7 +316,23 @@ would only add a redundant `exported_host`, as `homelab_zpool_*` does):
 homelab_hba_temperature_celsius{pci,board,chip,sensor="ioc"}
 homelab_hba_temperature_read_success{pci,board,chip}
 homelab_hba_info{pci,board,chip,driver,firmware}
+homelab_hba_phy_errors_total{pci,board,chip,phy,type}
+homelab_hba_phy_link_rate_gbps{pci,board,chip,phy}
 ```
+
+The PHY metrics need no ioctl — the SAS transport class publishes them under
+`/sys/class/sas_phy`, matched to their controller by scsi host index
+(`phy-0:3` belongs to `host0`). They are the early warning temperature is not:
+temperature says the card is stressed, `invalid_dword` / `running_disparity` /
+`loss_of_dword_sync` / `phy_reset_problem` say a link is actually degrading.
+All four were zero on all 8 PHYs of both cards when this was added, so the
+baseline is clean and any growth is meaningful — `sas-links.yml` alerts on
+accumulation, not on the raw counter, since these never reset except with the
+controller. Link rate is graphed but deliberately not alerted on: an unused PHY
+reads 0 and a real SATA-II device would sit at 3.0 Gbit forever.
+
+Temperature and PHY collection are independent — a failed ioctl still yields
+PHY counters, because the two failure modes have nothing to do with each other.
 
 `sensor` exists because IO Unit Page 7 also defines a board sensor; the 9207-8i
 reports `NOT_PRESENT` for it, so only `sensor="ioc"` is emitted here. A card

@@ -1,5 +1,5 @@
 [Unit]
-Description=Refresh SAS HBA temperature textfile metrics
+Description=Refresh SAS HBA textfile metrics
 
 [Timer]
 # The HBA firmware samples its die sensor on its own slow interval, so a faster
@@ -7,7 +7,7 @@ Description=Refresh SAS HBA temperature textfile metrics
 OnBootSec=2min
 OnUnitActiveSec=1min
 AccuracySec=10s
-Unit=hba-temp-textfile-exporter.service
+Unit=hba-textfile-exporter.service
 
 [Install]
 WantedBy=timers.target
