@@ -1,0 +1,13 @@
+[Unit]
+Description=Refresh SAS HBA temperature textfile metrics
+
+[Timer]
+# The HBA firmware samples its die sensor on its own slow interval, so a faster
+# poll would only add firmware round-trips without adding resolution.
+OnBootSec=2min
+OnUnitActiveSec=1min
+AccuracySec=10s
+Unit=hba-temp-textfile-exporter.service
+
+[Install]
+WantedBy=timers.target

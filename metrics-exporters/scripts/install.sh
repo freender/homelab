@@ -242,6 +242,21 @@ if [[ -z "${FILE_MAP_DEST[igpu-exporter.py]:-}" ]]; then
           /usr/local/bin/igpu-exporter /usr/local/bin/.igpu-exporter.version
 fi
 
+# Drop the HBA temperature exporter on hosts that no longer declare it, and take
+# its stale .prom with it -- the textfile collector keeps serving whatever is in
+# that directory, so a leftover file would report a temperature forever.
+if [[ -z "${FILE_MAP_DEST[hba-temp-textfile-exporter.py]:-}" ]]; then
+    if [[ -e /etc/systemd/system/hba-temp-textfile-exporter.timer ]]; then
+        retire_systemd_unit hba-temp-textfile-exporter.timer \
+            /etc/systemd/system/hba-temp-textfile-exporter.timer || true
+        retire_systemd_unit hba-temp-textfile-exporter.service \
+            /etc/systemd/system/hba-temp-textfile-exporter.service || true
+        rm -f /usr/local/bin/hba-temp-textfile-exporter \
+              /var/lib/prometheus/node-exporter/hba-temp.prom
+        print_sub "Removed hba-temp-textfile-exporter"
+    fi
+fi
+
 # Install/update every file this host's file-map declares (native node-exporter
 # and smartctl-exporter config are simply absent from the map in docker mode;
 # apcupsd/igpu config are absent unless those features are configured for the
@@ -281,6 +296,10 @@ if [[ -n "${FILE_MAP_DEST[zfs-pool-textfile-exporter]:-}" ]]; then
     systemctl enable --now zfs-pool-textfile-exporter.timer
     systemctl start zfs-pool-textfile-exporter.service
 fi
+if [[ -n "${FILE_MAP_DEST[hba-temp-textfile-exporter.py]:-}" ]]; then
+    systemctl enable --now hba-temp-textfile-exporter.timer
+    systemctl start hba-temp-textfile-exporter.service
+fi
 if [[ -n "${FILE_MAP_DEST[smartctl-exporter-override.conf]:-}" ]]; then
     # Packaged unit name is smartctl_exporter (underscore), not the
     # smartctl-exporter (hyphen) this module used to ship.
@@ -303,6 +322,9 @@ fi
 systemctl is-active --quiet prometheus-node-exporter
 if [[ -n "${FILE_MAP_DEST[zfs-pool-textfile-exporter]:-}" ]]; then
     systemctl is-active --quiet zfs-pool-textfile-exporter.timer
+fi
+if [[ -n "${FILE_MAP_DEST[hba-temp-textfile-exporter.py]:-}" ]]; then
+    systemctl is-active --quiet hba-temp-textfile-exporter.timer
 fi
 if [[ -n "${FILE_MAP_DEST[smartctl-exporter-override.conf]:-}" ]]; then
     systemctl is-active --quiet smartctl_exporter

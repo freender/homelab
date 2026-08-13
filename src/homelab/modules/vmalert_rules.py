@@ -18,6 +18,7 @@ RULE_FILES = (
     "nic-link.yml",
     "smart-disks.yml",
     "systemd-failed.yml",
+    "temperatures.yml",
     "ups.yml",
     "zfs-pools.yml",
 )

@@ -106,6 +106,8 @@ Then `./deploy metrics-exporters <host>` from the repo.
 - SMART metrics via smartctl_exporter
 - UPS metrics via apcupsd exporter on `master` / `master-standalone` UPS hosts
 - Intel GPU metrics via `igpu-exporter` on selected PVE hosts
+- SAS HBA controller temperature via node_exporter textfile collector
+  (`homelab_hba_*`) on hosts with `hba_temp: true`
 
 ## Ports
 - node_exporter: `:9100`
@@ -128,6 +130,9 @@ Then `./deploy metrics-exporters <host>` from the repo.
 - `/usr/local/bin/igpu-exporter`
 - `/etc/systemd/system/igpu-exporter.service`
 - `/etc/default/igpu-exporter`
+- `/usr/local/bin/hba-temp-textfile-exporter`
+- `/etc/systemd/system/hba-temp-textfile-exporter.service`
+- `/etc/systemd/system/hba-temp-textfile-exporter.timer`
 
 **In this repo:**
 - `configs/common/node-exporter.defaults`
@@ -141,6 +146,9 @@ Then `./deploy metrics-exporters <host>` from the repo.
 - `configs/common/igpu-exporter.py`
 - `configs/common/igpu-exporter.service`
 - `configs/common/igpu-exporter.defaults`
+- `configs/common/hba-temp-textfile-exporter.py`
+- `configs/common/hba-temp-textfile-exporter.service`
+- `configs/common/hba-temp-textfile-exporter.timer`
 - `../deploy`
 
 ### Where each exporter binary comes from
@@ -154,6 +162,7 @@ because there is no packaged or released artifact to use.
 | `smartctl_exporter` | `apt` (`prometheus-smartctl-exporter`) | packaged; Ubuntu has it in the normal archive, Debian stable only in `<codename>-backports` |
 | `igpu-exporter` | this repo (`configs/common/igpu-exporter.py`) | not packaged anywhere and upstream ships **zero** releases; a ~40-line wrapper over `intel_gpu_top` beats compiling a Go project on every host |
 | `apcupsd-exporter` | this repo (`configs/common/apcupsd-exporter.py`) | homelab-specific script |
+| `hba-temp-textfile-exporter` | this repo (`configs/common/hba-temp-textfile-exporter.py`) | no exporter and no vendor tool reads a SAS2 HBA's temperature on Linux; see below |
 
 Nothing in this module downloads anything at deploy time any more, so `curl`,
 `tar` and the `golang-go` toolchain are no longer installed. `python3` (runs the
@@ -240,6 +249,66 @@ into the scan output as `type: sntasmedia` and downgrades that one benign error.
 Without it this host reports 2 SMART devices instead of 4. Deploys migrate off the old
 self-managed `smartctl-exporter.service` (hyphen) automatically, tearing it down
 before the package installs so the two never fight over `:9633`.
+
+#### hba-temp-textfile-exporter (`hba_temp: true`)
+
+`ace` and `clovis` each carry an LSI SAS9207-8i (SAS2308, IT-mode firmware
+P20). Every other hot component on those hosts reports a temperature —
+CPU package and cores via `coretemp`, NVMe via its own hwmon, the X540 NIC via
+`ixgbe` — but the HBA reported nothing, because `mpt3sas` registers no hwmon
+device. That is the one card with no fan of its own and no airflow guarantee,
+and it was invisible. Measured on first read: **ace 95 °C, clovis 115 °C** IOC
+die temperature, against a 115 °C maximum for the ASIC.
+
+Nothing off the shelf reads it on Linux:
+
+| Option | Result |
+|---|---|
+| `sensors` / hwmon | no HBA chip; `mpt3sas` registers none |
+| `smartctl_exporter` | reports the *disks* behind the HBA, not the controller |
+| `storcli` | MegaRAID and SAS3 HBAs only; returns "No Controller found" for a SAS2308 |
+| `sas2ircu` | Broadcom's SAS2 tool, but it has no temperature command |
+| FreeBSD `mpsutil` / TrueNAS CORE `sysctl` | works there, does not exist on Linux |
+
+The value does exist in firmware: MPI2 **IO Unit Page 7** carries
+`IOCTemperature` plus its unit code. `mpt3sas` exposes a message-passing
+character device (`/dev/mpt2ctl` for SAS2 hardware, `/dev/mpt3ctl` for SAS3)
+that passes a config-page request through to firmware — the same interface
+`storcli` uses on the cards it does support. `configs/common/hba-temp-textfile-exporter.py`
+issues that two-step read (`PAGE_HEADER` for the page length, then
+`READ_CURRENT`) and writes
+`/var/lib/prometheus/node-exporter/hba-temp.prom`.
+
+Both requests are read-only, and the kernel driver owns the DMA buffer and
+builds the scatter-gather element itself — the script only fills in the first
+28 bytes of the message frame and never touches hardware registers.
+
+Controllers come from `/sys/class/scsi_host/*` rather than blind IOC probing:
+`proc_name` identifies the generation (`mpt2sas` vs `mpt3sas`, which selects the
+device node), `unique_id` *is* the IOC number the ioctl wants, and `board_name` /
+`version_product` / `version_fw` supply the labels. The PCI address is the
+identity label because scsi host numbering is not stable across reboots.
+
+Metrics (no `host` label — the scrape config attaches one, and emitting our own
+would only add a redundant `exported_host`, as `homelab_zpool_*` does):
+
+```
+homelab_hba_temperature_celsius{pci,board,chip,sensor="ioc"}
+homelab_hba_temperature_read_success{pci,board,chip}
+homelab_hba_info{pci,board,chip,driver,firmware}
+```
+
+`sensor` exists because IO Unit Page 7 also defines a board sensor; the 9207-8i
+reports `NOT_PRESENT` for it, so only `sensor="ioc"` is emitted here. A card
+whose firmware omits the sensor entirely (some OEM rebadges) sets
+`read_success 0` rather than vanishing, so the failure is visible instead of
+being an absent series.
+
+The timer runs every minute. The firmware samples the die on its own slow
+interval, so polling faster adds firmware round-trips without adding resolution.
+Finding no controller at all is a hard failure (exit 1 → failed unit →
+`SystemdUnitFailed`): the exporter is only deployed where a card is declared, so
+its absence means the card or driver is gone.
 
 ## Deployment
 

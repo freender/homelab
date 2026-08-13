@@ -1,0 +1,113 @@
+groups:
+  - name: temperatures
+    interval: 1m
+    rules:
+      # Disk temperatures (HDD/SSD/NVMe) are NOT here -- they live in
+      # smart-disks.yml next to the other smartctl_exporter rules, because they
+      # come from the same exporter and share its failure modes.
+      #
+      # This file covers the two components that had no temperature alerting at
+      # all: the SAS HBA (added 2026-08-13, see metrics-exporters/README.md --
+      # the card had no temperature *metric* before that, let alone an alert)
+      # and the CPU package/cores, whose hwmon data has always been collected
+      # but never alerted on.
+
+      # SAS2308's maximum ASIC junction temperature is 115C. This is a die
+      # temperature, not a heatsink reading, so it is normal for it to look
+      # alarming next to a CPU package figure -- but the ceiling is what it is.
+      #
+      # Measured on the day the exporter was added, at idle: ace 96C, clovis
+      # 116C. clovis is therefore over the limit and fires the critical rule
+      # immediately; that is the correct behaviour, not a miscalibrated
+      # threshold. Both are passively cooled 9207-8i cards with no directed
+      # airflow, which is the documented way these cards die. clovis is worse
+      # because it drives 6 SAS links to ace's 2 (more SerDes power in the
+      # ASIC) and shares its chassis with an RTX 3080 Ti.
+      #
+      # 100C leaves ~15C of warning runway below the ceiling; 110C means only
+      # 5C is left and the card should not be left running as-is.
+      - alert: HbaTemperatureHigh
+        expr: homelab_hba_temperature_celsius{sensor="ioc"} >= 100 and homelab_hba_temperature_celsius{sensor="ioc"} < 110
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.host }} HBA {{ $labels.board }} is {{ $value }}C"
+          description: "The {{ $labels.board }} ({{ $labels.chip }}) at {{ $labels.pci }} on {{ $labels.host }} has been at or above 100C for 15+ minutes, against a 115C maximum for the ASIC. These cards are passively cooled and depend entirely on case airflow. Add directed airflow (a 40mm fan on the heatsink is the standard fix) or re-pad the heatsink."
+
+      - alert: HbaTemperatureCritical
+        expr: homelab_hba_temperature_celsius{sensor="ioc"} >= 110
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.host }} HBA {{ $labels.board }} is {{ $value }}C"
+          description: "The {{ $labels.board }} ({{ $labels.chip }}) at {{ $labels.pci }} on {{ $labels.host }} is within 5C of, or above, the 115C maximum ASIC temperature. Every disk behind this controller depends on it. Check for dropped links with `cat /sys/class/sas_phy/phy-*/invalid_dword_count` and for controller resets with `journalctl -k | grep mpt`, and fix the airflow."
+
+      # A card whose firmware reports no sensor, or that stops answering the
+      # config-page read, keeps its series but flips this flag -- so the failure
+      # is visible instead of being an absent series that no threshold can match.
+      - alert: HbaTemperatureReadFailed
+        expr: homelab_hba_temperature_read_success == 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.host }} cannot read HBA {{ $labels.board }} temperature"
+          description: "hba-temp-textfile-exporter reached the {{ $labels.board }} at {{ $labels.pci }} on {{ $labels.host }} but could not read a temperature from MPI2 IO Unit Page 7. Run /usr/local/bin/hba-temp-textfile-exporter on {{ $labels.host }} for the firmware error."
+
+      # The textfile collector keeps serving whatever is in its directory, so a
+      # dead exporter does not produce an absent series -- it produces a frozen
+      # temperature, which is worse: the HBA could be cooking while the graph
+      # sits flat at its last good value. The timer runs every minute, so
+      # 15 minutes without a rewrite means it is broken.
+      - alert: HbaTemperatureStale
+        expr: time() - node_textfile_mtime_seconds{file=~".*/hba-temp\\.prom"} > 900
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.host }} HBA temperature metrics are stale"
+          description: "hba-temp.prom on {{ $labels.host }} has not been rewritten in over 15 minutes, so homelab_hba_temperature_celsius is frozen at its last value and any threshold on it is meaningless. Check `systemctl status hba-temp-textfile-exporter.timer` on {{ $labels.host }}."
+
+      # CPU temperature is judged against each CPU's own reported critical
+      # point (node_hwmon_temp_crit_celsius: 100C on ace/bray/clovis/cottonwood,
+      # 105C on cinci/osiris) rather than one fixed number, so the thresholds
+      # stay correct when a host is rebuilt on different silicon.
+      #
+      # Aggregated to one series per host with max()/min(): a hot CPU otherwise
+      # fires one alert per core, which on bray would be 13 notifications for a
+      # single event. min() on the critical point is the conservative choice if
+      # cores ever disagree.
+      #
+      # 7d peaks when this was written: cinci 97C (crit 105), cottonwood 96C
+      # (crit 100), bray 88C (crit 100), the rest below 75C. So cinci and
+      # cottonwood are the two that will exercise this first.
+      #
+      # LXC guests are absent by design -- their hwmon collector is negated
+      # (see metrics-exporters/README.md), because /sys/class/hwmon inside a
+      # guest is the PVE host's sensors, not its own.
+      - alert: CpuTemperatureHigh
+        expr: |
+          max by (host) (node_hwmon_temp_celsius{chip=~".*coretemp.*"})
+            >= (min by (host) (node_hwmon_temp_crit_celsius{chip=~".*coretemp.*"}) - 15)
+          and
+          max by (host) (node_hwmon_temp_celsius{chip=~".*coretemp.*"})
+            < (min by (host) (node_hwmon_temp_crit_celsius{chip=~".*coretemp.*"}) - 5)
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.host }} CPU is {{ $value }}C"
+          description: "The hottest core on {{ $labels.host }} has been within 15C of the CPU's own critical temperature for 15+ minutes. Check cooling and what is loading the host; sustained operation this close to Tj max shortens the part's life even though it has not started throttling yet."
+
+      - alert: CpuTemperatureCritical
+        expr: |
+          max by (host) (node_hwmon_temp_celsius{chip=~".*coretemp.*"})
+            >= (min by (host) (node_hwmon_temp_crit_celsius{chip=~".*coretemp.*"}) - 5)
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.host }} CPU is {{ $value }}C"
+          description: "{{ $labels.host }} is within 5C of its CPU critical temperature and is at or near thermal throttling. Check fans, heatsink seating and dust, and whatever is loading the host right now."
