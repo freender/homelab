@@ -1,0 +1,45 @@
+networks:
+  net_overlay:
+    external: true
+
+services:
+  alertmanager:
+    container_name: alertmanager
+    image: prom/alertmanager:v0.28.1
+    user: 1000:1000
+    env_file:
+      - /mnt/cache/appdata/alertmanager/.env
+    entrypoint:
+      - /bin/sh
+      - -ec
+    command:
+      - |
+        : "$${TELEGRAM_TOKEN:?TELEGRAM_TOKEN is required}"
+        : "$${TELEGRAM_CHATID:?TELEGRAM_CHATID is required}"
+        : "$${TELEGRAM_TOKEN_PLEX:?TELEGRAM_TOKEN_PLEX is required}"
+        : "$${TELEGRAM_CHATID_PLEX:?TELEGRAM_CHATID_PLEX is required}"
+        umask 077
+        printf '%s' "$${TELEGRAM_TOKEN}" > /tmp/telegram_token
+        printf '%s' "$${TELEGRAM_TOKEN_PLEX}" > /tmp/telegram_token_plex
+        sed \
+          -e "s/__TELEGRAM_CHATID__/$${TELEGRAM_CHATID}/g" \
+          -e "s/__TELEGRAM_CHATID_PLEX__/$${TELEGRAM_CHATID_PLEX}/g" \
+          /etc/alertmanager/alertmanager.yml.tpl > /tmp/alertmanager.yml
+        exec /bin/alertmanager \
+          --config.file=/tmp/alertmanager.yml \
+          --storage.path=/alertmanager \
+          --web.listen-address=:9093
+    volumes:
+      - /mnt/cache/appdata/alertmanager/alertmanager.yml.tpl:/etc/alertmanager/alertmanager.yml.tpl:ro
+      - /mnt/cache/appdata/alertmanager/data:/alertmanager
+    ports:
+      - 9093:9093
+    restart: always
+    mem_limit: 256m
+    networks:
+      - net_overlay
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.alertmanager.entryPoints: https
+      traefik.http.routers.alertmanager.middlewares: allow-local@file
+      traefik.http.services.alertmanager.loadbalancer.server.port: "9093"

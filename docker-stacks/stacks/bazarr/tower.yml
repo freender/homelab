@@ -1,0 +1,29 @@
+services:
+  bazarr:
+    image: ghcr.io/linuxserver/bazarr:latest
+    container_name: bazarr
+    stop_grace_period: 20s
+    networks:
+      net.internal: {}
+      net_overlay: {}
+    restart: always
+    mem_limit: 2g
+    volumes:
+      - /mnt/cache/appdata/bazarr:/config
+      - /mnt/tank/media:/data
+    environment:
+      PUID: 1000
+      PGID: 1000
+    labels:
+      traefik.enable: 'true'
+      traefik.http.routers.bazarr.entryPoints: 'https'
+      traefik.http.routers.bazarr.middlewares: 'allow-local@file'
+      traefik.http.services.bazarr.loadbalancer.server.port: '6767'
+
+networks:
+  net.internal:
+    external: true
+  net_overlay:
+    external: true
+
+

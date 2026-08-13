@@ -1,0 +1,47 @@
+services:
+  filebot:
+    image: ghcr.io/jlesage/filebot:latest
+    container_name: filebot
+    init: true
+    stop_grace_period: 20s
+    env_file:
+      - .env
+    networks:
+      net.internal: {}
+    restart: always
+    mem_limit: 2g
+    volumes:
+      - /mnt/cache/appdata/filebot:/config
+      - /mnt/tank/media:/data
+      - /mnt/cache/downloads:/downloads
+    environment:
+      FILEBOT_OPTS: "-Dnet.filebot.ssl.trustall=true"
+      AMC_INTERVAL: 30
+      AMC_INPUT_STABLE_TIME: 10
+      AMC_ACTION: move
+      AMC_CONFLICT: auto
+      AMC_MATCH_MODE: opportunistic
+      AMC_ARTWORK: n
+      AMC_MUSIC_FORMAT: '{plex.tail}'
+      AMC_MOVIE_FORMAT: '{ny.ascii()} {"{tmdb-$$tmdbid}"}/{ny.ascii()} {"{tmdb-$$tmdbid}"}'
+      AMC_SERIES_FORMAT: '{plex.tail}'
+      AMC_ANIME_FORMAT: '{plex.tail}'
+      AMC_PROCESS_MUSIC: n
+      AMC_LANG: English
+      USER_ID: 1000
+      GROUP_ID: 1000
+      UMASK: 000
+      DISPLAY_WIDTH: 1920
+      DISPLAY_HEIGHT: 1080
+      SECURE_CONNECTION: 0
+      AMC_CUSTOM_OPTIONS: >-
+        --def movieDB=TheMovieDB
+        --def ut_label=movie
+        --filter "n =~ /^UFC/ && !(n =~ /Prelims|Contender Series/)"
+        --def exec='/config/radarr-rescan.sh {tmdbid}'
+      AMC_INPUT_DIR: /downloads/filebot
+      AMC_OUTPUT_DIR: /data/movies
+      USE_FILEBOT_BETA: 0
+networks:
+  net.internal:
+    external: true

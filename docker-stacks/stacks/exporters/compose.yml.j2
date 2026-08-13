@@ -1,0 +1,37 @@
+# Shared stack: rendered once per host that declares `exporters` in hosts.conf.
+# Host-invariant by construction -- if a host ever needs to differ, move it to
+# stacks/<host>/exporters/compose.yml rather than adding a conditional here.
+networks:
+  net.internal:
+    external: true
+  net_overlay:
+    external: true
+
+services:
+  cadvisor-{{ HOST }}:
+    image: gcr.io/cadvisor/cadvisor:latest
+    container_name: cadvisor-{{ HOST }}
+    init: true
+    stop_grace_period: 20s
+    restart: always
+    mem_limit: 256m
+    privileged: true
+    environment:
+      TZ: 'America/New_York'
+    command:
+      - '--housekeeping_interval=10s'
+      - '--docker_only=true'
+      - '--store_container_labels=false'
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker:/var/lib/docker:ro
+      - /dev/disk:/dev/disk:ro
+    devices:
+      - /dev/kmsg
+    networks:
+      net.internal:
+        aliases: ['{{ HOST }}-cadvisor']
+      net_overlay:
+        aliases: ['{{ HOST }}-cadvisor']

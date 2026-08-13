@@ -1,0 +1,55 @@
+services:
+  plex:
+    image: ghcr.io/linuxserver/plex:latest
+    container_name: plex
+    stop_grace_period: 20s
+    env_file:
+      - .env
+    networks:
+      net.internal: {}
+      net_overlay: {}
+    restart: always
+    devices:
+#      - /dev/dri/card1:/dev/dri/card1
+      - /dev/dri/renderD128:/dev/dri/renderD128
+    group_add:
+      - 44
+      - 993
+    mem_limit: 5g
+    cpus: 4
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:32400/identity"]
+      interval: 30s
+      timeout: 15s
+      retries: 5
+      start_period: 120s
+    ports:
+      - "32400:32400"
+    volumes:
+      - /mnt/cache/appdata/plex/:/config
+      - /mnt/tank/media:/data
+      - /mnt/cache/appdata/plex/transcode:/transcode
+      - /mnt/cache/appdata/plex/downloads:/downloads
+    environment:
+      TZ: America/New_York
+      VERSION: docker
+      PUID: 1000
+      PGID: 1000
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.plex.entryPoints: "https"
+      traefik.http.services.plex.loadbalancer.server.port: "32400"
+      traefik.http.routers.plex.middlewares: "allow-all@file"
+      traefik.http.routers.plex.rule: "Host(`plex.${DOMAIN}`)"
+      traefik.http.routers.plex-cdn.entryPoints: "https"
+      traefik.http.services.plex-cdn.loadbalancer.server.port: "32400"
+      traefik.http.routers.plex-cdn.middlewares: "allow-cdn@file"
+      traefik.http.routers.plex-cdn.rule: "Host(`plex-cdn.${DOMAIN}`)"
+      traefik.http.routers.plex.service: "plex"
+      traefik.http.routers.plex-cdn.service: "plex-cdn"
+
+networks:
+  net.internal:
+    external: true
+  net_overlay:
+    external: true

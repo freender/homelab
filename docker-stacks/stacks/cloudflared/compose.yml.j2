@@ -1,0 +1,28 @@
+# Shared stack: rendered once per host that declares `cloudflared` in hosts.conf.
+# Host-invariant by construction -- if a host ever needs to differ, move it to
+# stacks/<host>/cloudflared/compose.yml rather than adding a conditional here.
+#
+# CLOUDFLARE_TUNNEL_ID comes from the host-local .env, so each host runs its own
+# tunnel from this one definition. net.internal is a per-host bridge, so the
+# container name only has to be unique on its own host.
+networks:
+  net.internal:
+    external: true
+
+services:
+  cloudflared-{{ HOST }}:
+    image: cloudflare/cloudflared:latest
+    container_name: cloudflared-{{ HOST }}
+    init: true
+    stop_grace_period: 20s
+    restart: always
+    mem_limit: 1g
+    env_file:
+      - .env
+    environment:
+      TZ: 'America/New_York'
+    command: tunnel run ${CLOUDFLARE_TUNNEL_ID}
+    volumes:
+      - /mnt/cache/appdata/cloudflared:/etc/cloudflared
+    networks:
+      net.internal: {}

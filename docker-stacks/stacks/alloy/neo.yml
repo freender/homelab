@@ -1,0 +1,33 @@
+networks:
+  net.internal:
+    external: true
+  net_overlay:
+    external: true
+
+services:
+  alloy-neo:
+    image: grafana/alloy:latest
+    container_name: alloy-neo
+    init: true
+    stop_grace_period: 60s
+    restart: always
+    mem_limit: 1g
+    environment:
+      TZ: 'America/New_York'
+    # Explicit listen-addr binds Alloy's HTTP server to all interfaces so it can
+    # be scraped; tower deliberately does not carry this. See README.
+    command:
+      - 'run'
+      - '--server.http.listen-addr=0.0.0.0:12345'
+      - '--storage.path=/var/lib/alloy/data'
+      - '/etc/alloy/config.alloy'
+    # neo has no geoipupdate stack and no endpoints.json, so it mounts neither.
+    volumes:
+      - /var/log:/var/log
+      - /mnt/cache/appdata/traefik/logs:/traefik/logs
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /mnt/cache/appdata/alloy/config.alloy:/etc/alloy/config.alloy
+      - /mnt/cache/appdata/alloy/data:/var/lib/alloy/data
+    networks:
+      net.internal: {}
+      net_overlay: {}

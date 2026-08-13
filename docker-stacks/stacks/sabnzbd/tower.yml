@@ -1,0 +1,32 @@
+services:
+  sabnzbd:
+    image: ghcr.io/linuxserver/sabnzbd:latest
+    container_name: sabnzbd
+    stop_grace_period: 20s
+    networks:
+      net.internal: {}
+      net_overlay: {}
+    restart: always
+    mem_limit: 4g
+    cpus: 2
+    volumes:
+      - /mnt/cache/appdata/sabnzbd:/config
+      - /mnt/cache/media/downloads:/data/downloads
+      - /mnt/cache/downloads:/downloads
+    environment:
+      PUID: 1000
+      PGID: 1000
+      UMASK: 022
+    labels:
+      traefik.enable: 'true'
+      traefik.http.routers.sabnzbd.entryPoints: 'https'
+      traefik.http.routers.sabnzbd.middlewares: 'allow-local@file'
+      traefik.http.services.sabnzbd.loadbalancer.server.port: '8080'
+
+networks:
+  net.internal:
+    external: true
+  net_overlay:
+    external: true
+
+

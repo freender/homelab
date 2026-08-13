@@ -1,0 +1,31 @@
+# Shared stack: rendered once per host that declares `geoipupdate` in hosts.conf.
+# Host-invariant by construction -- if a host ever needs to differ, move it to
+# stacks/<host>/geoipupdate/compose.yml rather than adding a conditional here.
+#
+# GEOIPUPDATE_ACCOUNT_ID / GEOIPUPDATE_LICENSE_KEY come from the host-local
+# .env, which is deliberately not repo-managed.
+networks:
+  net.internal:
+    external: true
+
+services:
+  geoipupdate-{{ HOST }}:
+    image: ghcr.io/maxmind/geoipupdate:latest
+    container_name: geoipupdate-{{ HOST }}
+    init: true
+    stop_grace_period: 20s
+    restart: always
+    mem_limit: 1g
+    user: '1000:1000'
+    env_file:
+      - .env
+    environment:
+      TZ: 'America/New_York'
+      GEOIPUPDATE_ACCOUNT_ID: ${GEOIPUPDATE_ACCOUNT_ID}
+      GEOIPUPDATE_LICENSE_KEY: ${GEOIPUPDATE_LICENSE_KEY}
+      GEOIPUPDATE_EDITION_IDS: 'GeoLite2-ASN GeoLite2-City GeoLite2-Country'
+      GEOIPUPDATE_FREQUENCY: '72'
+    volumes:
+      - /mnt/cache/appdata/geoipupdate:/usr/share/GeoIP
+    networks:
+      net.internal: {}

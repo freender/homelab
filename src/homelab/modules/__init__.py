@@ -9,6 +9,7 @@ from .apcupsd import deploy as deploy_apcupsd
 from .apt_upgrade import deploy as deploy_apt_upgrade
 from .disk_spindown import deploy as deploy_disk_spindown
 from .docker import deploy as deploy_docker
+from .docker_stacks import deploy as deploy_docker_stacks
 from .keepalived import deploy as deploy_keepalived
 from .metrics_exporters import deploy as deploy_metrics_exporters
 from .monitoring_config import deploy as deploy_monitoring_config
@@ -50,6 +51,10 @@ MODULES: dict[str, ModuleDefinition] = {
     "docker": ModuleDefinition(
         name="Docker Management Scripts",
         deploy=deploy_docker,
+    ),
+    "docker-stacks": ModuleDefinition(
+        name="Docker Compose Stacks",
+        deploy=deploy_docker_stacks,
     ),
     "disk-spindown": ModuleDefinition(
         name="Disk Spindown",
@@ -152,6 +157,9 @@ MODULE_ORDER = [
     "ubuntu-setup",
     "zfs-automation",
     "docker",
+    # Engine, swarm membership and the overlay must exist before any stack that
+    # attaches to net_overlay is reconciled.
+    "docker-stacks",
     "apt-upgrade",
     "pve-upgrade",
 ]

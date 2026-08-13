@@ -1,0 +1,109 @@
+services:
+  immich-postgresql:
+    image: ghcr.io/immich-app/postgres:17-vectorchord0.5.3
+    user: "1000:1000"
+    container_name: immich-postgresql
+    networks:
+      net.internal: {}
+    restart: always
+    mem_limit: 1g
+    cpus: 2
+    env_file:
+      - .env
+    volumes:
+      - /mnt/cache/appdata/immich-postgresql:/var/lib/postgresql/data
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_INITDB_ARGS: --data-checksums
+
+  immich-redis:
+    image: redis:8.6.3-alpine
+    container_name: immich-redis
+    networks:
+      net.internal: {}
+    restart: always
+    mem_limit: 1g
+    cpus: 2
+    env_file:
+      - .env
+    command: /bin/sh -c "redis-server --requirepass $${IMMICH_REDIS_PASSWORD}"
+
+
+  immich-machine-learning:
+    image: ghcr.io/immich-app/immich-machine-learning:release-openvino
+    container_name: immich-machine-learning
+    devices:
+      - /dev/dri/renderD128:/dev/dri/renderD128
+    networks:
+      net.internal: {}
+    restart: always
+    mem_limit: 8g
+    cpus: 2
+    env_file:
+      - .env
+    volumes:
+      - /mnt/cache/appdata/immich/cache/ml:/cache
+    environment:
+      MACHINE_LEARNING_CACHE_FOLDER: /cache
+  immich:
+    image: ghcr.io/immich-app/immich-server:release
+    container_name: immich
+    stop_grace_period: 20s
+    networks:
+      net.internal: {}
+      net_overlay: {}
+    labels:
+      traefik.enable: true
+      traefik.docker.network: net_overlay
+      traefik.http.routers.immich.entryPoints: https
+      traefik.http.routers.immich.rule: Host(`immich.${DOMAIN}`)
+      traefik.http.routers.immich.middlewares: allow-local@file
+      traefik.http.services.immich.loadbalancer.server.port: 8080
+    restart: always
+    devices:
+#      - /dev/dri/card1:/dev/dri/card1
+      - /dev/dri/renderD128:/dev/dri/renderD128
+    ports:
+      - "8080:8080"
+    mem_limit: 6g
+    cpus: 2
+    env_file:
+      - .env
+    volumes:
+      - /mnt/cache/appdata/immich/encoded-video:/data/encoded-video
+      - /mnt/cache/appdata/immich/thumbs:/data/thumbs
+      - /mnt/cache/appdata/immich/backups:/data/backups
+      - /mnt/cache/appdata/immich/profile:/data/profile
+      - /mnt/cache/pictures/library:/data/library
+      - /mnt/cache/pictures/upload:/data/upload
+      - /etc/localtime:/etc/localtime:ro
+    environment:
+      IMMICH_MEDIA_LOCATION: /data
+      IMMICH_PORT: 8080
+      DB_HOSTNAME: immich-postgresql
+      DB_USERNAME: ${DB_USERNAME}
+      DB_PASSWORD: ${DB_PASSWORD}
+      DB_DATABASE_NAME: ${DB_DATABASE_NAME}
+      DB_PORT: 5432
+      REDIS_HOSTNAME: immich-redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${IMMICH_REDIS_PASSWORD}
+      TZ: America/New_York
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://localhost:8080/api/server/ping').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 90s
+    depends_on:
+      - immich-postgresql
+      - immich-redis
+      - immich-machine-learning
+
+networks:
+  net.internal:
+    external: true
+  net_overlay:
+    external: true

@@ -1,0 +1,27 @@
+networks:
+  net.internal:
+    external: true
+  net_overlay:
+    external: true
+
+services:
+  alloy-tower:
+    image: grafana/alloy:latest
+    container_name: alloy-tower
+    init: true
+    stop_grace_period: 60s
+    restart: always
+    mem_limit: 1g
+    environment:
+      TZ: 'America/New_York'
+    volumes:
+      - /var/log:/var/log
+      - /mnt/cache/appdata/traefik/logs:/traefik/logs
+      - /mnt/cache/appdata/geoipupdate:/etc/alloy/geoip
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /mnt/cache/appdata/alloy/config.alloy:/etc/alloy/config.alloy
+      - /mnt/cache/appdata/alloy/endpoints.json:/etc/alloy/endpoints.json
+      - /mnt/cache/appdata/alloy/data:/var/lib/alloy/data
+    networks:
+      net.internal: {}
+      net_overlay: {}

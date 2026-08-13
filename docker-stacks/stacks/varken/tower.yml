@@ -1,0 +1,20 @@
+services:
+  varken:
+    image: ghcr.io/freender/varken:develop
+    container_name: varken
+    init: true
+    stop_grace_period: 20s
+    networks:
+      net.internal: {}
+    restart: always
+    user: "1000:1000"
+    mem_limit: 1g
+    volumes:
+      - /mnt/cache/appdata/varken:/config
+    environment:
+      TZ: America/New_York
+networks:
+  net.internal:
+    external: true
+
+

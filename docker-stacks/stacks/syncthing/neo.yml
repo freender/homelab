@@ -1,0 +1,32 @@
+services:
+  syncthing:
+    image: ghcr.io/linuxserver/syncthing:latest
+    container_name: syncthing
+    stop_grace_period: 20s
+    hostname: neo
+    networks:
+      net.internal: {}
+      net_overlay: {}
+    restart: always
+    mem_limit: 1g
+    ports:
+      - "8384:8384"
+      - "22000:22000/tcp"
+      - "22000:22000/udp"
+      - "21027:21027/udp"
+    volumes:
+      - /mnt/cache/appdata/syncthing:/config
+      - /mnt/cache/obsidian:/obsidian
+      - /mnt/cache/logseq:/logseq
+      - /mnt/cache/documents:/documents
+      - /mnt/cache/WSL-Backup:/WSL-Backup
+    environment:
+      PUID: 1000
+      PGID: 1000
+      UMASK: 022
+      
+networks:
+  net.internal:
+    external: true
+  net_overlay:
+    external: true

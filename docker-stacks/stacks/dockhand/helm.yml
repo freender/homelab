@@ -1,0 +1,28 @@
+networks:
+  net.internal:
+    external: true
+  net_overlay:
+    external: true
+
+services:
+  dockhand:
+    image: fnsys/dockhand:latest
+    container_name: dockhand
+    restart: always
+    environment:
+      TZ: 'America/New_York'
+    env_file:
+      - .env
+    networks:
+      net.internal:
+      net_overlay:
+    labels:
+      traefik.enable: true
+      traefik.http.routers.dockhand.entryPoints: https
+      traefik.http.routers.dockhand.middlewares: allow-local@file
+      traefik.http.services.dockhand.loadbalancer.server.port: 3000
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /mnt/cache/appdata/dockhand/data:/app/data
+      - /mnt/cache/appdata:/mnt/cache/appdata
+    mem_limit: 512m

@@ -54,6 +54,46 @@ def check_feature_registry(root: Path) -> None:
     print_ok(f"{len(declared)} feature(s) map to registered modules")
 
 
+def check_stack_placement(root: Path) -> None:
+    """Cross-check declared compose-stack placement against the stack tree.
+
+    hosts.conf is the canonical answer to "which host runs <app>". That is only
+    true if it cannot drift from the payload, so a declared stack with no compose
+    file, and a compose directory no host declares, are both hard failures. The
+    second case is the important one: without it a `git mv` between host
+    directories would relocate a service with no inventory change to review.
+    """
+    from .modules.docker_stacks import (
+        all_stacks,
+        check_placement,
+        check_shared_orphans,
+        check_stack_tree,
+        shared_stacks,
+    )
+
+    registry = default_registry(root)
+    stack_hosts = registry.list_hosts(feature="docker-stacks")
+    if not stack_hosts:
+        return
+
+    total = 0
+    try:
+        check_stack_tree(root)
+        for host in stack_hosts:
+            check_placement(root, host)
+            total += len(registry.get(host, "docker-stacks.stacks", []) or [])
+        check_shared_orphans(root)
+    except ValueError as error:
+        raise click.ClickException(str(error)) from error
+
+    shared = len(shared_stacks(root))
+    print_ok(
+        f"{total} placement(s) of {len(all_stacks(root))} stack(s) across "
+        f"{len(stack_hosts)} host(s); {shared} shared, "
+        f"{len(all_stacks(root)) - shared} host-specific"
+    )
+
+
 # --- Public repo leak check -------------------------------------------------
 #
 # This repo is public (AGENTS.md "Public Repo Boundary"). These checks are the
@@ -224,6 +264,36 @@ def list_hosts(feature: str | None) -> None:
         click.echo(host)
 
 
+@hosts.command("stacks")
+@click.option("--host", help="Only show stacks for this host.")
+@click.option("--stack", help="Only show hosts running this stack.")
+def list_stacks(host: str | None, stack: str | None) -> None:
+    """Answer 'which host runs <app>' from hosts.conf.
+
+    Reads the declared placement, not the directory tree, so the output is the
+    inventory's answer. `validate` is what guarantees the two agree.
+    """
+    registry = default_registry(repo_root())
+    target_hosts = registry.list_hosts(feature="docker-stacks")
+    if host is not None:
+        if host not in target_hosts:
+            raise click.ClickException(f"host '{host}' does not enable docker-stacks")
+        target_hosts = [host]
+
+    rows: list[tuple[str, str]] = []
+    for target in target_hosts:
+        declared = registry.get(target, "docker-stacks.stacks", []) or []
+        for name in sorted(str(entry) for entry in declared):
+            if stack is None or name == stack:
+                rows.append((name, target))
+
+    if stack is not None and not rows:
+        raise click.ClickException(f"no host declares stack '{stack}'")
+
+    for name, target in sorted(rows):
+        click.echo(f"{name}\t{target}")
+
+
 @main.command()
 @click.option("--dry-run", is_flag=True, default=False, help="Preview changes only.")
 @click.option("--force", is_flag=True, default=False, help="Force remote updates.")
@@ -296,6 +366,7 @@ def validate() -> None:
 
     print_action("Inventory")
     check_feature_registry(root)
+    check_stack_placement(root)
 
     print_action("Leak Check")
     check_public_repo_leaks(root)
@@ -406,10 +477,7 @@ def secrets_cache_status() -> None:
         print_sub("Files: none")
         return
     for file_info in files:
-        print_sub(
-            f"{file_info['name']} age={file_info['age_seconds']}s "
-            f"size={file_info['size']}B"
-        )
+        print_sub(f"{file_info['name']} age={file_info['age_seconds']}s size={file_info['size']}B")
 
 
 @secrets.command("cache-clear")

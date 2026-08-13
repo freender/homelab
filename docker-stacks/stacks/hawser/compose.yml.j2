@@ -1,0 +1,24 @@
+# Shared stack: rendered once per host that declares `hawser` in hosts.conf.
+# Host-invariant by construction -- if a host ever needs to differ, move it to
+# stacks/<host>/hawser/compose.yml rather than adding a conditional here.
+networks:
+  net_overlay:
+    external: true
+
+services:
+  hawser-{{ HOST }}:
+    image: ghcr.io/finsys/hawser:latest
+    container_name: hawser-{{ HOST }}
+    init: true
+    stop_grace_period: 20s
+    restart: always
+    mem_limit: 256m
+    env_file:
+      - .env
+    environment:
+      TZ: 'America/New_York'
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /mnt/cache/appdata/hawser/stacks:/data/stacks
+    networks:
+      net_overlay: {}

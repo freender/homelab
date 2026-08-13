@@ -1,0 +1,24 @@
+networks:
+  net.internal:
+    external: true
+  net_overlay:
+    external: true
+
+services:
+  meshcmd:
+    image: brytonsalisbury/meshcmd:amd64
+    container_name: meshcmd
+    networks:
+      net.internal:
+      net_overlay:
+    environment:
+      TZ: 'America/New_York'
+    labels:
+      traefik.enable: true
+      traefik.http.routers.meshcmd.entryPoints: https
+      traefik.http.routers.meshcmd.middlewares: allow-local@file
+      traefik.http.services.meshcmd.loadbalancer.server.port: 3000
+    volumes:
+      - /mnt/cache/appdata/meshcmd:/app/data:rw
+    restart: always
+    mem_limit: 1g

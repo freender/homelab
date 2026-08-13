@@ -1,0 +1,30 @@
+services:
+  radarr:
+    image: ghcr.io/linuxserver/radarr:latest
+    container_name: radarr
+    stop_grace_period: 20s
+    networks:
+      net.internal: {}
+      net_overlay: {}
+    restart: always
+    mem_limit: 1g
+    volumes:
+      - /mnt/cache/appdata/radarr:/config
+      - /mnt/tank/media:/data
+      - /mnt/cache/downloads:/downloads
+    environment:
+      PUID: 1000
+      PGID: 1000
+    labels:
+      traefik.enable: 'true'
+      traefik.http.routers.radarr.entryPoints: 'https'
+      traefik.http.routers.radarr.middlewares: 'allow-local@file'
+      traefik.http.services.radarr.loadbalancer.server.port: '7878'
+
+networks:
+  net.internal:
+    external: true
+  net_overlay:
+    external: true
+
+

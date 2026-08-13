@@ -55,17 +55,17 @@ groups:
         labels: {severity: warning, category: docker, site: home, host: tower, name: alloy-tower}
         annotations: {summary: "tower / alloy-tower is missing", description: "Important app container has not been seen by cAdvisor for 5 minutes."}
       - alert: ImportantContainerMissing
-        expr: absent_over_time(container_last_seen{job="cadvisor", host="tower", name="cloudflared"}[5m])
-        labels: {severity: warning, category: docker, site: home, host: tower, name: cloudflared}
-        annotations: {summary: "tower / cloudflared is missing", description: "Important app container has not been seen by cAdvisor for 5 minutes."}
+        expr: absent_over_time(container_last_seen{job="cadvisor", host="tower", name="cloudflared-tower"}[5m])
+        labels: {severity: warning, category: docker, site: home, host: tower, name: cloudflared-tower}
+        annotations: {summary: "tower / cloudflared-tower is missing", description: "Important app container has not been seen by cAdvisor for 5 minutes."}
       - alert: ImportantContainerMissing
         expr: absent_over_time(container_last_seen{job="cadvisor", host="tower", name="filebot"}[5m])
         labels: {severity: warning, category: docker, site: home, host: tower, name: filebot}
         annotations: {summary: "tower / filebot is missing", description: "Important app container has not been seen by cAdvisor for 5 minutes."}
       - alert: ImportantContainerMissing
-        expr: absent_over_time(container_last_seen{job="cadvisor", host="tower", name="geoipupdate"}[5m])
-        labels: {severity: warning, category: docker, site: home, host: tower, name: geoipupdate}
-        annotations: {summary: "tower / geoipupdate is missing", description: "Important app container has not been seen by cAdvisor for 5 minutes."}
+        expr: absent_over_time(container_last_seen{job="cadvisor", host="tower", name="geoipupdate-tower"}[5m])
+        labels: {severity: warning, category: docker, site: home, host: tower, name: geoipupdate-tower}
+        annotations: {summary: "tower / geoipupdate-tower is missing", description: "Important app container has not been seen by cAdvisor for 5 minutes."}
       - alert: ImportantContainerMissing
         expr: absent_over_time(container_last_seen{job="cadvisor", host="tower", name="hawser-tower"}[5m])
         labels: {severity: warning, category: docker, site: home, host: tower, name: hawser-tower}
@@ -87,9 +87,9 @@ groups:
         labels: {severity: warning, category: docker, site: home, host: helm, name: cloudfirewall}
         annotations: {summary: "helm / cloudfirewall is missing", description: "Important app container has not been seen by cAdvisor for 5 minutes."}
       - alert: ImportantContainerMissing
-        expr: absent_over_time(container_last_seen{job="cadvisor", host="helm", name="cloudflared"}[5m])
-        labels: {severity: warning, category: docker, site: home, host: helm, name: cloudflared}
-        annotations: {summary: "helm / cloudflared is missing", description: "Important app container has not been seen by cAdvisor for 5 minutes."}
+        expr: absent_over_time(container_last_seen{job="cadvisor", host="helm", name="cloudflared-helm"}[5m])
+        labels: {severity: warning, category: docker, site: home, host: helm, name: cloudflared-helm}
+        annotations: {summary: "helm / cloudflared-helm is missing", description: "Important app container has not been seen by cAdvisor for 5 minutes."}
       - alert: ImportantContainerMissing
         expr: absent_over_time(container_last_seen{job="cadvisor", host="helm", name="dockhand"}[5m])
         labels: {severity: warning, category: docker, site: home, host: helm, name: dockhand}
@@ -99,9 +99,9 @@ groups:
         labels: {severity: warning, category: docker, site: home, host: helm, name: food}
         annotations: {summary: "helm / food is missing", description: "Important app container has not been seen by cAdvisor for 5 minutes."}
       - alert: ImportantContainerMissing
-        expr: absent_over_time(container_last_seen{job="cadvisor", host="helm", name="geoipupdate"}[5m])
-        labels: {severity: warning, category: docker, site: home, host: helm, name: geoipupdate}
-        annotations: {summary: "helm / geoipupdate is missing", description: "Important app container has not been seen by cAdvisor for 5 minutes."}
+        expr: absent_over_time(container_last_seen{job="cadvisor", host="helm", name="geoipupdate-helm"}[5m])
+        labels: {severity: warning, category: docker, site: home, host: helm, name: geoipupdate-helm}
+        annotations: {summary: "helm / geoipupdate-helm is missing", description: "Important app container has not been seen by cAdvisor for 5 minutes."}
       - alert: ImportantContainerMissing
         expr: absent_over_time(container_last_seen{job="cadvisor", host="helm", name="grafana"}[5m])
         labels: {severity: warning, category: docker, site: home, host: helm, name: grafana}

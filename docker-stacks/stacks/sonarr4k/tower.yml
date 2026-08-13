@@ -1,0 +1,34 @@
+services:
+  sonarr4k:
+    image: ghcr.io/linuxserver/sonarr:latest
+    container_name: sonarr4k
+    stop_grace_period: 20s
+    env_file:
+      - .env
+    networks:
+      net.internal: {}
+      net_overlay: {}
+    restart: always
+    mem_limit: 1g
+    volumes:
+      - /mnt/cache/appdata/sonarr4k:/config
+      - /mnt/tank/media:/data
+      - /mnt/cache/downloads:/downloads
+    environment:
+      PUID: 1000
+      PGID: 1000
+      UMASK: 000
+    labels:
+      traefik.enable: 'true'
+      traefik.http.routers.sonarr4k.entryPoints: 'https'
+      traefik.http.routers.sonarr4k.middlewares: 'allow-local@file'
+      traefik.http.services.sonarr4k.loadbalancer.server.port: '8989'
+      traefik.http.routers.sonarr4k.rule: 'Host(`sonarr4k.${DOMAIN}`)'
+
+networks:
+  net.internal:
+    external: true
+  net_overlay:
+    external: true
+
+

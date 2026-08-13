@@ -1,0 +1,229 @@
+# tower is the traefik-sync SOURCE: it runs ACME, owns acme.json read-write, and
+# serves /source to the helm and neo clients. That asymmetry is intentional --
+# do not "normalize" acme.json to :ro here.
+networks:
+  net.internal:
+    name: net.internal
+  net_overlay:
+    external: true
+
+services:
+  # Dependencies - start these first
+  socket-proxy-tower:
+    image: ghcr.io/linuxserver/socket-proxy:latest
+    container_name: socket-proxy-tower
+    init: true
+    stop_grace_period: 20s
+    restart: always
+    mem_limit: 1g
+    environment:
+      TZ: 'America/New_York'
+      DISABLE_IPV6: 1
+      CONTAINERS: 1
+      # POST: 1 here vs POST: 0 on helm/neo -- unverified divergence, left as-is.
+      POST: 1
+      INFO: 1
+      EVENTS: 1
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      net.internal: {}
+      net_overlay: {}
+
+  crowdsec-tower:
+    image: ghcr.io/crowdsecurity/crowdsec:latest
+    container_name: crowdsec-tower
+    init: true
+    stop_grace_period: 20s
+    restart: always
+    mem_limit: 1g
+    environment:
+      TZ: 'America/New_York'
+      COLLECTIONS: 'crowdsecurity/traefik crowdsecurity/http-cve firix/authentik'
+      POSTOVERFLOWS: 'crowdsecurity/rdns'
+    # tower runs crowdsec as root with a plugin chown; helm/neo run it as
+    # 1000:1000. Two different fixes for the same problem -- unverified, kept.
+    entrypoint:
+      - /bin/bash
+      - -lc
+      - chown -R root:root /usr/local/lib/crowdsec/plugins && exec /docker_start.sh
+    volumes:
+      - /mnt/cache/appdata/crowdsec/data:/var/lib/crowdsec/data
+      - /mnt/cache/appdata/crowdsec:/etc/crowdsec
+      - /mnt/cache/appdata/traefik/logs:/var/log/traefik:ro
+    networks:
+      net.internal:
+        aliases:
+          - crowdsec
+    healthcheck:
+      test: ["CMD", "cscli", "lapi", "status"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  traefik-redis-tower:
+    image: redis:8.6.3-alpine
+    container_name: traefik-redis-tower
+    init: true
+    stop_grace_period: 20s
+    restart: always
+    mem_limit: 1g
+    env_file:
+      - .env
+    environment:
+      TZ: 'America/New_York'
+    command: /bin/sh -c "redis-server --requirepass $${REDIS_PASS}"
+    networks:
+      net.internal: {}
+      net_overlay: {}
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "$${REDIS_PASS}", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+
+  # Named for its target: this instance publishes tower's routes into helm's
+  # redis. Every kop container is <host>-to-<peer> so the mesh direction is
+  # readable without opening REDIS_ADDR.
+  traefik-kop-tower-to-helm:
+    image: ghcr.io/jittering/traefik-kop:latest
+    container_name: traefik-kop-tower-to-helm
+    hostname: tower
+    init: true
+    stop_grace_period: 20s
+    restart: always
+    mem_limit: 1g
+    env_file:
+      - .env
+    environment:
+      TZ: 'America/New_York'
+      KOP_HOSTNAME: tower
+      REDIS_ADDR: traefik-redis-helm:6379
+      REDIS_PASSWORD: $${REDIS_PASS}
+      SKIP_REPLACE: 1
+      KOP_POLL_INTERVAL: 60
+      DOCKER_CONFIG: /config.yaml
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /mnt/cache/appdata/traefik-kop/config.yaml:/config.yaml:ro
+    networks:
+      net.internal: {}
+      net_overlay: {}
+    depends_on:
+      traefik-redis-tower:
+        condition: service_healthy
+        restart: true
+
+  traefik-kop-tower-to-neo:
+    image: ghcr.io/jittering/traefik-kop:latest
+    container_name: traefik-kop-tower-to-neo
+    hostname: tower
+    init: true
+    stop_grace_period: 20s
+    restart: always
+    mem_limit: 1g
+    env_file:
+      - .env
+    environment:
+      TZ: 'America/New_York'
+      KOP_HOSTNAME: tower
+      REDIS_ADDR: traefik-redis-neo:6379
+      REDIS_PASSWORD: $${REDIS_PASS}
+      SKIP_REPLACE: 1
+      KOP_POLL_INTERVAL: 60
+      DOCKER_CONFIG: /config.yaml
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /mnt/cache/appdata/traefik-kop/config.yaml:/config.yaml:ro
+    networks:
+      net.internal: {}
+      net_overlay: {}
+    depends_on:
+      traefik-redis-tower:
+        condition: service_healthy
+        restart: true
+
+  traefik-tower:
+    image: ghcr.io/traefik/traefik:latest
+    container_name: traefik-tower
+    init: true
+    stop_grace_period: 20s
+    restart: always
+    mem_limit: 1g
+    user: 1000:1000
+    ports:
+      - '80:80'
+      - '443:443'
+    env_file:
+      - .env
+    environment:
+      TZ: 'America/New_York'
+      CF_DNS_API_TOKEN: ${TRAEFIK_DNS_API}
+    command: >
+      sh -c '
+        until nc -w 1 traefik-redis-tower 6379 < /dev/null; do
+          echo "Waiting for Redis...";
+          sleep 2;
+        done;
+        echo "Redis is up, starting Traefik";
+        exec traefik
+      '
+    volumes:
+      - /mnt/cache/appdata/traefik/traefik.yml:/etc/traefik/traefik.yml:ro
+      # rw: tower is the ACME issuer and the traefik-sync source of truth.
+      - /mnt/cache/appdata/traefik/acme.json:/etc/traefik/acme.json
+      - /mnt/cache/appdata/traefik/fileConfig.yml:/etc/traefik/fileConfig.yml:ro
+      - /mnt/cache/appdata/traefik/logs:/etc/traefik/logs:rw
+      - /mnt/cache/appdata/traefik/plugins-storage:/plugins-storage:rw
+    networks:
+      net.internal: {}
+      net_overlay: {}
+    labels:
+      traefik.enable: 'true'
+      traefik.http.routers.traefik-tower.rule: Host(`traefik-tower.${DOMAIN}`)
+      traefik.http.routers.traefik-tower.entryPoints: 'https'
+      traefik.http.routers.traefik-tower.service: 'api@internal'
+      traefik.http.routers.traefik-tower.middlewares: 'allow-local@file'
+      traefik.http.services.traefik-tower.loadbalancer.server.port: '8183'
+      traefik.http.routers.traefik-tower-ping.rule: Host(`traefik-tower.${DOMAIN}`) && PathPrefix(`/ping`)
+      traefik.http.routers.traefik-tower-ping.entryPoints: 'https'
+      traefik.http.routers.traefik-tower-ping.service: 'ping@internal'
+      traefik.http.routers.traefik-tower-ping.middlewares: 'allow-cdn-and-local@file'
+    healthcheck:
+      test: ["CMD", "traefik", "healthcheck", "--ping"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    depends_on:
+      socket-proxy-tower:
+        condition: service_started
+      crowdsec-tower:
+        condition: service_started
+      traefik-redis-tower:
+        condition: service_healthy
+        restart: true
+      traefik-kop-tower-to-helm:
+        condition: service_started
+      traefik-kop-tower-to-neo:
+        condition: service_started
+
+  traefik-sync-tower:
+    image: ghcr.io/freender/traefik-sync:main
+    container_name: traefik-sync-tower
+    init: true
+    stop_grace_period: 20s
+    restart: always
+    mem_limit: 128m
+    environment:
+      TZ: 'America/New_York'
+      MODE: server
+      SERVE_PATH: /source
+      LISTEN_PORT: 8080
+      API_TOKEN: ${TRAEFIK_SYNC_API_TOKEN}
+    volumes:
+      - /mnt/cache/appdata/traefik:/source:ro
+    networks:
+      net_overlay: {}

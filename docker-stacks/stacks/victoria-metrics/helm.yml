@@ -1,0 +1,23 @@
+networks:
+  net.internal:
+    external: true
+  net_overlay:
+    external: true
+
+services:
+  victoria-metrics:
+    container_name: victoria-metrics
+    image: victoriametrics/victoria-metrics:v1.117.1
+    user: 1000:1000
+    volumes:
+      - /mnt/cache/appdata/victoria-metrics:/victoria-metrics-data
+    ports:
+      - 8428:8428
+    command:
+      - "-retentionPeriod=1y"
+      - "-dedup.minScrapeInterval=10s"
+    restart: always
+    mem_limit: 1g
+    networks:
+      - net.internal
+      - net_overlay

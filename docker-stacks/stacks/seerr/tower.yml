@@ -1,0 +1,45 @@
+services:
+  seerr:
+    image: ghcr.io/seerr-team/seerr:latest
+    init: true
+    container_name: seerr
+    stop_grace_period: 20s
+    env_file:
+      - .env
+    networks:
+      net.internal: {}
+      net_overlay: {}
+    restart: always
+    mem_limit: 1g
+    volumes:
+      - /mnt/cache/appdata/seerr:/app/config 
+    environment:
+      TZ: America/New_York
+    healthcheck:
+      test: wget --no-verbose --tries=1 --spider http://localhost:5055/api/v1/status || exit 1
+      start_period: 20s
+      timeout: 3s
+      interval: 15s
+      retries: 3
+    labels:
+      traefik.enable: 'true'
+      
+      # Main router - seerr.${DOMAIN}
+      traefik.http.routers.seerr.entryPoints: 'https'
+      traefik.http.routers.seerr.rule: 'Host(`seerr.${DOMAIN}`)'
+      traefik.http.routers.seerr.middlewares: 'allow-all@file'
+      traefik.http.routers.seerr.service: 'seerr'
+      traefik.http.services.seerr.loadbalancer.server.port: '5055'
+      
+      # CDN router - seerr-cdn.${DOMAIN}
+      traefik.http.routers.seerr-cdn.entryPoints: 'https'
+      traefik.http.routers.seerr-cdn.rule: 'Host(`seerr-cdn.${DOMAIN}`)'
+      traefik.http.routers.seerr-cdn.middlewares: 'allow-cdn@file'
+      traefik.http.routers.seerr-cdn.service: 'seerr-cdn'
+      traefik.http.services.seerr-cdn.loadbalancer.server.port: '5055'
+
+networks:
+  net.internal:
+    external: true
+  net_overlay:
+    external: true

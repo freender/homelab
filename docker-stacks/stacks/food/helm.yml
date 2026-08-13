@@ -1,0 +1,41 @@
+networks:
+  net.internal:
+    external: true
+  net_overlay:
+    external: true
+
+services:
+  food:
+    container_name: food
+    image: ghcr.io/mealie-recipes/mealie:latest
+    volumes:
+      - /mnt/cache/appdata/food/:/app/data
+    environment:
+      TZ: 'America/New_York'
+      ALLOW_SIGNUP: false
+      BASE_URL: ${BASE_URL}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      PUID: "1000"
+      PGID: "1000"
+      WEB_CONCURRENCY: "1"
+      MAX_WORKERS: "1"
+      DB_ENGINE: "sqlite"
+      DEFAULT_EMAIL: ${DEFAULT_EMAIL}
+      SMTP_FROM_EMAIL: ${SMTP_FROM_EMAIL}
+      SMTP_HOST: ${SMTP_HOST}
+      SMTP_USER: ${SMTP_USER}
+      SMTP_PASSWORD: ${SMTP_PASSWORD}
+      SMTP_PORT: 587
+      DEFAULT_GROUP: "home"
+    env_file:
+      - .env
+    labels:
+      traefik.enable: true
+      traefik.http.routers.food.entryPoints: https
+      traefik.http.routers.food.middlewares: allow-local@file
+      traefik.http.services.food.loadbalancer.server.port: 9000
+    restart: always
+    mem_limit: 1g
+    networks:
+      net.internal:
+      net_overlay:

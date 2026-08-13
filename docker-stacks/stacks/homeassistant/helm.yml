@@ -1,0 +1,50 @@
+networks:
+  net.internal:
+    external: true
+  net_overlay:
+    external: true
+  net.external:
+    name: net.external
+    driver: macvlan
+    enable_ipv6: false
+    driver_opts:
+      parent: nic0
+    ipam:
+      config:
+        - subnet: 10.0.40.0/24
+          gateway: 10.0.40.1
+          ip_range: 10.0.40.0/27
+
+services:
+  homeassistant:
+    container_name: homeassistant
+    stop_grace_period: 20s
+    env_file:
+      - .env
+    image: "ghcr.io/linuxserver/homeassistant:latest"    
+    environment:
+      TZ: 'America/New_York'
+      PUID: 1000
+      PGID: 1000
+    labels:
+      traefik.enable: true
+      traefik.http.routers.homeassistant.entryPoints: https
+      traefik.http.routers.homeassistant.middlewares: allow-local@file
+      traefik.http.services.homeassistant.loadbalancer.server.port: 8123
+      traefik.http.routers.homeassistant.rule: Host(`homeassistant.${DOMAIN}`)
+      traefik.http.routers.homeassistant-cdn.rule: Host(`homeassistant-cdn.${DOMAIN}`)
+      traefik.http.routers.homeassistant-cdn.entryPoints: https
+      traefik.http.routers.homeassistant-cdn.middlewares: allow-cdn@file
+      traefik.http.services.homeassistant-cdn.loadbalancer.server.port: 8123
+      traefik.http.routers.homeassistant-cdn.service: homeassistant-cdn
+      traefik.http.routers.homeassistant.service: homeassistant
+    volumes:
+      - /mnt/cache/appdata/homeassistant:/config
+    restart: always
+    mem_limit: 2g
+    networks:
+      net.internal:
+      net_overlay:
+      net.external:
+        ipv4_address: 10.0.40.46
+        mac_address: "02:42:0a:00:28:2e"

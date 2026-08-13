@@ -1,0 +1,237 @@
+# neo is a traefik-sync CLIENT: it receives certs from tower and mounts
+# acme.json :ro. Only tower runs ACME.
+networks:
+  net.internal:
+    name: net.internal
+  net_overlay:
+    external: true
+
+services:
+  # Dependencies - start these first
+  socket-proxy-neo:
+    image: ghcr.io/linuxserver/socket-proxy:latest
+    container_name: socket-proxy-neo
+    init: true
+    stop_grace_period: 20s
+    restart: always
+    mem_limit: 1g
+    environment:
+      TZ: 'America/New_York'
+      DISABLE_IPV6: 1
+      CONTAINERS: 1
+      POST: 0
+      SWARM: 1
+      VERSION: 1
+      INFO: 1
+      EVENTS: 1
+      NETWORKS: 1
+      SERVICES: 1
+      TASKS: 1
+      NODES: 1
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      net.internal: {}
+      net_overlay: {}
+
+  crowdsec-neo:
+    image: ghcr.io/crowdsecurity/crowdsec:latest
+    container_name: crowdsec-neo
+    init: true
+    stop_grace_period: 20s
+    restart: always
+    mem_limit: 1g
+    user: '1000:1000'
+    environment:
+      TZ: 'America/New_York'
+      COLLECTIONS: 'crowdsecurity/traefik crowdsecurity/http-cve firix/authentik'
+      POSTOVERFLOWS: 'crowdsecurity/rdns'
+    volumes:
+      - /mnt/cache/appdata/crowdsec/data:/var/lib/crowdsec/data
+      - /mnt/cache/appdata/crowdsec:/etc/crowdsec
+      - /mnt/cache/appdata/traefik/logs:/var/log/traefik:ro
+    # The `crowdsec` alias keeps the bouncer endpoint in fileConfig.yml working
+    # now that the container is host-suffixed like every other service.
+    networks:
+      net.internal:
+        aliases:
+          - crowdsec
+    healthcheck:
+      test: ["CMD", "cscli", "lapi", "status"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  traefik-redis-neo:
+    image: redis:8.6.3-alpine
+    container_name: traefik-redis-neo
+    init: true
+    stop_grace_period: 20s
+    restart: always
+    mem_limit: 1g
+    env_file:
+      - .env
+    environment:
+      TZ: 'America/New_York'
+    command: /bin/sh -c "redis-server --requirepass $${REDIS_PASS}"
+    networks:
+      net.internal: {}
+      net_overlay: {}
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "$${REDIS_PASS}", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+
+  traefik-kop-neo-to-tower:
+    image: ghcr.io/jittering/traefik-kop:latest
+    container_name: traefik-kop-neo-to-tower
+    hostname: neo
+    init: true
+    stop_grace_period: 20s
+    restart: always
+    mem_limit: 1g
+    env_file:
+      - .env
+    environment:
+      TZ: 'America/New_York'
+      KOP_HOSTNAME: neo
+      REDIS_ADDR: traefik-redis-tower:6379
+      REDIS_PASSWORD: $${REDIS_PASS}
+      SKIP_REPLACE: 1
+      KOP_POLL_INTERVAL: 60
+      DOCKER_CONFIG: /config.yaml
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /mnt/cache/appdata/traefik-kop-neo/config.yaml:/config.yaml:ro
+    networks:
+      net.internal: {}
+      net_overlay: {}
+    depends_on:
+      traefik-redis-neo:
+        condition: service_healthy
+        restart: true
+
+  traefik-kop-neo-to-helm:
+    image: ghcr.io/jittering/traefik-kop:latest
+    container_name: traefik-kop-neo-to-helm
+    hostname: neo
+    init: true
+    stop_grace_period: 20s
+    restart: always
+    mem_limit: 1g
+    env_file:
+      - .env
+    environment:
+      TZ: 'America/New_York'
+      KOP_HOSTNAME: neo
+      REDIS_ADDR: traefik-redis-helm:6379
+      REDIS_PASSWORD: $${REDIS_PASS}
+      SKIP_REPLACE: 1
+      KOP_POLL_INTERVAL: 60
+      DOCKER_CONFIG: /config.yaml
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /mnt/cache/appdata/traefik-kop-neo/config.yaml:/config.yaml:ro
+    networks:
+      net.internal: {}
+      net_overlay: {}
+    depends_on:
+      traefik-redis-neo:
+        condition: service_healthy
+        restart: true
+
+  traefik-neo:
+    image: ghcr.io/traefik/traefik:latest
+    container_name: traefik-neo
+    init: true
+    stop_grace_period: 20s
+    restart: always
+    mem_limit: 1g
+    ports:
+      - '80:80'
+      - '443:443'
+    env_file:
+      - .env
+    environment:
+      TZ: 'America/New_York'
+      CF_DNS_API_TOKEN: ${TRAEFIK_DNS_API}
+    command: >
+      sh -c '
+        until nc -w 1 traefik-redis-neo 6379 < /dev/null; do
+          echo "Waiting for Redis...";
+          sleep 2;
+        done;
+        echo "Redis is up, starting Traefik";
+        exec traefik
+      '
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /mnt/cache/appdata/traefik/traefik.yml:/etc/traefik/traefik.yml:ro
+      - /mnt/cache/appdata/traefik/acme.json:/etc/traefik/acme.json:ro
+      - /mnt/cache/appdata/traefik/fileConfig.yml:/etc/traefik/fileConfig.yml:ro
+      - /mnt/cache/appdata/traefik/logs:/etc/traefik/logs:rw
+      - /mnt/cache/appdata/traefik/plugins-storage:/plugins-storage:rw
+    networks:
+      net.internal: {}
+      net_overlay: {}
+    labels:
+      traefik.enable: 'true'
+      traefik.http.routers.traefik-neo.rule: Host(`traefik-neo.${DOMAIN}`)
+      traefik.http.routers.traefik-neo.entryPoints: 'https'
+      traefik.http.routers.traefik-neo.service: 'api@internal'
+      traefik.http.routers.traefik-neo.middlewares: 'allow-local@file'
+      traefik.http.services.traefik-neo.loadbalancer.server.port: '8183'
+      traefik.http.routers.traefik-neo-ping.rule: Host(`traefik-neo.${DOMAIN}`) && PathPrefix(`/ping`)
+      traefik.http.routers.traefik-neo-ping.entryPoints: 'https'
+      traefik.http.routers.traefik-neo-ping.service: 'ping@internal'
+      traefik.http.routers.traefik-neo-ping.middlewares: 'allow-cdn-and-local@file'
+    healthcheck:
+      test: ["CMD", "traefik", "healthcheck", "--ping"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    depends_on:
+      socket-proxy-neo:
+        condition: service_started
+      crowdsec-neo:
+        condition: service_healthy
+      traefik-redis-neo:
+        condition: service_healthy
+        restart: true
+      traefik-kop-neo-to-tower:
+        condition: service_started
+      traefik-kop-neo-to-helm:
+        condition: service_started
+
+  traefik-sync-neo:
+    image: ghcr.io/freender/traefik-sync:main
+    container_name: traefik-sync-neo
+    init: true
+    stop_grace_period: 20s
+    restart: always
+    mem_limit: 128m
+    environment:
+      TZ: 'America/New_York'
+      MODE: client
+      SYNC_PROTOCOL: http
+      SOURCE_URL: http://traefik-sync-tower:8080
+      API_TOKEN: ${TRAEFIK_SYNC_API_TOKEN}
+      LOCAL_PATH: /data
+      SYNC_INTERVAL: 60
+      CONTAINER_NAME: traefik-neo
+      RESTART_DELAY: 5
+      FILE_OWNER: 1000
+      FILE_GROUP: 1000
+    volumes:
+      - /mnt/cache/appdata/traefik:/data
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      net_overlay: {}
+    depends_on:
+      traefik-neo:
+        condition: service_started
+    

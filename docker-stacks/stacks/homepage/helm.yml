@@ -1,0 +1,29 @@
+networks:
+  net.internal:
+    external: true
+  net_overlay:
+    external: true
+
+services:
+  homepage:
+    image: ghcr.io/gethomepage/homepage:latest
+    container_name: homepage
+    restart: always
+    mem_limit: 512m
+    environment:
+      TZ: America/New_York
+      HOMEPAGE_ALLOWED_HOSTS: homepage.${DOMAIN}
+      PUID: 1000
+      PGID: 1000
+    labels:
+      traefik.enable: true
+      traefik.http.routers.homepage.entryPoints: https
+      traefik.http.routers.homepage.middlewares: allow-local@file
+      traefik.http.routers.homepage.rule: Host(`homepage.${DOMAIN}`)
+      traefik.http.services.homepage.loadbalancer.server.port: 3000
+    volumes:
+      - /mnt/cache/appdata/homepage/config:/app/config
+      - /mnt/cache/appdata/homepage/images:/app/public/images:ro
+    networks:
+      net.internal:
+      net_overlay:

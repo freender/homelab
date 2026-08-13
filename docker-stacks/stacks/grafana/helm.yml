@@ -1,0 +1,31 @@
+networks:
+  net.internal:
+    external: true
+  net_overlay:
+    external: true
+services:
+  grafana:
+    networks:
+      net.internal:
+      net_overlay:
+    image: grafana/grafana:13.0.1
+    user: 1000:1000
+    environment:
+      TZ: 'America/New_York'
+      GF_PLUGINS_PREINSTALL: victoriametrics-logs-datasource
+#      PUID: 1000
+#      PGID: 1000
+      GF_SERVER_ROOT_URL: ${GRAFANA_URL}
+    container_name: grafana
+    env_file:
+      - .env
+    labels:
+      traefik.enable: true
+      traefik.http.routers.grafana.entryPoints: https
+      traefik.http.routers.grafana.middlewares: allow-local@file
+      traefik.http.services.grafana.loadbalancer.server.port: 3000
+    volumes:
+      - /mnt/cache/appdata/grafana:/var/lib/grafana:rw
+      - /mnt/cache/appdata/grafana/config:/etc/grafana:rw
+    restart: always
+    mem_limit: 1g

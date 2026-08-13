@@ -27,9 +27,9 @@ groups:
         labels: {severity: critical, category: docker, site: home, host: tower, name: cadvisor-tower}
         annotations: {summary: "tower / cadvisor-tower is missing", description: "Critical container has not been seen by cAdvisor for 5 minutes."}
       - alert: CriticalContainerMissing
-        expr: absent_over_time(container_last_seen{job="cadvisor", host="tower", name="traefik-kop-tower"}[5m])
-        labels: {severity: critical, category: docker, site: home, host: tower, name: traefik-kop-tower}
-        annotations: {summary: "tower / traefik-kop-tower is missing", description: "Critical container has not been seen by cAdvisor for 5 minutes."}
+        expr: absent_over_time(container_last_seen{job="cadvisor", host="tower", name="traefik-kop-tower-to-helm"}[5m])
+        labels: {severity: critical, category: docker, site: home, host: tower, name: traefik-kop-tower-to-helm}
+        annotations: {summary: "tower / traefik-kop-tower-to-helm is missing", description: "Critical container has not been seen by cAdvisor for 5 minutes."}
       - alert: CriticalContainerMissing
         expr: absent_over_time(container_last_seen{job="cadvisor", host="tower", name="traefik-kop-tower-to-neo"}[5m])
         labels: {severity: critical, category: docker, site: home, host: tower, name: traefik-kop-tower-to-neo}
@@ -71,13 +71,13 @@ groups:
         labels: {severity: critical, category: docker, site: home, host: helm, name: alertmanager}
         annotations: {summary: "helm / alertmanager is missing", description: "Critical container has not been seen by cAdvisor for 5 minutes."}
       - alert: CriticalContainerMissing
-        expr: absent_over_time(container_last_seen{job="cadvisor", host="helm", name="crowdsec"}[5m])
-        labels: {severity: critical, category: docker, site: home, host: helm, name: crowdsec}
-        annotations: {summary: "helm / crowdsec is missing", description: "Critical container has not been seen by cAdvisor for 5 minutes."}
+        expr: absent_over_time(container_last_seen{job="cadvisor", host="helm", name="crowdsec-helm"}[5m])
+        labels: {severity: critical, category: docker, site: home, host: helm, name: crowdsec-helm}
+        annotations: {summary: "helm / crowdsec-helm is missing", description: "Critical container has not been seen by cAdvisor for 5 minutes."}
       - alert: CriticalContainerMissing
-        expr: absent_over_time(container_last_seen{job="cadvisor", host="helm", name="traefik-kop-helm"}[5m])
-        labels: {severity: critical, category: docker, site: home, host: helm, name: traefik-kop-helm}
-        annotations: {summary: "helm / traefik-kop-helm is missing", description: "Critical container has not been seen by cAdvisor for 5 minutes."}
+        expr: absent_over_time(container_last_seen{job="cadvisor", host="helm", name="traefik-kop-helm-to-tower"}[5m])
+        labels: {severity: critical, category: docker, site: home, host: helm, name: traefik-kop-helm-to-tower}
+        annotations: {summary: "helm / traefik-kop-helm-to-tower is missing", description: "Critical container has not been seen by cAdvisor for 5 minutes."}
       - alert: CriticalContainerMissing
         expr: absent_over_time(container_last_seen{job="cadvisor", host="helm", name="traefik-kop-helm-to-neo"}[5m])
         labels: {severity: critical, category: docker, site: home, host: helm, name: traefik-kop-helm-to-neo}
@@ -107,9 +107,9 @@ groups:
         labels: {severity: critical, category: docker, site: home, host: neo, name: vmagent-neo}
         annotations: {summary: "neo / vmagent-neo is missing", description: "Critical container has not been seen by cAdvisor for 5 minutes."}
       - alert: CriticalContainerMissing
-        expr: absent_over_time(container_last_seen{job="cadvisor", host="neo", name="crowdsec"}[5m])
-        labels: {severity: critical, category: docker, site: home, host: neo, name: crowdsec}
-        annotations: {summary: "neo / crowdsec is missing", description: "Critical container has not been seen by cAdvisor for 5 minutes."}
+        expr: absent_over_time(container_last_seen{job="cadvisor", host="neo", name="crowdsec-neo"}[5m])
+        labels: {severity: critical, category: docker, site: home, host: neo, name: crowdsec-neo}
+        annotations: {summary: "neo / crowdsec-neo is missing", description: "Critical container has not been seen by cAdvisor for 5 minutes."}
       - alert: CriticalContainerMissing
         expr: absent_over_time(container_last_seen{job="cadvisor", host="neo", name="traefik-kop-neo-to-helm"}[5m])
         labels: {severity: critical, category: docker, site: home, host: neo, name: traefik-kop-neo-to-helm}

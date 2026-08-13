@@ -1,0 +1,30 @@
+# Shared stack: rendered once per host that declares `vmagent` in hosts.conf.
+# Host-invariant by construction -- if a host ever needs to differ, move it to
+# stacks/<host>/vmagent/compose.yml rather than adding a conditional here.
+networks:
+  net_overlay:
+    external: true
+
+services:
+  vmagent-{{ HOST }}:
+    image: victoriametrics/vmagent:v1.117.1
+    container_name: vmagent-{{ HOST }}
+    init: true
+    stop_grace_period: 20s
+    restart: always
+    mem_limit: 512m
+    user: '1000:1000'
+    environment:
+      TZ: 'America/New_York'
+    command:
+      - '-promscrape.config=/etc/vmagent/scrape.yml'
+      - '-promscrape.maxScrapeSize=64MB'
+      - '-promscrape.suppressScrapeErrors'
+      - '-remoteWrite.url=http://victoria-metrics:8428/api/v1/write'
+      - '-remoteWrite.tmpDataPath=/vmagent-data'
+      - '-remoteWrite.maxDiskUsagePerURL=5GB'
+    volumes:
+      - /mnt/cache/appdata/vmagent/scrape.yml:/etc/vmagent/scrape.yml:ro
+      - /mnt/cache/appdata/vmagent/data:/vmagent-data
+    networks:
+      net_overlay: {}
