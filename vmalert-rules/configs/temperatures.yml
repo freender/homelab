@@ -123,3 +123,70 @@ groups:
         annotations:
           summary: "{{ $labels.host }} CPU is {{ $value }}C"
           description: "{{ $labels.host }} is within 5C of its CPU critical temperature and is at or near thermal throttling. Check fans, heatsink seating and dust, and whatever is loading the host right now."
+
+      # 10G NIC die temperature. Today this matches ace and clovis only: both run
+      # an Intel 82599ES (X520) SFP+ card whose ixgbe driver registers an on-die
+      # sensor. The metric has always been collected by node_exporter's hwmon
+      # collector but was never alerted on.
+      #
+      # bray is absent, and cannot be added. Its 10G card is an X710, and
+      # mainline i40e registers no hwmon device at all (verified on 7.0.14-8-pve:
+      # no NIC entry in /sys/class/hwmon, no hwmon symbols in i40e.ko), so there
+      # is no series to alert on. The die does have a thermal sensor, but it is
+      # only reachable through unsupported firmware Admin Queue / debugfs pokes.
+      # There is no transceiver fallback either: every SFP+ cage in the homelab
+      # holds a passive DAC (SFP-H10GB-CU1M / CAB-10GSFP-P1M), which carries no
+      # DDM diagnostics page, so `ethtool -m` reports no temperature anywhere.
+      #
+      # The chip_name match is therefore a driver allowlist, not just "ixgbe":
+      # ice (E810) gained hwmon support in 6.9 and would be picked up
+      # automatically, so replacing bray's X710 with an E810 starts alerting
+      # without a rule change instead of silently staying unmonitored. i40e is
+      # listed for the same reason -- if it ever grows hwmon support upstream.
+      # A driver that registers no hwmon device simply contributes no series.
+      #
+      # One sensor per card, not per port -- the 82599ES is a single die driving
+      # both SFP+ ports, so this one reading covers the whole adapter.
+      #
+      # The threshold numbers are fixed rather than derived from the card's own
+      # sysfs values (as the CPU rules do), because ixgbe's hwmon labels are
+      # inverted relative to coretemp: temp1_crit (95C) is the *caution*
+      # threshold and temp1_max (105C) is the max operating threshold. Reusing
+      # the `crit - N` pattern here would read as correct and mean the wrong
+      # thing. 85C leaves 10C of runway below caution; 95C is caution itself.
+      # Both numbers stay conservative for the other allowlisted drivers too --
+      # E810's maximum is higher still, so this errs early rather than late.
+      #
+      # 7d range when this was written: ace 35-48C, clovis 35-37C. Neither is
+      # close, so this is early warning for a dead case fan or a blocked slot,
+      # not a live problem. ace runs ~10C hotter than clovis because its card
+      # sits in a slot with no directed airflow.
+      #
+      # Joined through node_hwmon_chip_names on chip_name rather than matching
+      # the chip label directly: the chip label embeds the full PCI path
+      # (0000:00:01_0_0000:01:00_1), so a card moved to another slot would
+      # silently stop matching a hardcoded regex.
+      - alert: NicTemperatureHigh
+        expr: |
+          (node_hwmon_temp_celsius * on (instance, chip) group_left (chip_name)
+            node_hwmon_chip_names{chip_name=~"ixgbe|i40e|ice"}) >= 85
+          and
+          (node_hwmon_temp_celsius * on (instance, chip) group_left (chip_name)
+            node_hwmon_chip_names{chip_name=~"ixgbe|i40e|ice"}) < 95
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.host }} 10G NIC is {{ $value }}C"
+          description: "The 10G NIC ({{ $labels.chip_name }}, {{ $labels.chip }}) on {{ $labels.host }} has been at or above 85C for 15+ minutes, against a 95C caution threshold and a 105C maximum operating temperature. These cards are passively cooled and depend on case airflow. Check for a stopped case or slot fan and for anything blocking the card's heatsink."
+
+      - alert: NicTemperatureCritical
+        expr: |
+          (node_hwmon_temp_celsius * on (instance, chip) group_left (chip_name)
+            node_hwmon_chip_names{chip_name=~"ixgbe|i40e|ice"}) >= 95
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.host }} 10G NIC is {{ $value }}C"
+          description: "The 10G NIC ({{ $labels.chip_name }}, {{ $labels.chip }}) on {{ $labels.host }} is at or above its 95C caution threshold, with only 10C left to the 105C maximum. Storage and replication traffic on VLAN 60 rides this card. Check `journalctl -k | grep {{ $labels.chip_name }}` for resets and fix the airflow before it starts dropping links."
