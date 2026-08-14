@@ -18,16 +18,35 @@ route:
   routes:
     # Proxmox notifications are discrete events, not conditions: they never resolve
     # themselves, so suppress resolved notices and do not re-notify. They are also
-    # deliberately not muted by the maintenance interval, because a dropped PVE
-    # error would never be re-sent.
-    - receiver: pve
+    # deliberately not muted by the maintenance interval, because a dropped
+    # Proxmox error would never be re-sent.
+    #
+    # source=~"pve|pbs" because xur (PBS) now posts here too, using the same
+    # webhook shape as the PVE nodes. It previously called the Telegram API
+    # directly, which meant PBS backup failures could not be silenced by MWBot,
+    # ignored the maintenance windows, were never deduplicated, and required a
+    # bot token on the backup server. The trade-off is that helm is now a single
+    # point of failure for PBS alerting as well -- one more argument for a
+    # dead-man's switch on this stack.
+    #
+    # PDM (arc) is deliberately not listed: Proxmox Datacenter Manager 1.1.7 has
+    # no notification subsystem at all (no notification CLI, no
+    # notifications.cfg), so there is nothing to repoint. arc's health has to
+    # come from node_exporter/NodeDown instead, which means adding it to
+    # scrape.yml.
+    #
+    # jobid/datastore are in group_by so that two different PBS jobs failing do
+    # not collapse into one notification; they are simply empty for PVE alerts.
+    - receiver: proxmox
       matchers:
-        - source="pve"
+        - source=~"pve|pbs"
       group_by:
         - alertname
         - host
         - name
         - vmid
+        - jobid
+        - datastore
       repeat_interval: 24h
       continue: false
     - receiver: plex-requests
@@ -59,6 +78,31 @@ route:
       mute_time_intervals:
         - scheduled-maintenance
       continue: false
+
+# A host that is down cannot be diagnosed through its own exporters, and every
+# rule that depends on them fires at once when it goes: ace's 45 minute outage
+# on 2026-08-13 produced NicMissing for nic0 and nic1 plus
+# SystemdUnitMetricsMissing, none of which said "the node is off". NodeDown now
+# names that condition directly, so everything else about the same host is
+# redundant while it holds.
+#
+# equal: [host] is what keeps this safe. Alertmanager only inhibits a target
+# whose `host` label matches the firing NodeDown exactly, so alerts carrying no
+# host label at all -- the fleet-wide absence rules such as ZfsPoolMetricsMissing
+# and SmartMetricsMissing -- are never suppressed by one host going down.
+#
+# This does not replace the per-rule host-up gates on NicMissing and
+# DockerMetricsTargetDown. Inhibition only applies once NodeDown is firing at
+# the 10 minute mark, and both of those alerts would already have notified
+# before then; the gates stop them from ever entering the pending state during
+# an outage, and this rule cleans up everything slower than they are.
+inhibit_rules:
+  - source_matchers:
+      - alertname=~"NodeDown|NodeDownOffsite"
+    target_matchers:
+      - alertname!~"NodeDown|NodeDownOffsite"
+    equal:
+      - host
 
 # These windows mute the expected churn from the repo's own scheduled jobs in
 # hosts.conf, so they are load-bearing despite predating the retirement of
@@ -95,16 +139,23 @@ receivers:
           {{ if .Annotations.description }}{{ .Annotations.description }}{{ end }}
           {{ end }}
 
-  - name: pve
+  # Shared by PVE and PBS. pve_severity keeps its name rather than becoming
+  # proxmox_severity: the label is set by the webhook body on each sending host,
+  # and the four PVE nodes' notification configs are host-local and not
+  # repo-managed, so renaming it would mean hand-editing all of them for a
+  # cosmetic gain. PBS sets the same label for the same reason.
+  - name: proxmox
     telegram_configs:
       - bot_token_file: /tmp/telegram_token
         chat_id: __TELEGRAM_CHATID__
         send_resolved: false
         message: |-
-          {{ if eq .CommonLabels.pve_severity "error" }}&#128308;{{ else if eq .CommonLabels.pve_severity "warning" }}&#128993;{{ else }}&#128309;{{ end }} [PROXMOX] {{ .CommonLabels.name }}
+          {{ if eq .CommonLabels.pve_severity "error" }}&#128308;{{ else if eq .CommonLabels.pve_severity "warning" }}&#128993;{{ else }}&#128309;{{ end }} [{{ if .CommonLabels.source }}{{ .CommonLabels.source | toUpper }}{{ else }}PROXMOX{{ end }}] {{ .CommonLabels.name }}
           {{ range .Alerts }}
           {{ if .Labels.host }}Node: {{ .Labels.host }}{{ end }}
           {{ if .Labels.vmid }}Guest: {{ .Labels.vmid }}{{ end }}
+          {{ if .Labels.datastore }}Datastore: {{ .Labels.datastore }}{{ end }}
+          {{ if .Labels.jobid }}Job: {{ .Labels.jobid }}{{ end }}
           {{ .Annotations.summary }}
           {{ if .Annotations.description }}{{ reReplaceAll "(?s)(.{700}).*" "$1 [...]" .Annotations.description }}{{ end }}
           {{ end }}

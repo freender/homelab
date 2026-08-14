@@ -1,0 +1,51 @@
+groups:
+  - name: node-down
+    interval: 1m
+    rules:
+      # Host reachability for every node_exporter target. Until this rule
+      # existed, only tower/helm/neo had a direct down alert (docker.yml's
+      # DockerMetricsTargetDown); the four PVE nodes and riven were covered
+      # only as a side effect of the *MetricsMissing rules, which detect the
+      # outage ~20 minutes late and report it under a name that describes a
+      # broken exporter rather than a dead host. ace being unreachable for
+      # 45 minutes on 2026-08-13 surfaced as NicMissing x2 plus
+      # SystemdUnitMetricsMissing and no statement that the node was down.
+      #
+      # `up` is synthesised by vmagent for every configured target, so this
+      # needs no absent_over_time() and no per-host selector -- a target that
+      # is scraped at all has an `up` series, and one that is not in
+      # scrape.yml is a config change, not an outage.
+      #
+      # for: 10m is chosen against 60 days of observed outages: routine
+      # reboots land at 5-15 minutes (LXC restarts are 5), so 10m stays quiet
+      # through the common case while a genuinely dead node is still named
+      # within a useful window. Longer outages (ace 45m, clovis 140m) fire
+      # once and resolve themselves.
+      #
+      # ghost is excluded deliberately: it is a roaming laptop reachable only
+      # over WireGuard, so `up == 0` there means "away", not "down". This
+      # matches its exclusion from SystemdUnitMetricsMissing in
+      # systemd-failed.yml.
+      - alert: NodeDown
+        expr: up{job="pve-node", host=~"ace|bray|clovis|osiris|tower|helm|neo|riven"} == 0
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.host }} is down"
+          description: "vmagent has been unable to scrape node_exporter on {{ $labels.host }} ({{ $labels.endpoint }}) for 10 minutes, so the host is unreachable or node_exporter is stopped. Every other alert for {{ $labels.host }} is suppressed while this fires. Check the host itself first; for an LXC guest, check `pct status` on its PVE node."
+
+      # Offsite hosts get a much longer window for the same reason
+      # ZfsPoolMetricsMissingOffsite and SystemdUnitMetricsMissingOffsite do:
+      # the WireGuard link flaps and these hosts are not ours to power-cycle.
+      # Observed cinci outages run to multiple days, so a 10m critical here
+      # would be pure noise. Warning severity, 1h, matching the offsite
+      # convention elsewhere in this ruleset.
+      - alert: NodeDownOffsite
+        expr: up{job="pve-node", host=~"cinci|cottonwood"} == 0
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "Offsite host {{ $labels.host }} is unreachable"
+          description: "vmagent has been unable to scrape node_exporter on {{ $labels.host }} ({{ $labels.endpoint }}) for an hour. Longer window than the on-prem rule to tolerate offsite link flaps. Could be the WireGuard tunnel, the site's internet, or the host itself; see the offsite-connectivity notes before assuming the host is dead."

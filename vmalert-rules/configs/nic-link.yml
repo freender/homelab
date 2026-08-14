@@ -29,15 +29,35 @@ groups:
       # matchers do not reliably detect partial absence with
       # absent()/absent_over_time(), only full-vector absence. osiris nic1
       # is retired (see NicLinkDown comment) and intentionally excluded.
+      #
+      # Gated on the host having been continuously scrapeable for 30 minutes.
+      # A host that is off produces no node_network_up samples either, so
+      # without the gate this fired on every outage longer than ~20 minutes
+      # and claimed a NIC had failed: ace was unreachable for 45 minutes on
+      # 2026-08-13 and paged for nic0 and nic1 despite both being fine. The
+      # gate makes the alert mean what its name says -- the host is up and
+      # scraping, but the interface is not there -- so an outage of any
+      # length cannot trigger it and NodeDown (node-down.yml) reports that
+      # case instead.
+      #
+      # 30m also acts as the post-boot settle window. It is deliberately
+      # longer than the [15m] absence window so that a NIC which never
+      # enumerates after a reboot is still caught: the host must be up 30m,
+      # by which point a genuinely absent device has already accumulated its
+      # full 15m of absence, so the alert lands ~30-35m after boot rather
+      # than being suppressed.
       - alert: NicMissing
         expr: |
-          absent_over_time(node_network_up{host="ace",device="nic0"}[15m])
-          or absent_over_time(node_network_up{host="ace",device="nic1"}[15m])
-          or absent_over_time(node_network_up{host="bray",device="nic0"}[15m])
-          or absent_over_time(node_network_up{host="bray",device="nic1"}[15m])
-          or absent_over_time(node_network_up{host="clovis",device="nic0"}[15m])
-          or absent_over_time(node_network_up{host="clovis",device="nic1"}[15m])
-          or absent_over_time(node_network_up{host="osiris",device="nic0"}[15m])
+          (
+            absent_over_time(node_network_up{host="ace",device="nic0"}[15m])
+            or absent_over_time(node_network_up{host="ace",device="nic1"}[15m])
+            or absent_over_time(node_network_up{host="bray",device="nic0"}[15m])
+            or absent_over_time(node_network_up{host="bray",device="nic1"}[15m])
+            or absent_over_time(node_network_up{host="clovis",device="nic0"}[15m])
+            or absent_over_time(node_network_up{host="clovis",device="nic1"}[15m])
+            or absent_over_time(node_network_up{host="osiris",device="nic0"}[15m])
+          )
+          and on(host) (min_over_time(up{job="pve-node"}[30m]) == 1)
         for: 5m
         labels:
           severity: critical
