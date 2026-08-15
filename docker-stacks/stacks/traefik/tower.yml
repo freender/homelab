@@ -39,7 +39,7 @@ services:
     mem_limit: 1g
     environment:
       TZ: 'America/New_York'
-      COLLECTIONS: 'crowdsecurity/traefik crowdsecurity/http-cve firix/authentik'
+      COLLECTIONS: 'crowdsecurity/traefik crowdsecurity/http-cve'
       POSTOVERFLOWS: 'crowdsecurity/rdns'
     # tower runs crowdsec as root with a plugin chown; helm/neo run it as
     # 1000:1000. Two different fixes for the same problem -- unverified, kept.

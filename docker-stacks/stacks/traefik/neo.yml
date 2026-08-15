@@ -44,7 +44,7 @@ services:
     user: '1000:1000'
     environment:
       TZ: 'America/New_York'
-      COLLECTIONS: 'crowdsecurity/traefik crowdsecurity/http-cve firix/authentik'
+      COLLECTIONS: 'crowdsecurity/traefik crowdsecurity/http-cve'
       POSTOVERFLOWS: 'crowdsecurity/rdns'
     volumes:
       - /mnt/cache/appdata/crowdsec/data:/var/lib/crowdsec/data
