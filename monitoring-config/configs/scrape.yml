@@ -40,6 +40,20 @@ scrape_configs:
       - targets: ["riven.freender.internal:9100"]
         labels:
           host: riven
+      # LXC guests that carry no other exporter: node_exporter here exists so
+      # NodeDown can answer "is this guest up". xur is the primary PBS, arc is
+      # the PDM host (PDM 1.1.7 has no notification system of its own), and
+      # deepstone is the Time Machine target. All three were entirely
+      # unmonitored until 2026-08-15.
+      - targets: ["xur.freender.internal:9100"]
+        labels:
+          host: xur
+      - targets: ["arc.freender.internal:9100"]
+        labels:
+          host: arc
+      - targets: ["deepstone.freender.internal:9100"]
+        labels:
+          host: deepstone
       # ghost is a WSL2 userland on a roaming laptop, reachable only over the
       # WireGuard tunnel. Expect this target to be down whenever the laptop is
       # away; failed-unit alerting for it is written to fire only when metrics

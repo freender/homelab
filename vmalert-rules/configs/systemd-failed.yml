@@ -65,6 +65,9 @@ groups:
           or absent_over_time(node_systemd_units{host="neo",state="failed"}[15m])
           or absent_over_time(node_systemd_units{host="tower",state="failed"}[15m])
           or absent_over_time(node_systemd_units{host="riven",state="failed"}[15m])
+          or absent_over_time(node_systemd_units{host="xur",state="failed"}[15m])
+          or absent_over_time(node_systemd_units{host="arc",state="failed"}[15m])
+          or absent_over_time(node_systemd_units{host="deepstone",state="failed"}[15m])
         for: 5m
         labels:
           severity: warning

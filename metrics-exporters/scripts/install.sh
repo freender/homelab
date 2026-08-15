@@ -303,6 +303,26 @@ fi
 print_action "Unwanted default services"
 homelab_mask_unwanted_service openipmi.service
 
+# Same principle, found when xur/arc/deepstone were first scraped on 2026-08-15:
+# turning failed-unit visibility on for a host that never had it exposes units
+# that have been failed for weeks and can never succeed, which is pure noise in
+# SystemdUnitFailed. Both checks below are runtime facts, not host lists, so a
+# bare-metal host can never trip them:
+#   - nvmf-autoconnect needs the nvme-fabrics module, which a container cannot
+#     load (deepstone).
+#   - the ZFS units are gated on /dev/zfs being absent, which is the definition
+#     of "this host cannot do ZFS". On xur they had been failed since 2026-08-07.
+#     Guarding on the device rather than on container-ness means masking cannot
+#     fire on a host that actually mounts ZFS.
+if systemd-detect-virt --container --quiet; then
+    homelab_mask_unwanted_service nvmf-autoconnect.service "no nvme-fabrics in a container"
+    if [[ ! -e /dev/zfs ]]; then
+        homelab_mask_unwanted_service zfs-mount.service "no /dev/zfs"
+        homelab_mask_unwanted_service zfs-share.service "no /dev/zfs"
+        homelab_mask_unwanted_service zfs-zed.service "no /dev/zfs"
+    fi
+fi
+
 systemctl daemon-reload
 systemctl enable --now prometheus-node-exporter
 if [[ "$FORCE_UPDATE" == "true" || "$NODE_EXPORTER_CHANGED" == "true" ]]; then

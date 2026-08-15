@@ -32,8 +32,22 @@ _NODE_EXPORTER_COMMON_ARGS = (
     "--collector.systemd",
     "--collector.uname",
     "--no-collector.xfs",
+    # node_exporter refuses to start if device-include and device-exclude are
+    # both non-empty, and some builds ship a non-empty default for the exclude
+    # (Debian 12's 1.5.0 uses `^lo$`), so passing only the include is enough to
+    # make it panic with "device-exclude & device-include are mutually exclusive".
+    # deepstone hit that on 2026-08-15; it has since been upgraded to trixie, so
+    # the whole fleet is on 1.9.0, which defaults the exclude to empty. This line
+    # is kept deliberately: it states the intent (we filter by include, so there
+    # is no exclude) rather than depending on a build's default, which is what
+    # makes it version-independent for any future host built from an older base
+    # image. Verified started-clean on both 1.5.0 and 1.9.0. Keep it immediately
+    # before the include.
+    "--collector.netdev.device-exclude=",
     # The LXC guests' only real interface is nic0; on the bare-metal hosts this
-    # also keeps per-VM tap/veth/fwbr interfaces out of the netdev series.
+    # also keeps per-VM tap/veth/fwbr interfaces out of the netdev series. The
+    # include pattern already omits `lo`, so clearing the exclude above does not
+    # reintroduce it.
     "--collector.netdev.device-include=^(nic[0-9]+|eth[0-9]+)$",
 )
 

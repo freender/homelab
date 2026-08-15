@@ -27,7 +27,7 @@ groups:
       # matches its exclusion from SystemdUnitMetricsMissing in
       # systemd-failed.yml.
       - alert: NodeDown
-        expr: up{job="pve-node", host=~"ace|bray|clovis|osiris|tower|helm|neo|riven"} == 0
+        expr: up{job="pve-node", host=~"ace|bray|clovis|osiris|tower|helm|neo|riven|xur|arc|deepstone"} == 0
         for: 10m
         labels:
           severity: critical
