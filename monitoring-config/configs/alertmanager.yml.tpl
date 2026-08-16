@@ -113,6 +113,23 @@ route:
       mute_time_intervals:
         - scheduled-maintenance
       continue: false
+    # Mains power state is orthogonal to the maintenance windows below: nothing
+    # in the 02:00 container image update or the 08:00 apt upgrade can put a UPS
+    # on battery. Muting these would delay a real power event until the window
+    # closes, or drop it entirely if it resolved inside the window -- and both
+    # rules use for: 0s, so a brief outage is exactly the case that would be
+    # lost. UpsShutdownImminent in particular precedes a clean shutdown of the
+    # whole cluster (ace/clovis are NIS slaves of bray-ups), which takes helm
+    # and this alerting stack down with it.
+    #
+    # Scoped to these two alerts rather than alertgroup="ups": UpsDaemonDown and
+    # UpsExporterDown both watch the apcupsd service, which the 08:00 apt
+    # upgrade legitimately restarts, and they are precisely the churn the window
+    # exists to absorb.
+    - receiver: mwbot
+      matchers:
+        - alertname=~"UpsOnBattery|UpsShutdownImminent"
+      continue: false
     - receiver: mwbot
       mute_time_intervals:
         - scheduled-maintenance
@@ -130,6 +147,14 @@ route:
 # host label at all -- the fleet-wide absence rules such as ZfsPoolMetricsMissing
 # and SmartMetricsMissing -- are never suppressed by one host going down.
 #
+# That holds only while every NodeDown carries a non-empty host. Alertmanager
+# treats a label absent on *both* source and target as equal, so a hostless
+# NodeDown -- a pve-node scrape target added without the host relabel -- would
+# match every hostless alert at once. Watchdog is excluded explicitly because it
+# is the one alert that must never be inhibited: suppressing it stops the
+# heartbeat and reports an outage that is not happening, the same false positive
+# the mute windows are deliberately kept away from it for.
+#
 # This does not replace the per-rule host-up gates on NicMissing and
 # DockerMetricsTargetDown. Inhibition only applies once NodeDown is firing at
 # the 10 minute mark, and both of those alerts would already have notified
@@ -140,6 +165,7 @@ inhibit_rules:
       - alertname=~"NodeDown|NodeDownOffsite"
     target_matchers:
       - alertname!~"NodeDown|NodeDownOffsite"
+      - alertname!="Watchdog"
     equal:
       - host
 
