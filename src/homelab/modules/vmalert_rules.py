@@ -22,6 +22,7 @@ RULE_FILES = (
     "systemd-failed.yml",
     "temperatures.yml",
     "ups.yml",
+    "watchdog.yml",
     "zfs-pools.yml",
 )
 

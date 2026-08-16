@@ -16,6 +16,31 @@ route:
   group_interval: 5m
   repeat_interval: 4h
   routes:
+    # Dead-man's switch, first so nothing else can claim it. The Watchdog alert
+    # (vmalert-rules/configs/watchdog.yml) always fires; this route turns that
+    # into a heartbeat to an external healthchecks.io check, which alerts from
+    # outside the homelab if the heartbeat stops.
+    #
+    # This is the only alerting path that survives helm dying. Everything else
+    # in this file is delivered *by* the stack it is monitoring: VictoriaMetrics,
+    # vmalert and Alertmanager all run on helm, so a helm outage silences the
+    # entire alerting system, including the NodeDown that would have named it.
+    #
+    # repeat_interval is the actual ping period: Alertmanager re-sends a firing
+    # group every repeat_interval, so 5m means a ping every 5 minutes. The
+    # external check's period plus grace must comfortably exceed this (15m/10m)
+    # so that one dropped ping is not an incident.
+    #
+    # Deliberately NOT muted by scheduled-maintenance. A mute window here would
+    # stop the heartbeat and report an outage that is not happening -- the exact
+    # false positive that gets a dead-man's switch disabled and forgotten.
+    - receiver: deadmanswitch
+      matchers:
+        - alertname="Watchdog"
+      group_wait: 0s
+      group_interval: 1m
+      repeat_interval: 5m
+      continue: false
     # Proxmox notifications are discrete events, not conditions: they never resolve
     # themselves, so suppress resolved notices and do not re-notify. They are also
     # deliberately not muted by the maintenance interval, because a dropped
@@ -182,6 +207,18 @@ receivers:
           {{ .Annotations.summary }}
           {{ if .Annotations.description }}{{ reReplaceAll "(?s)(.{700}).*" "$1 [...]" .Annotations.description }}{{ end }}
           {{ end }}
+
+  # The ping URL is a capability: anyone holding it can report the homelab as
+  # healthy, which would mask a real outage. This repo is public, so the URL is
+  # never written here -- it is substituted from HEALTHCHECK_URL in the
+  # host-local .env on helm, exactly like the Telegram tokens.
+  #
+  # send_resolved is false because the alert never resolves; a resolved
+  # notification would only be sent if the switch itself were removed.
+  - name: deadmanswitch
+    webhook_configs:
+      - url: __HEALTHCHECK_URL__
+        send_resolved: false
 
   - name: plex-requests
     telegram_configs:

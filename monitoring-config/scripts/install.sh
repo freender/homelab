@@ -66,9 +66,12 @@ fi
 
 validation_dir="$(mktemp -d)"
 trap 'rm -rf "$validation_dir"' EXIT
+# The healthcheck URL uses | as the sed delimiter because it contains slashes.
+# A placeholder host is enough: amtool validates URL syntax without connecting.
 sed \
     -e 's/__TELEGRAM_CHATID__/123456/g' \
     -e 's/__TELEGRAM_CHATID_PLEX__/654321/g' \
+    -e 's|__HEALTHCHECK_URL__|https://example.net/ping/validation|g' \
     "$ALERTMANAGER_CONFIG" > "$validation_dir/alertmanager.yml"
 printf x > "$validation_dir/telegram_token"
 printf x > "$validation_dir/telegram_token_plex"

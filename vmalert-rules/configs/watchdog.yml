@@ -1,0 +1,39 @@
+groups:
+  - name: watchdog
+    interval: 1m
+    rules:
+      # Dead-man's switch: an alert that is always firing, so that its
+      # *absence* is the signal.
+      #
+      # Every other rule in this directory assumes the monitoring stack is
+      # running, and nothing notices when it is not. VictoriaMetrics, vmalert
+      # and Alertmanager all run on helm, which had 13 separate down-periods
+      # in the 60 days to 2026-08-15. During each of them there was no
+      # alerting at all -- including no NodeDown for helm itself, because the
+      # component that would report the outage is the component that is down.
+      # This rule is what closes that hole: Alertmanager routes it to an
+      # external healthchecks.io check (receiver `deadmanswitch`), and if the
+      # pings stop, that service alerts from outside the homelab.
+      #
+      # vector(1) looks like it tests nothing, but vmalert is stateless and
+      # evaluates every rule by querying its datasource rather than locally
+      # (-datasource.url=http://victoria-metrics:8428). So a delivered ping
+      # proves the whole chain: vmalert is running, VictoriaMetrics answered
+      # the query, Alertmanager received and routed the alert, and helm still
+      # has outbound network. Any one of those failing stops the pings.
+      #
+      # No `for:` -- it must fire on the first evaluation after a restart, so
+      # that a vmalert restart does not create a gap in pings large enough to
+      # trip the external check.
+      #
+      # Deliberately carries no `host` label. The NodeDown inhibit rule in
+      # alertmanager.yml.tpl matches on `equal: [host]`, so a labelled
+      # watchdog could be suppressed by a host outage -- which is precisely
+      # when the switch must keep reporting.
+      - alert: Watchdog
+        expr: vector(1)
+        labels:
+          severity: none
+        annotations:
+          summary: "Monitoring pipeline is alive"
+          description: "Always-firing dead-man's switch. It is routed only to the external healthchecks.io check and never to Telegram, so seeing it here is normal and needs no action. If it stops firing, the external check reports that the monitoring stack on helm is down."

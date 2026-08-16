@@ -52,7 +52,12 @@ def validate(root: Path) -> None:
     # The installer substitutes globally, so a chat ID may back more than one receiver
     # (the private chat serves both the default and the Proxmox receiver). Only the
     # absence of a placeholder is a real error.
-    for placeholder in ("__TELEGRAM_CHATID__", "__TELEGRAM_CHATID_PLEX__"):
+    # __HEALTHCHECK_URL__ backs the dead-man's switch. It is a placeholder rather
+    # than a literal for the same reason the chat IDs are: the ping URL is a
+    # capability that would let anyone forge a healthy homelab, and this repo is
+    # public. Requiring it here means the switch cannot be silently dropped from
+    # the template.
+    for placeholder in ("__TELEGRAM_CHATID__", "__TELEGRAM_CHATID_PLEX__", "__HEALTHCHECK_URL__"):
         if placeholder not in alertmanager_template:
             raise ValueError(f"alertmanager template must contain {placeholder}")
 
