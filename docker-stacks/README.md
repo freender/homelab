@@ -14,6 +14,12 @@ This module owns `compose.yml` and nothing else.
   for their values. Deploy-time secrets belong in `secrets/`; per-app runtime
   variables belong on the host, where a reboot or the update timer can still start
   the stack without reaching 1Password.
+- **`env-examples/<stack>.env.example` documents the keys, not the values.** It
+  lives outside `stacks/` on purpose -- `stacks/<stack>/` is strictly `compose.yml.j2`
+  or `<host>.yml`, enforced by `check_stack_tree`, so a doc-only file cannot sit next
+  to the compose it describes. Every value in these files must be a placeholder,
+  not a real one; `./validate` enforces that with `check_env_example_placeholders`
+  (`src/homelab/cli.py`).
 - **`traefik.yml`, `fileConfig.yml` and `acme.json` are not managed here.** They
   carry the public route domain and the route map, and are excluded on purpose.
 
@@ -27,6 +33,7 @@ and is not encoded in the tree at all.
 docker-stacks/
   stacks/<stack>/compose.yml.j2       # uniform: rendered once per declaring host
   stacks/<stack>/<host>.yml           # host-specific: copied verbatim
+  env-examples/<stack>.env.example    # doc-only: keys the host-local .env needs
   scripts/install.sh                  # remote installer
   build/<host>/env                    # generated (gitignored)
   build/<host>/stacks/<stack>/        # generated: assembled staging tree

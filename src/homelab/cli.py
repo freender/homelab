@@ -311,6 +311,87 @@ def check_public_repo_leaks(root: Path) -> None:
     print_ok(f"{len(tracked)} tracked file(s) clean of secrets and external hosts")
 
 
+# --- .env.example placeholder check ------------------------------------------
+#
+# `.env.example` files document the keys a host-local `.env` needs without
+# shipping real values (AGENTS.md "Public Repo Boundary": ".env.example ...
+# placeholders are allowed for offline validation"). Nothing enforced that
+# promise -- someone pasting a real token into one during a copy/paste from a
+# live host would only be caught by check_public_repo_leaks if the value
+# happened to match a known secret *shape*. This check is stricter: every
+# assigned value must look like a placeholder, an allow-listed literal
+# default, or empty; anything else fails, whether or not it looks secret-shaped.
+
+_ENV_ASSIGNMENT = re.compile(r"^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=(.*)$")
+_DURATION_LITERAL = re.compile(r"\d+(ms|[smhdw])$", re.IGNORECASE)
+_JINJA_PLACEHOLDER = re.compile(r"^\{\{\s*[A-Za-z0-9_]+\s*\}\}$")
+_XPLACEHOLDER = re.compile(r"^[xX][xX:-]*$")
+_SAFE_LITERALS = frozenset({"true", "false", "info", "debug", "warn", "warning", "error"})
+
+
+def _is_placeholder_value(raw: str) -> bool:
+    """Whether an `.env.example` value looks like a placeholder, not a real one."""
+    value = raw.strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+        value = value[1:-1].strip()
+    if not value:
+        return True
+    if value.startswith("<") and value.endswith(">"):
+        return True
+    if _JINJA_PLACEHOLDER.match(value):
+        return True
+    if re.fullmatch(r"-?\d+", value):
+        return True
+    if value.lower() in _SAFE_LITERALS:
+        return True
+    if _DURATION_LITERAL.fullmatch(value):
+        return True
+    if value.startswith("/") or value.startswith("unix://"):
+        return True
+    if _XPLACEHOLDER.match(value):
+        return True
+    lowered = value.lower()
+    if lowered.startswith("replace-with") or "changeme" in lowered:
+        return True
+    if any(domain in lowered for domain in ("example.com", "example.net", "example.org")):
+        return True
+    return False
+
+
+def check_env_example_placeholders(root: Path) -> None:
+    """Fail the build if any `.env.example` assigns something other than a placeholder."""
+    findings: list[str] = []
+    examples = [path for path in _tracked_files(root) if path.name.endswith(".env.example")]
+
+    for path in examples:
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except (OSError, UnicodeDecodeError):
+            continue
+        rel = path.relative_to(root)
+        for lineno, line in enumerate(lines, start=1):
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            match = _ENV_ASSIGNMENT.match(stripped)
+            if not match:
+                continue
+            key, value = match.group(1), match.group(2)
+            if not _is_placeholder_value(value):
+                findings.append(f"{rel}:{lineno}: {key} is not a placeholder value")
+
+    if findings:
+        raise click.ClickException(
+            ".env.example placeholder check failed -- these look like real values, not "
+            "placeholders:\n  "
+            + "\n  ".join(sorted(set(findings)))
+            + "\n\nUse <PLACEHOLDER>, an empty value, or a genuinely non-secret literal "
+            "(see _is_placeholder_value in src/homelab/cli.py)."
+        )
+
+    print_ok(f"{len(examples)} .env.example file(s) contain placeholders only")
+
+
 @click.group()
 def main() -> None:
     """Homelab deployment CLI."""
@@ -436,6 +517,7 @@ def validate() -> None:
 
     print_action("Leak Check")
     check_public_repo_leaks(root)
+    check_env_example_placeholders(root)
 
     shellcheck = shutil.which("shellcheck")
     if shellcheck:
