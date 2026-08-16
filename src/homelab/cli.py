@@ -94,6 +94,71 @@ def check_stack_placement(root: Path) -> None:
     )
 
 
+def check_node_down_coverage(root: Path) -> None:
+    """Cross-check NodeDown's host lists against the pve-node targets in scrape.yml.
+
+    NodeDown/NodeDownOffsite enumerate hosts explicitly because the two carry
+    different urgency (on-prem 10m/critical vs offsite 1h/warning) and ghost is
+    excluded outright, so they cannot be collapsed into a single selector driven by
+    scrape.yml alone. That leaves the lists a hand-maintained copy of the scrape
+    targets, and the failure mode is silent: a host added to scrape.yml simply never
+    gets a down alert, and nothing anywhere says so. This check makes it loud.
+
+    Both directions are fatal, for the same reason check_stack_placement treats them
+    that way: an uncovered target is a monitoring blind spot, and a rule naming a host
+    nobody scrapes is a stale selector that can never fire.
+    """
+    scrape_path = root / "monitoring-config" / "configs" / "scrape.yml"
+    rules_path = root / "vmalert-rules" / "configs" / "node-down.yml"
+    if not scrape_path.exists() or not rules_path.exists():
+        return
+
+    scrape_data = yaml.safe_load(scrape_path.read_text(encoding="utf-8")) or {}
+    scraped: set[str] = set()
+    for job in scrape_data.get("scrape_configs") or []:
+        if job.get("job_name") != "pve-node":
+            continue
+        for static in job.get("static_configs") or []:
+            host = (static.get("labels") or {}).get("host")
+            if host:
+                scraped.add(str(host))
+
+    rules_text = rules_path.read_text(encoding="utf-8")
+    rules_data = yaml.safe_load(rules_text) or {}
+    covered: set[str] = set()
+    for group in rules_data.get("groups") or []:
+        for rule in group.get("rules") or []:
+            if not str(rule.get("alert", "")).startswith("NodeDown"):
+                continue
+            for selector in re.findall(r'host=~?"([^"]+)"', str(rule.get("expr", ""))):
+                covered.update(part for part in selector.split("|") if part)
+
+    # Exclusions live in the rule file, next to the prose explaining them, so the
+    # reviewer of a deliberate omission and the enforcement read the same lines.
+    excluded = set(re.findall(r"^\s*#\s*nodedown-exclude:\s*(\S+)", rules_text, re.MULTILINE))
+
+    missing = sorted(scraped - covered - excluded)
+    if missing:
+        raise click.ClickException(
+            f"scrape.yml pve-node target(s) with no NodeDown coverage: {', '.join(missing)}. "
+            "Add them to vmalert-rules/configs/node-down.yml, or declare an intentional "
+            "exclusion there with '# nodedown-exclude: <host>'."
+        )
+
+    stale = sorted(covered - scraped)
+    if stale:
+        raise click.ClickException(
+            f"node-down.yml alerts on host(s) scrape.yml does not scrape: {', '.join(stale)}. "
+            "Remove them from node-down.yml, or add the target to "
+            "monitoring-config/configs/scrape.yml."
+        )
+
+    for host in sorted(excluded - scraped):
+        print_warn(f"nodedown-exclude names '{host}', which scrape.yml does not scrape")
+
+    print_ok(f"{len(scraped)} pve-node target(s) have NodeDown coverage ({len(excluded)} excluded)")
+
+
 # --- Public repo leak check -------------------------------------------------
 #
 # This repo is public (AGENTS.md "Public Repo Boundary"). These checks are the
@@ -367,6 +432,7 @@ def validate() -> None:
     print_action("Inventory")
     check_feature_registry(root)
     check_stack_placement(root)
+    check_node_down_coverage(root)
 
     print_action("Leak Check")
     check_public_repo_leaks(root)
