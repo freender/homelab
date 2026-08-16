@@ -202,6 +202,50 @@ def test_alert_rules_track_container_renames() -> None:
     )
 
 
+def test_alertmanager_compose_substitutes_every_template_placeholder() -> None:
+    """The Alertmanager template and this compose file are owned by two different
+    modules (`monitoring-config` renders the template, `docker-stacks` renders the
+    compose that substitutes into it), so nothing but this test binds them.
+
+    A placeholder with no matching substitution does not fail the deploy: it
+    survives into the running config as a literal `__NAME__`. For
+    `__HEALTHCHECK_URL__` that silently produces an unreachable webhook target,
+    which kills the dead-man's switch -- the one alerting path that survives helm
+    dying -- while every other alert keeps working and nothing looks wrong. That
+    is exactly how it drifted before: the render logic existed only on helm and
+    was missing from this repo for two days.
+
+    The `:?` guard is asserted alongside it so a missing host-local .env value
+    fails the container start loudly instead of substituting empty.
+    """
+    import re
+
+    template = (ROOT / "monitoring-config" / "configs" / "alertmanager.yml.tpl").read_text(
+        encoding="utf-8"
+    )
+    compose = (ROOT / "docker-stacks" / "stacks" / "alertmanager" / "helm.yml").read_text(
+        encoding="utf-8"
+    )
+
+    placeholders = set(re.findall(r"__[A-Z][A-Z0-9_]*__", template))
+    assert placeholders, "alertmanager template carries no placeholders; contract changed"
+
+    # `-e "s<delim>__NAME__` -- the delimiter varies because the URL contains slashes.
+    unsubstituted = sorted(
+        name for name in placeholders if not re.search(r'-e "s(.)' + re.escape(name), compose)
+    )
+    assert not unsubstituted, (
+        "alertmanager template placeholder(s) with no compose substitution, so they "
+        "survive into the running config: " + ", ".join(unsubstituted)
+    )
+
+    unguarded = sorted(name for name in placeholders if f"{name.strip('_')}:?" not in compose)
+    assert not unguarded, (
+        "alertmanager compose substitutes placeholder(s) without a `:?` guard, so a "
+        "missing .env value renders empty instead of failing: " + ", ".join(unguarded)
+    )
+
+
 def test_crowdsec_is_reachable_as_plain_crowdsec_on_every_host() -> None:
     """Traefik reaches Crowdsec via `crowdsecLapiHost: crowdsec:8080` in
     fileConfig.yml -- a file this module does not manage, which traefik-sync

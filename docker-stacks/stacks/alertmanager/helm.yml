@@ -18,12 +18,14 @@ services:
         : "$${TELEGRAM_CHATID:?TELEGRAM_CHATID is required}"
         : "$${TELEGRAM_TOKEN_PLEX:?TELEGRAM_TOKEN_PLEX is required}"
         : "$${TELEGRAM_CHATID_PLEX:?TELEGRAM_CHATID_PLEX is required}"
+        : "$${HEALTHCHECK_URL:?HEALTHCHECK_URL is required}"
         umask 077
         printf '%s' "$${TELEGRAM_TOKEN}" > /tmp/telegram_token
         printf '%s' "$${TELEGRAM_TOKEN_PLEX}" > /tmp/telegram_token_plex
         sed \
           -e "s/__TELEGRAM_CHATID__/$${TELEGRAM_CHATID}/g" \
           -e "s/__TELEGRAM_CHATID_PLEX__/$${TELEGRAM_CHATID_PLEX}/g" \
+          -e "s|__HEALTHCHECK_URL__|$${HEALTHCHECK_URL}|g" \
           /etc/alertmanager/alertmanager.yml.tpl > /tmp/alertmanager.yml
         exec /bin/alertmanager \
           --config.file=/tmp/alertmanager.yml \
