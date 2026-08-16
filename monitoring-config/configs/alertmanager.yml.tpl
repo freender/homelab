@@ -26,10 +26,24 @@ route:
     # vmalert and Alertmanager all run on helm, so a helm outage silences the
     # entire alerting system, including the NodeDown that would have named it.
     #
-    # repeat_interval is the actual ping period: Alertmanager re-sends a firing
-    # group every repeat_interval, so 5m means a ping every 5 minutes. The
-    # external check's period plus grace must comfortably exceed this (15m/10m)
-    # so that one dropped ping is not an incident.
+    # repeat_interval is a floor on the ping rate, not the rate itself.
+    # Alertmanager only re-notifies on group_interval ticks, and with
+    # repeat_interval == group_interval == 1m the tick one minute later is
+    # marginally too early to satisfy the interval, so it fires on the one after.
+    # Measured cadence is therefore a ping every 2 minutes, not every minute
+    # (4 pings over 390s, steady 120s gaps, 2026-08-16). Lowering group_interval
+    # is what would tighten it; there is no need here.
+    #
+    # What matters is that the rate stays comfortably below the external check's
+    # period, or the check goes DOWN between pings and UP on the next one
+    # forever -- 5m pings against a 1m period did exactly that on 2026-08-15,
+    # and a switch that cries wolf gets muted, which is the same as not having
+    # one.
+    #
+    # The check is configured period 5m / grace 5m, so it alerts after 10
+    # minutes of silence. At a 2m cadence that is about five pings of headroom.
+    # Detection speed is owned by period and grace; the ping rate only decides
+    # how many consecutive failures it takes to trip.
     #
     # Deliberately NOT muted by scheduled-maintenance. A mute window here would
     # stop the heartbeat and report an outage that is not happening -- the exact
@@ -39,7 +53,7 @@ route:
         - alertname="Watchdog"
       group_wait: 0s
       group_interval: 1m
-      repeat_interval: 5m
+      repeat_interval: 1m
       continue: false
     # Proxmox notifications are discrete events, not conditions: they never resolve
     # themselves, so suppress resolved notices and do not re-notify. They are also
