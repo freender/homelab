@@ -104,6 +104,29 @@ inhibit_rules:
     equal:
       - host
 
+  # osiris is standalone, not part of the ace/bray/clovis HA cluster (verified
+  # 2026-08-15 via `ha-manager status` / `pvesh get /cluster/ha/resources`: CT
+  # 101/104/106/107/108 are HA-managed with fencing armed and watchdog active
+  # on ace/bray/clovis; xur and deepstone are absent from that resource list).
+  # If osiris goes down, xur and deepstone have no failover target and are
+  # guaranteed down for the same duration -- their own NodeDown firing after
+  # osiris's is 100% redundant, not new information, so it is inhibited here.
+  #
+  # This is deliberately NOT extended to ace/bray/clovis and their HA guests
+  # (tower, helm, neo, riven, arc). A normal fence-and-relocate finishes well
+  # inside NodeDown's 10m `for:`, so the guest's own NodeDown typically never
+  # fires during routine HA recovery -- there is no duplicate to suppress. If
+  # it does fire after the node's already did, that means HA did not save the
+  # guest in time (quorum loss, contested fencing, stuck migration), which is
+  # exactly the case that should still page. Blanket-suppressing it the same
+  # way as osiris would hide that failure mode.
+  - source_matchers:
+      - alertname="NodeDown"
+      - host="osiris"
+    target_matchers:
+      - alertname=~"NodeDown|NodeDownOffsite"
+      - host=~"xur|deepstone"
+
 # These windows mute the expected churn from the repo's own scheduled jobs in
 # hosts.conf, so they are load-bearing despite predating the retirement of
 # Uptime Kuma (which they were originally named after):
