@@ -1,0 +1,145 @@
+#!/bin/bash
+# Report whether this host is running an older kernel than the newest one it has
+# installed, for the node_exporter textfile collector.
+#
+# Why this exists: apt-upgrade installs kernel updates but never reboots, and its
+# only signal is a print_warn during the deploy run -- visible in that run's
+# output and nowhere else. A host can therefore run a superseded kernel
+# indefinitely with nothing reporting it.
+#
+# Why not just /var/run/reboot-required: that file is created by an apt hook
+# shipped in update-notifier-common, which is a Ubuntu default and is installed
+# on exactly one host here (cinci). On the Proxmox nodes and on cottonwood the
+# file is never created no matter how many kernels are pending, so a check built
+# only on it is a permanent silent false-negative. It is still read below,
+# because where the hook does exist it also catches non-kernel reboots (glibc,
+# systemd) that a kernel comparison cannot see -- it can add true positives, it
+# just cannot be the primary signal.
+#
+# DO NOT alert on node_reboot_required. That series already exists on every host
+# here, from apt_info.py in the distro package prometheus-node-exporter-
+# collectors, and it is exactly the check described above:
+#     g.set(int(os.path.isfile('/run/reboot-required')))
+# Verified 2026-08-16 on ace, bray, clovis and osiris: all four report
+# node_reboot_required 0.0 with the package installed and update-notifier-common
+# absent, so the value is structurally 0 and cannot ever become 1 no matter how
+# many kernels are pending. A false-healthy metric is worse than a missing one,
+# which is the whole reason homelab_reboot_required exists under a separate name
+# rather than this script overwriting apt.prom.
+#
+# Bare metal only. An LXC guest shares the PVE host's kernel: `uname -r` reports
+# the hypervisor's release and the guest has no kernel packages at all, so there
+# is nothing for the guest to reboot into and the comparison is meaningless.
+# metrics_exporters.py gates the whole file set on `baremetal` for that reason,
+# so this script is never installed on a guest; the runtime guard below is a
+# second line of defence.
+
+set -euo pipefail
+
+HOST="${HOSTNAME_OVERRIDE:-$(hostname -s)}"
+OUT_DIR="${TEXTFILE_DIR:-/var/lib/prometheus/node-exporter}"
+OUT_FILE="$OUT_DIR/reboot.prom"
+REBOOT_FLAG_FILE="${REBOOT_FLAG_FILE:-/var/run/reboot-required}"
+
+if systemd-detect-virt --container --quiet; then
+    echo "reboot-textfile-exporter: container guest shares the host kernel, nothing to report" >&2
+    exit 0
+fi
+
+if ! command -v dpkg-query >/dev/null 2>&1; then
+    echo "reboot-textfile-exporter: dpkg-query not found, cannot enumerate kernels" >&2
+    exit 0
+fi
+
+mkdir -p "$OUT_DIR"
+TMP_FILE="$(mktemp "$OUT_DIR/.reboot.prom.XXXXXX")"
+
+cleanup() {
+    rm -f "$TMP_FILE"
+}
+trap cleanup EXIT
+
+# The kernel release the newest *installed* kernel package would boot into,
+# i.e. what `uname -r` should read after the next reboot.
+#
+# Status filtering is load-bearing. `dpkg-query -W` also returns packages that
+# are not installed:
+#   `un` rows are virtual/provides names with an empty version -- on PVE the
+#        unsigned `proxmox-kernel-<rel>-pve` name is `un`, provided by the real
+#        `-signed` package.
+#   `rc` rows are removed-but-configured and carry a real, stale version -- cinci
+#        holds two of these, and counting them would fabricate a pending reboot.
+# Only `ii` is actually installed.
+#
+# Deriving the release from the package name (rather than matching a hardcoded
+# series like proxmox-kernel-7.0 or linux-image-generic) keeps this working
+# across a Proxmox or Ubuntu major upgrade. Meta and helper packages whose names
+# carry no release -- linux-image-generic, linux-image-amd64,
+# proxmox-kernel-helper, proxmox-kernel-7.0 -- fail the release regex and are
+# skipped, which is what stops a version sort from ranking, say,
+# proxmox-kernel-helper 9.2.0 above a real kernel.
+newest_installed_kernel_release() {
+    local status pkg version release
+    local best_version="" best_release=""
+
+    while read -r status pkg version; do
+        [[ "$status" == "ii" ]] || continue
+        release="${pkg#linux-image-}"
+        release="${release#unsigned-}"
+        release="${release#proxmox-kernel-}"
+        release="${release%-signed}"
+        [[ "$release" =~ ^[0-9]+\.[0-9]+\.[0-9]+-[0-9]+ ]] || continue
+        if [[ -z "$best_version" ]] || dpkg --compare-versions "$version" gt "$best_version"; then
+            best_version="$version"
+            best_release="$release"
+        fi
+    done < <(kernel_package_rows)
+
+    printf '%s' "$best_release"
+}
+
+# Queried per pattern: dpkg-query exits non-zero and prints nothing useful when a
+# pattern matches no package, which is the normal case for proxmox-kernel-* on
+# Ubuntu and linux-image-* on PVE. Status first in the format string so a package
+# with an empty version cannot shift the remaining fields.
+kernel_package_rows() {
+    local pattern
+    for pattern in 'linux-image-*' 'proxmox-kernel-*'; do
+        dpkg-query -W -f='${db:Status-Abbrev} ${Package} ${Version}\n' "$pattern" 2>/dev/null || true
+    done | grep -v -e '-dbg ' -e '-dbgsym' || true
+}
+
+running="$(uname -r)"
+installed="$(newest_installed_kernel_release)"
+
+flag_pending=0
+if [[ -e "$REBOOT_FLAG_FILE" ]]; then
+    flag_pending=1
+fi
+
+{
+    printf '# HELP homelab_kernel_info Running kernel release and the newest installed one; value is always 1, releases are labels.\n'
+    printf '# TYPE homelab_kernel_info gauge\n'
+    printf '# HELP homelab_reboot_required Whether this host needs a reboot to pick up an installed kernel or package update (1) or not (0).\n'
+    printf '# TYPE homelab_reboot_required gauge\n'
+
+    if [[ -z "$installed" ]]; then
+        # No installed kernel package could be identified. Deliberately emit no
+        # homelab_reboot_required rather than a 0: a hardcoded "healthy" here
+        # would be indistinguishable from a genuinely up-to-date host, and this
+        # state means the check itself is broken. The absence rule in
+        # vmalert-rules/configs/reboot.yml is what surfaces it.
+        printf 'homelab_kernel_info{host="%s",running="%s",installed=""} 1\n' "$HOST" "$running"
+    else
+        pending=0
+        [[ "$running" != "$installed" ]] && pending=1
+        [[ "$flag_pending" -eq 1 ]] && pending=1
+        printf 'homelab_kernel_info{host="%s",running="%s",installed="%s"} 1\n' \
+            "$HOST" "$running" "$installed"
+        printf 'homelab_reboot_required{host="%s"} %s\n' "$HOST" "$pending"
+    fi
+} > "$TMP_FILE"
+
+chmod 0644 "$TMP_FILE"
+mv "$TMP_FILE" "$OUT_FILE"
+trap - EXIT

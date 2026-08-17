@@ -336,6 +336,12 @@ if [[ -n "${FILE_MAP_DEST[hba-textfile-exporter.py]:-}" ]]; then
     systemctl enable --now hba-textfile-exporter.timer
     systemctl start hba-textfile-exporter.service
 fi
+# Same bare-metal gate as the ZFS exporter above: absent from an LXC guest's
+# file map, so nothing here runs there.
+if [[ -n "${FILE_MAP_DEST[reboot-textfile-exporter]:-}" ]]; then
+    systemctl enable --now reboot-textfile-exporter.timer
+    systemctl start reboot-textfile-exporter.service
+fi
 if [[ -n "${FILE_MAP_DEST[smartctl-exporter-override.conf]:-}" ]]; then
     # Packaged unit name is smartctl_exporter (underscore), not the
     # smartctl-exporter (hyphen) this module used to ship.
@@ -361,6 +367,9 @@ if [[ -n "${FILE_MAP_DEST[zfs-pool-textfile-exporter]:-}" ]]; then
 fi
 if [[ -n "${FILE_MAP_DEST[hba-textfile-exporter.py]:-}" ]]; then
     systemctl is-active --quiet hba-textfile-exporter.timer
+fi
+if [[ -n "${FILE_MAP_DEST[reboot-textfile-exporter]:-}" ]]; then
+    systemctl is-active --quiet reboot-textfile-exporter.timer
 fi
 if [[ -n "${FILE_MAP_DEST[smartctl-exporter-override.conf]:-}" ]]; then
     systemctl is-active --quiet smartctl_exporter

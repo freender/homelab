@@ -132,6 +132,27 @@ FILE_SPECS = (
         "/etc/systemd/system/hba-textfile-exporter.timer",
         feature="hba",
     ),
+    # Pending-reboot reporting: whether the running kernel is older than the
+    # newest installed one. Bare metal only -- an LXC guest runs the PVE host's
+    # kernel and has no kernel packages of its own, so there is nothing it could
+    # reboot into. Same `baremetal` gate as the ZFS exporter, which also covers
+    # ghost (WSL, flagged lxc_guest) whose kernel comes from Windows, not apt.
+    FileSpec(
+        "reboot-textfile-exporter",
+        "/usr/local/bin/reboot-textfile-exporter",
+        mode="755",
+        feature="baremetal",
+    ),
+    FileSpec(
+        "reboot-textfile-exporter.service",
+        "/etc/systemd/system/reboot-textfile-exporter.service",
+        feature="baremetal",
+    ),
+    FileSpec(
+        "reboot-textfile-exporter.timer",
+        "/etc/systemd/system/reboot-textfile-exporter.timer",
+        feature="baremetal",
+    ),
     FileSpec("node-exporter.defaults", "/etc/default/prometheus-node-exporter"),
     # smartctl_exporter itself comes from the distro package
     # (prometheus-smartctl-exporter); we only override the packaged unit's
@@ -349,6 +370,9 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
             "zfs-pool-textfile-exporter",
             "zfs-pool-textfile-exporter.service",
             "zfs-pool-textfile-exporter.timer",
+            "reboot-textfile-exporter",
+            "reboot-textfile-exporter.service",
+            "reboot-textfile-exporter.timer",
         ])
         if has_wrapper:
             copy_files(common_dir, build_dir, ["smartctl-wrapper.sh"])

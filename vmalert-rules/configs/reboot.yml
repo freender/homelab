@@ -1,0 +1,77 @@
+groups:
+  - name: reboot
+    interval: 1m
+    rules:
+      # apt-upgrade installs kernel updates on its daily timer but deliberately
+      # never reboots. Until this rule existed its only signal was a print_warn
+      # emitted during a deploy run, so a host could sit on a superseded kernel
+      # for weeks with nothing reporting it.
+      #
+      # Bare metal only, by construction rather than by a host filter here: the
+      # series comes from reboot-textfile-exporter, which metrics-exporters gates
+      # on `baremetal`, so LXC guests never produce it. A guest runs the PVE
+      # host's kernel and has none of its own to boot into.
+      #
+      # Note the deliberate use of homelab_reboot_required and NOT the
+      # node_reboot_required that apt.prom already publishes on every host: that
+      # one is the distro collector's os.path.isfile('/run/reboot-required'),
+      # which on Debian/Proxmox has no hook creating the file and so reads 0
+      # forever. Alerting on it would look correct and never fire.
+      #
+      # 24h rather than the minutes-scale `for:` used elsewhere in this repo. A
+      # pending kernel is not urgent -- it is a scheduling reminder, and firing
+      # while the daily apt-upgrade window is still in progress would page for
+      # something that has existed for ten minutes. The tradeoff is that vmalert
+      # restarts reset the timer, so a redeploy of this rules module delays the
+      # alert by up to another day; that is acceptable for a non-urgent signal
+      # and is why this is not shortened to compensate.
+      - alert: RebootRequired
+        expr: homelab_reboot_required == 1
+        for: 24h
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.host }} needs a reboot"
+          description: "{{ $labels.host }} has had a reboot pending for over 24h: it is running an older kernel than the newest one installed, or a package update set the reboot-required flag. Check homelab_kernel_info{host=\"{{ $labels.host }}\"} for the running vs installed kernel release, then schedule a reboot. Nothing reboots these hosts automatically."
+
+      # Absence, per the pattern established by ZfsPoolMetricsMissing: one
+      # absent_over_time() per exact host, because a regex matcher only detects
+      # full-vector absence and so stays silent unless every listed host goes
+      # dark at once. These are exactly the hosts whose metrics-exporters config
+      # has no lxc_guest flag.
+      #
+      # This also covers the case where the exporter runs but cannot identify an
+      # installed kernel package: it emits homelab_kernel_info with an empty
+      # installed label and deliberately omits homelab_reboot_required rather
+      # than reporting a possibly-wrong 0, which shows up here as absence.
+      - alert: RebootMetricsMissing
+        expr: |
+          absent_over_time(homelab_reboot_required{host="ace"}[1h])
+          or absent_over_time(homelab_reboot_required{host="bray"}[1h])
+          or absent_over_time(homelab_reboot_required{host="clovis"}[1h])
+          or absent_over_time(homelab_reboot_required{host="osiris"}[1h])
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Pending-reboot metrics missing on {{ $labels.host }}"
+          description: "homelab_reboot_required has produced no samples for {{ $labels.host }} in 1 hour, so pending-kernel alerting is blind there. The window is 1h because the exporter only refreshes every 15 minutes. Check `systemctl status reboot-textfile-exporter.timer` and `journalctl -u reboot-textfile-exporter` on {{ $labels.host }}."
+
+      # No offsite absence rule yet, deliberately. cinci and cottonwood are the
+      # other two bare-metal hosts and belong in this coverage, but the exporter
+      # has not been deployed to them: they authenticate with the `offsite` key,
+      # which was encrypted at ship time, so metrics-exporters was skipped there.
+      # Adding the rule now would mean shipping an alert that is guaranteed to
+      # fire within 15 minutes and stay firing until that deploy happens --
+      # accurate, but pure noise for a gap we already know about.
+      #
+      # When metrics-exporters is next deployed to cinci and cottonwood, add:
+      #
+      #   - alert: RebootMetricsMissingOffsite
+      #     expr: |
+      #       absent_over_time(homelab_reboot_required{host="cinci"}[3h])
+      #       or absent_over_time(homelab_reboot_required{host="cottonwood"}[3h])
+      #     for: 15m
+      #
+      # with the 3h window (vs 1h on-prem) to tolerate offsite link flaps, the
+      # same rationale as ZfsPoolMetricsMissingOffsite in zfs-pools.yml.

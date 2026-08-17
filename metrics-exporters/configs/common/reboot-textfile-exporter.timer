@@ -1,0 +1,16 @@
+[Unit]
+Description=Refresh pending-reboot textfile metrics
+
+[Timer]
+# The state only changes when apt installs or removes a kernel, so this is
+# deliberately slower than the ZFS and HBA timers -- a faster poll would just
+# re-read dpkg's status database. OnBootSec is short so a host that has just
+# been rebooted clears its pending flag promptly instead of alerting for another
+# quarter of an hour.
+OnBootSec=2min
+OnUnitActiveSec=15min
+AccuracySec=1min
+Unit=reboot-textfile-exporter.service
+
+[Install]
+WantedBy=timers.target

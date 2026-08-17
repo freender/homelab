@@ -108,6 +108,8 @@ Then `./deploy metrics-exporters <host>` from the repo.
 - Intel GPU metrics via `igpu-exporter` on selected PVE hosts
 - SAS HBA controller temperature and per-PHY link health via node_exporter
   textfile collector (`homelab_hba_*`) on hosts with `hba: true`
+- Pending-reboot state via node_exporter textfile collector
+  (`homelab_reboot_required`, `homelab_kernel_info`) on bare metal
 
 ## Ports
 - node_exporter: `:9100`
@@ -133,6 +135,9 @@ Then `./deploy metrics-exporters <host>` from the repo.
 - `/usr/local/bin/hba-textfile-exporter`
 - `/etc/systemd/system/hba-textfile-exporter.service`
 - `/etc/systemd/system/hba-textfile-exporter.timer`
+- `/usr/local/bin/reboot-textfile-exporter`
+- `/etc/systemd/system/reboot-textfile-exporter.service`
+- `/etc/systemd/system/reboot-textfile-exporter.timer`
 
 **In this repo:**
 - `configs/common/node-exporter.defaults`
@@ -149,7 +154,52 @@ Then `./deploy metrics-exporters <host>` from the repo.
 - `configs/common/hba-textfile-exporter.py`
 - `configs/common/hba-textfile-exporter.service`
 - `configs/common/hba-textfile-exporter.timer`
+- `configs/common/reboot-textfile-exporter`
+- `configs/common/reboot-textfile-exporter.service`
+- `configs/common/reboot-textfile-exporter.timer`
 - `../deploy`
+
+### Pending-reboot reporting
+
+`apt-upgrade` installs kernel updates on a daily timer and never reboots; its
+only signal was a `print_warn` during a deploy run. `reboot-textfile-exporter`
+turns that into `homelab_reboot_required` (0/1) plus `homelab_kernel_info`,
+which carries the running and newest-installed kernel release as labels.
+`vmalert-rules/configs/reboot.yml` alerts on it after 24h.
+
+Bare metal only, via the same `baremetal` gate as the ZFS exporter. An LXC guest
+runs the PVE host's kernel, reports it in `uname -r`, and has no kernel packages
+of its own, so it has nothing to reboot into. `ghost` is flagged `lxc_guest` and
+is excluded by the same gate, which is also correct for a different reason — WSL
+takes its kernel from Windows, not from apt.
+
+It compares the running kernel against the newest **installed** kernel package
+rather than reading `/var/run/reboot-required`. That file comes from an apt hook
+in `update-notifier-common`, which is a Ubuntu default and is present on `cinci`
+only; on the Proxmox nodes and `cottonwood` it is never created, so a check built
+on it alone would report "no reboot needed" forever. The file is still read as a
+supplementary signal, since where it does exist it also catches non-kernel
+reboots that a kernel comparison cannot see.
+
+**Do not alert on `node_reboot_required`.** That series already exists on every
+host, emitted into `apt.prom` by `apt_info.py` from the distro package
+`prometheus-node-exporter-collectors`, and it is precisely the
+`/run/reboot-required` check described above. Verified 2026-08-16 on `ace`,
+`bray`, `clovis` and `osiris`: all four report `node_reboot_required 0.0` with
+that package installed and `update-notifier-common` absent, so on Debian/Proxmox
+the value is structurally 0 and can never become 1. It is trustworthy only on
+the Ubuntu hosts. `homelab_reboot_required` exists under its own name for this
+reason, and this module deliberately does not overwrite `apt.prom`.
+
+Kernel releases are derived from package names, so no Proxmox or Ubuntu series
+is hardcoded and a major upgrade does not break the check. Only `ii` packages
+count: `un` rows have blank versions (on PVE the unsigned name is virtual,
+provided by the real `-signed` package) and `rc` rows carry real but stale
+versions that would otherwise fabricate a pending reboot. Meta and helper
+packages (`linux-image-generic`, `proxmox-kernel-7.0`, `proxmox-kernel-helper`)
+encode no release and are skipped — without that, `proxmox-kernel-helper 9.2.0`
+sorts above every real kernel. `tests/test_reboot_exporter.py` covers each of
+these cases against live-host output.
 
 ### Where each exporter binary comes from
 

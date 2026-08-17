@@ -17,6 +17,7 @@ RULE_FILES = (
     "important-containers.yml",
     "nic-link.yml",
     "node-down.yml",
+    "reboot.yml",
     "sas-links.yml",
     "smart-disks.yml",
     "systemd-failed.yml",
