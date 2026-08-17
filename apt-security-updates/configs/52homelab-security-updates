@@ -1,0 +1,55 @@
+// Managed by homelab (apt-security-updates) -- do not edit on the host.
+//
+// Read after the package's own 50unattended-upgrades, so the #clear directives
+// below discard its defaults before ours are set. This is load-bearing: APT
+// list assignment *appends*, it does not replace, so without #clear the
+// package's origin list would remain active alongside ours and this file would
+// widen the scope instead of narrowing it.
+
+#clear Unattended-Upgrade::Origins-Pattern;
+Unattended-Upgrade::Origins-Pattern {
+    // Debian security only. Verified against `apt-cache policy` on ace
+    // (2026-08-16), which reports for security.debian.org:
+    //     o=Debian a=stable-security n=trixie-security l=Debian-Security
+    // The Proxmox repo is o=Proxmox n=trixie c=pve-no-subscription, so it
+    // cannot match this pattern. That separation is the entire point of this
+    // module: Debian security patches apply themselves, Proxmox packages
+    // (pve-manager, qemu-server, the kernel, ZFS) stay a human decision taken
+    // during the monthly window documented in pve-upgrade/README.md.
+    //
+    // stable-updates and backports are deliberately absent. Backports is
+    // enabled on these hosts by metrics-exporters for
+    // prometheus-smartctl-exporter, and it is not a security suite.
+    "origin=Debian,codename=${distro_codename}-security,label=Debian-Security";
+};
+
+#clear Unattended-Upgrade::Package-Blacklist;
+Unattended-Upgrade::Package-Blacklist {
+    // Belt and braces. The origin pattern above already excludes everything
+    // Proxmox ships, so nothing here should ever match. It exists so that a
+    // future mistake in the pattern fails closed rather than dist-upgrading a
+    // hypervisor's kernel or storage stack unattended.
+    "^proxmox-";
+    "^pve-";
+    "^libpve-";
+    "^zfs";
+    "^libzfs";
+};
+
+// Never reboot a hypervisor unattended. Rebooting is a human decision taken
+// during the monthly window; homelab_reboot_required (metrics-exporters) is
+// what surfaces that one is needed.
+Unattended-Upgrade::Automatic-Reboot "false";
+Unattended-Upgrade::Automatic-Reboot-WithUsers "false";
+
+// Kernel and dependency lifecycle on these nodes belongs to Proxmox and to the
+// manual dist-upgrade, not to this module. Removing a kernel automatically is
+// exactly the class of unattended action that must not happen here.
+Unattended-Upgrade::Remove-Unused-Kernel-Packages "false";
+Unattended-Upgrade::Remove-New-Unused-Dependencies "false";
+Unattended-Upgrade::Remove-Unused-Dependencies "false";
+
+// Apply in smaller transactions, so an interrupted run (power loss, the UPS
+// shutdown path) leaves the package database consistent rather than half-way
+// through one large dpkg invocation.
+Unattended-Upgrade::MinimalSteps "true";

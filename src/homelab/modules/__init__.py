@@ -6,6 +6,7 @@ from pathlib import Path
 
 from ..deploy import DeploySession
 from .apcupsd import deploy as deploy_apcupsd
+from .apt_security_updates import deploy as deploy_apt_security_updates
 from .apt_upgrade import deploy as deploy_apt_upgrade
 from .disk_spindown import deploy as deploy_disk_spindown
 from .docker import deploy as deploy_docker
@@ -43,6 +44,10 @@ MODULES: dict[str, ModuleDefinition] = {
     "apcupsd": ModuleDefinition(
         name="apcupsd",
         deploy=deploy_apcupsd,
+    ),
+    "apt-security-updates": ModuleDefinition(
+        name="APT Security Updates",
+        deploy=deploy_apt_security_updates,
     ),
     "apt-upgrade": ModuleDefinition(
         name="APT Dist-Upgrade",
@@ -160,6 +165,10 @@ MODULE_ORDER = [
     # Engine, swarm membership and the overlay must exist before any stack that
     # attaches to net_overlay is reconciled.
     "docker-stacks",
+    # Both apt modules last, after everything that could install a package they
+    # would then upgrade. apt-security-updates before apt-upgrade only so the
+    # mutual-exclusion failure in the former surfaces before the latter runs.
+    "apt-security-updates",
     "apt-upgrade",
     "pve-upgrade",
 ]

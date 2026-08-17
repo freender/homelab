@@ -12,6 +12,7 @@ MODULE_DIR = "vmalert-rules"
 REMOTE_ROOT = "/tmp/homelab-vmalert-rules"
 REMOTE_RULES_DIR = "/mnt/cache/appdata/vmalert/rules"
 RULE_FILES = (
+    "apt-updates.yml",
     "critical-containers.yml",
     "docker.yml",
     "important-containers.yml",

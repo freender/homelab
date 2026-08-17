@@ -1,0 +1,58 @@
+groups:
+  - name: apt-updates
+    interval: 1m
+    rules:
+      # Both rules read apt_upgrades_pending, which every host already publishes
+      # into apt.prom via apt_info.py from the distro package
+      # prometheus-node-exporter-collectors. Nothing in this repo collects it --
+      # it was simply never alerted on, which is how four hypervisors reached 20
+      # pending security updates unnoticed.
+
+      # Safety net for apt-security-updates, not a patching reminder. On the
+      # hosts that module covers, Debian security updates install themselves
+      # within a day, so this expression should be empty almost all the time; a
+      # host that stays non-zero for a week means the automation stopped working
+      # (unattended-upgrades disabled, apt-daily-upgrade.timer masked, a held
+      # package, no disk space). It is deliberately not scoped to those hosts:
+      # anything with an unpatched security backlog for a week is worth knowing
+      # about, and the hosts covered by apt-upgrade clear it daily on their own,
+      # so they can never reach 7d. That makes the rule self-selecting rather
+      # than carrying a host list that drifts out of step with hosts.conf.
+      #
+      # 7d survives a vmalert restart: vmalert runs with -remoteWrite.url and
+      # -remoteRead.url, so pending-alert start times persist to
+      # VictoriaMetrics as ALERTS_FOR_STATE and are restored on startup.
+      # Confirmed live on helm, 2026-08-17.
+      #
+      # New CVEs landing do not reset the timer. `for:` only restarts when the
+      # expression stops returning a series for that label set -- i.e. when the
+      # count actually reaches 0 and the host is fully patched. A count moving
+      # 20 -> 21 changes the value, not the label set.
+      - alert: SecurityUpdatesPending
+        expr: sum by (host) (apt_upgrades_pending{origin=~".*[Ss]ecurity.*"}) > 0
+        for: 7d
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.host }} has had security updates pending for a week"
+          description: "{{ $labels.host }} has carried at least one unapplied security update continuously for 7 days ({{ $value }} pending now). On a host covered by apt-security-updates this means the automation has stopped: check `systemctl status apt-daily-upgrade.timer` and `journalctl -u unattended-upgrades`, and confirm `apt-config dump Unattended-Upgrade::Origins-Pattern` still resolves. Elsewhere it means the host is genuinely behind."
+
+      # The weekly digest, not an incident. Proxmox packages are upgraded by
+      # hand during the monthly window (pve-upgrade/README.md), so this
+      # expression is true nearly all the time by design -- it exists to
+      # produce one summary message, not to be actioned on sight.
+      #
+      # severity: info is what routes it: monitoring-config sends this alertname
+      # to its own Alertmanager route with repeat_interval 168h and group_by
+      # [alertname], so all four nodes collapse into a single notification once
+      # a week. Do not give it warning/critical severity or shorten the `for:`
+      # without changing that route, or it becomes a daily nag for a condition
+      # that is deliberately left standing between maintenance windows.
+      - alert: ProxmoxUpdatesAvailable
+        expr: sum by (host) (apt_upgrades_pending{origin=~"Proxmox.*"}) > 0
+        for: 1h
+        labels:
+          severity: info
+        annotations:
+          summary: "{{ $labels.host }}: {{ $value }} Proxmox updates available"
+          description: "{{ $labels.host }} has {{ $value }} pending packages from the Proxmox repository. These are deliberately not applied automatically -- run the monthly rolling upgrade documented in pve-upgrade/README.md (osiris, bray, ace, clovis, one node at a time), and reboot only where homelab_reboot_required is 1."

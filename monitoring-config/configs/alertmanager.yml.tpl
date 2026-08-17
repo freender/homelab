@@ -88,6 +88,30 @@ route:
         - datastore
       repeat_interval: 24h
       continue: false
+    # The Proxmox update digest, not an alert. Proxmox packages are upgraded by
+    # hand during the monthly window, so ProxmoxUpdatesAvailable is true nearly
+    # all the time by design -- at the parent's 4h repeat that would page six
+    # times a day for a condition that is *supposed* to stand between windows,
+    # which is exactly the noise that gets a receiver muted.
+    #
+    # repeat_interval 168h turns it into one message a week. group_by is
+    # narrowed to alertname alone -- dropping host, name and severity -- so all
+    # four nodes collapse into a single notification listing each of them,
+    # rather than one per node. That is the whole point: the weekly digest is
+    # one message, not four.
+    #
+    # Muted by scheduled-maintenance like the default route: there is nothing
+    # time-critical here, and a digest that lands mid-window would be
+    # indistinguishable from the churn the window exists to absorb.
+    - receiver: mwbot
+      matchers:
+        - alertname="ProxmoxUpdatesAvailable"
+      group_by:
+        - alertname
+      repeat_interval: 168h
+      mute_time_intervals:
+        - scheduled-maintenance
+      continue: false
     - receiver: plex-requests
       matchers:
         - name=~"plex|seerr"

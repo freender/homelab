@@ -21,10 +21,14 @@ groups:
       # 24h rather than the minutes-scale `for:` used elsewhere in this repo. A
       # pending kernel is not urgent -- it is a scheduling reminder, and firing
       # while the daily apt-upgrade window is still in progress would page for
-      # something that has existed for ten minutes. The tradeoff is that vmalert
-      # restarts reset the timer, so a redeploy of this rules module delays the
-      # alert by up to another day; that is acceptable for a non-urgent signal
-      # and is why this is not shortened to compensate.
+      # something that has existed for ten minutes.
+      #
+      # This survives a vmalert restart. vmalert runs with -remoteWrite.url and
+      # -remoteRead.url (docker-stacks/stacks/vmalert/helm.yml), so pending-alert
+      # start times are persisted to VictoriaMetrics as ALERTS_FOR_STATE and
+      # restored on startup; confirmed live on helm 2026-08-17. An earlier
+      # revision of this comment claimed a redeploy reset the timer, which was
+      # wrong -- long `for:` durations are safe here.
       - alert: RebootRequired
         expr: homelab_reboot_required == 1
         for: 24h

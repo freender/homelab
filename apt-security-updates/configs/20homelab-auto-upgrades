@@ -1,0 +1,14 @@
+// Managed by homelab (apt-security-updates) -- do not edit on the host.
+//
+// These keys drive the distro's apt-daily.timer (package index refresh) and
+// apt-daily-upgrade.timer, and the latter is what actually invokes
+// unattended-upgrades. Without them the config in 52homelab-security-updates
+// is correct but never runs.
+//
+// PVE's own pve-daily-update.timer also refreshes the index. Both are
+// idempotent and the duplicate refresh costs nothing; pve-daily-update is left
+// alone because it is also what feeds the node's "updates available" state in
+// the web UI.
+APT::Periodic::Update-Package-Lists "1";
+APT::Periodic::Unattended-Upgrade "1";
+APT::Periodic::AutocleanInterval "7";
