@@ -209,26 +209,6 @@ node_in_csv() {
     return 1
 }
 
-ensure_required_packages() {
-    local missing_pkgs=()
-    local package
-
-    for package in mbuffer vim mc ripgrep; do
-        if ! dpkg -s "$package" >/dev/null 2>&1; then
-            missing_pkgs+=("$package")
-        fi
-    done
-
-    if [[ ${#missing_pkgs[@]} -eq 0 ]]; then
-        print_sub "Required packages already installed"
-        return 0
-    fi
-
-    print_sub "Installing required packages: ${missing_pkgs[*]}"
-    apt-get update -qq
-    apt-get install -y -q "${missing_pkgs[@]}"
-}
-
 configure_native_zfs_scrub_timers() {
     local pool
     local monthly_timer
@@ -462,9 +442,6 @@ case "$HOST_TYPE" in
 
         print_sub "Deploying cluster rejoin helper..."
         install_file homelab-pve-cluster-rejoin-helper || exit 1
-
-        print_sub "Installing required packages..."
-        ensure_required_packages || exit 1
 
         print_sub "Importing ZFS pools..."
         import_zfs_pools "$IMPORT_POOLS"

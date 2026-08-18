@@ -68,6 +68,15 @@ Remote apt dist-upgrade across PVE and Ubuntu hosts
 ./deploy apt-upgrade all
 ```
 
+### [base-packages](base-packages/)
+Baseline package set (`mbuffer`, `vim`, `mc`, `ripgrep`) on every apt-managed host.
+Runs first in the module order, since later modules assume these tools exist.
+Per-host additions go in `hosts.conf` under `base-packages.extra`.
+
+```bash
+./deploy base-packages all
+```
+
 ### [docker](docker/)
 Docker management scripts
 - `start.sh`: Update and start all containers (Traefik first)
