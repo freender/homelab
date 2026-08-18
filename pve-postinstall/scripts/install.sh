@@ -213,7 +213,7 @@ ensure_required_packages() {
     local missing_pkgs=()
     local package
 
-    for package in mbuffer vim mc; do
+    for package in mbuffer vim mc ripgrep; do
         if ! dpkg -s "$package" >/dev/null 2>&1; then
             missing_pkgs+=("$package")
         fi

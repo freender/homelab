@@ -45,6 +45,28 @@ cleanup_legacy_rebuild_bundle() {
     fi
 }
 
+ensure_required_packages() {
+    local missing_pkgs=()
+    local package
+
+    # shellcheck disable=SC2043 # single package today; loop shape matches
+    # pve-postinstall's ensure_required_packages so more packages can be added later
+    for package in ripgrep; do
+        if ! dpkg -s "$package" >/dev/null 2>&1; then
+            missing_pkgs+=("$package")
+        fi
+    done
+
+    if [[ ${#missing_pkgs[@]} -eq 0 ]]; then
+        print_sub "Required packages already installed"
+        return 0
+    fi
+
+    print_sub "Installing required packages: ${missing_pkgs[*]}"
+    apt-get update -qq
+    apt-get install -y -q "${missing_pkgs[@]}"
+}
+
 print_header "Ubuntu Setup"
 
 print_action "Legacy local rebuild bundle"
@@ -75,6 +97,9 @@ if [[ -e "/usr/share/zoneinfo/$SYSTEM_TIMEZONE" ]]; then
 else
     print_warn "timezone data not found for $SYSTEM_TIMEZONE"
 fi
+
+print_action "Required packages"
+ensure_required_packages
 
 print_action "Unwanted default services"
 # openipmi: LSB init script that fails at boot on hardware with no BMC/IPMI
