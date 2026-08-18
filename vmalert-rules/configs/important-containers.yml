@@ -192,6 +192,22 @@ groups:
         expr: absent_over_time(container_last_seen{job="cadvisor", host="cinci", name="hawser"}[5m]) and on(host) (min_over_time(up{job="pve-node"}[10m]) == 1)
         labels: {severity: warning, category: docker, site: offsite, host: cinci, name: hawser}
         annotations: {summary: "cinci / hawser is missing", description: "Important app container has not been seen by cAdvisor for 5 minutes."}
+      # The immich server itself, not just its three sidecars. It was the one
+      # container in the whole fleet with no rule, and it went down on cinci for
+      # 12h in Aug 2026 in total silence while -machine-learning, -postgres and
+      # -redis all stayed up and quiet -- exactly the shape that hides an outage,
+      # since the sidecars do not fail when the server does.
+      #
+      # cinci and cottonwood immich are host-local compose, not repo-managed
+      # (docker-stacks/stacks/immich/ has only neo.yml), so nothing generates
+      # these rules from a compose file and they drift by hand. Note cinci names
+      # its database immich-postgres where neo and cottonwood use
+      # immich-postgresql; the rule below and the one after it match each host's
+      # actual container name, so do not "normalize" one without the other.
+      - alert: ImportantContainerMissing
+        expr: absent_over_time(container_last_seen{job="cadvisor", host="cinci", name="immich"}[5m]) and on(host) (min_over_time(up{job="pve-node"}[10m]) == 1)
+        labels: {severity: warning, category: docker, site: offsite, host: cinci, name: immich}
+        annotations: {summary: "cinci / immich is missing", description: "Important app container has not been seen by cAdvisor for 5 minutes."}
       - alert: ImportantContainerMissing
         expr: absent_over_time(container_last_seen{job="cadvisor", host="cinci", name="immich-machine-learning"}[5m]) and on(host) (min_over_time(up{job="pve-node"}[10m]) == 1)
         labels: {severity: warning, category: docker, site: offsite, host: cinci, name: immich-machine-learning}
