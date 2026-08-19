@@ -7,10 +7,29 @@ global:
 
 route:
   receiver: mwbot
+  # Deliberately coarse: one notification per condition, listing every host and
+  # container it affects, rather than one per host. `host` and `name` used to be
+  # here, which meant a fleet-wide condition arrived as one message per member --
+  # SecurityUpdatesPending on eight hosts was eight messages, and Docker dying on
+  # tower was seventeen ImportantContainerMissing messages describing one event.
+  # None of them said how wide the problem was, which is the one thing you cannot
+  # reconstruct from a single message.
+  #
+  # This is the same narrowing the ProxmoxUpdatesAvailable route below has used
+  # since it was added; that route stays separate only for its 168h repeat.
+  #
+  # `severity` stays because the mwbot receiver picks its icon from
+  # `.CommonLabels.severity`: drop it and a group of mixed severity renders the
+  # blue "info" icon for a critical. It costs nothing to keep -- severity is
+  # effectively determined by alertname here (CriticalContainerMissing vs
+  # ImportantContainerMissing, CpuTemperatureHigh vs CpuTemperatureCritical), so
+  # it almost never splits a group that would otherwise have merged.
+  #
+  # Routes that must NOT collapse carry their own group_by and say why: `proxmox`
+  # (one alertname covers every distinct PVE/PBS event) and `ZfsPoolUnhealthy`
+  # (per-pool hardware faults) below.
   group_by:
     - alertname
-    - host
-    - name
     - severity
   group_wait: 30s
   group_interval: 5m
@@ -112,9 +131,20 @@ route:
       mute_time_intervals:
         - scheduled-maintenance
       continue: false
+    # Keeps the pre-2026-08-19 fine grouping rather than inheriting the parent's
+    # narrowed group_by. This channel has external users in it, and `name` is the
+    # only word in the message they can act on -- "Plex is down" is a service
+    # status, "CriticalContainerMissing x2" is an operator's alert leaking into a
+    # user-facing channel. The collapse the parent route exists for also has
+    # nothing to offer here: at most two services can ever be in this group.
     - receiver: plex-requests
       matchers:
         - name=~"plex|seerr"
+      group_by:
+        - alertname
+        - host
+        - name
+        - severity
       mute_time_intervals:
         - scheduled-maintenance
       continue: false
@@ -130,9 +160,21 @@ route:
     # the whole replacement window at a volume worth leaving unsilenced.
     # Scoped to this alert, not all of alertgroup="zfs-pools": the capacity and
     # metrics-missing rules have different urgency and should keep the default.
+    #
+    # group_by is kept fine for the same reason the repeat is slow: each degraded
+    # pool is a separate piece of failing hardware with its own disk to source and
+    # its own resilver to wait out. Collapsing two of them into one notification
+    # would let the second inherit the first's 24h repeat and disappear behind it
+    # -- and on a pool that may have no redundancy left, that is the failure this
+    # route is written to prevent.
     - receiver: mwbot
       matchers:
         - alertname="ZfsPoolUnhealthy"
+      group_by:
+        - alertname
+        - host
+        - name
+        - severity
       repeat_interval: 24h
       mute_time_intervals:
         - scheduled-maintenance
@@ -236,20 +278,52 @@ time_intervals:
         location: America/New_York
 
 receivers:
+  # Two renderings, chosen by group size, because the route's group_by is now
+  # coarse enough that a group can hold every container on a host.
+  #
+  # A one-alert group renders exactly as it did before this file grew the
+  # grouping change -- full severity/host/name/summary/description. That is still
+  # the overwhelmingly common case and it loses nothing.
+  #
+  # A multi-alert group renders one line per member instead, because the old
+  # per-alert block is 5-6 lines and Telegram rejects a message over 4096
+  # characters outright. Seventeen containers missing on tower would have been a
+  # *dropped* notification, which is strictly worse than the noise the grouping
+  # was meant to fix. The per-member lists and each member's summary are
+  # hard-capped for the same reason -- 15 firing at 80 characters plus 8 resolved
+  # keeps the worst case near 2.5k, comfortably inside the limit. The header
+  # carries the true count, so a truncated list still tells you how wide the
+  # problem is.
+  #
+  # Firing and resolved are listed separately. A group re-notifies while members
+  # are clearing, so a single `range .Alerts` would list recovered hosts
+  # indistinguishably from broken ones under a [FIRING] header.
+  #
+  # The header count is `.Alerts.Firing`, not `.Alerts`: a group of four with
+  # three already recovered is not "[FIRING] CpuTemperatureHigh x4". Counting the
+  # whole group there overstates a live problem using alerts the same message
+  # goes on to list as resolved.
   - name: mwbot
     telegram_configs:
       - bot_token_file: /tmp/telegram_token
         chat_id: __TELEGRAM_CHATID__
         send_resolved: true
         message: |-
-          {{ if eq .Status "resolved" }}&#128994;{{ else if eq .CommonLabels.severity "critical" }}&#128308;{{ else if eq .CommonLabels.severity "warning" }}&#128993;{{ else }}&#128309;{{ end }} [{{ .Status | toUpper }}] {{ .CommonLabels.alertname }}{{ if .CommonLabels.name }}: {{ .CommonLabels.name }}{{ end }}
-          {{ range .Alerts }}
+          {{ if eq .Status "resolved" }}&#128994;{{ else if eq .CommonLabels.severity "critical" }}&#128308;{{ else if eq .CommonLabels.severity "warning" }}&#128993;{{ else }}&#128309;{{ end }} [{{ .Status | toUpper }}] {{ .CommonLabels.alertname }}{{ if .CommonLabels.name }}: {{ .CommonLabels.name }}{{ end }}{{ if gt (len .Alerts.Firing) 1 }} &#215;{{ len .Alerts.Firing }}{{ end }}
+          {{ if eq (len .Alerts) 1 }}{{ range .Alerts }}
           Severity: {{ .Labels.severity }}
           {{ if .Labels.host }}Host: {{ .Labels.host }}{{ end }}
           {{ if .Labels.name }}Name: {{ .Labels.name }}{{ end }}
           {{ .Annotations.summary }}
           {{ if .Annotations.description }}{{ .Annotations.description }}{{ end }}
-          {{ end }}
+          {{ end }}{{ else }}{{ if .CommonAnnotations.summary }}
+          {{ reReplaceAll "(?s)(.{200}).*" "$1 [...]" .CommonAnnotations.summary }}{{ end }}{{ if .Alerts.Firing }}
+          Firing ({{ len .Alerts.Firing }}):{{ range $i, $a := .Alerts.Firing }}{{ if lt $i 15 }}
+          &#8226; {{ if $a.Labels.host }}{{ $a.Labels.host }}{{ else if $a.Labels.instance }}{{ $a.Labels.instance }}{{ else }}?{{ end }}{{ if $a.Labels.name }} / {{ $a.Labels.name }}{{ end }}{{ if $a.Annotations.summary }} &#8212; {{ reReplaceAll "(?s)(.{80}).*" "$1 [...]" $a.Annotations.summary }}{{ end }}{{ end }}{{ end }}{{ if gt (len .Alerts.Firing) 15 }}
+          &#8226; [...] first 15 of {{ len .Alerts.Firing }} shown{{ end }}{{ end }}{{ if .Alerts.Resolved }}
+          Resolved ({{ len .Alerts.Resolved }}):{{ range $i, $a := .Alerts.Resolved }}{{ if lt $i 8 }}
+          &#8226; {{ if $a.Labels.host }}{{ $a.Labels.host }}{{ else if $a.Labels.instance }}{{ $a.Labels.instance }}{{ else }}?{{ end }}{{ if $a.Labels.name }} / {{ $a.Labels.name }}{{ end }}{{ end }}{{ end }}{{ if gt (len .Alerts.Resolved) 8 }}
+          &#8226; [...] first 8 of {{ len .Alerts.Resolved }} shown{{ end }}{{ end }}{{ end }}
 
   # Shared by PVE and PBS. pve_severity keeps its name rather than becoming
   # proxmox_severity: the label is set by the webhook body on each sending host,
