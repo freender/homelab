@@ -55,4 +55,4 @@ groups:
           severity: info
         annotations:
           summary: "{{ $labels.host }}: {{ $value }} Proxmox updates available"
-          description: "{{ $labels.host }} has {{ $value }} pending packages from the Proxmox repository. These are deliberately not applied automatically -- run the monthly rolling upgrade documented in pve-upgrade/README.md (osiris, bray, ace, clovis, one node at a time), and reboot only where homelab_reboot_required is 1."
+          description: "{{ $labels.host }} has {{ $value }} pending packages from the Proxmox repository. These are deliberately not applied automatically -- run the monthly rolling upgrade documented at https://github.com/freender/homelab/blob/main/pve-upgrade/README.md (osiris, bray, ace, clovis, one node at a time), and reboot only where homelab_reboot_required is 1."
