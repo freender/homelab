@@ -220,32 +220,54 @@ panels, so every disk swap meant editing ten panels by hand.
 
 It had already rotted by the time it was replaced (2026-08-20). Three serials
 belonged to disks that no longer existed, and the same serial carried different
-names on different panels — harmless only because each panel filters
-`rotational=`, so the wrong half never matched. Each panel carried the full
-map regardless of which half it could use.
+names on different panels -- harmless only because each panel filters
+`rotational=`, so the wrong half never matched. Each panel carried the full map
+regardless of which half it could use.
 
-This exporter deletes the map rather than relocating it. The names were always
-`<host> <pool> <position> (<size>)`, and every component of that is readable from
-the running system, so nothing is written down by a human and **no hardware
-identifier enters the repo**. Verified against the hand map: clovis's six raidz
-members and cottonwood's two mirror members reproduce their hand-written names
-exactly, from vdev order alone.
+This exporter deletes the map rather than relocating it. A name is
+`<host> <pool> [<position>]`, all of which is readable from the running system,
+so nothing is written down by a human and **no hardware identifier enters the
+repo**.
 
 | Component | Derived from |
 |---|---|
 | `Ace`, `Clovis` | the host's own name |
-| `Boot`, `VM-Flash`, `Cache` | the pool the disk belongs to |
-| `Z1` | the vdev type (raidz1) for pools with no fixed purpose name |
-| `D1..D6` / `A`,`B` | position in the vdev — numbered for raidz, lettered for a mirror |
-| `(20TB)` | `/sys/block/<dev>/size`, snapped to the decimal capacity on the box |
+| `Boot`, `VM-Flash`, `Vault`, `Cache` | the pool the disk belongs to |
+| `D1..D6` | the member's ordinal in that pool, in the order `zpool status` prints it -- which is vdev order, not device order (clovis's vault starts at `sde`). Omitted for a single-member pool. |
 
-The `Z1-A`/`Z1-B` letter the hand map used was dropped: it only distinguished
-ace's vault from clovis's, and the host name already does that.
+The host prefix is not decoration: panels group by `disk_label` alone, so two
+hosts producing the same name would silently merge two physical disks into one
+series. ace and clovis both have a `Vault D1`.
+
+#### What the name deliberately leaves out
+
+**Capacity.** It disambiguates nothing -- clovis has five identical 10 TB
+members -- and printing it needs a rounding heuristic, because disks are sold in
+decimal units that never land exactly on the number on the box. Every tolerance
+loose enough to turn 20,000,588,955,648 bytes into `20TB` also turns a 1.92 TB
+enterprise SSD into `2TB`, since those are sized exactly 4% below round. The
+exact byte count is published as the `size_bytes` label instead, where no
+rounding decision is needed. node_exporter has no whole-disk size metric, so
+this is the only source for it.
+
+**Vdev geometry.** An earlier version named raidz members `Z1` and mirror
+members `A`/`B`. That was dropped for two reasons. It makes identity depend on
+layout, so rebuilding vault-hdd as raidz2 would rename all nine of its disks and
+orphan their series -- pool names change far less often than pool layouts. And
+it was the sole reason this exporter needed an indentation-aware parse of the
+`zpool status` tree: container-vdev detection, section headers, per-vdev counter
+resets, letters-versus-numbers. Keyed on the pool, position is just the member's
+ordinal and the parser is a flat scan for lines beginning with `/`.
+
+Two consequences of the flat scan, both acceptable and neither reachable in this
+fleet: a pool with several vdevs numbers straight through them rather than
+restarting per vdev, and a cache/log/spare device would be numbered inline with
+the data members.
 
 #### No serial label
 
-`serial` is deliberately absent. It is not the join key — queries join on
-`(host, device)` — and it is genuinely ambiguous: for a USB-attached disk the
+`serial` is deliberately absent. It is not the join key -- queries join on
+`(host, device)` -- and it is genuinely ambiguous: for a USB-attached disk the
 kernel and smartctl disagree. cottonwood `sdb` is `Y93814AW0JNFS6S` to
 node_exporter and `S6SFNJ0WA41839Y` to smartctl, and cinci `sda` reports a bridge
 placeholder of all zeroes. The old dashboard needed *two* override entries per
@@ -279,17 +301,19 @@ nothing collides.
 Two failure modes are guarded because both are silent and both cost the whole
 host's metrics rather than one series. node_exporter rejects an *entire* textfile
 on a duplicate metric, so two NVMe namespaces on one controller cannot both claim
-the same smartctl device — the second is dropped with a reason on stderr. And an
+the same smartctl device -- the second is dropped with a reason on stderr. And an
 OFFLINE raidz member keeps the by-id path it was added with (`-L` cannot resolve
 an absent device), so it yields no series but still consumes its position;
 otherwise replacing a failed disk would renumber every healthy disk behind it and
-orphan their history. `tests/test_disk_label_exporter.py` covers both, plus the
-capacity rounding and the real `zpool status` output from all four layouts.
+orphan their history. That case is live on ace, whose vault `D3` failed on
+2026-08-10 while `D1`/`D2` kept their identity.
+`tests/test_disk_label_exporter.py` covers both, plus fleet-wide name uniqueness
+and the real `zpool status` output from all four layouts.
 
 #### The escape hatch: `metrics-exporters.disk_labels`
 
-For the rare disk whose useful name is not derivable — in no pool, not the boot
-disk — an optional per-host map renders to `/etc/homelab/disk-labels.conf`:
+For the rare disk whose useful name is not derivable -- in no pool, not the boot
+disk -- an optional per-host map renders to `/etc/homelab/disk-labels.conf`:
 
 ```yaml
 metrics-exporters:
@@ -299,7 +323,7 @@ metrics-exporters:
 
 Keyed by the model in `/sys/block/<dev>/device/model`, matched exactly or as a
 prefix (longest wins) so a firmware revision suffix does not have to be pinned.
-**Keyed by model, never by serial** — a model is not a hardware identifier, so
+**Keyed by model, never by serial** -- a model is not a hardware identifier, so
 this stays safe in a public repo. Only cottonwood uses it, for a USB drive whose
 enclosure reports a different model than the drive inside it.
 
@@ -316,6 +340,7 @@ because there is no packaged or released artifact to use.
 | `apcupsd-exporter` | this repo (`configs/common/apcupsd-exporter.py`) | homelab-specific script |
 | `hba-textfile-exporter` | this repo (`configs/common/hba-textfile-exporter.py`) | no exporter and no vendor tool reads a SAS2 HBA's temperature on Linux; see below |
 | `disk-label-textfile-exporter` | this repo (`configs/common/disk-label-textfile-exporter.py`) | homelab-specific naming derived from this fleet's pool layout |
+
 
 Nothing in this module downloads anything at deploy time any more, so `curl`,
 `tar` and the `golang-go` toolchain are no longer installed. `python3` (runs the

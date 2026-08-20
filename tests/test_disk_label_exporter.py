@@ -5,9 +5,8 @@ is that derivation actually reproduces what a human wrote by hand -- otherwise
 the replacement is a regression dressed up as a simplification.
 
 The fixtures below are real `zpool status -LP` output captured from ace, clovis,
-cottonwood and cinci on 2026-08-20, and the expected names are the ones the
-Grafana dashboard carried in its overrides on that date. clovis is the load
-bearing case: six raidz members whose names encode vdev order, which is the
+cottonwood and cinci on 2026-08-20. clovis is the load-bearing case: six raidz
+members whose positions encode vdev order rather than device order, which is the
 single fact that made "derive, don't map" viable.
 
 Two failure modes get their own tests because both are silent and both cost the
@@ -18,6 +17,9 @@ Two failure modes get their own tests because both are silent and both cost the
   - an OFFLINE raidz member keeps its by-id path (it has no kernel device to
     resolve to), and must still consume its position, or removing a failed disk
     silently renumbers every healthy disk behind it.
+
+And one that is silent but fleet-wide: panels group by `disk_label` alone, so a
+name that repeats across two hosts would merge two disks into one series.
 """
 
 from __future__ import annotations
@@ -112,15 +114,14 @@ def exporter():
     return _load()
 
 
-def _disk(device, size_bytes, rotational="1", model=""):
+def _disk(device, rotational="1", model="", size_bytes="10000831348736"):
     return {
         "device": device,
         "smart_device": device if device.startswith("sd") else device.split("n")[0],
-        "size_bytes": str(size_bytes),
+        "size_bytes": size_bytes,
         "rotational": rotational,
         "model": model,
         "pool": "",
-        "vdev": "",
         "position": "",
     }
 
@@ -136,113 +137,85 @@ def _labels(exporter, disks, status, host, root="", overrides=None):
     return {row["device"]: row["disk_label"] for row in rows}
 
 
-# --- capacity ------------------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    ("size_bytes", "expected"),
-    [
-        # Decimal capacities: a 20 TB drive really is 20.0006 TB, and snapping
-        # to the marketing number is what makes the legend readable.
-        (20_000_588_955_648, "20TB"),
-        (12_000_138_625_024, "12TB"),
-        (10_000_831_348_736, "10TB"),
-        (4_000_787_030_016, "4TB"),
-        (2_000_398_934_016, "2TB"),
-        (1_024_209_543_168, "1TB"),
-        (1_000_204_886_016, "1TB"),
-        (512_110_190_592, "512GB"),
-        (500_107_862_016, "500GB"),
-        (256_060_514_304, "256GB"),
-        # Genuinely fractional capacity must not be snapped to a wrong integer.
-        (1_500_000_000_000, "1.5TB"),
-        (0, ""),
-    ],
-)
-def test_capacity_reads_as_the_number_on_the_box(exporter, size_bytes, expected):
-    assert exporter.format_size(size_bytes) == expected
-
-
 # --- derivation reproduces the hand-written names -------------------------
 
 
-def test_clovis_raidz_members_match_the_hand_written_names(exporter):
+def test_clovis_raidz_members_are_numbered_in_vdev_order(exporter):
     """The six-member case, and the reason this approach works at all.
 
-    These names were maintained by hand in ten Grafana panels. Every one of them
-    falls out of vdev order, which is not the same as device order: sde is D1.
+    These positions were maintained by hand in ten Grafana panels. Every one of
+    them falls out of the order zpool prints members, which is not device
+    order: sde is D1.
     """
-    disks = {
-        "sda": _disk("sda", 10_000_831_348_736),
-        "sdb": _disk("sdb", 10_000_831_348_736),
-        "sdc": _disk("sdc", 10_000_831_348_736),
-        "sdd": _disk("sdd", 10_000_831_348_736),
-        "sde": _disk("sde", 12_000_138_625_024),
-        "sdf": _disk("sdf", 10_000_831_348_736),
-    }
+    disks = {name: _disk(name) for name in ("sda", "sdb", "sdc", "sdd", "sde", "sdf")}
     assert _labels(exporter, disks, CLOVIS_STATUS, "Clovis") == {
-        "sde": "Clovis Z1 D1 (12TB)",
-        "sdd": "Clovis Z1 D2 (10TB)",
-        "sdc": "Clovis Z1 D3 (10TB)",
-        "sdb": "Clovis Z1 D4 (10TB)",
-        "sda": "Clovis Z1 D5 (10TB)",
-        "sdf": "Clovis Z1 D6 (10TB)",
+        "sde": "Clovis Vault D1",
+        "sdd": "Clovis Vault D2",
+        "sdc": "Clovis Vault D3",
+        "sdb": "Clovis Vault D4",
+        "sda": "Clovis Vault D5",
+        "sdf": "Clovis Vault D6",
     }
 
 
-def test_pool_purpose_beats_vdev_geometry(exporter):
-    """rpool and vm-flash are named for what they are for, not how they are built.
+def test_pool_names_the_disk_not_its_vdev_layout(exporter):
+    """A disk is named for the pool it belongs to, never for the vdev geometry.
 
-    Both are single-disk pools with no container vdev, so they also cover the
-    "leaf directly under the pool" parse path, which is a different branch from
-    the raidz case above.
+    Encoding geometry would mean rebuilding vault-hdd as raidz2 renames all of
+    its disks and orphans their series; the pool name changes far less often.
+    rpool and vm-flash are also single-member pools, which covers the
+    "no position" branch.
     """
     disks = {
-        "nvme0n1": _disk("nvme0n1", 500_107_862_016, rotational="0"),
-        "nvme1n1": _disk("nvme1n1", 2_000_398_934_016, rotational="0"),
-        "sda": _disk("sda", 20_000_588_955_648),
-        "sdb": _disk("sdb", 20_000_588_955_648),
+        "nvme0n1": _disk("nvme0n1", rotational="0"),
+        "nvme1n1": _disk("nvme1n1", rotational="0"),
+        "sda": _disk("sda"),
+        "sdb": _disk("sdb"),
     }
-    labels = _labels(exporter, disks, ACE_STATUS, "Ace")
-    assert labels["nvme0n1"] == "Ace Boot (500GB)"
-    assert labels["nvme1n1"] == "Ace VM-Flash (2TB)"
+    assert _labels(exporter, disks, ACE_STATUS, "Ace") == {
+        "nvme0n1": "Ace Boot",
+        "nvme1n1": "Ace VM-Flash",
+        "sda": "Ace Vault D1",
+        "sdb": "Ace Vault D2",
+    }
 
 
-def test_mirror_members_are_lettered_not_numbered(exporter):
-    """A mirror is a set of equals, so A/B reads better than D1/D2 -- and that is
-    what the hand-written cottonwood names already used."""
+def test_mirror_members_are_numbered_like_any_other_pool(exporter):
     disks = {
-        "sda": _disk("sda", 4_000_787_030_016, rotational="0"),
-        "sdb": _disk("sdb", 4_000_787_030_016, rotational="0"),
+        "sda": _disk("sda", rotational="0"),
+        "sdb": _disk("sdb", rotational="0"),
     }
     assert _labels(exporter, disks, COTTONWOOD_STATUS, "Cottonwood") == {
-        "sda": "Cottonwood Cache B (4TB)",
-        "sdb": "Cottonwood Cache A (4TB)",
+        "sda": "Cottonwood Cache D2",
+        "sdb": "Cottonwood Cache D1",
     }
 
 
 def test_single_disk_pool_gets_no_position(exporter):
-    disks = {"sda": _disk("sda", 2_048_408_248_320, rotational="0")}
-    assert _labels(exporter, disks, CINCI_STATUS, "Cinci") == {"sda": "Cinci Cache (2TB)"}
+    disks = {"sda": _disk("sda", rotational="0")}
+    assert _labels(exporter, disks, CINCI_STATUS, "Cinci") == {"sda": "Cinci Cache"}
+
+
+def test_unknown_pool_falls_back_to_its_own_name(exporter):
+    """A pool this homelab has not seen still gets a readable name rather than
+    dropping through to the kernel device."""
+    status = CINCI_STATUS.replace("cache", "scratch")
+    disks = {"sda": _disk("sda")}
+    assert _labels(exporter, disks, status, "Cinci") == {"sda": "Cinci Scratch"}
 
 
 def test_non_zfs_root_disk_is_still_called_boot(exporter):
     """cinci and cottonwood boot from plain ext4, so there is no pool to name the
     boot disk after. Without the root-filesystem fallback it would be called
     "Cinci sdb", which is exactly the unreadable legend this replaces."""
-    disks = {
-        "sda": _disk("sda", 2_048_408_248_320, rotational="0"),
-        "sdb": _disk("sdb", 512_110_190_592, rotational="0"),
-    }
+    disks = {"sda": _disk("sda", rotational="0"), "sdb": _disk("sdb", rotational="0")}
     labels = _labels(exporter, disks, CINCI_STATUS, "Cinci", root="sdb")
-    assert labels["sdb"] == "Cinci Boot (512GB)"
+    assert labels["sdb"] == "Cinci Boot"
 
 
 def test_unpooled_disk_falls_back_to_its_device_name(exporter):
-    disks = {"sdc": _disk("sdc", 1_000_204_886_016)}
-    assert _labels(exporter, disks, CINCI_STATUS, "Cottonwood") == {
-        "sdc": "Cottonwood sdc (1TB)"
-    }
+    disks = {"sdc": _disk("sdc")}
+    assert _labels(exporter, disks, CINCI_STATUS, "Cottonwood") == {"sdc": "Cottonwood sdc"}
 
 
 def test_model_override_names_a_disk_derivation_cannot(exporter):
@@ -253,15 +226,11 @@ def test_model_override_names_a_disk_derivation_cannot(exporter):
     enclosure appends a firmware revision ("My Passport 0837") that should not
     have to be pinned.
     """
-    disks = {"sdc": _disk("sdc", 1_000_204_886_016, model="My Passport 0837")}
+    disks = {"sdc": _disk("sdc", model="My Passport 0837")}
     labels = _labels(
-        exporter,
-        disks,
-        CINCI_STATUS,
-        "Cottonwood",
-        overrides={"My Passport": "Passport"},
+        exporter, disks, CINCI_STATUS, "Cottonwood", overrides={"My Passport": "Passport"}
     )
-    assert labels["sdc"] == "Cottonwood Passport (1TB)"
+    assert labels["sdc"] == "Cottonwood Passport"
 
 
 def test_longest_matching_override_prefix_wins(exporter):
@@ -276,7 +245,7 @@ def test_longest_matching_override_prefix_wins(exporter):
     assert exporter.match_override("Samsung SSD 990 PRO", {"My Passport": "Passport"}) == ""
 
 
-# --- the two silent, host-wide failure modes ------------------------------
+# --- the silent, host-wide and fleet-wide failure modes --------------------
 
 
 def test_offline_member_still_consumes_its_position(exporter):
@@ -291,8 +260,19 @@ def test_offline_member_still_consumes_its_position(exporter):
     assert membership["sdb"]["position"] == "D2"
     # The offline member resolves to no kernel device, so it is absent from the
     # mapping entirely -- but D3 was consumed, not reused.
-    assert [key for key in membership if key.startswith("sd")] == ["sda", "sdb"]
+    assert sorted(key for key in membership if key.startswith("sd")) == ["sda", "sdb"]
     assert "D3" not in {entry["position"] for entry in membership.values()}
+
+
+def test_names_are_unique_across_the_fleet(exporter):
+    """Panels group by disk_label alone, so two hosts producing the same name
+    would silently merge two physical disks into one series. The host prefix is
+    what prevents it -- ace and clovis both have a "Vault D1"."""
+    ace = _labels(exporter, {"sda": _disk("sda")}, ACE_STATUS, "Ace")
+    clovis = _labels(exporter, {"sde": _disk("sde")}, CLOVIS_STATUS, "Clovis")
+    assert ace["sda"] == "Ace Vault D1"
+    assert clovis["sde"] == "Clovis Vault D1"
+    assert set(ace.values()).isdisjoint(clovis.values())
 
 
 def test_shared_smartctl_device_does_not_duplicate_a_series(exporter):
@@ -300,43 +280,27 @@ def test_shared_smartctl_device_does_not_duplicate_a_series(exporter):
     device. node_exporter rejects the *entire* textfile on a duplicate metric,
     which would unlabel every disk on the host, so the second one is dropped."""
     rows = [
-        {
-            "device": "nvme0n1",
-            "smart_device": "nvme0",
-            "disk_label": "Ace Boot (500GB)",
-            "pool": "rpool",
-            "vdev": "",
-            "position": "",
-            "role": "boot",
-            "rotational": "0",
-            "model": "",
-            "size_bytes": "500107862016",
-        },
-        {
-            "device": "nvme0n2",
-            "smart_device": "nvme0",
-            "disk_label": "Ace Boot 2 (500GB)",
-            "pool": "",
-            "vdev": "",
-            "position": "",
-            "role": "unassigned",
-            "rotational": "0",
-            "model": "",
-            "size_bytes": "500107862016",
-        },
+        {**_disk("nvme0n1", rotational="0"), "disk_label": "Ace Boot", "pool": "rpool"},
+        {**_disk("nvme0n2", rotational="0"), "disk_label": "Ace Boot 2"},
     ]
+    for row in rows:
+        row["smart_device"] = "nvme0"
     output = exporter.render(rows)
-    smart_lines = [
-        line for line in output.splitlines() if line.startswith("homelab_smart_disk_label")
-    ]
-    assert len(smart_lines) == 1
+    smart = [ln for ln in output.splitlines() if ln.startswith("homelab_smart_disk_label")]
+    assert len(smart) == 1
     # Both disks still get their own node_exporter-keyed series; only the
     # ambiguous smartctl view is collapsed.
-    disk_lines = [line for line in output.splitlines() if line.startswith("homelab_disk_label{")]
-    assert len(disk_lines) == 2
+    assert len([ln for ln in output.splitlines() if ln.startswith("homelab_disk_label{")]) == 2
 
 
 # --- label hygiene --------------------------------------------------------
+
+
+def _render_one(exporter, **kw):
+    rows = exporter.build(
+        {"sda": _disk("sda", **kw)}, exporter.parse_zpool_status(ACE_STATUS), "", "Ace", {}
+    )
+    return exporter.render(rows), rows
 
 
 def test_no_serial_label_is_emitted(exporter):
@@ -344,43 +308,34 @@ def test_no_serial_label_is_emitted(exporter):
     disk the kernel and smartctl report different values, and some bridges
     report a placeholder. Emitting one would reintroduce the identifier this
     design exists to avoid."""
-    rows = exporter.build(
-        {"sda": _disk("sda", 20_000_588_955_648)},
-        exporter.parse_zpool_status(ACE_STATUS),
-        "",
-        "Ace",
-        {},
-    )
-    output = exporter.render(rows)
+    output, _ = _render_one(exporter)
     assert "serial" not in output
 
 
 def test_no_host_label_is_emitted(exporter):
     """The scrape config attaches `host`; emitting our own would land as
     `exported_host` and break the (host, device) join every panel depends on."""
-    rows = exporter.build(
-        {"sda": _disk("sda", 20_000_588_955_648)},
-        exporter.parse_zpool_status(ACE_STATUS),
-        "",
-        "Ace",
-        {},
-    )
-    for line in exporter.render(rows).splitlines():
+    output, rows = _render_one(exporter)
+    for line in output.splitlines():
         if line.startswith("homelab_"):
             assert 'host="' not in line
     # ...but the host name still appears inside the label *value*, which is what
-    # makes the legend readable.
+    # makes the legend readable and fleet-unique.
     assert rows[0]["disk_label"].startswith("Ace ")
+
+
+def test_capacity_is_published_as_exact_bytes_not_a_rounded_string(exporter):
+    """Capacity is data, not part of the name. Printing it in the label would
+    need a rounding heuristic, and every tolerance loose enough to turn
+    20,000,588,955,648 into "20TB" also turns a 1.92TB enterprise SSD into
+    "2TB"."""
+    output, rows = _render_one(exporter, size_bytes="20000588955648")
+    assert 'size_bytes="20000588955648"' in output
+    assert "TB" not in rows[0]["disk_label"]
 
 
 def test_rotational_zero_survives_empty_label_filtering(exporter):
     """Empty labels are dropped, and rotational="0" must not be mistaken for one
     -- every NVMe panel filters on exactly that value."""
-    rows = exporter.build(
-        {"nvme1n1": _disk("nvme1n1", 2_000_398_934_016, rotational="0")},
-        exporter.parse_zpool_status(ACE_STATUS),
-        "",
-        "Ace",
-        {},
-    )
-    assert 'rotational="0"' in exporter.render(rows)
+    output, _ = _render_one(exporter, rotational="0")
+    assert 'rotational="0"' in output

@@ -2,21 +2,30 @@
 """Write human-readable disk names for the node_exporter textfile collector.
 
 Grafana's disk panels graph one series per physical disk, and a raw serial
-("S7HGNJ0Y413560K") is unreadable in a legend. Until now that was solved in the
-dashboard: ~966 hand-written field overrides mapping serial -> "Bray VM-Flash
-(2TB)", duplicated across ten panels, so every disk swap meant editing ten
-panels by hand. That map had already rotted -- three serials belonged to disks
-that no longer exist, and the same serial carried different names on different
-panels.
+("S7HGNJ0Y413560K") is unreadable in a legend. That used to be solved in the
+dashboard: ~966 hand-written field overrides mapping serial -> friendly name,
+duplicated across ten panels, so every disk swap meant editing ten panels by
+hand. The map had already rotted -- three serials belonged to disks that no
+longer existed, and the same serial carried different names on different panels.
 
-This exporter removes the map instead of relocating it. The names were always
-`<host> <pool> <position> (<size>)`, and every one of those components is
-readable from the running system, so nothing has to be written down by a human
-and no hardware identifier ever enters the repo. A disk swap is picked up on the
-next timer tick with no edit anywhere. Verified against the hand map on
-2026-08-20: clovis vault-hdd's six raidz members and cottonwood cache's two
-mirror members reproduce their hand-written names exactly, from vdev order
-alone.
+This exporter removes the map instead of relocating it. A name is
+`<host> <pool> [<position>]`, all of which is readable from the running system,
+so nothing has to be written down by a human and no hardware identifier ever
+enters the repo. A disk swap is picked up on the next timer tick with no edit
+anywhere.
+
+The name deliberately encodes as little as possible:
+
+  - No capacity. It disambiguates nothing (clovis has five identical 10TB
+    members) and printing it needs a rounding heuristic that is wrong for
+    exactly the drives that are sized just below a round number -- a 1.92TB
+    enterprise SSD reads as "2TB". The exact byte count is published as a label
+    instead, where it needs no rounding decision at all.
+  - No vdev geometry. "Z1" (raidz1) would have made a pool rebuilt as raidz2
+    rename every one of its disks and orphan nine series, and it is not what
+    anyone needs to locate a disk. It also cost the entire indentation-aware
+    tree parse this file used to carry; keyed on the pool instead, position is
+    just the member's ordinal.
 
 Deliberately no `serial` label. Serial is not the join key -- queries join on
 (host, device) -- and it is actively ambiguous: for a USB-attached disk the
@@ -38,14 +47,14 @@ group_left. They are the same disk; SATA devices render identically in both.
 No `host` label: the scrape config attaches one, and emitting our own would only
 produce a redundant `exported_host` (see homelab_zpool_* in VictoriaMetrics).
 The host name still appears *inside* the disk_label string, which is a value,
-not a label, so nothing collides.
+not a label, so nothing collides -- and it is what keeps names unique across the
+fleet, since panels group by disk_label alone.
 """
 
 from __future__ import annotations
 
 import os
 import re
-import string
 import subprocess
 import sys
 import tempfile
@@ -56,9 +65,9 @@ OUT_FILE = OUT_DIR / "disk-labels.prom"
 
 SYS_BLOCK = Path(os.environ.get("SYS_BLOCK_DIR", "/sys/block"))
 # Optional model -> component-name overrides, for the rare disk whose useful
-# name is not derivable (a USB enclosure whose model string is the bare drive
-# inside it). Keyed by model, never by serial: a model is not a hardware
-# identifier, so this file stays safe to render from the public repo.
+# name is not derivable (in no pool and not the boot disk). Keyed by model,
+# never by serial: a model is not a hardware identifier, so this file stays safe
+# to render from the public repo.
 OVERRIDES_FILE = Path(os.environ.get("DISK_LABEL_OVERRIDES_FILE", "/etc/homelab/disk-labels.conf"))
 
 # Only whole disks that node_exporter's diskstats collector reports and the
@@ -66,35 +75,15 @@ OVERRIDES_FILE = Path(os.environ.get("DISK_LABEL_OVERRIDES_FILE", "/etc/homelab/
 # not physical disks and would double-count.
 DEVICE_PATTERN = re.compile(r"^(sd[a-z]+|nvme\d+n\d+)$")
 
-# Pools whose display name is fixed by what the pool is for, rather than by the
-# vdev geometry underneath it. Anything else falls back to its vdev type, which
-# is how vault-hdd becomes "Z1".
+# How a pool reads in a legend. Anything not listed falls back to the pool's own
+# name, capitalised -- deliberately the pool and not its vdev layout, so
+# changing a pool's redundancy does not rename its disks.
 POOL_COMPONENT = {
     "rpool": "Boot",
     "vm-flash": "VM-Flash",
+    "vault-hdd": "Vault",
     "cache": "Cache",
 }
-
-# Mirrors the pool_role() mapping in zfs-pool-textfile-exporter so the two
-# exporters agree on what a pool is for.
-POOL_ROLE = {
-    "vault-hdd": "media",
-    "vm-flash": "vm",
-    "rpool": "boot",
-    "cache": "cache",
-}
-
-VDEV_COMPONENT = {
-    "raidz1": "Z1",
-    "raidz2": "Z2",
-    "raidz3": "Z3",
-    "mirror": "Mirror",
-}
-
-# `zpool status` section headers that appear at container-vdev depth but are not
-# vdevs. A leaf under one of these is auxiliary (L2ARC, SLOG, spare), not a data
-# member, so it gets the section name as its position rather than a data index.
-SECTIONS = {"logs", "cache", "spares", "special", "dedup"}
 
 
 def read_sysfs(path: Path) -> str:
@@ -109,31 +98,6 @@ def host_title() -> str:
     # "cottonwood" -> "Cottonwood". Deliberately not .title(), which would
     # mangle a hyphenated or digit-bearing hostname.
     return host[:1].upper() + host[1:]
-
-
-def snap(value: float) -> str:
-    """Round a capacity to the number a human would print on the box.
-
-    Disk capacities are decimal, so a 20 TB drive is 20.0006 TB and a 256 GB
-    NVMe is 256.06 GB -- both within a rounding error of their marketing size.
-    Anything genuinely fractional (a 1.5 TB drive) keeps one decimal rather than
-    being snapped to a wrong integer.
-    """
-    if value <= 0:
-        return "0"
-    nearest = round(value)
-    if nearest and abs(value - nearest) / value <= 0.06:
-        return str(nearest)
-    return f"{value:.1f}".rstrip("0").rstrip(".")
-
-
-def format_size(size_bytes: int) -> str:
-    if size_bytes <= 0:
-        return ""
-    terabytes = size_bytes / 1e12
-    if terabytes >= 1:
-        return f"{snap(terabytes)}TB"
-    return f"{snap(size_bytes / 1e9)}GB"
 
 
 def smart_device(device: str) -> str:
@@ -198,20 +162,22 @@ def discover_disks() -> dict[str, dict[str, str]]:
         disks[entry.name] = {
             "device": entry.name,
             "smart_device": smart_device(entry.name),
+            # Exact bytes, published as-is. node_exporter has no whole-disk size
+            # metric, so this is the only source -- and keeping it a raw number
+            # means no rounding decision is baked into anything.
             # /sys/block/*/size is in 512-byte sectors regardless of the disk's
             # real logical block size; that is the kernel's fixed unit here.
-            "size_bytes": str(int(sectors) * 512) if sectors.isdigit() else "0",
+            "size_bytes": str(int(sectors) * 512) if sectors.isdigit() else "",
             "rotational": read_sysfs(entry / "queue" / "rotational") or "0",
             "model": read_sysfs(entry / "device" / "model"),
             "pool": "",
-            "vdev": "",
             "position": "",
         }
     return disks
 
 
 def leaf_to_device(path: str) -> str:
-    """A `zpool status -LP` leaf path -> the whole-disk kernel name, or "".
+    """A `zpool status -LP` member path -> the whole-disk kernel name, or "".
 
     -L resolves a member to its kernel name, but only if the device is present:
     an OFFLINE member keeps whatever path it was added by (typically
@@ -227,84 +193,46 @@ def leaf_to_device(path: str) -> str:
     return name if DEVICE_PATTERN.match(name) else ""
 
 
-def position_label(vdev_type: str, index: int) -> str:
-    """Where this disk sits in its vdev, in the form that vdev type deserves.
-
-    raidz members are ordered and interchangeable, so they get D1..Dn. Mirror
-    members are a small set of equals, so they get A/B/C, which is how the
-    hand-written names already read.
-    """
-    if vdev_type == "mirror":
-        return string.ascii_uppercase[index] if index < 26 else str(index + 1)
-    if vdev_type.startswith("raidz"):
-        return f"D{index + 1}"
-    return ""
-
-
 def parse_zpool_status(output: str) -> dict[str, dict[str, str]]:
-    """device -> {pool, vdev, position} from `zpool status -LP` config blocks.
+    """device -> {pool, position} from `zpool status -LP` config blocks.
 
-    Indentation carries the tree: inside the config block every row starts with
-    a tab, then the pool at column 0, container vdevs at column 2, and their
-    members at column 4. A pool with no container vdev (a single-disk rpool)
-    puts its member at column 2 instead, which is distinguishable because a leaf
-    path always starts with "/".
+    Position is the member's ordinal within its pool, in the order zpool prints
+    it -- which is vdev order, not device order (clovis's vault-hdd starts at
+    sde). A pool with a single member gets no position, because there is nothing
+    to distinguish it from.
+
+    Members are found by looking for a leading "/" rather than by measuring
+    indentation. That is deliberate: this used to track container vdevs and
+    their depth so it could tell a raidz from a mirror and number them
+    differently, and all of that existed only to put "Z1" and "A"/"B" in a name.
+    Dropping that from the name dropped the parse with it.
+
+    Two consequences, both acceptable here and neither reachable in this fleet:
+    a pool with several vdevs numbers straight through them rather than
+    restarting per vdev, and a cache/log/spare device would be numbered inline
+    with the data members.
     """
-    membership: dict[str, dict[str, str]] = {}
+    order: dict[str, list[str]] = {}
     pool = ""
-    vdev = ""
-    vdev_type = ""
-    index = 0
     in_config = False
 
     for raw in output.splitlines():
-        stripped = raw.strip()
-        if stripped.startswith("pool:"):
-            pool = stripped.split(":", 1)[1].strip()
-            vdev = vdev_type = ""
-            in_config = False
-            continue
-        if stripped.startswith("config:"):
+        line = raw.strip()
+        if line.startswith("pool:"):
+            pool, in_config = line.split(":", 1)[1].strip(), False
+        elif line.startswith("config:"):
             in_config = True
-            continue
-        if not in_config or not raw.startswith("\t"):
-            continue
-        body = raw[1:]
-        if not body.strip():
-            continue
-        depth = len(body) - len(body.lstrip(" "))
-        fields = body.split()
-        if not fields:
-            continue
-        name = fields[0]
-
-        if depth == 0:
-            # The pool's own row; header rows (NAME ...) land here too.
-            continue
-        if depth == 2 and not name.startswith("/"):
-            # A container vdev, or a section header like logs/cache/spares.
-            vdev = name
-            vdev_type = "" if name in SECTIONS else name.rsplit("-", 1)[0]
-            index = 0
-            continue
-        if depth == 2:
-            # A leaf directly under the pool: single-disk pool, no container.
-            device = leaf_to_device(name)
-            if device:
-                membership[device] = {"pool": pool, "vdev": "", "position": ""}
-            continue
-        if depth >= 4:
-            device = leaf_to_device(name)
-            if device:
-                membership[device] = {
-                    "pool": pool,
-                    "vdev": vdev,
-                    "position": vdev if vdev in SECTIONS else position_label(vdev_type, index),
-                }
-            # Count even unresolvable members, so a failed disk does not
+        elif in_config and raw.startswith("\t") and line.startswith("/"):
+            # Count unresolvable members too, so a failed disk does not
             # renumber the ones that are still there.
-            index += 1
-    return membership
+            order.setdefault(pool, []).append(leaf_to_device(line.split()[0]))
+
+    return {
+        device: {"pool": pool, "position": f"D{index + 1}" if len(devices) > 1 else ""}
+        for pool, devices in order.items()
+        for index, device in enumerate(devices)
+        if device
+    }
 
 
 def zpool_membership() -> dict[str, dict[str, str]]:
@@ -354,10 +282,7 @@ def component(disk: dict[str, str], overrides: dict[str, str]) -> str:
         return override
     pool = disk["pool"]
     if pool:
-        if pool in POOL_COMPONENT:
-            return POOL_COMPONENT[pool]
-        vdev_type = disk["vdev"].rsplit("-", 1)[0] if disk["vdev"] else ""
-        return VDEV_COMPONENT.get(vdev_type) or pool[:1].upper() + pool[1:]
+        return POOL_COMPONENT.get(pool) or pool[:1].upper() + pool[1:]
     if disk.get("is_root"):
         return "Boot"
     return disk["device"]
@@ -367,15 +292,7 @@ def compose_label(disk: dict[str, str], host: str, overrides: dict[str, str]) ->
     parts = [host, component(disk, overrides)]
     if disk["position"]:
         parts.append(disk["position"])
-    size = format_size(int(disk["size_bytes"]))
-    name = " ".join(parts)
-    return f"{name} ({size})" if size else name
-
-
-def role(disk: dict[str, str]) -> str:
-    if disk["pool"]:
-        return POOL_ROLE.get(disk["pool"], "general")
-    return "boot" if disk.get("is_root") else "unassigned"
+    return " ".join(parts)
 
 
 def build(
@@ -390,7 +307,6 @@ def build(
         disk = dict(disks[device])
         disk.update(membership.get(device, {}))
         disk["is_root"] = "1" if device == root and not disk["pool"] else ""
-        disk["role"] = role(disk)
         disk["disk_label"] = compose_label(disk, host, overrides)
         rows.append(disk)
     return rows
@@ -405,28 +321,24 @@ def labels(disk: dict[str, str], device: str) -> str:
         "device": device,
         "disk_label": disk["disk_label"],
         "pool": disk["pool"],
-        "vdev": disk["vdev"],
         "position": disk["position"],
-        "role": disk["role"],
         "rotational": disk["rotational"],
         "model": disk["model"],
-        "size": format_size(int(disk["size_bytes"])),
+        "size_bytes": disk["size_bytes"],
     }
     return ",".join(f'{key}="{escape(value)}"' for key, value in pairs.items() if value)
 
 
 def render(rows: list[dict[str, str]]) -> str:
     lines = [
-        "# HELP homelab_disk_label Human-readable name for a physical disk, derived from "
-        "its ZFS pool, vdev position and capacity. Join on (host, device) with node_disk_* "
-        "and use disk_label as the legend. Value is always 1.",
+        "# HELP homelab_disk_label Human-readable name for a physical disk, derived from its "
+        "host, ZFS pool and position in that pool. Join on (host, device) with node_disk_* and "
+        "use disk_label as the legend. Value is always 1.",
         "# TYPE homelab_disk_label gauge",
         "# HELP homelab_smart_disk_label The same name keyed by the device as "
         "smartctl_exporter names it (nvme0 rather than nvme0n1), for joining on "
         "(host, device) with smartctl_device*. Value is always 1.",
         "# TYPE homelab_smart_disk_label gauge",
-        "# HELP homelab_disk_label_count Number of physical disks labelled on this host.",
-        "# TYPE homelab_disk_label_count gauge",
     ]
     for disk in rows:
         lines.append(f"homelab_disk_label{{{labels(disk, disk['device'])}}} 1")
@@ -446,7 +358,6 @@ def render(rows: list[dict[str, str]]) -> str:
             continue
         seen.add(device)
         lines.append(f"homelab_smart_disk_label{{{labels(disk, device)}}} 1")
-    lines.append(f"homelab_disk_label_count {len(rows)}")
     return "\n".join(lines) + "\n"
 
 
