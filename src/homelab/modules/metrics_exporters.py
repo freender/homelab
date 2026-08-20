@@ -26,6 +26,20 @@ _NODE_EXPORTER_COMMON_ARGS = (
     "--collector.meminfo",
     "--collector.loadavg",
     "--collector.filesystem",
+    # Debian's prometheus-node-exporter package (1.9.0-1+b4, the whole fleet's
+    # version) compiles in a patched default for this flag that adds `mnt|media`
+    # to upstream's exclude list -- see `mount-points-exclude` in
+    # `prometheus-node-exporter --help`. Every ZFS dataset we care about is
+    # bind-mounted under /mnt/cache or /mnt/tank, so the packaged default
+    # silently dropped all of it (only `/` and tmpfs `/tmp` kept reporting).
+    # This bit us on 2026-07-30 when tower/helm/neo/cinci/cottonwood moved from
+    # a Docker-run node_exporter (upstream default, no /mnt exclusion) to this
+    # native package -- Grafana's "Dataset Growth - 31d" panel went flat that
+    # day. Pin the exclude list back to upstream's pre-patch value so /mnt
+    # datasets are reported again; still excludes the pseudo-filesystems and
+    # container storage churn the patch was trying to hide.
+    "--collector.filesystem.mount-points-exclude="
+    "^/(dev|proc|run|sys|var/lib/docker/.+|var/lib/containers/storage/.+)($|/)",
     "--collector.netdev",
     "--collector.textfile",
     f"--collector.textfile.directory={TEXTFILE_DIR}",
