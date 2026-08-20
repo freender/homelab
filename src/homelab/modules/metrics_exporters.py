@@ -146,6 +146,33 @@ FILE_SPECS = (
         "/etc/systemd/system/hba-textfile-exporter.timer",
         feature="hba",
     ),
+    # Human-readable disk names, derived from ZFS pool/vdev position/capacity so
+    # Grafana legends can say "Ace Z1 D1 (20TB)" instead of a raw serial. Bare
+    # metal only for the same reason as the ZFS exporter: it reads /sys/block
+    # and `zpool status`, and an LXC guest owns neither (lxcfs would show it the
+    # PVE host's disks). Replaces ~966 hand-written serial overrides that lived
+    # in the dashboard; see the exporter's docstring.
+    FileSpec(
+        "disk-label-textfile-exporter.py",
+        "/usr/local/bin/disk-label-textfile-exporter",
+        mode="755",
+        feature="baremetal",
+    ),
+    FileSpec(
+        "disk-label-textfile-exporter.service",
+        "/etc/systemd/system/disk-label-textfile-exporter.service",
+        feature="baremetal",
+    ),
+    FileSpec(
+        "disk-label-textfile-exporter.timer",
+        "/etc/systemd/system/disk-label-textfile-exporter.timer",
+        feature="baremetal",
+    ),
+    FileSpec(
+        "disk-labels.conf",
+        "/etc/homelab/disk-labels.conf",
+        feature="disk_label_overrides",
+    ),
     # Pending-reboot reporting: whether the running kernel is older than the
     # newest installed one. Bare metal only -- an LXC guest runs the PVE host's
     # kernel and has no kernel packages of its own, so there is nothing it could
@@ -210,6 +237,7 @@ FILE_SPECS = (
 _TEMPLATED_ONLY_BUILD_NAMES = {
     "apcupsd-exporter.env",
     "zfs-expected-pools.conf",
+    "disk-labels.conf",
     "smartctl-exporter-override.conf",
     "node-exporter.defaults",
 }
@@ -249,6 +277,9 @@ def validate(root: Path) -> None:
     pools_template = zfs_expected_pools_template(root)
     if not pools_template.is_file():
         raise ValueError(f"Missing required config: {pools_template}")
+    overrides_template = disk_labels_template(root)
+    if not overrides_template.is_file():
+        raise ValueError(f"Missing required config: {overrides_template}")
     for template in (smartctl_override_template(root), node_exporter_defaults_template(root)):
         if not template.is_file():
             raise ValueError(f"Missing required config: {template}")
@@ -313,6 +344,10 @@ def zfs_expected_pools_template(root: Path) -> Path:
     return root / "metrics-exporters" / "templates" / "zfs-expected-pools.conf.tpl"
 
 
+def disk_labels_template(root: Path) -> Path:
+    return root / "metrics-exporters" / "templates" / "disk-labels.conf.tpl"
+
+
 def smartctl_override_template(root: Path) -> Path:
     return root / "metrics-exporters" / "templates" / "smartctl-exporter-override.conf.tpl"
 
@@ -341,12 +376,44 @@ def zfs_expected_pools(root: Path, host: str) -> list[str]:
     return pools
 
 
+def disk_label_overrides(root: Path, host: str) -> list[tuple[str, str]]:
+    """Per-model display-name overrides for disk-label-textfile-exporter.
+
+    The exporter derives every name from the running system, so this is only for
+    the rare disk whose useful name is not derivable -- a USB enclosure whose
+    model string names the bare drive inside it. Keyed by model rather than by
+    serial on purpose: a model is not a hardware identifier, so it is safe in a
+    public repo.
+    """
+    registry = default_registry(root)
+    configured = registry.get(host, "metrics-exporters.disk_labels", None)
+    if configured is None:
+        return []
+    if not isinstance(configured, dict):
+        raise ValueError(
+            f"{host}: metrics-exporters.disk_labels must be a mapping of model to name"
+        )
+    overrides: list[tuple[str, str]] = []
+    for model, name in configured.items():
+        model_text, name_text = str(model).strip(), str(name).strip()
+        if not model_text or not name_text:
+            raise ValueError(f"{host}: metrics-exporters.disk_labels has an empty model or name")
+        if "=" in model_text or "\n" in name_text:
+            raise ValueError(
+                f"{host}: metrics-exporters.disk_labels model must not contain '=' "
+                f"and name must be a single line ({model_text!r})"
+            )
+        overrides.append((model_text, name_text))
+    return overrides
+
+
 def build_file_specs(
     *,
     has_apcupsd: bool,
     has_igpu: bool,
     has_hba: bool,
     has_expected_pools: bool,
+    has_disk_label_overrides: bool,
     has_wrapper: bool,
     lxc_guest: bool,
 ) -> tuple[FileSpec, ...]:
@@ -356,6 +423,7 @@ def build_file_specs(
         "igpu": has_igpu,
         "hba": has_hba and not lxc_guest,
         "zfs_expected_pools": has_expected_pools and not lxc_guest,
+        "disk_label_overrides": has_disk_label_overrides and not lxc_guest,
         "smartctl_wrapper": has_wrapper and not lxc_guest,
     }
     return tuple(
@@ -387,6 +455,9 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
             "reboot-textfile-exporter",
             "reboot-textfile-exporter.service",
             "reboot-textfile-exporter.timer",
+            "disk-label-textfile-exporter.py",
+            "disk-label-textfile-exporter.service",
+            "disk-label-textfile-exporter.timer",
         ])
         if has_wrapper:
             copy_files(common_dir, build_dir, ["smartctl-wrapper.sh"])
@@ -460,11 +531,20 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
             ZFS_EXPECTED_POOLS=expected_pools,
         )
 
+    label_overrides = [] if lxc_guest else disk_label_overrides(root, host)
+    if label_overrides:
+        render_file(
+            disk_labels_template(root),
+            build_dir / "disk-labels.conf",
+            DISK_LABEL_OVERRIDES=label_overrides,
+        )
+
     file_specs = build_file_specs(
         has_apcupsd=has_apcupsd,
         has_igpu=has_igpu,
         has_hba=has_hba,
         has_expected_pools=bool(expected_pools),
+        has_disk_label_overrides=bool(label_overrides),
         has_wrapper=has_wrapper,
         lxc_guest=lxc_guest,
     )

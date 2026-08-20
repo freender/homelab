@@ -273,6 +273,31 @@ if [[ -z "${FILE_MAP_DEST[hba-textfile-exporter.py]:-}" ]]; then
     fi
 fi
 
+# Same treatment for the disk-label exporter: drop it on a host that no longer
+# gets it (an LXC guest), and take its stale .prom with it. The textfile
+# collector serves whatever is in that directory regardless of whether anything
+# still writes it, so a leftover file would keep naming disks that this host may
+# no longer have.
+if [[ -z "${FILE_MAP_DEST[disk-label-textfile-exporter.py]:-}" ]]; then
+    if [[ -e /etc/systemd/system/disk-label-textfile-exporter.timer ]]; then
+        retire_systemd_unit disk-label-textfile-exporter.timer \
+            /etc/systemd/system/disk-label-textfile-exporter.timer || true
+        retire_systemd_unit disk-label-textfile-exporter.service \
+            /etc/systemd/system/disk-label-textfile-exporter.service || true
+        rm -f /usr/local/bin/disk-label-textfile-exporter \
+              /var/lib/prometheus/node-exporter/disk-labels.prom
+        print_sub "Removed disk-label-textfile-exporter"
+    fi
+fi
+
+# The per-model override file is optional and independent of the exporter: a
+# host that stops declaring metrics-exporters.disk_labels must lose the file,
+# or the exporter would keep applying overrides that hosts.conf no longer says.
+if [[ -z "${FILE_MAP_DEST[disk-labels.conf]:-}" ]] && [[ -e /etc/homelab/disk-labels.conf ]]; then
+    rm -f /etc/homelab/disk-labels.conf
+    print_sub "Removed disk-labels.conf (no overrides configured)"
+fi
+
 # Install/update every file this host's file-map declares (native node-exporter
 # and smartctl-exporter config are simply absent from the map in docker mode;
 # apcupsd/igpu config are absent unless those features are configured for the
@@ -342,6 +367,13 @@ if [[ -n "${FILE_MAP_DEST[reboot-textfile-exporter]:-}" ]]; then
     systemctl enable --now reboot-textfile-exporter.timer
     systemctl start reboot-textfile-exporter.service
 fi
+# Bare-metal gate again. Started explicitly as well as enabled so a deploy that
+# changes the naming rules (or the override file) is reflected immediately
+# rather than at the next 5-minute tick.
+if [[ -n "${FILE_MAP_DEST[disk-label-textfile-exporter.py]:-}" ]]; then
+    systemctl enable --now disk-label-textfile-exporter.timer
+    systemctl start disk-label-textfile-exporter.service
+fi
 if [[ -n "${FILE_MAP_DEST[smartctl-exporter-override.conf]:-}" ]]; then
     # Packaged unit name is smartctl_exporter (underscore), not the
     # smartctl-exporter (hyphen) this module used to ship.
@@ -370,6 +402,9 @@ if [[ -n "${FILE_MAP_DEST[hba-textfile-exporter.py]:-}" ]]; then
 fi
 if [[ -n "${FILE_MAP_DEST[reboot-textfile-exporter]:-}" ]]; then
     systemctl is-active --quiet reboot-textfile-exporter.timer
+fi
+if [[ -n "${FILE_MAP_DEST[disk-label-textfile-exporter.py]:-}" ]]; then
+    systemctl is-active --quiet disk-label-textfile-exporter.timer
 fi
 if [[ -n "${FILE_MAP_DEST[smartctl-exporter-override.conf]:-}" ]]; then
     systemctl is-active --quiet smartctl_exporter

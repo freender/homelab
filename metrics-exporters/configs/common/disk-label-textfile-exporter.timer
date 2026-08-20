@@ -1,0 +1,15 @@
+[Unit]
+Description=Refresh disk name textfile metrics
+
+[Timer]
+# Disk topology changes when someone swaps a disk or imports a pool, not on any
+# schedule, so this only has to be frequent enough that a swap is reflected
+# before anyone goes looking at the dashboard. Every 5 minutes also keeps
+# `zpool status` off the once-a-minute cadence the other exporters already use.
+OnBootSec=2min
+OnUnitActiveSec=5min
+AccuracySec=30s
+Unit=disk-label-textfile-exporter.service
+
+[Install]
+WantedBy=timers.target

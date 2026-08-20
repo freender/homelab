@@ -110,6 +110,8 @@ Then `./deploy metrics-exporters <host>` from the repo.
   textfile collector (`homelab_hba_*`) on hosts with `hba: true`
 - Pending-reboot state via node_exporter textfile collector
   (`homelab_reboot_required`, `homelab_kernel_info`) on bare metal
+- Human-readable disk names via node_exporter textfile collector
+  (`homelab_disk_label`, `homelab_smart_disk_label`) on bare metal
 
 ## Ports
 - node_exporter: `:9100`
@@ -138,6 +140,10 @@ Then `./deploy metrics-exporters <host>` from the repo.
 - `/usr/local/bin/reboot-textfile-exporter`
 - `/etc/systemd/system/reboot-textfile-exporter.service`
 - `/etc/systemd/system/reboot-textfile-exporter.timer`
+- `/usr/local/bin/disk-label-textfile-exporter`
+- `/etc/systemd/system/disk-label-textfile-exporter.service`
+- `/etc/systemd/system/disk-label-textfile-exporter.timer`
+- `/etc/homelab/disk-labels.conf`
 
 **In this repo:**
 - `configs/common/node-exporter.defaults`
@@ -157,6 +163,10 @@ Then `./deploy metrics-exporters <host>` from the repo.
 - `configs/common/reboot-textfile-exporter`
 - `configs/common/reboot-textfile-exporter.service`
 - `configs/common/reboot-textfile-exporter.timer`
+- `configs/common/disk-label-textfile-exporter.py`
+- `configs/common/disk-label-textfile-exporter.service`
+- `configs/common/disk-label-textfile-exporter.timer`
+- `templates/disk-labels.conf.tpl`
 - `../deploy`
 
 ### Pending-reboot reporting
@@ -201,6 +211,98 @@ encode no release and are skipped — without that, `proxmox-kernel-helper 9.2.0
 sorts above every real kernel. `tests/test_reboot_exporter.py` covers each of
 these cases against live-host output.
 
+### disk-label-textfile-exporter
+
+Grafana graphs one series per physical disk, and a raw serial is unreadable in a
+legend. That used to be fixed in the dashboard: **966 hand-written field
+overrides** mapping `serial -> "Bray VM-Flash (2TB)"`, duplicated across ten disk
+panels, so every disk swap meant editing ten panels by hand.
+
+It had already rotted by the time it was replaced (2026-08-20). Three serials
+belonged to disks that no longer existed, and the same serial carried different
+names on different panels — harmless only because each panel filters
+`rotational=`, so the wrong half never matched. Each panel carried the full
+map regardless of which half it could use.
+
+This exporter deletes the map rather than relocating it. The names were always
+`<host> <pool> <position> (<size>)`, and every component of that is readable from
+the running system, so nothing is written down by a human and **no hardware
+identifier enters the repo**. Verified against the hand map: clovis's six raidz
+members and cottonwood's two mirror members reproduce their hand-written names
+exactly, from vdev order alone.
+
+| Component | Derived from |
+|---|---|
+| `Ace`, `Clovis` | the host's own name |
+| `Boot`, `VM-Flash`, `Cache` | the pool the disk belongs to |
+| `Z1` | the vdev type (raidz1) for pools with no fixed purpose name |
+| `D1..D6` / `A`,`B` | position in the vdev — numbered for raidz, lettered for a mirror |
+| `(20TB)` | `/sys/block/<dev>/size`, snapped to the decimal capacity on the box |
+
+The `Z1-A`/`Z1-B` letter the hand map used was dropped: it only distinguished
+ace's vault from clovis's, and the host name already does that.
+
+#### No serial label
+
+`serial` is deliberately absent. It is not the join key — queries join on
+`(host, device)` — and it is genuinely ambiguous: for a USB-attached disk the
+kernel and smartctl disagree. cottonwood `sdb` is `Y93814AW0JNFS6S` to
+node_exporter and `S6SFNJ0WA41839Y` to smartctl, and cinci `sda` reports a bridge
+placeholder of all zeroes. The old dashboard needed *two* override entries per
+USB disk for exactly this reason. `node_disk_info` still carries the serial for
+anyone who wants it, joinable on the same `(host, device)`.
+
+#### Two metrics, because the exporters disagree on device names
+
+```
+homelab_disk_label{device="nvme0n1",...}        joins node_disk_* / node_disk_info
+homelab_smart_disk_label{device="nvme0",...}    joins smartctl_device*
+```
+
+smartctl probes the NVMe controller, node_exporter reports the namespace block
+device; SATA disks are named identically by both. Emitting both is what lets a
+panel replace a nested `label_replace` chain with one `group_left`:
+
+```promql
+sum by(disk_label) (irate(node_disk_read_bytes_total{device=~"sd[a-z]+"}[25s])
+  * on(host,device) group_left(disk_label) homelab_disk_label{rotational="1"})
+
+max by(disk_label) (smartctl_device_temperature{temperature_type="current"}
+  * on(host,device) group_left(disk_label) homelab_smart_disk_label{rotational="1"})
+```
+
+Neither carries a `host` label: the scrape config attaches one, and emitting our
+own would only produce a redundant `exported_host` (as `homelab_zpool_*` does).
+The host name appears inside the `disk_label` *value*, which is not a label, so
+nothing collides.
+
+Two failure modes are guarded because both are silent and both cost the whole
+host's metrics rather than one series. node_exporter rejects an *entire* textfile
+on a duplicate metric, so two NVMe namespaces on one controller cannot both claim
+the same smartctl device — the second is dropped with a reason on stderr. And an
+OFFLINE raidz member keeps the by-id path it was added with (`-L` cannot resolve
+an absent device), so it yields no series but still consumes its position;
+otherwise replacing a failed disk would renumber every healthy disk behind it and
+orphan their history. `tests/test_disk_label_exporter.py` covers both, plus the
+capacity rounding and the real `zpool status` output from all four layouts.
+
+#### The escape hatch: `metrics-exporters.disk_labels`
+
+For the rare disk whose useful name is not derivable — in no pool, not the boot
+disk — an optional per-host map renders to `/etc/homelab/disk-labels.conf`:
+
+```yaml
+metrics-exporters:
+  disk_labels:
+    My Passport: Passport
+```
+
+Keyed by the model in `/sys/block/<dev>/device/model`, matched exactly or as a
+prefix (longest wins) so a firmware revision suffix does not have to be pinned.
+**Keyed by model, never by serial** — a model is not a hardware identifier, so
+this stays safe in a public repo. Only cottonwood uses it, for a USB drive whose
+enclosure reports a different model than the drive inside it.
+
 ### Where each exporter binary comes from
 
 `apt` owns every binary it can. Only `igpu-exporter` is built by hand, and only
@@ -213,6 +315,7 @@ because there is no packaged or released artifact to use.
 | `igpu-exporter` | this repo (`configs/common/igpu-exporter.py`) | not packaged anywhere and upstream ships **zero** releases; a ~40-line wrapper over `intel_gpu_top` beats compiling a Go project on every host |
 | `apcupsd-exporter` | this repo (`configs/common/apcupsd-exporter.py`) | homelab-specific script |
 | `hba-textfile-exporter` | this repo (`configs/common/hba-textfile-exporter.py`) | no exporter and no vendor tool reads a SAS2 HBA's temperature on Linux; see below |
+| `disk-label-textfile-exporter` | this repo (`configs/common/disk-label-textfile-exporter.py`) | homelab-specific naming derived from this fleet's pool layout |
 
 Nothing in this module downloads anything at deploy time any more, so `curl`,
 `tar` and the `golang-go` toolchain are no longer installed. `python3` (runs the

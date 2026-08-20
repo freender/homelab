@@ -1,0 +1,6 @@
+[Unit]
+Description=Write human-readable disk names for node_exporter textfile collector
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/disk-label-textfile-exporter
