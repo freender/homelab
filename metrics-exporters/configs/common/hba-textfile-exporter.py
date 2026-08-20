@@ -24,9 +24,14 @@ The sensor updates slowly (firmware samples it on its own interval), so polling
 faster than once a minute buys nothing.
 
 Controllers are discovered from sysfs rather than by probing IOC numbers blind:
-scsi_host attributes give the board name, chip, firmware revision and PCI
-address for labelling, and mpt3sas sets `unique_id` to the IOC number the ioctl
-interface expects.
+scsi_host attributes give the board name, chip, firmware revision, PCI address
+and SAS address for labelling, and mpt3sas sets `unique_id` to the IOC number
+the ioctl interface expects.
+
+Metric series are labelled by board+chip, not by PCI address -- the address
+identifies the slot, not the card, so reseating a card would otherwise orphan
+its history. PCI and SAS addresses are published on homelab_hba_info instead.
+See disambiguate() for the one case where pci has to come back.
 
 The PHY counters need no ioctl at all -- the SAS transport class publishes them
 under /sys/class/sas_phy. They are the early warning the temperature is not:
@@ -150,7 +155,48 @@ def discover_controllers() -> list[dict[str, str]]:
                 "board": read_sysfs(host_dir / "board_name") or "unknown",
                 "chip": read_sysfs(host_dir / "version_product") or "unknown",
                 "firmware": read_sysfs(host_dir / "version_fw"),
+                # Identity for homelab_hba_info only, never for the metric
+                # series. sas_address is the card's NVDATA address and is the
+                # strongest identifier available -- it survives a slot move and
+                # changes only when the card itself is replaced. serial
+                # (board_tracer) is stronger still on a genuine LSI but is
+                # empty on cross-flashed/OEM clones with unprogrammed
+                # manufacturing NVDATA, so it cannot be relied on.
+                "sas_address": read_sysfs(host_dir / "host_sas_address"),
+                "serial": read_sysfs(host_dir / "board_tracer"),
             }
+        )
+    return disambiguate(controllers)
+
+
+def disambiguate(controllers: list[dict[str, str]]) -> list[dict[str, str]]:
+    """Decide whether `pci` has to be part of the metric label set.
+
+    Metric series are labelled by board+chip (plus the host label the scrape
+    config attaches), deliberately *not* by PCI address: the address is a
+    property of the slot, not the card, so reseating a card into a different
+    slot silently orphans its series and starts a new one. That happened on
+    clovis on 2026-08-14 and looked like a second controller appearing.
+
+    board+chip is unique in practice because each host has exactly one HBA, but
+    "in practice" is not a guarantee: two identical cards in one host would
+    render byte-identical label sets, and node_exporter's textfile collector
+    rejects the *entire* file when it sees a duplicate metric -- losing every
+    HBA metric on that host rather than just the ambiguous one. So when the key
+    is not unique, fall back to including pci for that host and accept the
+    slot-move churn as the lesser problem.
+    """
+    seen: dict[tuple[str, str], int] = {}
+    for controller in controllers:
+        key = (controller["board"], controller["chip"])
+        seen[key] = seen.get(key, 0) + 1
+    ambiguous = any(count > 1 for count in seen.values())
+    for controller in controllers:
+        controller["identify_by_pci"] = "1" if ambiguous else ""
+    if ambiguous:
+        print(
+            "two or more controllers share board+chip; including pci in labels",
+            file=sys.stderr,
         )
     return controllers
 
@@ -293,12 +339,21 @@ def escape(value: str) -> str:
 
 
 def labels(controller: dict[str, str], **extra: str) -> str:
-    pairs = {
-        "pci": controller["pci"],
-        "board": controller["board"],
-        "chip": controller["chip"],
-        **extra,
-    }
+    """Label set for a metric series: board+chip, and pci only when forced.
+
+    See disambiguate(). Everything volatile -- pci, sas_address, serial,
+    firmware -- belongs on homelab_hba_info instead, so that reseating a card
+    or flashing its firmware does not break continuity of the temperature and
+    PHY series that alerts are written against.
+    """
+    pairs: dict[str, str] = {}
+    if controller.get("identify_by_pci"):
+        pairs["pci"] = controller["pci"]
+    pairs["board"] = controller["board"]
+    pairs["chip"] = controller["chip"]
+    # Overwrites in place rather than appending, so a caller passing pci= when
+    # it is already present cannot emit the label twice.
+    pairs.update(extra)
     # No host label: the scrape config attaches one, and emitting our own only
     # produces a redundant exported_host (see homelab_zpool_* in VictoriaMetrics).
     return ",".join(f'{key}="{escape(value)}"' for key, value in pairs.items())
@@ -323,8 +378,17 @@ def render(controllers: list[dict[str, str]]) -> str:
         "# TYPE homelab_hba_phy_link_rate_gbps gauge",
     ]
     for controller in controllers:
+        # The info metric is where the volatile identifiers live, so they stay
+        # available for debugging ("which slot is that card in, and is it the
+        # same physical card as last month?") without being part of any series
+        # an alert is written against. serial is empty on cards with
+        # unprogrammed manufacturing NVDATA; that is reported as an empty
+        # label rather than omitted, so the label set stays uniform.
         info_labels = labels(
             controller,
+            pci=controller["pci"],
+            sas_address=controller["sas_address"],
+            serial=controller["serial"],
             driver=controller["driver"],
             firmware=controller["firmware"],
         )

@@ -16,45 +16,69 @@ groups:
       # temperature, not a heatsink reading, so it is normal for it to look
       # alarming next to a CPU package figure -- but the ceiling is what it is.
       #
-      # Measured on the day the exporter was added, at idle: ace 96C, clovis
-      # 116C. clovis is therefore over the limit and fires the critical rule
-      # immediately. That is a true positive, confirmed twice by hand the same
-      # day: its heatsink is too hot to touch, and opening the case dropped the
-      # reading 116C -> 98C within minutes while ace, untouched, stayed at 95C.
-      # The sensor tracks airflow in real time; it is not a fixed offset.
+      # Thresholds were 100C/110C when these rules were written (2026-08-13),
+      # because the cards were passively cooled and 96C *was* the idle
+      # baseline: anything lower would have alerted permanently. Directed
+      # 40mm fans were fitted to both cards, which changes the baseline
+      # completely and makes those numbers blind:
+      #   - ace  0000:07:00.0: pinned 93-96C for days, then 95 -> 65C within
+      #     five minutes when its fan went in on 2026-08-20.
+      #   - clovis 0000:02:00.0: steady 64-67C, with brief single-sample
+      #     excursions to ~81C.
+      # At a 65C baseline a 100C warning means a dead fan can add 30C and
+      # notify nobody. 85C is ~20C above baseline, so it reads as "directed
+      # airflow has failed" rather than "this card runs hot", which is now the
+      # only interesting failure. The `for: 15m` guard is what makes 85C safe
+      # against clovis's 81C spikes -- they are single samples, not sustained.
       #
-      # clovis is the hotter one despite having a slot fan and an idle
-      # (vfio-bound) GPU, so this is not case airflow. Two reasons:
-      #   - It drives 6 SAS links to ace's 2, and the card's own
-      #     BoardPowerRequirement reflects it: 14W vs 10W into a heatsink of
-      #     the same size.
-      #   - The two cards are not the same hardware. ace's is a genuine LSI
-      #     (board_assembly H3-25412-00K, board_tracer SV52978426, SAS address
-      #     in LSI's 500605b range); clovis's reports no board assembly, no
-      #     serial, and SAS address 0x56c92bf0..., i.e. a clone or a
-      #     cross-flashed OEM card with unprogrammed manufacturing NVDATA.
-      # A hot heatsink means the die-to-heatsink path is fine and the fins
-      # simply cannot shed 14W without air moving over them specifically.
+      # 100C is the critical point: still 15C below the ASIC ceiling, but well
+      # past the passive-cooling equilibrium these cards used to sit at, so
+      # reaching it means the fan is gone *and* case airflow is not covering
+      # for it.
       #
-      # 100C leaves ~15C of warning runway below the ceiling; 110C means only
-      # 5C is left and the card should not be left running as-is.
+      # Historical note on why the two cards differed before the fans: clovis
+      # ran hotter despite a slot fan and an idle (vfio-bound) GPU. It drives 6
+      # SAS links to ace's 2 (BoardPowerRequirement 14W vs 10W into an
+      # identical heatsink), and the cards are not the same hardware -- ace's
+      # is a genuine LSI (board_assembly H3-25412-00K, board_tracer SV52978426,
+      # SAS address in LSI's 500605b range) while clovis's reports no board
+      # assembly, no serial, and SAS address 0x56c92bf0..., i.e. a clone or a
+      # cross-flashed OEM card with unprogrammed manufacturing NVDATA.
+      #
+      # Historical series note. clovis has one HBA, not two. A series at
+      # 0000:04:00.0 that last reported 2026-08-14 having peaked at 125C --
+      # above the ASIC maximum -- is the *same card* before it was moved to
+      # another PCIe slot. Back then the exporter put the PCI address in the
+      # series labels, so the reseat orphaned the old series and started a new
+      # one, which read as a second controller appearing.
+      #
+      # That is fixed at the source: the exporter now keys series on
+      # board+chip and publishes pci/sas_address/serial on homelab_hba_info
+      # instead, so a card can move slots without splitting its history. Same
+      # class of trap the NIC rules avoid by joining on chip_name rather than
+      # the slot-derived chip label. The pre-2026-08-20 series carrying a `pci`
+      # label are stale by design and age out with retention.
+      #
+      # ace's card is also not the one described above: it was an LSISAS2008
+      # until 2026-08-13 and is an LSISAS2308 since. A replaced card *should*
+      # start a new series, and board+chip gives exactly that.
       - alert: HbaTemperatureHigh
-        expr: homelab_hba_temperature_celsius{sensor="ioc"} >= 100 and homelab_hba_temperature_celsius{sensor="ioc"} < 110
+        expr: homelab_hba_temperature_celsius{sensor="ioc"} >= 85 and homelab_hba_temperature_celsius{sensor="ioc"} < 100
         for: 15m
         labels:
           severity: warning
         annotations:
           summary: "{{ $labels.host }} HBA {{ $labels.board }} is {{ $value }}C"
-          description: "The {{ $labels.board }} ({{ $labels.chip }}) at {{ $labels.pci }} on {{ $labels.host }} has been at or above 100C for 15+ minutes, against a 115C maximum for the ASIC. These cards are passively cooled and depend entirely on case airflow. Add directed airflow (a 40mm fan on the heatsink is the standard fix) or re-pad the heatsink."
+          description: "The {{ $labels.board }} ({{ $labels.chip }}) on {{ $labels.host }} has been at or above 85C for 15+ minutes, against a 115C maximum for the ASIC. These cards sit at 65C with their 40mm fans running, so this reads as a failed or obstructed fan. Check the fan is spinning and that nothing is blocking the heatsink."
 
       - alert: HbaTemperatureCritical
-        expr: homelab_hba_temperature_celsius{sensor="ioc"} >= 110
+        expr: homelab_hba_temperature_celsius{sensor="ioc"} >= 100
         for: 10m
         labels:
           severity: critical
         annotations:
           summary: "{{ $labels.host }} HBA {{ $labels.board }} is {{ $value }}C"
-          description: "The {{ $labels.board }} ({{ $labels.chip }}) at {{ $labels.pci }} on {{ $labels.host }} is within 5C of, or above, the 115C maximum ASIC temperature. Every disk behind this controller depends on it. Check for dropped links with `cat /sys/class/sas_phy/phy-*/invalid_dword_count` and for controller resets with `journalctl -k | grep mpt`, and fix the airflow."
+          description: "The {{ $labels.board }} ({{ $labels.chip }}) on {{ $labels.host }} is at or above 100C, 15C from the 115C maximum ASIC temperature, with its fan presumably dead and case airflow not covering for it. Every disk behind this controller depends on it. Check for dropped links with `cat /sys/class/sas_phy/phy-*/invalid_dword_count` and for controller resets with `journalctl -k | grep mpt`, and restore airflow."
 
       # A card whose firmware reports no sensor, or that stops answering the
       # config-page read, keeps its series but flips this flag -- so the failure
@@ -66,7 +90,7 @@ groups:
           severity: warning
         annotations:
           summary: "{{ $labels.host }} cannot read HBA {{ $labels.board }} temperature"
-          description: "hba-textfile-exporter reached the {{ $labels.board }} at {{ $labels.pci }} on {{ $labels.host }} but could not read a temperature from MPI2 IO Unit Page 7. Run /usr/local/bin/hba-textfile-exporter on {{ $labels.host }} for the firmware error."
+          description: "hba-textfile-exporter reached the {{ $labels.board }} on {{ $labels.host }} but could not read a temperature from MPI2 IO Unit Page 7. Run /usr/local/bin/hba-textfile-exporter on {{ $labels.host }} for the firmware error."
 
       # The textfile collector keeps serving whatever is in its directory, so a
       # dead exporter does not produce an absent series -- it produces a frozen

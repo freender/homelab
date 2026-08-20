@@ -322,6 +322,51 @@ LSI's `500605b` range) while clovis's reports no board assembly, no serial and
 SAS address `0x56c92bf0...` — a clone or cross-flashed OEM card with
 unprogrammed manufacturing NVDATA.
 
+**Resolved 2026-08-20.** Both cards now have directed 40 mm fans and the
+readings above are historical: clovis settled at 64-67 °C, and ace went
+95 °C -> 65 °C within five minutes of its fan going in. The alert thresholds in
+`vmalert-rules/configs/temperatures.yml` were lowered to match — 85 °C warning
+and 100 °C critical, against the old 100/110 that were only ever that high
+because 96 °C *was* the passive baseline. At a 65 °C baseline the point of the
+alert is now "the fan has failed", not "this card runs hot".
+
+##### Series identity: board+chip, not PCI address
+
+Two hardware changes in one week broke the original `pci`-keyed labelling:
+clovis's card moved to a different PCIe slot (`0000:04:00.0` ->
+`0000:02:00.0`), and ace's card was replaced outright (`LSISAS2008` FW
+09.00.00.00 -> `LSISAS2308` FW 20.00.02.00 on 2026-08-13). The first orphaned a
+series and made one card look like two, the second legitimately produced a new
+one.
+
+So metric series are now keyed on **board+chip** plus the `host` label the
+scrape config attaches, and every volatile identifier moved to
+`homelab_hba_info`:
+
+| Label | On series | On `homelab_hba_info` | Why |
+|---|---|---|---|
+| `board`, `chip` | yes | yes | Changes only when the card is genuinely replaced, which *should* start a new series |
+| `pci` | only if forced | yes | Identifies the slot, not the card |
+| `sas_address` | no | yes | Strongest real identity — NVDATA-resident, survives a slot move, verified stable across six boots on clovis |
+| `serial` (`board_tracer`) | no | yes | Empty on cross-flashed/OEM clones — clovis reports none, so it cannot be the key |
+
+`sas_address` was the obvious candidate for the key and was rejected: it is an
+opaque hex string in alert text, and keying on it would still churn on any card
+replacement. board+chip reads well in a notification and each host has exactly
+one HBA.
+
+"Exactly one" is not guaranteed, though, and two identical cards in one host
+would render byte-identical label sets — node_exporter rejects the *entire*
+textfile on a duplicate metric, so that host would lose all HBA metrics rather
+than just the ambiguous one. `disambiguate()` handles it: when board+chip is not
+unique it puts `pci` back for that host's controllers and logs why, accepting
+slot-move churn as the lesser problem. `tests/test_hba_exporter.py` covers both
+paths.
+
+Empty labels are dropped by Prometheus/VictoriaMetrics, so clovis's
+`homelab_hba_info` has no `serial` at all. That is correct — do not substitute a
+placeholder, which would make an unprogrammed card look like it has a serial.
+
 Nothing off the shelf reads it on Linux:
 
 | Option | Result |

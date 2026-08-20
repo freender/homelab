@@ -24,14 +24,19 @@ groups:
       # running_disparity and loss_of_dword_sync together, and three
       # notifications for one fault is exactly the noise that got
       # ZfsPoolDeviceErrors deleted (see zfs-pools.yml).
+      # Grouped by host+board, not host+pci: the exporter labels series by
+      # board+chip so that reseating a card into another slot does not orphan
+      # its history (see hba-textfile-exporter.py's disambiguate()). The PCI
+      # address is still available on homelab_hba_info when it is needed to
+      # find the card physically.
       - alert: SasPhyErrorsIncreasing
-        expr: sum by (host, pci, board, phy) (increase(homelab_hba_phy_errors_total[1h])) > 10
+        expr: sum by (host, board, phy) (increase(homelab_hba_phy_errors_total[1h])) > 10
         for: 30m
         labels:
           severity: warning
         annotations:
           summary: "{{ $labels.host }} SAS PHY {{ $labels.phy }} is accumulating link errors"
-          description: "PHY {{ $labels.phy }} on the {{ $labels.board }} at {{ $labels.pci }} ({{ $labels.host }}) has logged {{ $value }} new link errors in the last hour, from a baseline of zero. Usual causes in order of likelihood: a marginal or half-seated SAS breakout cable, a failing connector, or a controller that is overheating. Check `cat /sys/class/sas_phy/phy-*/invalid_dword_count` and homelab_hba_temperature_celsius on {{ $labels.host }}, and reseat the cable for that PHY before suspecting the card."
+          description: "PHY {{ $labels.phy }} on the {{ $labels.board }} on {{ $labels.host }} has logged {{ $value }} new link errors in the last hour, from a baseline of zero. Usual causes in order of likelihood: a marginal or half-seated SAS breakout cable, a failing connector, or a controller that is overheating. Check `cat /sys/class/sas_phy/phy-*/invalid_dword_count` and homelab_hba_temperature_celsius on {{ $labels.host }}, and reseat the cable for that PHY before suspecting the card. `homelab_hba_info{host=\"{{ $labels.host }}\"}` gives the card's PCI address."
 
       # No alert on homelab_hba_phy_link_rate_gbps dropping. It is graphed
       # because a PHY renegotiating 6.0 -> 3.0 Gbit is a real early sign of
