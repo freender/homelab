@@ -43,11 +43,12 @@ groups:
       # produce one summary message, not to be actioned on sight.
       #
       # severity: info is what routes it: monitoring-config sends this alertname
-      # to its own Alertmanager route with repeat_interval 168h and group_by
-      # [alertname], so all four nodes collapse into a single notification once
-      # a week. Do not give it warning/critical severity or shorten the `for:`
-      # without changing that route, or it becomes a daily nag for a condition
-      # that is deliberately left standing between maintenance windows.
+      # to its own Alertmanager route with group_by [alertname] and an
+      # active_time_intervals gate that only opens on Saturday, so all four
+      # nodes collapse into a single notification once a week. Do not give it
+      # warning/critical severity or shorten the `for:` without changing that
+      # route, or it becomes a daily nag for a condition that is deliberately
+      # left standing between maintenance windows.
       - alert: ProxmoxUpdatesAvailable
         expr: sum by (host) (apt_upgrades_pending{origin=~"Proxmox.*"}) > 0
         for: 1h

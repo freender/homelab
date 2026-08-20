@@ -113,11 +113,23 @@ route:
     # times a day for a condition that is *supposed* to stand between windows,
     # which is exactly the noise that gets a receiver muted.
     #
-    # repeat_interval 168h turns it into one message a week. group_by is
-    # narrowed to alertname alone -- dropping host, name and severity -- so all
-    # four nodes collapse into a single notification listing each of them,
-    # rather than one per node. That is the whole point: the weekly digest is
-    # one message, not four.
+    # active_time_intervals is what makes this weekly: saturday-digest is
+    # active for all of Saturday and nothing else, so the notification is held
+    # (not dropped) every other day and released when the window opens.
+    #
+    # repeat_interval is therefore NOT the weekly cadence -- it only has to
+    # stop a second send inside the one 24h window, so 24h is exactly right:
+    # the earliest permitted repeat lands on Sunday, which is already closed.
+    # It was 168h before the Saturday gate existed; leaving it there would be
+    # a 7-day countdown from the last send racing a calendar window, which
+    # drifts ~5min later each week because the tick at the window's open is
+    # always marginally short of 168h. The two are coupled -- drop
+    # active_time_intervals and 24h becomes a daily nag.
+    #
+    # group_by is narrowed to alertname alone -- dropping host, name and
+    # severity -- so all four nodes collapse into a single notification
+    # listing each of them, rather than one per node. That is the whole point:
+    # the weekly digest is one message, not four.
     #
     # Muted by scheduled-maintenance like the default route: there is nothing
     # time-critical here, and a digest that lands mid-window would be
@@ -127,7 +139,29 @@ route:
         - alertname="ProxmoxUpdatesAvailable"
       group_by:
         - alertname
-      repeat_interval: 168h
+      repeat_interval: 24h
+      active_time_intervals:
+        - saturday-digest
+      mute_time_intervals:
+        - scheduled-maintenance
+      continue: false
+    # RebootRequired's own weekly digest. Same shape and same rationale as
+    # ProxmoxUpdatesAvailable above, including the 24h repeat: without this
+    # route it falls through to the default at the bottom of this list, which
+    # repeats every 4h once the alert's 24h `for:` clears -- six pages a day
+    # for a pending kernel that is deliberately left standing until the next
+    # manual reboot window, not something that changes hour to hour.
+    #
+    # group_by: [alertname] collapses every host that needs a reboot into one
+    # weekly message instead of one per host, same as the Proxmox digest.
+    - receiver: mwbot
+      matchers:
+        - alertname="RebootRequired"
+      group_by:
+        - alertname
+      repeat_interval: 24h
+      active_time_intervals:
+        - saturday-digest
       mute_time_intervals:
         - scheduled-maintenance
       continue: false
@@ -275,6 +309,16 @@ time_intervals:
       - times:
           - start_time: "08:00"
             end_time: "08:10"
+        location: America/New_York
+
+  # Used as active_time_intervals (not mute_time_intervals) by the
+  # ProxmoxUpdatesAvailable and RebootRequired routes above, so those two
+  # weekly digests only send on a Saturday, any time of day. No `times:`
+  # entry deliberately -- an unset field matches everything for that
+  # dimension, so `weekdays` alone is the whole condition.
+  - name: saturday-digest
+    time_intervals:
+      - weekdays: ["saturday"]
         location: America/New_York
 
 receivers:
