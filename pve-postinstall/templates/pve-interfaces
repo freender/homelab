@@ -15,7 +15,6 @@ iface lo inet loopback
 iface {{ NET_MGMT_IFACE }} inet manual
 {% if NET_STORAGE_IFACE %}
 iface {{ NET_STORAGE_IFACE }} inet manual
-	mtu 9000
 {% endif %}
 auto vmbr0
 iface vmbr0 inet static
@@ -33,6 +32,5 @@ iface vmbr1 inet static
 	bridge-ports {{ NET_STORAGE_IFACE }}
 	bridge-stp off
 	bridge-fd 0
-	mtu 9000
 {% endif %}
 source /etc/network/interfaces.d/*
