@@ -9,10 +9,9 @@ hand. The map had already rotted -- three serials belonged to disks that no
 longer existed, and the same serial carried different names on different panels.
 
 This exporter removes the map instead of relocating it. A name is
-`<host> <pool> [<position>]`, all of which is readable from the running system,
-so nothing has to be written down by a human and no hardware identifier ever
-enters the repo. A disk swap is picked up on the next timer tick with no edit
-anywhere.
+`<pool> [<position>]`, all of which is readable from the running system, so
+nothing has to be written down by a human and no hardware identifier ever enters
+the repo. A disk swap is picked up on the next timer tick with no edit anywhere.
 
 The name deliberately encodes as little as possible:
 
@@ -26,6 +25,15 @@ The name deliberately encodes as little as possible:
     anyone needs to locate a disk. It also cost the entire indentation-aware
     tree parse this file used to carry; keyed on the pool instead, position is
     just the member's ordinal.
+  - No host, and no prettification of the pool name. Every other panel in the
+    dashboard builds its legend as `{{host}} <thing>` from the `host` label the
+    scrape config attaches, so a name that carried its own Title-cased host was
+    the one series in the dashboard that could never match its neighbours --
+    "Ace Vault D1" sitting next to "ace vm-flash" and "ace - SAS9207-8i". The
+    pool name is emitted verbatim for the same reason: `vault-hdd` is what
+    `zpool status` calls it and what homelab_zpool_* already labels it, so a
+    cosmetic `vault-hdd` -> `Vault` map only created a fourth spelling of one
+    pool. Panels group by (host, disk_label) and render `{{host}} {{disk_label}}`.
 
 Deliberately no `serial` label. Serial is not the join key -- queries join on
 (host, device) -- and it is actively ambiguous: for a USB-attached disk the
@@ -46,9 +54,10 @@ group_left. They are the same disk; SATA devices render identically in both.
 
 No `host` label: the scrape config attaches one, and emitting our own would only
 produce a redundant `exported_host` (see homelab_zpool_* in VictoriaMetrics).
-The host name still appears *inside* the disk_label string, which is a value,
-not a label, so nothing collides -- and it is what keeps names unique across the
-fleet, since panels group by disk_label alone.
+Names therefore only have to be unique *within* a host, which they are by
+construction -- a disk belongs to at most one pool at one position. Grouping by
+(host, disk_label) rather than disk_label alone is also what makes a cross-host
+collision structurally impossible instead of merely test-enforced.
 """
 
 from __future__ import annotations
@@ -75,15 +84,9 @@ OVERRIDES_FILE = Path(os.environ.get("DISK_LABEL_OVERRIDES_FILE", "/etc/homelab/
 # not physical disks and would double-count.
 DEVICE_PATTERN = re.compile(r"^(sd[a-z]+|nvme\d+n\d+)$")
 
-# How a pool reads in a legend. Anything not listed falls back to the pool's own
-# name, capitalised -- deliberately the pool and not its vdev layout, so
-# changing a pool's redundancy does not rename its disks.
-POOL_COMPONENT = {
-    "rpool": "Boot",
-    "vm-flash": "VM-Flash",
-    "vault-hdd": "Vault",
-    "cache": "Cache",
-}
+# What an unpooled boot disk is called. Lowercase like every pool name, so a
+# legend never mixes casing within one host's disks.
+ROOT_COMPONENT = "boot"
 
 
 def read_sysfs(path: Path) -> str:
@@ -91,13 +94,6 @@ def read_sysfs(path: Path) -> str:
         return path.read_text().strip()
     except OSError:
         return ""
-
-
-def host_title() -> str:
-    host = os.environ.get("HOSTNAME_OVERRIDE") or os.uname().nodename.split(".")[0]
-    # "cottonwood" -> "Cottonwood". Deliberately not .title(), which would
-    # mangle a hyphenated or digit-bearing hostname.
-    return host[:1].upper() + host[1:]
 
 
 def smart_device(device: str) -> str:
@@ -276,20 +272,19 @@ def root_device() -> str:
 
 
 def component(disk: dict[str, str], overrides: dict[str, str]) -> str:
-    """The middle of the display name: what this disk is, in this host."""
+    """What this disk is, within its host. The host itself is not part of it."""
     override = match_override(disk["model"], overrides)
     if override:
         return override
-    pool = disk["pool"]
-    if pool:
-        return POOL_COMPONENT.get(pool) or pool[:1].upper() + pool[1:]
+    if disk["pool"]:
+        return disk["pool"]
     if disk.get("is_root"):
-        return "Boot"
+        return ROOT_COMPONENT
     return disk["device"]
 
 
-def compose_label(disk: dict[str, str], host: str, overrides: dict[str, str]) -> str:
-    parts = [host, component(disk, overrides)]
+def compose_label(disk: dict[str, str], overrides: dict[str, str]) -> str:
+    parts = [component(disk, overrides)]
     if disk["position"]:
         parts.append(disk["position"])
     return " ".join(parts)
@@ -299,7 +294,6 @@ def build(
     disks: dict[str, dict[str, str]],
     membership: dict[str, dict[str, str]],
     root: str,
-    host: str,
     overrides: dict[str, str],
 ) -> list[dict[str, str]]:
     rows: list[dict[str, str]] = []
@@ -307,7 +301,7 @@ def build(
         disk = dict(disks[device])
         disk.update(membership.get(device, {}))
         disk["is_root"] = "1" if device == root and not disk["pool"] else ""
-        disk["disk_label"] = compose_label(disk, host, overrides)
+        disk["disk_label"] = compose_label(disk, overrides)
         rows.append(disk)
     return rows
 
@@ -331,9 +325,10 @@ def labels(disk: dict[str, str], device: str) -> str:
 
 def render(rows: list[dict[str, str]]) -> str:
     lines = [
-        "# HELP homelab_disk_label Human-readable name for a physical disk, derived from its "
-        "host, ZFS pool and position in that pool. Join on (host, device) with node_disk_* and "
-        "use disk_label as the legend. Value is always 1.",
+        "# HELP homelab_disk_label Human-readable name for a physical disk within its host, "
+        "derived from its ZFS pool and position in that pool. Join on (host, device) with "
+        "node_disk_*, group by (host, disk_label) and render '{{host}} {{disk_label}}'. "
+        "Value is always 1.",
         "# TYPE homelab_disk_label gauge",
         "# HELP homelab_smart_disk_label The same name keyed by the device as "
         "smartctl_exporter names it (nvme0 rather than nvme0n1), for joining on "
@@ -383,7 +378,7 @@ def main() -> int:
         # than publishing an empty file that silently unlabels every panel.
         print("no physical disks found under /sys/block", file=sys.stderr)
         return 1
-    rows = build(disks, zpool_membership(), root_device(), host_title(), load_overrides())
+    rows = build(disks, zpool_membership(), root_device(), load_overrides())
     write_out(render(rows))
     return 0
 

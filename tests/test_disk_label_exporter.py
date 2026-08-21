@@ -126,12 +126,11 @@ def _disk(device, rotational="1", model="", size_bytes="10000831348736"):
     }
 
 
-def _labels(exporter, disks, status, host, root="", overrides=None):
+def _labels(exporter, disks, status, root="", overrides=None):
     rows = exporter.build(
         disks,
         exporter.parse_zpool_status(status),
         root,
-        host,
         overrides or {},
     )
     return {row["device"]: row["disk_label"] for row in rows}
@@ -148,13 +147,13 @@ def test_clovis_raidz_members_are_numbered_in_vdev_order(exporter):
     order: sde is D1.
     """
     disks = {name: _disk(name) for name in ("sda", "sdb", "sdc", "sdd", "sde", "sdf")}
-    assert _labels(exporter, disks, CLOVIS_STATUS, "Clovis") == {
-        "sde": "Clovis Vault D1",
-        "sdd": "Clovis Vault D2",
-        "sdc": "Clovis Vault D3",
-        "sdb": "Clovis Vault D4",
-        "sda": "Clovis Vault D5",
-        "sdf": "Clovis Vault D6",
+    assert _labels(exporter, disks, CLOVIS_STATUS) == {
+        "sde": "vault-hdd D1",
+        "sdd": "vault-hdd D2",
+        "sdc": "vault-hdd D3",
+        "sdb": "vault-hdd D4",
+        "sda": "vault-hdd D5",
+        "sdf": "vault-hdd D6",
     }
 
 
@@ -172,11 +171,11 @@ def test_pool_names_the_disk_not_its_vdev_layout(exporter):
         "sda": _disk("sda"),
         "sdb": _disk("sdb"),
     }
-    assert _labels(exporter, disks, ACE_STATUS, "Ace") == {
-        "nvme0n1": "Ace Boot",
-        "nvme1n1": "Ace VM-Flash",
-        "sda": "Ace Vault D1",
-        "sdb": "Ace Vault D2",
+    assert _labels(exporter, disks, ACE_STATUS) == {
+        "nvme0n1": "rpool",
+        "nvme1n1": "vm-flash",
+        "sda": "vault-hdd D1",
+        "sdb": "vault-hdd D2",
     }
 
 
@@ -185,37 +184,41 @@ def test_mirror_members_are_numbered_like_any_other_pool(exporter):
         "sda": _disk("sda", rotational="0"),
         "sdb": _disk("sdb", rotational="0"),
     }
-    assert _labels(exporter, disks, COTTONWOOD_STATUS, "Cottonwood") == {
-        "sda": "Cottonwood Cache D2",
-        "sdb": "Cottonwood Cache D1",
+    assert _labels(exporter, disks, COTTONWOOD_STATUS) == {
+        "sda": "cache D2",
+        "sdb": "cache D1",
     }
 
 
 def test_single_disk_pool_gets_no_position(exporter):
     disks = {"sda": _disk("sda", rotational="0")}
-    assert _labels(exporter, disks, CINCI_STATUS, "Cinci") == {"sda": "Cinci Cache"}
+    assert _labels(exporter, disks, CINCI_STATUS) == {"sda": "cache"}
 
 
-def test_unknown_pool_falls_back_to_its_own_name(exporter):
-    """A pool this homelab has not seen still gets a readable name rather than
-    dropping through to the kernel device."""
+def test_pool_name_is_emitted_verbatim(exporter):
+    """No cosmetic rewriting of the pool name.
+
+    homelab_zpool_* already labels this pool `scratch`, and `zpool status` calls
+    it `scratch`; a prettified `Scratch` here would be a second spelling of one
+    pool in one dashboard, which is the drift this scheme exists to remove.
+    """
     status = CINCI_STATUS.replace("cache", "scratch")
     disks = {"sda": _disk("sda")}
-    assert _labels(exporter, disks, status, "Cinci") == {"sda": "Cinci Scratch"}
+    assert _labels(exporter, disks, status) == {"sda": "scratch"}
 
 
 def test_non_zfs_root_disk_is_still_called_boot(exporter):
     """cinci and cottonwood boot from plain ext4, so there is no pool to name the
     boot disk after. Without the root-filesystem fallback it would be called
-    "Cinci sdb", which is exactly the unreadable legend this replaces."""
+    "sdb", which is exactly the unreadable legend this replaces."""
     disks = {"sda": _disk("sda", rotational="0"), "sdb": _disk("sdb", rotational="0")}
-    labels = _labels(exporter, disks, CINCI_STATUS, "Cinci", root="sdb")
-    assert labels["sdb"] == "Cinci Boot"
+    labels = _labels(exporter, disks, CINCI_STATUS, root="sdb")
+    assert labels["sdb"] == "boot"
 
 
 def test_unpooled_disk_falls_back_to_its_device_name(exporter):
     disks = {"sdc": _disk("sdc")}
-    assert _labels(exporter, disks, CINCI_STATUS, "Cottonwood") == {"sdc": "Cottonwood sdc"}
+    assert _labels(exporter, disks, CINCI_STATUS) == {"sdc": "sdc"}
 
 
 def test_model_override_names_a_disk_derivation_cannot(exporter):
@@ -227,10 +230,8 @@ def test_model_override_names_a_disk_derivation_cannot(exporter):
     have to be pinned.
     """
     disks = {"sdc": _disk("sdc", model="My Passport 0837")}
-    labels = _labels(
-        exporter, disks, CINCI_STATUS, "Cottonwood", overrides={"My Passport": "Passport"}
-    )
-    assert labels["sdc"] == "Cottonwood Passport"
+    labels = _labels(exporter, disks, CINCI_STATUS, overrides={"My Passport": "passport"})
+    assert labels["sdc"] == "passport"
 
 
 def test_longest_matching_override_prefix_wins(exporter):
@@ -238,11 +239,11 @@ def test_longest_matching_override_prefix_wins(exporter):
     assert (
         exporter.match_override(
             "My Passport Ultra 0837",
-            {"My Passport": "Passport", "My Passport Ultra": "Passport Ultra"},
+            {"My Passport": "passport", "My Passport Ultra": "passport ultra"},
         )
-        == "Passport Ultra"
+        == "passport ultra"
     )
-    assert exporter.match_override("Samsung SSD 990 PRO", {"My Passport": "Passport"}) == ""
+    assert exporter.match_override("Samsung SSD 990 PRO", {"My Passport": "passport"}) == ""
 
 
 # --- the silent, host-wide and fleet-wide failure modes --------------------
@@ -264,15 +265,19 @@ def test_offline_member_still_consumes_its_position(exporter):
     assert "D3" not in {entry["position"] for entry in membership.values()}
 
 
-def test_names_are_unique_across_the_fleet(exporter):
-    """Panels group by disk_label alone, so two hosts producing the same name
-    would silently merge two physical disks into one series. The host prefix is
-    what prevents it -- ace and clovis both have a "Vault D1"."""
-    ace = _labels(exporter, {"sda": _disk("sda")}, ACE_STATUS, "Ace")
-    clovis = _labels(exporter, {"sde": _disk("sde")}, CLOVIS_STATUS, "Clovis")
-    assert ace["sda"] == "Ace Vault D1"
-    assert clovis["sde"] == "Clovis Vault D1"
-    assert set(ace.values()).isdisjoint(clovis.values())
+def test_names_collide_across_hosts_and_must_be_grouped_by_host(exporter):
+    """The name is deliberately host-relative: ace and clovis both call a disk
+    "vault-hdd D1".
+
+    This is not a defect to be fixed by re-adding a host prefix -- it is why
+    panels must group by (host, disk_label) rather than disk_label alone, which
+    makes a cross-host merge structurally impossible instead of test-enforced.
+    The `host` label the scrape config attaches is the disambiguator, and it is
+    the same one every non-disk panel in the dashboard already uses.
+    """
+    ace = _labels(exporter, {"sda": _disk("sda")}, ACE_STATUS)
+    clovis = _labels(exporter, {"sde": _disk("sde")}, CLOVIS_STATUS)
+    assert ace["sda"] == clovis["sde"] == "vault-hdd D1"
 
 
 def test_shared_smartctl_device_does_not_duplicate_a_series(exporter):
@@ -280,8 +285,8 @@ def test_shared_smartctl_device_does_not_duplicate_a_series(exporter):
     device. node_exporter rejects the *entire* textfile on a duplicate metric,
     which would unlabel every disk on the host, so the second one is dropped."""
     rows = [
-        {**_disk("nvme0n1", rotational="0"), "disk_label": "Ace Boot", "pool": "rpool"},
-        {**_disk("nvme0n2", rotational="0"), "disk_label": "Ace Boot 2"},
+        {**_disk("nvme0n1", rotational="0"), "disk_label": "rpool", "pool": "rpool"},
+        {**_disk("nvme0n2", rotational="0"), "disk_label": "nvme0n2"},
     ]
     for row in rows:
         row["smart_device"] = "nvme0"
@@ -298,7 +303,7 @@ def test_shared_smartctl_device_does_not_duplicate_a_series(exporter):
 
 def _render_one(exporter, **kw):
     rows = exporter.build(
-        {"sda": _disk("sda", **kw)}, exporter.parse_zpool_status(ACE_STATUS), "", "Ace", {}
+        {"sda": _disk("sda", **kw)}, exporter.parse_zpool_status(ACE_STATUS), "", {}
     )
     return exporter.render(rows), rows
 
@@ -319,9 +324,9 @@ def test_no_host_label_is_emitted(exporter):
     for line in output.splitlines():
         if line.startswith("homelab_"):
             assert 'host="' not in line
-    # ...but the host name still appears inside the label *value*, which is what
-    # makes the legend readable and fleet-unique.
-    assert rows[0]["disk_label"].startswith("Ace ")
+    # ...and it does not appear in the label *value* either: the panel prefixes
+    # `{{host}}` itself, exactly as every non-disk panel does.
+    assert rows[0]["disk_label"] == "vault-hdd D1"
 
 
 def test_capacity_is_published_as_exact_bytes_not_a_rounded_string(exporter):

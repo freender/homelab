@@ -225,19 +225,18 @@ names on different panels -- harmless only because each panel filters
 regardless of which half it could use.
 
 This exporter deletes the map rather than relocating it. A name is
-`<host> <pool> [<position>]`, all of which is readable from the running system,
-so nothing is written down by a human and **no hardware identifier enters the
+`<pool> [<position>]`, all of which is readable from the running system, so
+nothing is written down by a human and **no hardware identifier enters the
 repo**.
 
 | Component | Derived from |
 |---|---|
-| `Ace`, `Clovis` | the host's own name |
-| `Boot`, `VM-Flash`, `Vault`, `Cache` | the pool the disk belongs to |
+| `rpool`, `vm-flash`, `vault-hdd`, `cache` | the pool the disk belongs to, verbatim |
+| `boot` | the disk backing `/`, when `/` is not on ZFS (cinci, cottonwood) |
 | `D1..D6` | the member's ordinal in that pool, in the order `zpool status` prints it -- which is vdev order, not device order (clovis's vault starts at `sde`). Omitted for a single-member pool. |
 
-The host prefix is not decoration: panels group by `disk_label` alone, so two
-hosts producing the same name would silently merge two physical disks into one
-series. ace and clovis both have a `Vault D1`.
+Panels group by `(host, disk_label)` and render `{{host}} {{disk_label}}`, so a
+disk reads as `clovis vault-hdd D1`.
 
 #### What the name deliberately leaves out
 
@@ -264,6 +263,18 @@ fleet: a pool with several vdevs numbers straight through them rather than
 restarting per vdev, and a cache/log/spare device would be numbered inline with
 the data members.
 
+**The host, and any prettifying of the pool name.** Every other panel in the
+dashboard builds its legend as `{{host}} <thing>` from the `host` label the
+scrape config attaches. A name that carried its own Title-cased host was
+therefore the one series in the dashboard that could never match its neighbours:
+`Ace Vault D1` sat next to `ace vm-flash` (from `homelab_zpool_*`) and
+`ace - SAS9207-8i` (from `homelab_hba_*`), three spellings of one host. For the
+same reason the pool name is emitted verbatim -- `vault-hdd`, not `Vault`. It is
+what `zpool status` prints and what `homelab_zpool_*` already labels it, so a
+cosmetic map only created a fourth spelling of one pool. Dropping both also
+deleted the map, the host-casing helper, and the fleet-uniqueness constraint
+described below.
+
 #### No serial label
 
 `serial` is deliberately absent. It is not the join key -- queries join on
@@ -286,17 +297,21 @@ device; SATA disks are named identically by both. Emitting both is what lets a
 panel replace a nested `label_replace` chain with one `group_left`:
 
 ```promql
-sum by(disk_label) (irate(node_disk_read_bytes_total{device=~"sd[a-z]+"}[25s])
+sum by(host,disk_label) (irate(node_disk_read_bytes_total{device=~"sd[a-z]+"}[25s])
   * on(host,device) group_left(disk_label) homelab_disk_label{rotational="1"})
 
-max by(disk_label) (smartctl_device_temperature{temperature_type="current"}
+max by(host,disk_label) (smartctl_device_temperature{temperature_type="current"}
   * on(host,device) group_left(disk_label) homelab_smart_disk_label{rotational="1"})
 ```
 
+Legend format is `{{host}} {{disk_label}}` in both cases.
+
 Neither carries a `host` label: the scrape config attaches one, and emitting our
 own would only produce a redundant `exported_host` (as `homelab_zpool_*` does).
-The host name appears inside the `disk_label` *value*, which is not a label, so
-nothing collides.
+Names are therefore only unique *within* a host -- ace and clovis both call a
+disk `vault-hdd D1` -- which is why panels must group by `(host, disk_label)`
+rather than `disk_label` alone. That makes a cross-host merge structurally
+impossible rather than something a test has to keep watching.
 
 Two failure modes are guarded because both are silent and both cost the whole
 host's metrics rather than one series. node_exporter rejects an *entire* textfile
@@ -307,8 +322,8 @@ an absent device), so it yields no series but still consumes its position;
 otherwise replacing a failed disk would renumber every healthy disk behind it and
 orphan their history. That case is live on ace, whose vault `D3` failed on
 2026-08-10 while `D1`/`D2` kept their identity.
-`tests/test_disk_label_exporter.py` covers both, plus fleet-wide name uniqueness
-and the real `zpool status` output from all four layouts.
+`tests/test_disk_label_exporter.py` covers both, plus the deliberate cross-host
+name collision and the real `zpool status` output from all four layouts.
 
 #### The escape hatch: `metrics-exporters.disk_labels`
 
@@ -318,11 +333,12 @@ disk -- an optional per-host map renders to `/etc/homelab/disk-labels.conf`:
 ```yaml
 metrics-exporters:
   disk_labels:
-    My Passport: Passport
+    My Passport: passport
 ```
 
 Keyed by the model in `/sys/block/<dev>/device/model`, matched exactly or as a
 prefix (longest wins) so a firmware revision suffix does not have to be pinned.
+Values are lowercase, like the pool names they sit alongside in a legend.
 **Keyed by model, never by serial** -- a model is not a hardware identifier, so
 this stays safe in a public repo. Only cottonwood uses it, for a USB drive whose
 enclosure reports a different model than the drive inside it.
