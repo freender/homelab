@@ -1,0 +1,29 @@
+groups:
+  - name: disk-labels
+    interval: 1m
+    rules:
+      # homelab_disk_label / homelab_smart_disk_label are what turn a kernel
+      # device name into a legend: every disk panel in Grafana joins on
+      # (host, device) and groups by (host, disk_label). Nothing alerts on them,
+      # so a broken disk-label-textfile-exporter is invisible until someone
+      # looks at a graph and misreads it.
+      #
+      # It cannot fail by going absent. node_exporter's textfile collector
+      # serves whatever is already in its directory, so a dead exporter leaves
+      # the old disk-labels.prom in place and the labels silently freeze --
+      # after a disk swap the panels then attribute the new disk's I/O and
+      # temperature to the name of the one it replaced, which is worse than an
+      # empty panel because it looks correct.
+      #
+      # The timer runs every 5 minutes (vs 1 minute for the hba/zfs-pool
+      # exporters), so the threshold is 30 minutes rather than the 15 used by
+      # HbaTemperatureStale and ZfsPoolMetricsStale -- six missed ticks, wide
+      # enough that a single slow `zpool status` cannot fire it.
+      - alert: DiskLabelMetricsStale
+        expr: time() - node_textfile_mtime_seconds{file=~".*/disk-labels\\.prom"} > 1800
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.host }} disk name metrics are stale"
+          description: "disk-labels.prom on {{ $labels.host }} has not been rewritten in over 30 minutes, so homelab_disk_label is frozen and Grafana's disk panels may be attributing I/O and temperature to the wrong disk. Check `systemctl status disk-label-textfile-exporter.timer` on {{ $labels.host }}."

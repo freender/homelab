@@ -14,6 +14,7 @@ REMOTE_RULES_DIR = "/mnt/cache/appdata/vmalert/rules"
 RULE_FILES = (
     "apt-updates.yml",
     "critical-containers.yml",
+    "disk-labels.yml",
     "docker.yml",
     "important-containers.yml",
     "nic-link.yml",

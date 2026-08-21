@@ -73,3 +73,24 @@ groups:
         annotations:
           summary: "Offsite ZFS pool health metrics missing"
           description: "homelab_zpool_healthy has produced no samples for any cinci/cottonwood pool in 1 hour; longer window than the on-prem rule to tolerate offsite link flaps. Could mean the exporter/link is down, or that host is genuinely unreachable."
+
+      # The two rules above only catch an *absent* series, which is not how this
+      # exporter fails. node_exporter's textfile collector keeps serving
+      # whatever is already in its directory, so a dead
+      # zfs-pool-textfile-exporter leaves homelab_zpool_healthy present and
+      # frozen at its last value -- a pool could go DEGRADED while
+      # ZfsPoolUnhealthy sits at a stale 0 and never fires. Same reasoning as
+      # HbaTemperatureStale in temperatures.yml, and the same threshold: the
+      # timer runs every minute, so 15 minutes without a rewrite is broken.
+      #
+      # No separate offsite window here, unlike the missing-metrics pair above:
+      # this reads the file's mtime from a successful scrape, so an offsite link
+      # flap makes the series absent rather than stale and cannot fire it.
+      - alert: ZfsPoolMetricsStale
+        expr: time() - node_textfile_mtime_seconds{file=~".*/zfs-pools\\.prom"} > 900
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.host }} ZFS pool metrics are stale"
+          description: "zfs-pools.prom on {{ $labels.host }} has not been rewritten in over 15 minutes, so every homelab_zpool_* series is frozen at its last value and ZfsPoolUnhealthy/ZfsPoolSpaceCritical cannot fire on anything that has changed since. Check `systemctl status zfs-pool-textfile-exporter.timer` on {{ $labels.host }}."
