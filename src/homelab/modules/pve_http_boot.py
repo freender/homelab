@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ipaddress
 from contextlib import nullcontext
 from pathlib import Path
 
@@ -143,19 +144,40 @@ def _read_pdm_cert_fingerprint(root: Path) -> str:
     return fingerprint
 
 
+def normalize_mgmt_ip(value: object, host: str) -> str:
+    """Return a bare dotted-quad IPv4 address, or raise.
+
+    The old check only counted dots, which let three broken forms through:
+    a CIDR suffix, out-of-range octets, and non-numeric octets. The CIDR case is
+    the realistic one — `pve-postinstall.interfaces.mgmt_ip` in this same
+    hosts.conf *is* a CIDR, so copying a value between the two identically-named
+    keys is an easy mistake that this key must reject.
+
+    It matters because the value is baked into `set http-boot-server` in the iPXE
+    entry points. A bad address does not fail at deploy time; it fails when
+    someone tries to netboot a bare-metal node, which is exactly when nothing else
+    is available to debug it.
+    """
+    text = str(value).strip()
+    try:
+        return str(ipaddress.IPv4Address(text))
+    except ValueError as exc:
+        raise ValueError(
+            f"pve-http-boot.mgmt_ip must be a bare dotted IPv4 address for {host} "
+            f"(got {text!r}); a CIDR suffix or hostname will render an unbootable "
+            "iPXE entry point"
+        ) from exc
+
+
 def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
     registry = default_registry(root)
 
-    mgmt_ip = str(registry.get(host, "pve-http-boot.mgmt_ip"))
+    mgmt_ip = normalize_mgmt_ip(registry.get(host, "pve-http-boot.mgmt_ip"), host)
     pdm_url = str(registry.get(host, "pve-http-boot.pdm_url"))
     pdm_cert_fingerprint = _read_pdm_cert_fingerprint(root)
     autoupdate_schedule = str(
         registry.get(host, "pve-http-boot.autoupdate_schedule", "*-*-* 09:00:00")
     )
-
-    ip_parts = mgmt_ip.split(".")
-    if len(ip_parts) != 4:
-        raise ValueError(f"pve-http-boot.mgmt_ip must be a dotted IPv4 address for {host}")
 
     configs_dir = root / "pve-http-boot" / "configs"
     templates_dir = root / "pve-http-boot" / "templates"
