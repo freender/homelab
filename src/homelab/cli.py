@@ -498,11 +498,18 @@ def validate() -> None:
         print_warn("ruff not installed; skipping Python lint (CI will still run it)")
 
     if _module_available("pytest"):
-        print_action("Pytest")
+        # tests/test_dry_run_all_modules.py parametrizes over every registered module
+        # and offline-dry-runs it against the real hosts.conf, so this single pytest
+        # invocation is also `validate`'s per-module dry-run check (see below) —
+        # instrumented for coverage instead of living in a bespoke for-loop.
+        print_action("Pytest (includes per-module dry-run)")
         _run_command([sys.executable, "-m", "pytest", "-q", "tests"], cwd=root)
         print_ok("Tests passed")
     else:
-        print_warn("pytest not installed; skipping tests (CI will still run them)")
+        print_warn(
+            "pytest not installed; skipping tests and per-module dry-run "
+            "(CI will still run them)"
+        )
 
     print_action("YAML Syntax")
     with (root / "hosts.conf").open("r", encoding="utf-8") as handle:
@@ -528,22 +535,6 @@ def validate() -> None:
         print_ok("ShellCheck passed")
     else:
         print_warn("shellcheck not installed; skipping shell lint")
-
-    print_action("Dry-run Modules")
-    if offline_mode():
-        print_sub("Offline mode enabled; remote SSH diffs are skipped")
-    failed_modules: list[str] = []
-    for module_name in ordered_modules():
-        print_sub(module_name)
-        exit_code = execute_module(module_name, "all", True, False)
-        if exit_code == 0:
-            print_ok("OK")
-        else:
-            print_warn("Issues")
-            failed_modules.append(module_name)
-
-    if failed_modules:
-        raise click.ClickException(f"dry-run failures: {' '.join(failed_modules)}")
 
     print_header("Validation Complete")
 

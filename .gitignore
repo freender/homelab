@@ -41,3 +41,5 @@ Thumbs.db
 *.pyc
 *.pyo
 *.egg-info/
+.coverage
+.pytest_cache/

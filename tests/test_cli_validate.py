@@ -37,43 +37,40 @@ def _write_node_down_pair(root: Path, scraped: list[str], covered: str, extra: s
     )
 
 
-def test_validate_reports_offline_mode(monkeypatch, tmp_path: Path) -> None:
-    messages: list[str] = []
+def test_validate_runs_ruff_and_pytest_when_available(monkeypatch, tmp_path: Path) -> None:
+    # Per-module dry-run now lives in tests/test_dry_run_all_modules.py (parametrized,
+    # coverage-instrumented) rather than a bespoke for-loop in `validate`, so this test
+    # only asserts the subprocess steps run, not their content.
+    commands: list[list[str]] = []
 
     monkeypatch.setattr(cli, "repo_root", lambda: tmp_path)
-    monkeypatch.setattr(cli, "_run_command", lambda command, cwd: None)
+    monkeypatch.setattr(cli, "_run_command", lambda command, cwd: commands.append(command))
     monkeypatch.setattr(cli.shutil, "which", lambda name: None)
-    monkeypatch.setattr(cli, "ordered_modules", lambda: ["alpha", "beta"])
-    monkeypatch.setattr(cli, "execute_module", lambda *args: 0)
-    monkeypatch.setattr(cli, "offline_mode", lambda: True)
-    monkeypatch.setattr(cli, "print_sub", messages.append)
 
     (tmp_path / "hosts.conf").write_text("{}\n", encoding="utf-8")
 
     result = CliRunner().invoke(cli.main, ["validate"])
 
     assert result.exit_code == 0
-    assert "Offline mode enabled; remote SSH diffs are skipped" in messages
+    assert any("ruff" in command for command in commands)
+    assert any("pytest" in command for command in commands)
 
 
-def test_validate_fails_when_any_module_fails(monkeypatch, tmp_path: Path) -> None:
+def test_validate_warns_when_pytest_missing(monkeypatch, tmp_path: Path) -> None:
+    messages: list[str] = []
+
     monkeypatch.setattr(cli, "repo_root", lambda: tmp_path)
     monkeypatch.setattr(cli, "_run_command", lambda command, cwd: None)
     monkeypatch.setattr(cli.shutil, "which", lambda name: None)
-    monkeypatch.setattr(cli, "ordered_modules", lambda: ["alpha", "beta"])
-    monkeypatch.setattr(cli, "offline_mode", lambda: False)
-
-    def fake_execute_module(module_name: str, host: str, dry_run: bool, force: bool) -> int:
-        return 1 if module_name == "beta" else 0
-
-    monkeypatch.setattr(cli, "execute_module", fake_execute_module)
+    monkeypatch.setattr(cli, "_module_available", lambda name: name != "pytest")
+    monkeypatch.setattr(cli, "print_warn", messages.append)
 
     (tmp_path / "hosts.conf").write_text("{}\n", encoding="utf-8")
 
     result = CliRunner().invoke(cli.main, ["validate"])
 
-    assert result.exit_code != 0
-    assert "dry-run failures: beta" in result.output
+    assert result.exit_code == 0
+    assert any("skipping tests and per-module dry-run" in message for message in messages)
 
 
 def test_node_down_coverage_accepts_the_live_repo_config() -> None:

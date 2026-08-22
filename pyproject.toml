@@ -15,6 +15,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest>=8.3,<9",
+    "pytest-cov>=6.0,<7",
     "ruff>=0.11,<0.12",
 ]
 
@@ -42,3 +43,15 @@ select = [
     "I",
     "UP",
 ]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--cov=homelab --cov-report=term-missing"
+
+[tool.coverage.run]
+source = ["homelab"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+skip_empty = true
