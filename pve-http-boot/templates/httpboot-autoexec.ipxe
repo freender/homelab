@@ -10,6 +10,28 @@
 # chain fetched them from.
 
 set http-boot-server {{ MGMT_IP }}
-dhcp
+
+# Open every NIC before asking for a lease, then poll rather than asking once.
+# A one-shot `dhcp` succeeds on a virtio link, which comes up instantly, and
+# fails on real hardware: iPXE re-initialises the NIC, the switch port
+# renegotiates, and the switch will not forward until STP converges. A bare
+# `dhcp` gives up well before that, `chain` then fails, and the node lands in
+# the shell fallback having never requested boot.ipxe. Polling also covers
+# multi-NIC nodes, where the first enumerated port is not necessarily the
+# cabled one and each attempt retries across all of them.
 ifopen
+
+set attempts:int32 12
+:dhcp_retry
+dhcp && goto dhcp_ok
+iseq ${attempts} 0 && goto dhcp_failed ||
+inc attempts -1
+sleep 3
+goto dhcp_retry
+
+:dhcp_failed
+echo No DHCP lease on any interface. Run ifstat to inspect per-NIC link state.
+shell
+
+:dhcp_ok
 chain http://${http-boot-server}/boot.ipxe || shell

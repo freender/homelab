@@ -65,6 +65,28 @@ def test_httpboot_entrypoint_template_sets_http_boot_server_from_mgmt_ip() -> No
     assert "http:///" not in autoexec
 
 
+def test_entrypoint_polls_for_dhcp_instead_of_asking_once() -> None:
+    """A one-shot `dhcp` boots a VM and strands real hardware.
+
+    iPXE re-initialises the NIC after the firmware hands off, so the switch port
+    renegotiates and stays blocked until STP converges. A single `dhcp` returns
+    failure well before that, `chain` never runs, and the node drops to the shell
+    without ever requesting boot.ipxe — which is exactly how ace failed while the
+    virtio test VM, whose link comes up instantly, sailed through.
+    """
+    autoexec = read_template("httpboot-autoexec.ipxe")
+
+    # Every interface up first: the first enumerated NIC is not necessarily the
+    # cabled one on a multi-NIC node.
+    assert "\nifopen\n" in autoexec
+
+    # A retry loop, not a bare `dhcp` followed straight by the chain.
+    assert "dhcp && goto dhcp_ok" in autoexec
+    assert "goto dhcp_retry" in autoexec
+    assert "inc attempts -1" in autoexec
+    assert "\ndhcp\nifopen\n" not in autoexec
+
+
 def test_entrypoint_falls_back_to_a_shell_when_no_payload_is_built_yet() -> None:
     """boot.ipxe only exists after a successful autoupdate run.
 
