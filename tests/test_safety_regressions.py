@@ -20,27 +20,69 @@ from homelab.modules import (
 ROOT = Path(__file__).resolve().parents[1]
 
 
-class ValueRegistry:
-    def __init__(self, value: object) -> None:
+class KeyedRegistry:
+    """Registry stub that answers exactly one key.
+
+    Deliberately not a "return the same value for every key" stub: that shape cannot
+    tell whether a normalizer reads the hosts.conf key it is supposed to, so a
+    normalizer pointed at the wrong key would still pass.
+    """
+
+    def __init__(self, key: str, value: object) -> None:
+        self.key = key
         self.value = value
 
-    def get(self, _host: str, _key: str, default: object = None) -> object:
-        return self.value if self.value is not None else default
+    def get(self, _host: str, key: str, default: object = None) -> object:
+        return self.value if key == self.key else default
 
 
-@pytest.mark.parametrize(
-    "normalizer",
-    [
-        apt_upgrade.normalize_autoupgrade,
+# Each of these gates a destructive or noisy action, and each has a deliberately
+# *safe* default when the key is absent: no unattended dist-upgrade, no host GPU
+# torn away from the console, webhook stays in dry-run.
+DANGEROUS_BOOLEANS = [
+    (apt_upgrade.normalize_autoupgrade, "apt-upgrade.autoupgrade", False),
+    (
         pve_gpu_passthrough.normalize_isolate_host_gpu,
+        "pve-gpu-passthrough.isolate_host_gpu",
+        False,
+    ),
+    (
         pve_postinstall_webhook.normalize_webhook_dry_run,
-    ],
-)
-def test_dangerous_boolean_settings_are_strict(normalizer) -> None:
-    assert normalizer(ValueRegistry("false"), "ace") is False
-    assert normalizer(ValueRegistry("true"), "ace") is True
+        "pve-postinstall-webhook.dry_run",
+        True,
+    ),
+]
+
+
+@pytest.mark.parametrize(("normalizer", "key", "safe_default"), DANGEROUS_BOOLEANS)
+def test_dangerous_boolean_settings_are_strict(normalizer, key: str, safe_default: bool) -> None:
+    assert normalizer(KeyedRegistry(key, "false"), "ace") is False
+    assert normalizer(KeyedRegistry(key, "true"), "ace") is True
     with pytest.raises(ValueError, match="must be true or false"):
-        normalizer(ValueRegistry("ture"), "ace")
+        normalizer(KeyedRegistry(key, "ture"), "ace")
+
+
+@pytest.mark.parametrize(("normalizer", "key", "safe_default"), DANGEROUS_BOOLEANS)
+def test_dangerous_booleans_read_their_own_key(normalizer, key: str, safe_default: bool) -> None:
+    """A normalizer wired to the wrong hosts.conf key silently ignores the operator.
+
+    Answering only `key` means a normalizer reading anything else falls through to
+    its default, so the `true` case below fails loudly instead of passing.
+    """
+    assert normalizer(KeyedRegistry(key, "true"), "ace") is True
+    assert normalizer(KeyedRegistry("some.other.key", "true"), "ace") is safe_default
+
+
+@pytest.mark.parametrize(("normalizer", "key", "safe_default"), DANGEROUS_BOOLEANS)
+def test_dangerous_booleans_default_to_the_safe_side(
+    normalizer, key: str, safe_default: bool
+) -> None:
+    """An absent key must not enable the dangerous behavior.
+
+    Note `dry_run` defaults True while the other two default False — the safe
+    direction differs per setting, so this cannot be asserted generically.
+    """
+    assert normalizer(KeyedRegistry(key, None), "ace") is safe_default
 
 
 def test_deploy_rejects_unknown_host_before_module_dispatch(
@@ -382,7 +424,9 @@ def test_recover_failed_units_leaves_persistent_failure_visible(tmp_path: Path) 
     )
 
     assert result.returncode == 0, result.stderr
-    assert "still failing" in result.stdout or "still failing" in result.stderr
+    # print_warn writes to stdout (lib/print.sh); accepting either stream would let a
+    # regression that reroutes an operator-facing warning to stderr pass unnoticed.
+    assert "still failing" in result.stdout, result.stderr
 
 
 def test_mask_unwanted_service_skips_uninstalled_unit(tmp_path: Path) -> None:
@@ -433,9 +477,13 @@ backup_and_copy_if_changed() { return 2; }
 
 
 def test_keepalived_build_uses_caller_supplied_tmpfs_path(
+    offline: None,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+    # `offline` is load-bearing, not decoration: normalize_config resolves the
+    # keepalived env path eagerly to build its error messages, so without it this
+    # test shells out to the `op` CLI and fails on any machine without a session.
     values = {
         "config.type": "ubuntu",
         "keepalived.interface": "eth0",
