@@ -2,6 +2,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
+from src.homelab.modules import pve_http_boot
+
 ROOT = Path(__file__).resolve().parents[1]
 HTTP_BOOT_CONFIGS = ROOT / "pve-http-boot" / "configs"
 HTTP_BOOT_TEMPLATES = ROOT / "pve-http-boot" / "templates"
@@ -309,3 +313,51 @@ def test_baked_offsite_iso_build_is_retired() -> None:
     installer = read_installer()
     assert "rm -rf /srv/httpboot/iso" in installer
     assert "rm -rf /etc/homelab-http-boot/iso-answers" in installer
+
+
+# --------------------------------------------------------------------------
+# PDM answer-auth token format
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["barestring", ":onlysecret", "onlyname:", ":", ""],
+)
+def test_malformed_pdm_token_is_rejected_at_deploy_time(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, value: str
+) -> None:
+    """A token missing its `<name>:` half authenticates against nothing.
+
+    The installer sends it verbatim as `Authorization: Bearer <name>:<secret>`
+    and PDM resolves the name against tokens.cfg to choose a hash. Without a
+    name there is nothing to resolve, so PDM returns a bare 401. prepare-iso
+    bakes in whatever string it is handed, so the mistake stays invisible until
+    a node has already netbooted and is asking for its answer file.
+    """
+    monkeypatch.setattr(
+        pve_http_boot.op_secrets, "secret_file", lambda _root, _name: tmp_path / "s.env"
+    )
+    monkeypatch.setattr(
+        pve_http_boot.op_secrets,
+        "parse_env_file",
+        lambda _p: {"PVE_HTTP_BOOT_TOKEN": value},
+    )
+
+    with pytest.raises(ValueError):
+        pve_http_boot._read_token(ROOT)
+
+
+def test_wellformed_pdm_token_is_accepted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        pve_http_boot.op_secrets, "secret_file", lambda _root, _name: tmp_path / "s.env"
+    )
+    monkeypatch.setattr(
+        pve_http_boot.op_secrets,
+        "parse_env_file",
+        lambda _p: {"PVE_HTTP_BOOT_TOKEN": "homelab-pve-auto-install:s3cr3t"},
+    )
+
+    assert pve_http_boot._read_token(ROOT) == "homelab-pve-auto-install:s3cr3t"

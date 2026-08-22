@@ -369,19 +369,25 @@ def write_secret(tmp_path: Path, body: str) -> Path:
 
 
 @pytest.mark.parametrize(
-    ("reader", "key"),
+    ("reader", "key", "value"),
     [
-        (pve_http_boot._read_token, "PVE_HTTP_BOOT_TOKEN"),
-        (pve_http_boot._read_pdm_cert_fingerprint, "PDM_CERT_FINGERPRINT"),
+        # The token carries a mandatory `<name>:` half, so a bare placeholder is
+        # not a valid sample for this reader — see _read_token.
+        (
+            pve_http_boot._read_token,
+            "PVE_HTTP_BOOT_TOKEN",
+            "homelab-pve-auto-install:abc123",
+        ),
+        (pve_http_boot._read_pdm_cert_fingerprint, "PDM_CERT_FINGERPRINT", "abc123"),
     ],
 )
 def test_secret_readers_return_the_value(
-    reader, key: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    reader, key: str, value: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    path = write_secret(tmp_path, f"{key}=abc123\n")
+    path = write_secret(tmp_path, f"{key}={value}\n")
     monkeypatch.setattr(pve_http_boot.op_secrets, "secret_file", lambda _r, _n: path)
 
-    assert reader(tmp_path) == "abc123"
+    assert reader(tmp_path) == value
 
 
 @pytest.mark.parametrize(

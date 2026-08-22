@@ -117,6 +117,21 @@ def _read_token(root: Path) -> str:
         raise ValueError(
             f"PVE_HTTP_BOOT_TOKEN is empty in rendered secret '{SECRET_NAME}'"
         )
+    # The installer sends this verbatim as `Authorization: Bearer <name>:<secret>`,
+    # and PDM resolves the name half against its tokens.cfg to pick a hash to
+    # check. A token without the name is unresolvable, so PDM answers 401 with no
+    # further detail. Nothing rejects it earlier: prepare-iso bakes in whatever
+    # string it is given, so a malformed token stays invisible until a node is
+    # already netbooted and asking for its answer file - the single worst place
+    # to discover it. Fail here instead.
+    name, sep, secret = token.partition(":")
+    if not sep or not name or not secret:
+        raise ValueError(
+            f"PVE_HTTP_BOOT_TOKEN in rendered secret '{SECRET_NAME}' must be "
+            "'<name>:<secret>' as required by the Proxmox automated-installation "
+            "docs; the name half must match a token in PDM's "
+            "/etc/proxmox-datacenter-manager/autoinst/tokens.cfg"
+        )
     return token
 
 
