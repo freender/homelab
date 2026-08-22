@@ -237,6 +237,35 @@ def test_http_boot_autoupdate_cleans_temp_and_promotes_whole_tree() -> None:
 # --------------------------------------------------------------------------
 
 
+def test_installer_serves_the_snp_bound_loader_not_the_native_driver_build() -> None:
+    """ipxe.efi drives the NIC itself and has never booted this fleet's hardware.
+
+    Taking over the card means resetting it, so the link drops and has to
+    renegotiate. That is free on virtio and fatal on the HP 560SFP+ (Intel
+    82599) every node here boots from — iPXE re-inits the card and then stalls
+    on "Waiting for link-up". arc's access log shows two VM boots completing the
+    full chain and zero bare-metal ones. snponly.efi binds to the UEFI Simple
+    Network Protocol instead, reusing the option-ROM driver that already has the
+    link up and just fetched this file.
+    """
+    installer = read_installer()
+
+    assert "install -m 0644 /usr/lib/ipxe/snponly.efi" in installer
+    assert "install -m 0644 /usr/lib/ipxe/ipxe.efi" not in installer
+    assert "[[ -f /usr/lib/ipxe/snponly.efi ]] || missing_pkgs+=(ipxe)" in installer
+
+
+def test_loader_is_still_published_at_the_url_unifi_hands_out() -> None:
+    """The DHCP boot option points at /httpboot/ipxe.efi.
+
+    Swapping the source binary must not rename the served file, or every client
+    404s until someone edits the UniFi Network Boot option by hand.
+    """
+    installer = read_installer()
+
+    assert "/srv/httpboot/httpboot/ipxe.efi" in installer
+
+
 def test_installer_removes_the_superseded_menus() -> None:
     installer = read_installer()
 

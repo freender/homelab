@@ -59,7 +59,7 @@ command -v nginx    >/dev/null 2>&1 || missing_pkgs+=(nginx)
 command -v rsync    >/dev/null 2>&1 || missing_pkgs+=(rsync)
 command -v flock    >/dev/null 2>&1 || missing_pkgs+=(util-linux)
 command -v xorriso  >/dev/null 2>&1 || missing_pkgs+=(xorriso)
-[[ -f /usr/lib/ipxe/ipxe.efi ]] || missing_pkgs+=(ipxe)
+[[ -f /usr/lib/ipxe/snponly.efi ]] || missing_pkgs+=(ipxe)
 command -v proxmox-auto-install-assistant >/dev/null 2>&1 \
     || missing_pkgs+=(proxmox-auto-install-assistant)
 if [[ ${#missing_pkgs[@]} -gt 0 ]]; then
@@ -158,12 +158,25 @@ if [[ -f /srv/httpboot/boot.ipxe ]] \
     print_sub "removed superseded homelab boot menu"
 fi
 
+# Serve snponly.efi, not ipxe.efi. ipxe.efi carries iPXE's own NIC drivers and
+# resets the card when it takes over, so the link drops and must renegotiate.
+# That is free on a virtio NIC and has never once succeeded on this fleet's
+# bare metal: every node here boots from an HP 560SFP+ (Intel 82599), where
+# iPXE re-inits the card and then sits on "Waiting for link-up" until it gives
+# up. arc's access log records two VM boots completing the full chain and zero
+# bare-metal ones. snponly.efi instead binds to the UEFI Simple Network
+# Protocol, reusing the option-ROM driver that already brought the link up and
+# fetched this very file - no reset, no relink.
+#
+# The destination filename stays ipxe.efi deliberately: it is the URL baked
+# into the UniFi Network Boot DHCP option, and renaming it would strand every
+# client until that option is edited by hand.
 print_action "Installing HTTP Boot loader"
-if [[ -f /usr/lib/ipxe/ipxe.efi ]]; then
-    install -m 0644 /usr/lib/ipxe/ipxe.efi /srv/httpboot/httpboot/ipxe.efi
-    print_sub "installed /srv/httpboot/httpboot/ipxe.efi"
+if [[ -f /usr/lib/ipxe/snponly.efi ]]; then
+    install -m 0644 /usr/lib/ipxe/snponly.efi /srv/httpboot/httpboot/ipxe.efi
+    print_sub "installed /srv/httpboot/httpboot/ipxe.efi (from snponly.efi, SNP-bound)"
 else
-    print_error "missing packaged iPXE binary: /usr/lib/ipxe/ipxe.efi"
+    print_error "missing packaged iPXE binary: /usr/lib/ipxe/snponly.efi"
     exit 1
 fi
 
