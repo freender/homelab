@@ -6,8 +6,13 @@ from pathlib import Path
 from .. import op_secrets
 from ..deploy import DeploySession, force_env, prepare_build_dir, stage_and_run_remote_installer
 from ..hosts import default_registry
-from ..module_support import normalize_bool, tmpfs_secret_stage, validate_secret_reference
-from ..output import print_action, print_error, print_sub
+from ..module_support import (
+    normalize_bool,
+    run_module_deploy,
+    tmpfs_secret_stage,
+    validate_secret_reference,
+)
+from ..output import print_sub
 from ..ssh import HostConnection, diff_many
 
 REMOTE_ROOT = "/tmp/homelab-pve-postinstall-webhook"
@@ -35,21 +40,14 @@ def deploy(
     force: bool,
     session: DeploySession,
 ) -> int:
-    registry = default_registry(root)
-    supported_hosts = registry.list_hosts(feature=FEATURE)
-    hosts = registry.filter_hosts(requested_host, supported_hosts)
-    if not hosts:
-        print_action(f"Skipping {FEATURE} (not applicable to {requested_host})")
-        return 0
-
-    try:
-        validate(root)
-    except ValueError as exc:
-        print_error(str(exc))
-        return 1
-
-    session.run(lambda host: deploy_host(root, host, dry_run=dry_run, force=force), hosts)
-    return 0 if session.finish() else 1
+    return run_module_deploy(
+        root,
+        requested_host,
+        FEATURE,
+        session,
+        lambda host: deploy_host(root, host, dry_run=dry_run, force=force),
+        validate=lambda _supported_hosts, _hosts: validate(root),
+    )
 
 
 def validate(root: Path) -> None:

@@ -5,8 +5,14 @@ from pathlib import Path
 from ..build import copy_files
 from ..deploy import DeploySession, force_env, prepare_build_dir, stage_and_run_remote_installer
 from ..hosts import default_registry
-from ..module_support import FileSpec, connection_for_host, feature_paused, write_file_map
-from ..output import print_action, print_sub
+from ..module_support import (
+    FileSpec,
+    connection_for_host,
+    feature_paused,
+    run_module_deploy,
+    write_file_map,
+)
+from ..output import print_sub
 from ..ssh import diff_many
 
 MODULE_DIR = "apt-security-updates"
@@ -34,16 +40,14 @@ def deploy(
     force: bool,
     session: DeploySession,
 ) -> int:
-    registry = default_registry(root)
-    supported_hosts = registry.list_hosts(feature=MODULE_DIR)
-    hosts = registry.filter_hosts(requested_host, supported_hosts)
-    if not hosts:
-        print_action(f"Skipping {MODULE_DIR} (not applicable to {requested_host})")
-        return 0
-
-    validate(root)
-    session.run(lambda host: deploy_host(root, host, dry_run=dry_run, force=force), hosts)
-    return 0 if session.finish() else 1
+    return run_module_deploy(
+        root,
+        requested_host,
+        MODULE_DIR,
+        session,
+        lambda host: deploy_host(root, host, dry_run=dry_run, force=force),
+        validate=lambda _supported_hosts, _hosts: validate(root),
+    )
 
 
 def validate(root: Path) -> None:

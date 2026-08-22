@@ -7,8 +7,8 @@ from invoke.exceptions import UnexpectedExit
 from ..build import copy_files, render_file
 from ..deploy import DeploySession, prepare_build_dir, stage_and_run_remote_installer
 from ..hosts import default_registry
-from ..module_support import normalize_bool
-from ..output import print_action, print_error, print_sub
+from ..module_support import normalize_bool, run_module_deploy
+from ..output import print_sub
 from ..ssh import HostConnection, build_files, offline_mode
 
 REMOTE_ROOT = "/tmp/homelab-pve-gpu-passthrough"
@@ -25,22 +25,18 @@ def deploy(
     _force: bool,
     session: DeploySession,
 ) -> int:
-    registry = default_registry(root)
-    supported_hosts = registry.list_hosts(feature="pve-gpu-passthrough")
-    hosts = registry.filter_hosts(requested_host, supported_hosts)
-    if not hosts:
-        print_action(f"Skipping pve-gpu-passthrough (not applicable to {requested_host})")
-        return 0
-
-    try:
+    def validate_and_warn(_supported_hosts: list[str], _hosts: list[str]) -> None:
         validate(root)
-    except ValueError as exc:
-        print_error(str(exc))
-        return 1
+        print_sub("WARNING: This will modify systemd-boot cmdline, modules, and initramfs")
 
-    print_sub("WARNING: This will modify systemd-boot cmdline, modules, and initramfs")
-    session.run(lambda host: deploy_host(root, host, dry_run=dry_run), hosts)
-    return 0 if session.finish() else 1
+    return run_module_deploy(
+        root,
+        requested_host,
+        "pve-gpu-passthrough",
+        session,
+        lambda host: deploy_host(root, host, dry_run=dry_run),
+        validate=validate_and_warn,
+    )
 
 
 def validate(root: Path) -> None:

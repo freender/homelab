@@ -5,8 +5,8 @@ from pathlib import Path
 from ..build import write_env_file
 from ..deploy import DeploySession, force_env, prepare_build_dir, stage_and_run_remote_installer
 from ..hosts import HostLookupError, default_registry
-from ..module_support import feature_paused, normalize_bool
-from ..output import print_action, print_sub
+from ..module_support import feature_paused, normalize_bool, run_module_deploy
+from ..output import print_sub
 from ..ssh import HostConnection
 
 REMOTE_ROOT = "/tmp/homelab-apt-upgrade"
@@ -21,15 +21,13 @@ def deploy(
     force: bool,
     session: DeploySession,
 ) -> int:
-    registry = default_registry(root)
-    supported_hosts = registry.list_hosts(feature="apt-upgrade")
-    hosts = registry.filter_hosts(requested_host, supported_hosts)
-    if not hosts:
-        print_action(f"Skipping apt-upgrade (not applicable to {requested_host})")
-        return 0
-
-    session.run(lambda host: deploy_host(root, host, dry_run=dry_run, force=force), hosts)
-    return 0 if session.finish() else 1
+    return run_module_deploy(
+        root,
+        requested_host,
+        "apt-upgrade",
+        session,
+        lambda host: deploy_host(root, host, dry_run=dry_run, force=force),
+    )
 
 
 def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:

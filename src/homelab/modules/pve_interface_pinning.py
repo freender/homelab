@@ -6,8 +6,15 @@ from pathlib import Path
 
 from ..deploy import DeploySession, force_env, prepare_build_dir, stage_and_run_remote_installer
 from ..hosts import HostLookupError, default_registry
-from ..module_support import FileSpec, HostArtifacts, normalize_bool, require_text, write_file_map
-from ..output import print_action, print_sub
+from ..module_support import (
+    FileSpec,
+    HostArtifacts,
+    normalize_bool,
+    require_text,
+    run_module_deploy,
+    write_file_map,
+)
+from ..output import print_sub
 from ..ssh import HostConnection, build_files, diff_many
 
 REMOTE_ROOT = "/tmp/homelab-pve-interface-pinning"
@@ -30,16 +37,14 @@ def deploy(
     force: bool,
     session: DeploySession,
 ) -> int:
-    registry = default_registry(root)
-    supported_hosts = registry.list_hosts(feature="pve-interface-pinning")
-    hosts = registry.filter_hosts(requested_host, supported_hosts)
-    if not hosts:
-        print_action(f"Skipping pve-interface-pinning (not applicable to {requested_host})")
-        return 0
-
-    validate(root, supported_hosts)
-    session.run(lambda host: deploy_host(root, host, dry_run=dry_run, force=force), hosts)
-    return 0 if session.finish() else 1
+    return run_module_deploy(
+        root,
+        requested_host,
+        "pve-interface-pinning",
+        session,
+        lambda host: deploy_host(root, host, dry_run=dry_run, force=force),
+        validate=lambda supported_hosts, _hosts: validate(root, supported_hosts),
+    )
 
 
 def validate(root: Path, hosts: list[str]) -> None:

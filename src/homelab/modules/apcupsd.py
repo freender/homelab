@@ -5,7 +5,8 @@ from pathlib import Path
 from ..build import render_file, write_env_file
 from ..deploy import DeploySession, force_env, prepare_build_dir, stage_and_run_remote_installer
 from ..hosts import HostLookupError, default_registry
-from ..output import print_action, print_error, print_sub
+from ..module_support import run_module_deploy
+from ..output import print_sub
 from ..ssh import HostConnection, build_files, diff_many
 
 REMOTE_ROOT = "/tmp/homelab-apcupsd"
@@ -18,25 +19,15 @@ def deploy(
     force: bool,
     session: DeploySession,
 ) -> int:
-    registry = default_registry(root)
-    supported_hosts = registry.list_hosts(feature="apcupsd")
-    hosts = registry.filter_hosts(requested_host, supported_hosts)
-    if not hosts:
-        print_action(f"Skipping apcupsd (not applicable to {requested_host})")
-        return 0
-
-    try:
-        validate(root)
-    except ValueError as exc:
-        print_error(str(exc))
-        return 1
-
     slave_hosts = get_slave_hosts(root)
-    session.run(
+    return run_module_deploy(
+        root,
+        requested_host,
+        "apcupsd",
+        session,
         lambda host: deploy_host(root, host, slave_hosts=slave_hosts, dry_run=dry_run, force=force),
-        hosts,
+        validate=lambda _supported_hosts, _hosts: validate(root),
     )
-    return 0 if session.finish() else 1
 
 
 def validate(root: Path) -> None:

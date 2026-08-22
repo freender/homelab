@@ -11,10 +11,11 @@ from ..module_support import (
     FileSpec,
     HostArtifacts,
     require_text,
+    run_module_deploy,
     tmpfs_secret_stage,
     write_file_map,
 )
-from ..output import print_action, print_error, print_sub
+from ..output import print_sub
 from ..ssh import HostConnection, build_files, diff_many
 
 REMOTE_ROOT = "/tmp/homelab-keepalived"
@@ -50,21 +51,14 @@ def deploy(
     force: bool,
     session: DeploySession,
 ) -> int:
-    registry = default_registry(root)
-    supported_hosts = registry.list_hosts(feature="keepalived")
-    hosts = registry.filter_hosts(requested_host, supported_hosts)
-    if not hosts:
-        print_action(f"Skipping keepalived (not applicable to {requested_host})")
-        return 0
-
-    try:
-        validate(root, hosts)
-    except ValueError as exc:
-        print_error(str(exc))
-        return 1
-
-    session.run(lambda host: deploy_host(root, host, dry_run=dry_run, force=force), hosts)
-    return 0 if session.finish() else 1
+    return run_module_deploy(
+        root,
+        requested_host,
+        "keepalived",
+        session,
+        lambda host: deploy_host(root, host, dry_run=dry_run, force=force),
+        validate=lambda _supported_hosts, hosts: validate(root, hosts),
+    )
 
 
 def validate(root: Path, hosts: list[str]) -> None:

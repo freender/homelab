@@ -9,7 +9,8 @@ from invoke.exceptions import UnexpectedExit
 
 from ..deploy import DeploySession, force_env, prepare_build_dir, stage_and_run_remote_installer
 from ..hosts import HostLookupError, default_registry
-from ..output import print_action, print_error, print_sub
+from ..module_support import run_module_deploy
+from ..output import print_sub
 from ..ssh import HostConnection, build_files, offline_diff, offline_mode
 
 REMOTE_ROOT = "/tmp/homelab-ssh-config"
@@ -65,21 +66,14 @@ def deploy(
     force: bool,
     session: DeploySession,
 ) -> int:
-    registry = default_registry(root)
-    supported_hosts = registry.list_hosts(feature="ssh-config")
-    hosts = registry.filter_hosts(requested_host, supported_hosts)
-    if not hosts:
-        print_action(f"Skipping ssh-config (not applicable to {requested_host})")
-        return 0
-
-    try:
-        validate(root, supported_hosts)
-    except ValueError as exc:
-        print_error(str(exc))
-        return 1
-
-    session.run(lambda host: deploy_host(root, host, dry_run=dry_run, force=force), hosts)
-    return 0 if session.finish() else 1
+    return run_module_deploy(
+        root,
+        requested_host,
+        "ssh-config",
+        session,
+        lambda host: deploy_host(root, host, dry_run=dry_run, force=force),
+        validate=lambda supported_hosts, _hosts: validate(root, supported_hosts),
+    )
 
 
 def validate(root: Path, supported_hosts: list[str]) -> None:

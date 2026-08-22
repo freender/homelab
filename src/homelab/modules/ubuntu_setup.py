@@ -7,8 +7,8 @@ from .. import op_secrets
 from ..build import copy_file, copy_files, render_file, write_env_file
 from ..deploy import DeploySession, force_env, prepare_build_dir, stage_and_run_remote_installer
 from ..hosts import HostLookupError, default_registry
-from ..module_support import FileSpec, normalize_bool
-from ..output import print_action, print_sub
+from ..module_support import FileSpec, normalize_bool, run_module_deploy
+from ..output import print_sub
 from ..ssh import HostConnection, build_files, diff_many
 
 REMOTE_ROOT = "/tmp/homelab-ubuntu-setup"
@@ -42,16 +42,14 @@ def deploy(
     force: bool,
     session: DeploySession,
 ) -> int:
-    registry = default_registry(root)
-    supported_hosts = registry.list_hosts(feature="ubuntu-setup")
-    hosts = registry.filter_hosts(requested_host, supported_hosts)
-    if not hosts:
-        print_action(f"Skipping ubuntu-setup (not applicable to {requested_host})")
-        return 0
-
-    validate(root)
-    session.run(lambda host: deploy_host(root, host, dry_run=dry_run, force=force), hosts)
-    return 0 if session.finish() else 1
+    return run_module_deploy(
+        root,
+        requested_host,
+        "ubuntu-setup",
+        session,
+        lambda host: deploy_host(root, host, dry_run=dry_run, force=force),
+        validate=lambda _supported_hosts, _hosts: validate(root),
+    )
 
 
 def validate(root: Path) -> None:

@@ -184,6 +184,51 @@ def validate_secret_reference(root: Path, secret_name: str) -> None:
         )
 
 
+def run_module_deploy(
+    root: Path,
+    requested_host: str,
+    feature: str,
+    session: DeploySession,
+    deploy_host: Callable[[str], None],
+    *,
+    validate: Callable[[list[str], list[str]], None] | None = None,
+) -> int:
+    """Shared module deploy() prologue: resolve hosts, optionally validate, run.
+
+    Every module's deploy() reduced to the same shape: look up which hosts have
+    `feature` enabled, skip cleanly if none apply to the requested target, run an
+    optional pre-flight validation, then hand the filtered host list to
+    `session.run`. This used to be copy-pasted at the top of ~24 modules, each
+    building its own per-host deploy logic (rendering, diffing, staging)
+    separately below it — this helper only replaces that shared top, not the
+    per-host body.
+
+    `validate`, if given, receives `(supported_hosts, hosts)` — the full set of
+    hosts with the feature enabled, and the subset matching `requested_host`.
+    Callers differ on which one they need (e.g. `pve-backup` validates across
+    all configured hosts even when deploying to one; most validate only the
+    hosts actually being touched), so both are passed and the caller's lambda
+    picks. It is intentionally not wrapped in a try/except here: `execute_module`
+    in cli.py already catches `ValueError` centrally, reports it, and returns 1 —
+    a module-local catch only duplicated that without changing behavior.
+    """
+    from .hosts import default_registry
+    from .output import print_action
+
+    registry = default_registry(root)
+    supported_hosts = registry.list_hosts(feature=feature)
+    hosts = registry.filter_hosts(requested_host, supported_hosts)
+    if not hosts:
+        print_action(f"Skipping {feature} (not applicable to {requested_host})")
+        return 0
+
+    if validate is not None:
+        validate(supported_hosts, hosts)
+
+    session.run(deploy_host, hosts)
+    return 0 if session.finish() else 1
+
+
 def simple_root_installer_deploy(
     root: Path,
     requested_host: str,
@@ -197,19 +242,13 @@ def simple_root_installer_deploy(
     dry_run_details: Callable[[str], list[str]] | None = None,
 ) -> int:
     from .deploy import stage_and_run_remote_installer
-    from .hosts import default_registry
     from .output import print_action, print_sub
 
-    registry = default_registry(root)
-    supported_hosts = registry.list_hosts(feature=feature)
-    hosts = registry.filter_hosts(requested_host, supported_hosts)
-    if not hosts:
-        print_action(f"Skipping {feature} (not applicable to {requested_host})")
-        return 0
-
     installer = root / feature / "scripts" / "install.sh"
-    if not installer.is_file():
-        raise ValueError(f"Missing installer: {installer}")
+
+    def validate(_supported_hosts: list[str], _hosts: list[str]) -> None:
+        if not installer.is_file():
+            raise ValueError(f"Missing installer: {installer}")
 
     def deploy_host(host: str) -> None:
         connection = connection_for_host(root, host)
@@ -232,5 +271,6 @@ def simple_root_installer_deploy(
             remote_subdirs=("lib",),
         )
 
-    session.run(deploy_host, hosts)
-    return 0 if session.finish() else 1
+    return run_module_deploy(
+        root, requested_host, feature, session, deploy_host, validate=validate
+    )

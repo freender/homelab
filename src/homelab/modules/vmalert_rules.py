@@ -3,9 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 
 from ..deploy import DeploySession, force_env, stage_and_run_remote_installer
-from ..hosts import default_registry
-from ..module_support import connection_for_host
-from ..output import print_action, print_sub
+from ..module_support import connection_for_host, run_module_deploy
+from ..output import print_sub
 from ..ssh import diff_many
 
 MODULE_DIR = "vmalert-rules"
@@ -37,16 +36,14 @@ def deploy(
     force: bool,
     session: DeploySession,
 ) -> int:
-    registry = default_registry(root)
-    supported_hosts = registry.list_hosts(feature=MODULE_DIR)
-    hosts = registry.filter_hosts(requested_host, supported_hosts)
-    if not hosts:
-        print_action(f"Skipping {MODULE_DIR} (not applicable to {requested_host})")
-        return 0
-
-    validate(root, hosts)
-    session.run(lambda host: deploy_host(root, host, dry_run=dry_run, force=force), hosts)
-    return 0 if session.finish() else 1
+    return run_module_deploy(
+        root,
+        requested_host,
+        MODULE_DIR,
+        session,
+        lambda host: deploy_host(root, host, dry_run=dry_run, force=force),
+        validate=lambda _supported_hosts, hosts: validate(root, hosts),
+    )
 
 
 def validate(root: Path, hosts: list[str]) -> None:

@@ -20,17 +20,36 @@ internals, helper APIs, and execution detail. Do not restate `AGENTS.md` here.
 
 ## Python module shape
 
-Every module in `src/homelab/modules/*.py` follows this flow:
+Every module in `src/homelab/modules/*.py` follows this flow, via the shared
+`run_module_deploy` prologue (`module_support.py`) — do not hand-roll it:
 
 ```python
 def deploy(root, requested_host, dry_run, force, session):
-    registry = default_registry(root)
-    supported_hosts = registry.list_hosts(feature="feature-name")
-    hosts = registry.filter_hosts(requested_host, supported_hosts)
-    validate(root)
-    session.run(lambda host: deploy_host(root, host, dry_run=dry_run, force=force), hosts)
-    return 0 if session.finish() else 1
+    return run_module_deploy(
+        root,
+        requested_host,
+        "feature-name",
+        session,
+        lambda host: deploy_host(root, host, dry_run=dry_run, force=force),
+        validate=lambda supported_hosts, hosts: validate(root, hosts),  # optional
+    )
 ```
+
+`run_module_deploy` resolves `supported_hosts`/`hosts`, prints the clean skip when
+none apply, runs `validate` if given (uncaught — `execute_module` in `cli.py` already
+catches `ValueError` centrally, so a module-local try/except only duplicates that),
+then calls `session.run`/`session.finish()`. `validate`'s callback receives both
+`supported_hosts` (every host with the feature enabled) and `hosts` (the subset
+matching `requested_host`) since modules differ on which one they need to check
+(e.g. `pve-backup` validates across all configured hosts even when deploying to
+one) — take whichever the module needs and ignore the other. Every module uses
+this except `pve-autoinstall`, which drives a single fixed host (the PDM host)
+running its own remote sync script rather than per-host `session.run` — a
+genuinely different shape, not an oversight.
+
+`simple_root_installer_deploy` (below) is a thin wrapper around this for modules
+that have no per-host build directory to render — it only stages `scripts/` and
+runs `install.sh`.
 
 ## hosts.conf access
 
@@ -57,8 +76,12 @@ From `src/homelab/module_support.py` and `src/homelab/deploy.py`:
 - `diff_many(...)`, `build_files(...)`, `write_file_map(...)`
 - `connection_for_host(root, host)`
 - `feature_paused(registry, host, feature, default=False)`
-- `simple_root_installer_deploy(...)` — the standard path for a module that just
-  stages a bundle and runs `install.sh` as root; prefer it over hand-rolling.
+- `run_module_deploy(...)` — the shared deploy() prologue (host resolution, skip,
+  validate, session.run/finish). Every module's `deploy()` should be a one-line
+  call to this.
+- `simple_root_installer_deploy(...)` — for a module with no per-host build dir:
+  just stages `scripts/` and runs `install.sh` as root. Built on top of
+  `run_module_deploy`; prefer it over hand-rolling when there's nothing to render.
 
 ## Module boundary
 
@@ -191,7 +214,8 @@ Add or update tests when touching these areas:
 | Test | Covers |
 | --- | --- |
 | `tests/test_render_golden.py` | Golden renders for the four **network-critical** modules — `pve-postinstall`, `pve-interface-pinning`, `pve-gpu-passthrough`, `pve-autoinstall`. A bad render is only discovered after a reboot on a host you can no longer reach. Renders against the real `hosts.conf`, so it also catches inventory drift, and asserts no unsubstituted Jinja placeholders survive. |
-| `tests/test_zfs_replication_pause.py` | Pause semantics — per-job `paused` vs `enabled: false` in `zfs-automation`. |
+| `tests/test_dry_run_all_modules.py` | Parametrized offline dry-run of every registered module against the real `hosts.conf` (`execute_module(name, "all", True, False)` under `HOMELAB_OFFLINE=1`). This is what `homelab validate` relies on for its per-module dry-run gate — it no longer has its own for-loop. Runs under `--cov`, so it is also the main source of coverage signal for modules with few dedicated tests (e.g. `zfs_automation.py`). A new module is covered automatically via `MODULES`/`ordered_modules()`; no per-module addition needed here. |
+| `tests/test_zfs_replication_pause.py` | Pause semantics — per-job `paused` vs `enabled: false` in `zfs-automation`. Imports `normalize_replication_config` from the package's `__init__.py` re-export, not `.replication` directly — keep that export if you touch it. |
 | `tests/test_hosts.py`, `tests/test_cli_validate.py` | Inventory parsing and the validate command. |
 | `tests/test_build_and_templates.py`, `tests/test_module_fallbacks.py` | Build/render plumbing and module fallback behavior. |
 | `tests/test_pbs_client_backup.py`, `tests/test_pve_backup.py`, `tests/test_pve_http_boot.py`, `tests/test_docker_start.py`, `tests/test_ssh_helpers.py` | Module-specific behavior. |
