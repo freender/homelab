@@ -14,9 +14,13 @@ checks below deliberately target the "renders fine, boots nothing" class:
 
   * a build artifact that is never installed (or vice versa),
   * an unsubstituted `{{ MGMT_IP }}` reaching an iPXE entry point,
-  * a menu chaining to a file that is not served,
-  * the ISO `PLACEHOLDER` sentinel escaping the one file the autoupdate rewrites,
+  * a chain target that is neither deployed nor built at runtime,
+  * a hand-written ISO reference creeping back into a rendered iPXE file,
   * a mode regression on the file holding the PDM URL and cert fingerprint.
+
+Since the migration to the stock Proxmox boot menu the deploy renders exactly one
+iPXE file — the UEFI HTTP Boot entry point. Everything else under /srv/httpboot is
+produced at runtime by pve-http-boot-autoupdate from `prepare-iso` output.
 
 Everything runs against an isolated copy of the repo's module tree under
 `tmp_path`, so no test writes into `pve-http-boot/build/` in the working tree.
@@ -145,7 +149,7 @@ def test_no_unrendered_placeholder_survives_the_build(build_dir: Path) -> None:
 
 @pytest.mark.parametrize(
     "name",
-    ["boot.ipxe", "httpboot-autoexec.ipxe", "nginx-http-boot.conf", "http-boot-mgmt.conf"],
+    ["httpboot-autoexec.ipxe", "nginx-http-boot.conf", "http-boot-mgmt.conf"],
 )
 def test_mgmt_ip_is_baked_into_every_host_specific_artifact(
     name: str, build_dir: Path, mgmt_ip: str
@@ -168,33 +172,27 @@ def test_ipxe_entry_points_pin_the_server_before_chaining(
     assert "http:///" not in content, f"{name}: empty server in URL"
 
 
-def test_menus_do_not_hardcode_the_server(build_dir: Path, mgmt_ip: str) -> None:
-    """Static menus must inherit the address, not carry it.
-
-    A hardcoded IP renders correctly for `arc` and silently breaks the moment the
-    module is deployed to a second host.
-    """
-    for name in pve_http_boot.IPXE_MENUS:
-        content = (build_dir / name).read_text(encoding="utf-8")
-
-        assert mgmt_ip not in content, f"{name}: hardcodes the HTTP boot server IP"
-        assert "set http-boot-server" not in content, f"{name}: overrides the server"
-
-
 # --------------------------------------------------------------------------
 # chain reachability
 # --------------------------------------------------------------------------
 
 
-def test_every_chained_menu_is_served(build_dir: Path) -> None:
-    """Follow the actual chain targets and prove each one is deployed.
+# Served at /srv/httpboot/<name> by pve-http-boot-autoupdate rather than by the
+# deploy, so FILE_SPECS legitimately does not carry them.
+RUNTIME_PAYLOAD = {"boot.ipxe"}
 
-    Adding a menu entry without adding the file to FILE_SPECS produces a menu that
-    looks right, deploys clean, and dead-ends at `Could not open` on the console
-    of a machine that is now not booting.
+
+def test_every_chain_target_is_either_deployed_or_built_at_runtime(
+    build_dir: Path,
+) -> None:
+    """Follow the actual chain targets and prove each one will exist.
+
+    Chaining to a file that neither the deploy installs nor the autoupdate builds
+    produces an entry point that renders fine, deploys clean, and dead-ends at
+    `Could not open` on the console of a machine that is now not booting.
     """
     served = {
-        spec.remote_path
+        spec.remote_path.removeprefix(f"{DOC_ROOT}/")
         for spec in pve_http_boot.FILE_SPECS
         if spec.remote_path.startswith(f"{DOC_ROOT}/")
     }
@@ -204,12 +202,21 @@ def test_every_chained_menu_is_served(build_dir: Path) -> None:
         for target in CHAIN_TARGET.findall(path.read_text(encoding="utf-8")):
             referenced.setdefault(target, set()).add(path.name)
 
-    assert referenced, "no chain targets found — the regex or the menus changed"
+    assert referenced, "no chain targets found — the regex or the entry point changed"
 
     for target, sources in sorted(referenced.items()):
-        assert f"{DOC_ROOT}/{target}" in served, (
-            f"{target} is chained from {sorted(sources)} but is not installed under {DOC_ROOT}"
+        assert target in served or target in RUNTIME_PAYLOAD, (
+            f"{target} is chained from {sorted(sources)} but is neither installed "
+            f"under {DOC_ROOT} nor built by pve-http-boot-autoupdate"
         )
+
+
+def test_runtime_payload_is_deliberately_absent_from_file_specs() -> None:
+    """Shipping our own boot.ipxe again would overwrite the stock Proxmox menu on
+    every deploy and silently revert the migration."""
+    declared = {spec.build_name for spec in pve_http_boot.FILE_SPECS}
+
+    assert declared.isdisjoint(RUNTIME_PAYLOAD)
 
 
 def test_autoexec_is_served_from_the_nested_httpboot_path() -> None:
@@ -226,33 +233,22 @@ def test_autoexec_is_served_from_the_nested_httpboot_path() -> None:
 
 
 # --------------------------------------------------------------------------
-# ISO placeholder sentinel
+# no hand-written ISO references
 # --------------------------------------------------------------------------
 
 
-def test_placeholder_iso_is_confined_to_the_shared_loader(build_dir: Path) -> None:
-    """`proxmox-ve_PLACEHOLDER.iso` is the sed target for pve-http-boot-autoupdate.
+def test_no_rendered_ipxe_file_names_an_iso(build_dir: Path) -> None:
+    """The ISO filename is version-coupled and belongs only to prepare-iso output.
 
-    It must appear in exactly one served file. A second copy is never rewritten on
-    a version bump, so that path keeps requesting an ISO that no longer exists —
-    and only that one menu entry breaks, which is why it goes unnoticed.
+    Any copy written here is frozen at the version that happened to be current
+    when someone typed it, and nothing updates it on a version bump — so that one
+    boot path quietly starts requesting an ISO that no longer exists.
     """
-    carriers = {
-        path.name
-        for path in build_dir.glob("*.ipxe")
-        if "PLACEHOLDER" in path.read_text(encoding="utf-8")
-    }
+    for path in sorted(build_dir.glob("*.ipxe")):
+        content = path.read_text(encoding="utf-8")
 
-    assert carriers == {"pve-load.ipxe"}, f"unexpected PLACEHOLDER carriers: {carriers}"
-
-
-def test_loader_requests_kernel_initrd_and_iso_from_the_inherited_server(
-    build_dir: Path,
-) -> None:
-    loader = (build_dir / "pve-load.ipxe").read_text(encoding="utf-8")
-
-    for asset in ("vmlinuz", "initrd.img", "proxmox-ve_PLACEHOLDER.iso"):
-        assert f"http://${{http-boot-server}}/{asset}" in loader, f"missing {asset}"
+        assert "proxmox-ve_" not in content, f"{path.name}: hand-written ISO reference"
+        assert "PLACEHOLDER" not in content, f"{path.name}: stale sed sentinel"
 
 
 # --------------------------------------------------------------------------
@@ -426,10 +422,8 @@ def test_validate_accepts_the_real_module_tree(staged_root: Path) -> None:
 @pytest.mark.parametrize(
     "relative",
     [
-        "configs/pve-load.ipxe",
         "configs/pve-http-boot-autoupdate",
         "configs/pve-http-boot-autoupdate.service",
-        "templates/boot.ipxe",
         "templates/httpboot-autoexec.ipxe",
         "templates/nginx-http-boot.conf",
         "templates/http-boot-mgmt.conf",

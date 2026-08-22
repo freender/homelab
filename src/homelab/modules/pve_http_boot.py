@@ -22,22 +22,17 @@ REMOTE_ROOT = "/tmp/homelab-pve-http-boot"
 SECRET_NAME = "pve-http-boot-token"
 HTTP_BOOT_CONFIG_DIR = "/etc/homelab-http-boot"
 
-# Static iPXE menus copied verbatim. The entry points (boot.ipxe and
-# httpboot-autoexec.ipxe) are rendered from templates because they bake in the
-# per-host HTTP Boot server IP; every other menu inherits it via iPXE chain.
-IPXE_MENUS = [
-    "pdm-auto-warning.ipxe",
-    "pdm-auto.ipxe",
-    "pve-load.ipxe",
-    "pve-tui.ipxe",
-    "pve-gui.ipxe",
-    "pve-debug.ipxe",
-    "pve-serial.ipxe",
-]
-
-# iPXE entry points rendered from templates/ with the host's MGMT_IP.
+# The boot menu is no longer authored here. `proxmox-auto-install-assistant
+# prepare-iso --pxe --pxe-loader ipxe` emits a stock boot.ipxe next to
+# vmlinuz/initrd.img, and pve-http-boot-autoupdate installs it verbatim, so the
+# menu entries and their kernel command lines are always the ones Proxmox ships
+# for the exact ISO being served. The hand-rolled menus that used to live in
+# configs/ had silently drifted onto pre-8.2 kernel args (proxtui/proxdebug),
+# which an installer ignores rather than rejects.
+#
+# That leaves exactly one iPXE file for the deploy to own: the UEFI HTTP Boot
+# entry point, which must be rendered because it bakes in the per-host server IP.
 IPXE_ENTRY_TEMPLATES = [
-    "boot.ipxe",
     "httpboot-autoexec.ipxe",
 ]
 
@@ -54,14 +49,6 @@ STATIC_UNITS = [
 FILE_SPECS = (
     FileSpec("http-boot-mgmt.conf", f"{HTTP_BOOT_CONFIG_DIR}/http-boot-mgmt.conf", "600"),
     FileSpec("nginx-http-boot.conf", "/etc/nginx/sites-available/http-boot"),
-    FileSpec("boot.ipxe", "/srv/httpboot/boot.ipxe"),
-    FileSpec("pdm-auto-warning.ipxe", "/srv/httpboot/pdm-auto-warning.ipxe"),
-    FileSpec("pdm-auto.ipxe", "/srv/httpboot/pdm-auto.ipxe"),
-    FileSpec("pve-load.ipxe", "/srv/httpboot/pve-load.ipxe"),
-    FileSpec("pve-tui.ipxe", "/srv/httpboot/pve-tui.ipxe"),
-    FileSpec("pve-gui.ipxe", "/srv/httpboot/pve-gui.ipxe"),
-    FileSpec("pve-debug.ipxe", "/srv/httpboot/pve-debug.ipxe"),
-    FileSpec("pve-serial.ipxe", "/srv/httpboot/pve-serial.ipxe"),
     FileSpec("httpboot-autoexec.ipxe", "/srv/httpboot/httpboot/autoexec.ipxe"),
     FileSpec("pve-http-boot-enable", "/usr/local/sbin/pve-http-boot-enable", "755"),
     FileSpec("pve-http-boot-disable", "/usr/local/sbin/pve-http-boot-disable", "755"),
@@ -98,7 +85,7 @@ def validate(root: Path) -> None:
     configs_dir = root / "pve-http-boot" / "configs"
     templates_dir = root / "pve-http-boot" / "templates"
 
-    for name in IPXE_MENUS + OPERATIONAL_SCRIPTS + STATIC_UNITS:
+    for name in OPERATIONAL_SCRIPTS + STATIC_UNITS:
         path = configs_dir / name
         if not path.is_file():
             raise ValueError(f"missing required config: {path}")
@@ -184,8 +171,8 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
     build_dir = root / "pve-http-boot" / "build" / host
     prepare_build_dir(build_dir)
 
-    # Copy static iPXE menus, operational scripts, and service unit
-    copy_files(configs_dir, build_dir, IPXE_MENUS + OPERATIONAL_SCRIPTS + STATIC_UNITS)
+    # Copy operational scripts and service unit
+    copy_files(configs_dir, build_dir, OPERATIONAL_SCRIPTS + STATIC_UNITS)
 
     # Render host-specific templates
     render_file(

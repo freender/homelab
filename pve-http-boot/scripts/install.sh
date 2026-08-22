@@ -135,23 +135,27 @@ if [[ -L /etc/nginx/sites-enabled/default ]]; then
     print_sub "Disabled nginx default site"
 fi
 
-# ── iPXE menus: point pve-load.ipxe at the current ISO ────────────────────────
-# install_file_map already installed every iPXE menu. Menus resolve the server
-# at runtime via ${http-boot-server} (set in the entry points), so the only fix-up
-# here is replacing the PLACEHOLDER ISO name on a fresh host that has not yet
-# run pve-http-boot-autoupdate. Once pve-http-boot-autoupdate promotes a real ISO, it owns this.
-print_action "Pointing pve-load.ipxe at current ISO"
-current_iso="$(find /srv/httpboot -maxdepth 1 -name 'proxmox-ve_*auto*.iso' -printf '%f\n' 2>/dev/null | sort -V | tail -1)"
-if [[ -z "$current_iso" ]]; then
-    current_iso="$(find /srv/httpboot -maxdepth 1 -name 'proxmox-ve_*.iso' -printf '%f\n' 2>/dev/null | sort -V | tail -1)"
-fi
-if [[ -n "$current_iso" ]]; then
-    sed -i -E \
-        -e "s#proxmox-ve_[^[:space:]]+\.iso#${current_iso}#g" \
-        /srv/httpboot/pve-load.ipxe
-    print_sub "pve-load.ipxe points at $current_iso"
-else
-    print_warn "no proxmox-ve_*.iso found under /srv/httpboot; pve-load.ipxe left unchanged"
+# ── Retire the hand-rolled iPXE menus ────────────────────────────────────────
+# The boot menu is now the stock one emitted by `proxmox-auto-install-assistant
+# prepare-iso --pxe-loader ipxe` and installed at runtime by
+# pve-http-boot-autoupdate, so the deploy no longer ships menus or rewrites a
+# PLACEHOLDER ISO name into them. Remove the superseded files; leaving them
+# served would offer boot entries that still carry pre-8.2 kernel args.
+print_action "Removing superseded hand-rolled iPXE menus"
+rm -f /srv/httpboot/pve-load.ipxe /srv/httpboot/pdm-auto.ipxe \
+      /srv/httpboot/pdm-auto-warning.ipxe /srv/httpboot/pve-tui.ipxe \
+      /srv/httpboot/pve-gui.ipxe /srv/httpboot/pve-debug.ipxe \
+      /srv/httpboot/pve-serial.ipxe
+
+# The old homelab boot.ipxe chained to the menus just removed, so leaving it in
+# place would serve a menu whose every installer entry dead-ends. Match on its
+# content rather than removing unconditionally: after migration this same path
+# holds the stock Proxmox menu, and deleting that on every re-deploy would break
+# netboot until the next autoupdate run.
+if [[ -f /srv/httpboot/boot.ipxe ]] \
+   && grep -q "Homelab Network Boot" /srv/httpboot/boot.ipxe; then
+    rm -f /srv/httpboot/boot.ipxe
+    print_sub "removed superseded homelab boot menu"
 fi
 
 print_action "Installing HTTP Boot loader"
@@ -195,6 +199,18 @@ if nginx -t 2>/dev/null; then
 else
     print_warn "nginx config test failed — HTTP Boot service not started"
     exit 1
+fi
+
+# ── Ensure a payload exists ───────────────────────────────────────────────────
+# boot.ipxe, vmlinuz, initrd.img and the prepared ISO are all built at runtime by
+# pve-http-boot-autoupdate, so a fresh host (or one migrating off the hand-rolled
+# menus) has nothing to serve until it runs. Waiting for the timer would leave
+# netboot dropping to an iPXE shell for up to a week. Kick it off detached: the
+# build takes minutes and its result belongs in the journal, not in deploy output.
+if [[ ! -s /srv/httpboot/boot.ipxe ]]; then
+    print_action "No boot payload present; starting pve-http-boot-autoupdate"
+    systemctl start --no-block pve-http-boot-autoupdate.service || true
+    print_sub "Watch: journalctl -fu pve-http-boot-autoupdate.service"
 fi
 
 print_ok "pve-http-boot deploy complete"

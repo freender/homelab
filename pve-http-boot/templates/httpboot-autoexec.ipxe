@@ -1,8 +1,15 @@
 #!ipxe
 # httpboot-autoexec.ipxe - iPXE entry point after UEFI HTTP Boot loads ipxe.efi.
 # Rendered by homelab deploy; do not edit manually.
+#
+# This is the only iPXE file the deploy installs. boot.ipxe is the stock Proxmox
+# menu generated at runtime by pve-http-boot-autoupdate, so it is absent until
+# the first successful build — hence the shell fallback rather than a hang on a
+# machine that has nothing else to boot from. The stock menu addresses vmlinuz,
+# initrd.img and the ISO relatively, which iPXE resolves against the URI this
+# chain fetched them from.
 
 set http-boot-server {{ MGMT_IP }}
 dhcp
 ifopen
-chain http://${http-boot-server}/boot.ipxe
+chain http://${http-boot-server}/boot.ipxe || shell
