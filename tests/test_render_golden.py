@@ -5,6 +5,13 @@ NICs by MAC), `pve-gpu-passthrough` (rewrites the boot cmdline) and `pve-autoins
 (writes unattended-installer answer files) had zero test coverage. A bad render in any
 of them is only discovered after a reboot, on a host you can no longer reach.
 
+`keepalived` belongs to the same class for a different reason: it does not break the
+node it runs on, it breaks the *fleet*. It owns the VIP that fronts the triple-Traefik
+HA setup, and its failure modes are cross-host — a VRID mismatch or an asymmetric peer
+list yields two masters answering for one address, which looks healthy from every
+individual host. Nothing else in the suite compares keepalived hosts against each
+other.
+
 These render against the real hosts.conf, so they also catch inventory drift.
 """
 
@@ -18,6 +25,7 @@ import pytest
 from homelab.deploy import prepare_build_dir
 from homelab.hosts import default_registry
 from homelab.modules import (
+    keepalived,
     pve_autoinstall,
     pve_gpu_passthrough,
     pve_interface_pinning,
@@ -92,6 +100,13 @@ def test_interfaces_render_is_complete_and_addressed(host: str, tmp_path: Path) 
 # --------------------------------------------------------------------------------------
 # pve-interface-pinning: systemd .link files (renames NICs by MAC)
 # --------------------------------------------------------------------------------------
+
+
+def test_there_are_pinned_hosts_to_cover() -> None:
+    # Guard the guard: this file guards its other three inventory-driven parametrizes
+    # but this one was missed. If pve-interface-pinning were dropped from every host,
+    # the test below would silently stop existing rather than fail.
+    assert _hosts_with("pve-interface-pinning"), "expected at least one pinned host"
 
 
 @pytest.mark.parametrize("host", _hosts_with("pve-interface-pinning"))
@@ -255,3 +270,222 @@ def test_autoinstall_identifiers_are_unique() -> None:
                 "an autoinstall could target the wrong machine"
             )
             seen[value] = host
+
+
+# --------------------------------------------------------------------------------------
+# keepalived: the VIP fronting the triple-Traefik HA setup
+#
+# Most checks below are cross-host invariants. Each node's own config can be perfectly
+# valid on its own and still produce a split-brain VIP when compared to its peers, so
+# per-host validation (which keepalived.normalize_config already does) cannot catch any
+# of it. Rendering offline against the real hosts.conf is what makes that comparison
+# possible without SSH or 1Password.
+# --------------------------------------------------------------------------------------
+
+
+def _keepalived_hosts() -> list[str]:
+    return _hosts_with("keepalived")
+
+
+@pytest.fixture(scope="module")
+def keepalived_configs() -> dict[str, keepalived.KeepalivedConfig]:
+    # MonkeyPatch.context() unwinds on exit, so offline mode does not leak into the
+    # rest of the module the way a bare setenv in a module-scoped fixture would.
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setenv("HOMELAB_OFFLINE", "1")
+        registry = default_registry(ROOT)
+        return {
+            host: keepalived.normalize_config(ROOT, registry, host)
+            for host in _keepalived_hosts()
+        }
+
+
+@pytest.fixture(scope="module")
+def keepalived_renders(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Path]:
+    """Render every keepalived host's artifacts exactly once for the whole module."""
+    renders: dict[str, Path] = {}
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setenv("HOMELAB_OFFLINE", "1")
+        for host in _keepalived_hosts():
+            build_dir = tmp_path_factory.mktemp(f"keepalived-{host}-")
+            keepalived.build_host_artifacts(ROOT, host, build_dir)
+            renders[host] = build_dir
+    return renders
+
+
+def test_there_are_keepalived_hosts_to_cover() -> None:
+    # Guard the guard. A VIP needs at least two participants to be highly available,
+    # and the fleet-wide comparisons below are vacuous with fewer.
+    assert len(_keepalived_hosts()) >= 2, "expected at least two keepalived hosts"
+
+
+@pytest.mark.parametrize("host", _keepalived_hosts())
+def test_keepalived_render_is_complete(host: str, keepalived_renders) -> None:
+    """Both artifacts must render with no placeholders left behind.
+
+    `healthcheck.sh` is the track_script: if it renders broken it exits non-zero on
+    every node, every node drops its weight, and the VIP ends up wherever priority
+    alone puts it — health checking silently stops mattering.
+    """
+    for name in keepalived.TEMPLATE_FILES:
+        rendered = (keepalived_renders[host] / name).read_text(encoding="utf-8")
+
+        assert not UNRENDERED.search(rendered), f"{host}: placeholder left in {name}"
+        assert rendered.strip(), f"{host}: {name} rendered empty"
+
+
+@pytest.mark.parametrize("host", _keepalived_hosts())
+def test_keepalived_conf_carries_the_hosts_own_identity(
+    host: str, keepalived_configs, keepalived_renders
+) -> None:
+    config = keepalived_configs[host]
+    rendered = (keepalived_renders[host] / "keepalived.conf").read_text(encoding="utf-8")
+
+    assert f"vrrp_instance {config.instance_name}" in rendered
+    assert f"interface {config.interface}" in rendered
+    assert f"virtual_router_id {config.virtual_router_id}" in rendered
+    assert f"priority {config.priority}" in rendered
+    assert f"unicast_src_ip {config.unicast_src_ip}" in rendered
+
+    # Peers and VIPs are joined with indentation into block bodies; a broken join
+    # would collapse them onto one line and keepalived would refuse the config at
+    # start, after the old one is already gone.
+    for peer in config.unicast_peers:
+        assert re.search(rf"^\s+{re.escape(peer)}\s*$", rendered, re.MULTILINE), (
+            f"{host}: peer {peer} not on its own line"
+        )
+    for vip in config.virtual_ips:
+        assert re.search(rf"^\s+{re.escape(vip)}\s*$", rendered, re.MULTILINE), (
+            f"{host}: vip {vip} not on its own line"
+        )
+
+
+@pytest.mark.parametrize("host", _keepalived_hosts())
+def test_keepalived_healthcheck_targets_the_local_backend(
+    host: str, keepalived_configs, keepalived_renders
+) -> None:
+    config = keepalived_configs[host]
+    rendered = (keepalived_renders[host] / "healthcheck.sh").read_text(encoding="utf-8")
+
+    assert config.healthcheck_host in rendered
+    assert config.healthcheck_url in rendered
+    # The resolve pin is what makes this a *local* check rather than a request the
+    # VIP itself could answer from another node.
+    assert "--resolve" in rendered and "127.0.0.1" in rendered
+
+
+def test_all_keepalived_hosts_share_one_virtual_router_id(keepalived_configs) -> None:
+    """A VRID mismatch is the classic split-brain: each node forms its own VRRP group,
+    every node becomes master, and the VIP is answered by all of them at once."""
+    vrids = {host: c.virtual_router_id for host, c in keepalived_configs.items()}
+
+    assert len(set(vrids.values())) == 1, f"keepalived VRID mismatch across hosts: {vrids}"
+
+
+def test_keepalived_priorities_are_unique(keepalived_configs) -> None:
+    """Equal priorities make mastership depend on IP tiebreak and, with preempt,
+    flap the VIP between nodes."""
+    seen: dict[int, str] = {}
+    for host, config in keepalived_configs.items():
+        assert config.priority not in seen, (
+            f"{host} and {seen[config.priority]} share priority {config.priority}"
+        )
+        seen[config.priority] = host
+
+
+def test_keepalived_peer_lists_are_symmetric_and_self_excluding(keepalived_configs) -> None:
+    """Unicast VRRP is not discovered — every node must list every other node.
+
+    A missing entry is invisible while the omitted node is BACKUP and becomes a second
+    master the moment it stops hearing advertisements it was never being sent.
+    """
+    addresses = {host: c.unicast_src_ip for host, c in keepalived_configs.items()}
+
+    for host, config in keepalived_configs.items():
+        peers = set(config.unicast_peers)
+
+        assert config.unicast_src_ip not in peers, f"{host}: lists itself as a unicast peer"
+
+        expected = {ip for other, ip in addresses.items() if other != host}
+        assert peers == expected, (
+            f"{host}: unicast_peers {sorted(peers)} != other members {sorted(expected)}"
+        )
+
+
+def test_keepalived_source_addresses_are_unique(keepalived_configs) -> None:
+    seen: dict[str, str] = {}
+    for host, config in keepalived_configs.items():
+        assert config.unicast_src_ip not in seen, (
+            f"{host} and {seen[config.unicast_src_ip]} share {config.unicast_src_ip}"
+        )
+        seen[config.unicast_src_ip] = host
+
+
+def test_keepalived_healthcheck_hosts_are_unique(keepalived_configs) -> None:
+    """Each node health-checks its own Traefik via --resolve to 127.0.0.1.
+
+    Two nodes sharing a healthcheck host would check the same backend, so a node
+    would hold the VIP on the strength of a *different* node's health.
+    """
+    seen: dict[str, str] = {}
+    for host, config in keepalived_configs.items():
+        assert config.healthcheck_host not in seen, (
+            f"{host} and {seen[config.healthcheck_host]} share a healthcheck host"
+        )
+        seen[config.healthcheck_host] = host
+
+
+def test_keepalived_hosts_agree_on_the_virtual_address(keepalived_configs) -> None:
+    """The VIP addresses must match across the group even though the `dev <iface>`
+    suffix legitimately differs per host."""
+    per_host = {
+        host: sorted(vip.split()[0] for vip in c.virtual_ips)
+        for host, c in keepalived_configs.items()
+    }
+    distinct = {tuple(v) for v in per_host.values()}
+
+    assert len(distinct) == 1, f"keepalived hosts disagree on the VIP: {per_host}"
+
+
+def test_keepalived_vip_device_matches_the_hosts_interface(keepalived_configs) -> None:
+    """`virtual_ipaddress ... dev X` and `interface Y` are separate hosts.conf keys.
+
+    VRRP would run on Y while the address is added to X, so the node advertises
+    mastership for a VIP that never becomes reachable on the NIC carrying the traffic.
+    """
+    for host, config in keepalived_configs.items():
+        for vip in config.virtual_ips:
+            parts = vip.split()
+            if "dev" not in parts:
+                continue
+            device = parts[parts.index("dev") + 1]
+            assert device == config.interface, (
+                f"{host}: VIP pinned to dev {device} but VRRP runs on {config.interface}"
+            )
+
+
+def test_keepalived_advert_intervals_agree(keepalived_configs) -> None:
+    """Mismatched advert_int makes peers compute different master-down timers, which
+    shows up as intermittent unexplained failovers rather than an outright break."""
+    intervals = {host: c.advert_interval for host, c in keepalived_configs.items()}
+
+    assert len(set(intervals.values())) == 1, f"advert_interval mismatch: {intervals}"
+
+
+def test_keepalived_validate_rejects_a_bad_priority(offline: None) -> None:
+    # Guard the guard: prove normalize_config actually rejects out-of-range values
+    # instead of the golden data merely happening to be fine.
+    registry = default_registry(ROOT)
+    host = _keepalived_hosts()[0]
+
+    class Drifted:
+        def get(self, h: str, key: str, default: object = None) -> object:
+            if key == "keepalived.priority":
+                return 0
+            return registry.get(h, key, default)
+
+        def has(self, h: str, key: str) -> bool:
+            return registry.has(h, key)
+
+    with pytest.raises(ValueError, match="priority must be >= 1"):
+        keepalived.normalize_config(ROOT, Drifted(), host)
