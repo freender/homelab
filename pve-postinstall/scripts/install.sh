@@ -372,6 +372,10 @@ print_sub "Removing enterprise repository definitions..."
 rm -f /etc/apt/sources.list.d/pve-enterprise.sources
 rm -f /etc/apt/sources.list.d/ceph.list
 rm -f /etc/apt/sources.list.d/ceph-enterprise.list
+# PVE 9 installs a deb822 ceph.sources pointing at the enterprise ceph repo;
+# without a subscription every apt-get update fails 401 and breaks apt modules.
+# No node runs Ceph here, so drop the file instead of pinning no-subscription.
+rm -f /etc/apt/sources.list.d/ceph.sources
 
 print_sub "Setting timezone to $TIMEZONE..."
 if command -v timedatectl >/dev/null 2>&1; then
