@@ -279,7 +279,10 @@ copy_if_changed() {
     rc=$?
 
     if [[ $rc -eq 0 ]]; then
-        cp "$src" "$dst"
+        if ! cp "$src" "$dst"; then
+            print_error "failed to write $label"
+            return 2
+        fi
         print_sub "Updated $label"
         return 0
     fi
@@ -306,7 +309,10 @@ backup_and_copy_if_changed() {
 
     if [[ $rc -eq 0 ]]; then
         backup_config "$dst"
-        cp "$src" "$dst"
+        if ! cp "$src" "$dst"; then
+            print_error "failed to write $label"
+            return 2
+        fi
         print_sub "Updated $label"
         return 0
     fi
@@ -334,7 +340,10 @@ install_if_changed() {
 
     if [[ $rc -eq 0 ]]; then
         ensure_parent_dir "$dst"
-        install -m "$mode" "$src" "$dst"
+        if ! install -m "$mode" "$src" "$dst"; then
+            print_error "failed to install $label"
+            return 2
+        fi
         print_sub "Updated $label"
         return 0
     fi
@@ -364,7 +373,10 @@ backup_and_install_if_changed() {
     if [[ $rc -eq 0 ]]; then
         ensure_parent_dir "$dst"
         backup_config "$dst"
-        install -m "$mode" "$src" "$dst"
+        if ! install -m "$mode" "$src" "$dst"; then
+            print_error "failed to install $label"
+            return 2
+        fi
         print_sub "Updated $label"
         return 0
     fi
