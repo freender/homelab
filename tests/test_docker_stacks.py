@@ -171,15 +171,14 @@ def test_real_stack_tree_is_structurally_valid() -> None:
 UNMANAGED_ALERT_TARGETS: set[tuple[str, str]] = set()
 
 
-def test_alert_rules_track_container_renames() -> None:
+def test_alert_rules_track_container_renames(tmp_path: Path) -> None:
     """A rename that misses vmalert gives a permanent false 'missing' critical
     AND leaves the new container unmonitored. Bind the two together here."""
     import re
-    import tempfile
 
     defined: dict[str, set[str]] = {}
     for host in STACK_HOSTS:
-        out = Path(tempfile.mkdtemp())
+        out = tmp_path / host
         docker_stacks.assemble_stacks(ROOT, host, docker_stacks.host_stacks(ROOT, host), out)
         names: set[str] = set()
         for compose in out.rglob("compose.yml"):
@@ -246,7 +245,7 @@ def test_alertmanager_compose_substitutes_every_template_placeholder() -> None:
     )
 
 
-def test_crowdsec_is_reachable_as_plain_crowdsec_on_every_host() -> None:
+def test_crowdsec_is_reachable_as_plain_crowdsec_on_every_host(tmp_path: Path) -> None:
     """Traefik reaches Crowdsec via `crowdsecLapiHost: crowdsec:8080` in
     fileConfig.yml -- a file this module does not manage, which traefik-sync
     copies unchanged from tower to helm and neo. One shared name must therefore
@@ -257,10 +256,8 @@ def test_crowdsec_is_reachable_as_plain_crowdsec_on_every_host() -> None:
       * it must NOT be on net_overlay, or the name would resolve across the
         swarm mesh and a host could stream decisions from another host's LAPI.
     """
-    import tempfile
-
     for host in STACK_HOSTS:
-        out = Path(tempfile.mkdtemp())
+        out = tmp_path / host
         docker_stacks.assemble_stacks(ROOT, host, ["traefik"], out)
         document = yaml.safe_load((out / "traefik" / "compose.yml").read_text())
 

@@ -81,6 +81,11 @@ def run_start(
         "DOCKER_FAIL_PULL": "true" if fail_pull else "false",
         "PATH": f"{fake_bin}:{os.environ['PATH']}",
         "XDG_RUNTIME_DIR": str(tmp_path / "runtime"),
+        # start.sh defaults to PULL_RETRY_DELAY=15, so the failing-pull case slept
+        # for two real 15s intervals and was ~95% of the entire suite's runtime.
+        # The retry *count* is what the tests assert on (via the command log), and
+        # PULL_ATTEMPTS is left at its default so that behavior is unchanged.
+        "PULL_RETRY_DELAY": "0",
     }
 
     result = subprocess.run(
