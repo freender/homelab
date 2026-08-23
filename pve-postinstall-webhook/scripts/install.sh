@@ -47,6 +47,12 @@ ic "$SCRIPT_DIR/scripts/homelab-pdm-installation-watch.py" /usr/local/sbin/homel
 ic "$SCRIPT_DIR/scripts/homelab-pdm-refresh-remote.py" /usr/local/sbin/homelab-pdm-refresh-remote 755 homelab-pdm-refresh-remote
 ic "$SCRIPT_DIR/scripts/homelab-postinstall-deploy.sh" /usr/local/sbin/homelab-postinstall-deploy 755 homelab-postinstall-deploy
 
+print_action "Installing root SSH agent + 1Password key loader"
+install -d -m 700 /root/.local/bin /root/.config
+ic "$SCRIPT_DIR/scripts/op-ssh-add" /root/.local/bin/op-ssh-add 700 op-ssh-add
+ic "$SCRIPT_DIR/scripts/addhomelabkeys" /root/.local/bin/addhomelabkeys 700 addhomelabkeys
+ic "$SCRIPT_DIR/scripts/op-ssh-agent.conf" /root/.config/op-ssh-agent.env 600 op-ssh-agent.env
+
 print_action "Installing webhook config"
 install -m 0600 "$BUILD_DIR/env" /etc/homelab-postinstall-webhook/env
 
@@ -57,12 +63,23 @@ ic "$SCRIPT_DIR/scripts/homelab-pdm-installation-watch.service" \
    /etc/systemd/system/homelab-pdm-installation-watch.service 644 homelab-pdm-installation-watch.service
 ic "$SCRIPT_DIR/scripts/homelab-pdm-installation-watch.timer" \
    /etc/systemd/system/homelab-pdm-installation-watch.timer 644 homelab-pdm-installation-watch.timer
+ic "$SCRIPT_DIR/scripts/homelab-ssh-agent.service" \
+   /etc/systemd/system/homelab-ssh-agent.service 644 homelab-ssh-agent.service
+ic "$SCRIPT_DIR/scripts/homelab-op-ssh-load.service" \
+   /etc/systemd/system/homelab-op-ssh-load.service 644 homelab-op-ssh-load.service
+ic "$SCRIPT_DIR/scripts/homelab-op-ssh-load.timer" \
+   /etc/systemd/system/homelab-op-ssh-load.timer 644 homelab-op-ssh-load.timer
 
 systemctl daemon-reload
 systemctl enable --now homelab-postinstall-webhook.service
 systemctl restart homelab-postinstall-webhook.service
 systemctl enable --now homelab-pdm-installation-watch.timer
+systemctl enable --now homelab-ssh-agent.service
+systemctl enable --now homelab-op-ssh-load.timer
+systemctl start homelab-op-ssh-load.service
 
 print_ok "post-install webhook listener installed"
 print_sub "Status: systemctl status homelab-postinstall-webhook.service --no-pager"
 print_sub "PDM watch: systemctl list-timers homelab-pdm-installation-watch.timer --no-pager"
+print_sub "SSH agent: systemctl status homelab-ssh-agent.service --no-pager"
+print_sub "SSH key load: systemctl list-timers homelab-op-ssh-load.timer --no-pager"

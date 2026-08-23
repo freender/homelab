@@ -26,9 +26,15 @@ REQUIRED_SCRIPTS = [
     "homelab-pdm-installation-watch.py",
     "homelab-pdm-refresh-remote.py",
     "homelab-postinstall-deploy.sh",
+    "op-ssh-add",
+    "addhomelabkeys",
+    "op-ssh-agent.conf",
     "homelab-postinstall-webhook.service",
     "homelab-pdm-installation-watch.service",
     "homelab-pdm-installation-watch.timer",
+    "homelab-ssh-agent.service",
+    "homelab-op-ssh-load.service",
+    "homelab-op-ssh-load.timer",
     "install.sh",
 ]
 
@@ -114,6 +120,30 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
             (
                 scripts_dir / "homelab-pdm-installation-watch.timer",
                 "/etc/systemd/system/homelab-pdm-installation-watch.timer",
+            ),
+            (
+                scripts_dir / "op-ssh-add",
+                "/root/.local/bin/op-ssh-add",
+            ),
+            (
+                scripts_dir / "addhomelabkeys",
+                "/root/.local/bin/addhomelabkeys",
+            ),
+            (
+                scripts_dir / "op-ssh-agent.conf",
+                "/root/.config/op-ssh-agent.env",
+            ),
+            (
+                scripts_dir / "homelab-ssh-agent.service",
+                "/etc/systemd/system/homelab-ssh-agent.service",
+            ),
+            (
+                scripts_dir / "homelab-op-ssh-load.service",
+                "/etc/systemd/system/homelab-op-ssh-load.service",
+            ),
+            (
+                scripts_dir / "homelab-op-ssh-load.timer",
+                "/etc/systemd/system/homelab-op-ssh-load.timer",
             ),
         ],
     ):

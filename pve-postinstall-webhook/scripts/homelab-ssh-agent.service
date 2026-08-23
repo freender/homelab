@@ -1,0 +1,15 @@
+[Unit]
+Description=Homelab shared SSH agent
+Documentation=man:ssh-agent(1)
+
+[Service]
+Type=simple
+Environment=HOME=/root
+Environment=SSH_AUTH_SOCK=/root/.ssh/agent.sock
+ExecStartPre=/usr/bin/mkdir -p /root/.ssh
+ExecStartPre=/usr/bin/rm -f /root/.ssh/agent.sock
+ExecStart=/usr/bin/ssh-agent -D -a /root/.ssh/agent.sock
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

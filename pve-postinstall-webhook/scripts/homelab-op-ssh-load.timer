@@ -1,0 +1,11 @@
+[Unit]
+Description=Refresh homelab SSH keys from 1Password
+
+[Timer]
+OnBootSec=10s
+OnUnitActiveSec=7h
+AccuracySec=5min
+Unit=homelab-op-ssh-load.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,89 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  printf 'Usage: %s {main|pve}\n' "$0" >&2
+}
+
+die() {
+  printf 'op-ssh-add: %s\n' "$*" >&2
+  exit 1
+}
+
+key_name="${1:-}"
+if [[ -z "$key_name" ]]; then
+  usage
+  exit 2
+fi
+
+config_file="${OP_SSH_CONFIG:-$HOME/.config/op-ssh-agent.env}"
+if [[ -r "$config_file" ]]; then
+  # shellcheck source=/dev/null
+  source "$config_file"
+fi
+
+case "$key_name" in
+  main)
+    item_ref="${OP_SSH_MAIN_REF:-}"
+    ttl="${OP_SSH_MAIN_TTL:-24h}"
+    label="main"
+    ;;
+  pve)
+    item_ref="${OP_SSH_PVE_REF:-}"
+    ttl="${OP_SSH_PVE_TTL:-8h}"
+    label="pve"
+    ;;
+  *)
+    usage
+    exit 2
+    ;;
+esac
+
+op_bin="${OP_BIN:-}"
+if [[ -z "$op_bin" ]]; then
+  if [[ -x "$HOME/.local/bin/op" ]]; then
+    op_bin="$HOME/.local/bin/op"
+  else
+    op_bin="$(command -v op || true)"
+  fi
+fi
+
+[[ -n "$op_bin" && -x "$op_bin" ]] || die "1Password CLI is not installed; install 'op' first"
+command -v ssh-add >/dev/null 2>&1 || die "ssh-add is not installed"
+
+export SSH_AUTH_SOCK="${SSH_AUTH_SOCK:-$HOME/.ssh/agent.sock}"
+[[ -S "$SSH_AUTH_SOCK" ]] || die "SSH agent socket not found at $SSH_AUTH_SOCK"
+
+set +e
+ssh_add_output="$(SSH_AUTH_SOCK="$SSH_AUTH_SOCK" ssh-add -l 2>&1)"
+ssh_add_rc=$?
+set -e
+if [[ "$ssh_add_rc" -eq 2 ]]; then
+  die "cannot talk to SSH agent at $SSH_AUTH_SOCK: $ssh_add_output"
+elif [[ "$ssh_add_rc" -ne 0 && "$ssh_add_rc" -ne 1 ]]; then
+  die "unexpected ssh-add status $ssh_add_rc: $ssh_add_output"
+fi
+
+[[ -n "$item_ref" ]] || die "missing 1Password item ref for $label key in $config_file"
+
+if [[ -z "${OP_SERVICE_ACCOUNT_TOKEN:-}" ]]; then
+  token_file="${OP_SERVICE_ACCOUNT_TOKEN_FILE:-$HOME/.config/op/service-account-token}"
+  [[ -r "$token_file" ]] || die "missing OP_SERVICE_ACCOUNT_TOKEN or readable token file at $token_file"
+  OP_SERVICE_ACCOUNT_TOKEN="$(<"$token_file")"
+  OP_SERVICE_ACCOUNT_TOKEN="${OP_SERVICE_ACCOUNT_TOKEN//$'\r'/}"
+  OP_SERVICE_ACCOUNT_TOKEN="${OP_SERVICE_ACCOUNT_TOKEN//$'\n'/}"
+  export OP_SERVICE_ACCOUNT_TOKEN
+fi
+
+[[ -n "$OP_SERVICE_ACCOUNT_TOKEN" ]] || die "empty 1Password service account token"
+
+forbidden_vault="${OP_SSH_FORBIDDEN_OFFSITE_VAULT:-}"
+forbidden_item="${OP_SSH_FORBIDDEN_OFFSITE_ITEM:-}"
+if [[ -n "$forbidden_vault" && -n "$forbidden_item" ]]; then
+  if "$op_bin" item get "$forbidden_item" --vault "$forbidden_vault" --format json >/dev/null 2>&1; then
+    die "service account can read forbidden offsite item '$forbidden_item' in vault '$forbidden_vault'; refusing to load default keys"
+  fi
+fi
+
+"$op_bin" read "$item_ref" | SSH_AUTH_SOCK="$SSH_AUTH_SOCK" ssh-add -q -t "$ttl" -
+printf 'Loaded %s SSH key for %s.\n' "$label" "$ttl"

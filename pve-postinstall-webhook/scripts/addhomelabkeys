@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+set -euo pipefail
+export SSH_AUTH_SOCK="${SSH_AUTH_SOCK:-$HOME/.ssh/agent.sock}"
+# arc needs both keys: pve to SSH into PVE nodes during post-install deploys
+# and PDM remote refresh, main to git pull this repo over git@github.com.
+"$HOME/.local/bin/op-ssh-add" main
+"$HOME/.local/bin/op-ssh-add" pve
