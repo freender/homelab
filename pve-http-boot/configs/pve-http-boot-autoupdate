@@ -16,38 +16,109 @@ ISO_DIR="/root/iso"
 SRV="/srv/httpboot"
 STAGE="/srv/httpboot.stage"
 HTTP_BOOT_BUILD="$ISO_DIR/http-boot-build"
+SUMS_FILE="$ISO_DIR/SHA256SUMS"
 TOKEN_FILE="/root/homelab-pve-auto-install.token"
 LOCK="/run/pve-http-boot-autoupdate.lock"
 STAMP_FILE="/etc/homelab-http-boot/build-stamp"
+
+# A run older than this is stuck, not merely overlapping. Comfortably above the
+# unit's TimeoutStartSec, so systemd normally kills a hung run long before this
+# matters; it only catches one started outside systemd by hand.
+STALL_AFTER=7200
+
+# Every fetch is bounded and retried. Without a timeout a stalled connection
+# hangs forever holding the lock (Type=oneshot has no start timeout of its own),
+# and every later run then exits 0 "another run is active" — a silent stop that
+# no failed-unit alert can see.
+CURL_SMALL=(--fail --silent --show-error --location
+            --connect-timeout 15 --max-time 120
+            --retry 3 --retry-delay 5 --retry-connrefused)
+# --continue-at resumes a partial file from an interrupted run, so a blip costs
+# the remaining bytes rather than all 1.7 GB. Upstream advertises
+# Accept-Ranges: bytes, and curl treats "no local file" and "already complete"
+# as ordinary success.
+CURL_ISO=(--fail --location --no-progress-meter
+          --connect-timeout 15 --max-time 3600
+          --retry 5 --retry-delay 10 --retry-connrefused --continue-at -)
+# Loopback probes against the just-promoted payload. Bounded for the same
+# reason: a wedged nginx worker would otherwise stall the run indefinitely while
+# it still holds the lock. No retry — this is a verdict, not a fetch.
+CURL_PROBE=(--fail --silent --head --connect-timeout 5 --max-time 30)
 
 # PDM connection details (written by homelab deploy; do not edit here)
 # shellcheck source=/etc/homelab-http-boot/http-boot-mgmt.conf
 source /etc/homelab-http-boot/http-boot-mgmt.conf
 
 log()    { echo "pve-http-boot-autoupdate: $*"; }
-# No node_exporter textfile metric here: arc (this host) has no node_exporter
-# installed/scraped (it's outside the metrics-exporters host list), so a metric
-# would just be written and never read. Failures surface via `systemctl status
-# pve-http-boot-autoupdate`/journalctl (this is a oneshot unit; a failed run is
-# visible as a failed unit) rather than a Prometheus alert. If alerting on this
-# becomes worth having, wire it through a notify-on-failure unit instead of a
-# dead textfile metric.
+# No node_exporter textfile metric here, and none is needed: arc runs
+# node_exporter (metrics-exporters in hosts.conf) and vmalert's
+# SystemdUnitFailed matches every non-homelab-* unit with no host filter, so a
+# failed run here already alerts. That is why every failure path below aborts
+# rather than degrading to a best-effort build — and why lock contention must
+# not report success indefinitely, since exit 0 is invisible to that alert.
 fail()   { log "ERROR: $*" >&2; exit 1; }
 
 cleanup_temp() {
     rm -rf "$STAGE" "$HTTP_BOOT_BUILD"
 }
+
+# Prevent overlapping runs. Opened append-only on purpose: `9>` would truncate
+# the file before the lock is even attempted, destroying the running instance's
+# start timestamp that the stall check below reads.
+exec 9>>"$LOCK"
+if ! flock -n 9; then
+    # Contention is normally harmless and exiting 0 is correct. But a run wedged
+    # on a stalled fetch would otherwise make every subsequent run report
+    # success forever, so the payload silently stops tracking upstream with no
+    # failed unit to alert on. Past STALL_AFTER, treat the holder as stuck.
+    holder="$(cat "$LOCK" 2>/dev/null || true)"
+    started="${holder##*started=}"
+    started="${started//[!0-9]/}"
+    if [[ -n "$started" ]]; then
+        age=$(( $(date +%s) - started ))
+        if (( age > STALL_AFTER )); then
+            fail "a run started $((age / 60))m ago still holds $LOCK; it is stuck, not merely overlapping"
+        fi
+    fi
+    log "another run is active"
+    exit 0
+fi
+
+# Only now, holding the lock. Setting this earlier meant a run that exited on
+# contention wiped $STAGE and $HTTP_BOOT_BUILD out from under the instance that
+# actually held the lock.
 trap cleanup_temp EXIT
 
-# Prevent overlapping runs
-exec 9>"$LOCK"
-flock -n 9 || { log "another run is active"; exit 0; }
+truncate -s 0 "$LOCK"
+printf 'pid=%s started=%s\n' "$$" "$(date +%s)" >&9
 
 [[ -s "$TOKEN_FILE" ]] || fail "missing or empty token file $TOKEN_FILE"
 
-# 1. Detect latest upstream ISO
-latest="$(curl -fsSL "$ISO_INDEX" | grep -oE "proxmox-ve_[0-9]+\.[0-9]+-[0-9]+\.iso" | sort -V | tail -1)"
-[[ -n "$latest" ]] || fail "could not determine latest upstream ISO"
+# 1. Detect the latest upstream ISO from the directory manifest.
+# SHA256SUMS is one stable, line-oriented artifact carrying both the published
+# filenames and their digests. The old code scraped the /iso/ index page for the
+# name and fetched a separate <iso>.sha256 for the digest: that index is a
+# hand-styled HTML document (CSS variables, dark mode, collapsible "older
+# versions"), so discovery rode on presentation markup, and a transient failure
+# on the second fetch silently downgraded the run into building an ISO it had
+# never verified.
+mkdir -p "$ISO_DIR"
+curl "${CURL_SMALL[@]}" -o "$SUMS_FILE" "${ISO_INDEX}SHA256SUMS" \
+    || fail "could not fetch ${ISO_INDEX}SHA256SUMS"
+
+# Exact-match amd64 Proxmox VE only. The manifest also lists PBS/PMG/PDM images
+# and proxmox-ve_<ver>-arm64.iso, and `sort -V` orders the arm64 name *after*
+# the plain one — so a loose pattern picks an ARM image for this x86 fleet, and
+# nothing catches it until a node has already netbooted the result.
+latest="$(awk '$2 ~ /^proxmox-ve_[0-9]+\.[0-9]+-[0-9]+\.iso$/ { print $2 }' \
+    "$SUMS_FILE" | sort -V | tail -1)"
+[[ -n "$latest" ]] || fail "no proxmox-ve amd64 ISO listed in SHA256SUMS"
+
+# Exactly one digest, or abort: two matching lines leave a newline in the value
+# and fail this test rather than silently verifying against the wrong one.
+iso_sha256="$(awk -v want="$latest" '$2 == want { print $1 }' "$SUMS_FILE")"
+[[ "$iso_sha256" =~ ^[0-9a-f]{64}$ ]] \
+    || fail "no single sha256 digest for $latest in SHA256SUMS"
 
 # 2. Decide whether a rebuild is needed.
 # The prepared ISO bakes in the PDM answer URL, the TLS cert fingerprint and the
@@ -57,9 +128,12 @@ latest="$(curl -fsSL "$ISO_INDEX" | grep -oE "proxmox-ve_[0-9]+\.[0-9]+-[0-9]+\.
 # Proxmox release — potentially months — and the automated install then fails to
 # fetch its answer mid-rebuild, which is the worst possible moment to find out.
 # The stamp covers every build input. Only hashes are stored, never the token.
+# The digest is included alongside the filename because upstream republishing
+# the same name with different content would otherwise read as "up to date"
+# forever. The filename stays in the stamp too: it is baked into the payload.
 want_stamp="$(
-    printf '%s|%s|%s|%s' \
-        "$latest" "$PDM_URL" "$PDM_CERT_FINGERPRINT" \
+    printf '%s|%s|%s|%s|%s' \
+        "$latest" "$iso_sha256" "$PDM_URL" "$PDM_CERT_FINGERPRINT" \
         "$(sha256sum <"$TOKEN_FILE" | cut -d' ' -f1)" \
         | sha256sum | cut -d' ' -f1
 )"
@@ -87,35 +161,29 @@ fi
 # 3. Fetch the upstream ISO, reusing an already-verified local copy.
 # A rebuild triggered by a token or certificate rotation does not need a fresh
 # 1.7 GB download — the ISO on disk is the same one upstream is still publishing.
-mkdir -p "$ISO_DIR"
 cd "$ISO_DIR"
 
-# Upstream publishes '<iso>.sha256', not '<iso>.sha256sum'. The old code asked for
-# the latter, so the fetch always 404'd, the "no upstream sha256sum available"
-# branch always won, and this ISO has in fact never been integrity-checked before
-# being turned into an auto-install payload.
-sum_file="${latest}.sha256"
-have_sums=1
-curl -fsSL "${ISO_INDEX}${sum_file}" -o "$sum_file" 2>/dev/null || have_sums=0
-[[ "$have_sums" -eq 1 ]] || log "WARN: upstream published no checksum for $latest"
-
+# Checked against the digest carried by the manifest fetched above, so there is
+# no second request that can fail and no "checksum unavailable" path to fall
+# through: an unverifiable ISO now aborts the run instead of being built.
 iso_verified() {
-    [[ -s "$latest" ]] || return 1
-    [[ "$have_sums" -eq 1 ]] || return 1
-    sha256sum -c --status "$sum_file"
+    [[ -s "$ISO_DIR/$latest" ]] || return 1
+    printf '%s  %s\n' "$iso_sha256" "$ISO_DIR/$latest" | sha256sum -c --status -
 }
 
 if iso_verified; then
     log "reusing verified local copy of $latest"
 else
-    rm -f "$latest"
     # --no-progress-meter: this runs under systemd, and curl's progress bar
     # otherwise lands in the journal as ~30 lines of carriage-return noise.
-    curl -fLO --no-progress-meter "${ISO_INDEX}${latest}"
+    curl "${CURL_ISO[@]}" -o "$ISO_DIR/$latest" "${ISO_INDEX}${latest}" \
+        || fail "download failed for $latest"
     # Fatal rather than a warning: this ISO becomes the payload that unattended
     # machines boot and install themselves from. Serving one that failed its
-    # checksum is not a "proceed with caution" situation.
-    if [[ "$have_sums" -eq 1 ]] && ! iso_verified; then
+    # checksum is not a "proceed with caution" situation. Discard it too, so the
+    # next run starts clean rather than resuming onto corrupt bytes.
+    if ! iso_verified; then
+        rm -f "$ISO_DIR/$latest"
         fail "sha256 mismatch for $latest — refusing to build a payload from it"
     fi
 fi
@@ -178,9 +246,9 @@ systemctl reload nginx 2>/dev/null || systemctl restart nginx
 
 # 8. Post-promote HTTP smoke test
 ok=1
-curl -fsI "http://127.0.0.1/$prepared_iso" >/dev/null || ok=0
-curl -fsI "http://127.0.0.1/initrd.img" >/dev/null || ok=0
-curl -fsI "http://127.0.0.1/boot.ipxe"  >/dev/null || ok=0
+curl "${CURL_PROBE[@]}" "http://127.0.0.1/$prepared_iso" >/dev/null || ok=0
+curl "${CURL_PROBE[@]}" "http://127.0.0.1/initrd.img" >/dev/null || ok=0
+curl "${CURL_PROBE[@]}" "http://127.0.0.1/boot.ipxe"  >/dev/null || ok=0
 if [[ "$ok" -ne 1 ]]; then
     log "post-promote check failed; rolling back"
     rsync -a --delete "$SRV.prev"/ "$SRV"/

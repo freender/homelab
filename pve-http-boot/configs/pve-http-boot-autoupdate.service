@@ -5,4 +5,10 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
+# systemd disables the start timeout for Type=oneshot by default, so a run that
+# wedged on a network fetch would hold the update lock indefinitely and every
+# later run would exit 0 "another run is active" — no failed unit, no alert, and
+# the payload quietly stops tracking upstream. curl's --max-time bounds each
+# request; this bounds the run as a whole, including prepare-iso.
+TimeoutStartSec=1h
 ExecStart=/usr/local/sbin/pve-http-boot-autoupdate

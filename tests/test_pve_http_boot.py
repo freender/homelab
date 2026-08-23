@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -9,6 +10,11 @@ from src.homelab.modules import pve_http_boot
 ROOT = Path(__file__).resolve().parents[1]
 HTTP_BOOT_CONFIGS = ROOT / "pve-http-boot" / "configs"
 HTTP_BOOT_TEMPLATES = ROOT / "pve-http-boot" / "templates"
+
+# The awk program the updater uses to pick the ISO out of SHA256SUMS. Kept
+# verbatim so the behavioural test below exercises the real selection rather
+# than a paraphrase of it.
+SELECT_AWK = r"$2 ~ /^proxmox-ve_[0-9]+\.[0-9]+-[0-9]+\.iso$/ { print $2 }"
 
 # Kernel command-line flags the Proxmox installer renamed in 8.2. An unknown flag
 # is ignored rather than rejected, so a stale one does not fail the boot — it just
@@ -27,6 +33,18 @@ def read_template(name: str) -> str:
 
 def read_installer() -> str:
     return (ROOT / "pve-http-boot" / "scripts" / "install.sh").read_text(encoding="utf-8")
+
+
+def _select(awk_program: str, manifest: str) -> str:
+    """Run the updater's real `awk ... | sort -V | tail -1` selection pipeline."""
+    result = subprocess.run(
+        ["bash", "-c", 'awk "$1" | sort -V | tail -1', "bash", awk_program],
+        input=manifest,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return result.stdout.strip()
 
 
 # --------------------------------------------------------------------------
@@ -154,9 +172,21 @@ def test_build_stamp_covers_every_input_baked_into_the_prepared_iso() -> None:
     updater = read_config("pve-http-boot-autoupdate")
 
     assert 'STAMP_FILE="/etc/homelab-http-boot/build-stamp"' in updater
-    assert '"$latest" "$PDM_URL" "$PDM_CERT_FINGERPRINT"' in updater
+    assert '"$latest" "$iso_sha256" "$PDM_URL" "$PDM_CERT_FINGERPRINT"' in updater
     assert 'sha256sum <"$TOKEN_FILE"' in updater
     assert '"$want_stamp" == "$have_stamp"' in updater
+
+
+def test_build_stamp_includes_the_iso_digest_not_just_its_name() -> None:
+    """Upstream republishing the same filename with different content would
+    otherwise read as "up to date" forever, because the freshness decision is
+    made before the ISO is ever fetched."""
+    updater = read_config("pve-http-boot-autoupdate")
+
+    assert '"$iso_sha256"' in updater
+    stamp = updater[updater.index("want_stamp=") : updater.index("have_stamp=")]
+    assert "$iso_sha256" in stamp
+    assert "$latest" in stamp
 
 
 def test_build_stamp_is_not_served_over_http() -> None:
@@ -204,18 +234,63 @@ def test_autoupdate_reuses_a_verified_local_iso_instead_of_refetching() -> None:
     assert "reusing verified local copy" in updater
 
 
-def test_iso_checksum_uses_the_extension_upstream_actually_publishes() -> None:
-    """Proxmox publishes '<iso>.sha256'. Asking for '.sha256sum' 404s, and the
-    old code treated that as "no checksum available" and carried on — so the ISO
-    behind every network install was never actually verified."""
+def test_discovery_reads_the_signed_directory_manifest_not_the_index_page() -> None:
+    """The /iso/ index is a hand-styled HTML document, so scraping it made
+    discovery depend on presentation markup. SHA256SUMS is one line-oriented
+    artifact that carries both the filename and the digest, which also removes
+    the second fetch whose failure used to downgrade the run."""
     updater = read_config("pve-http-boot-autoupdate")
 
-    assert 'sum_file="${latest}.sha256"' in updater
+    assert '"${ISO_INDEX}SHA256SUMS"' in updater
 
-    code = [
-        line for line in updater.splitlines() if not line.lstrip().startswith("#")
+    code = [line for line in updater.splitlines() if not line.lstrip().startswith("#")]
+    # No HTML scrape, and no per-ISO checksum side fetch.
+    assert not [line for line in code if 'curl -fsSL "$ISO_INDEX"' in line]
+    assert not [line for line in code if "sum_file=" in line]
+    assert not [line for line in code if "have_sums" in line]
+
+
+def test_an_unverifiable_iso_aborts_instead_of_being_built() -> None:
+    """The old code treated a failed checksum fetch as "no checksum available"
+    and carried on, so a transient network fault was enough to turn an
+    unverified ISO into the payload unattended machines install from."""
+    updater = read_config("pve-http-boot-autoupdate")
+
+    assert 'fail "could not fetch ${ISO_INDEX}SHA256SUMS"' in updater
+    assert 'fail "no single sha256 digest for $latest in SHA256SUMS"' in updater
+    assert 'fail "download failed for $latest"' in updater
+
+
+def test_a_failed_checksum_discards_the_iso_so_the_next_run_starts_clean() -> None:
+    """The download resumes with --continue-at, so leaving a corrupt file behind
+    would make every later run resume onto the same bad bytes."""
+    updater = read_config("pve-http-boot-autoupdate")
+
+    mismatch = updater.index('fail "sha256 mismatch for $latest')
+    discard = updater.index('rm -f "$ISO_DIR/$latest"')
+
+    assert discard < mismatch
+
+
+def test_large_download_is_bounded_retried_and_resumable() -> None:
+    """A bare curl with no timeout is what lets a run wedge forever, and with no
+    resume a blip at 90% throws away the whole 1.7 GB."""
+    updater = read_config("pve-http-boot-autoupdate")
+
+    for opt in ("--connect-timeout", "--max-time", "--retry", "--continue-at"):
+        assert opt in updater, f"{opt} missing from the ISO fetch"
+
+    # Every curl in the script goes through a bounded option array. An unbounded
+    # one anywhere reintroduces the wedge, including the loopback probes: nginx
+    # hanging would stall the run while it still holds the lock.
+    bounded = ("CURL_SMALL", "CURL_ISO", "CURL_PROBE")
+    code = [line for line in updater.splitlines() if not line.lstrip().startswith("#")]
+    unbounded = [
+        line
+        for line in code
+        if "curl " in line and not any(arr in line for arr in bounded)
     ]
-    assert not [line for line in code if ".sha256sum" in line]
+    assert not unbounded, f"unbounded curl call(s): {unbounded}"
 
 
 def test_a_checksum_mismatch_aborts_instead_of_warning() -> None:
@@ -223,6 +298,85 @@ def test_a_checksum_mismatch_aborts_instead_of_warning() -> None:
     updater = read_config("pve-http-boot-autoupdate")
 
     assert 'fail "sha256 mismatch for $latest' in updater
+
+
+def test_manifest_selection_picks_amd64_and_never_the_arm64_image() -> None:
+    """The manifest lists every Proxmox product plus an arm64 PVE image, and
+    `sort -V` orders `proxmox-ve_9.2-1-arm64.iso` *after* `proxmox-ve_9.2-1.iso`.
+    A loose pattern therefore selects the ARM image for this x86 fleet, builds a
+    payload from it without complaint, and only fails once a node has netbooted
+    it. Run the real selection against a realistic manifest rather than trusting
+    the regex by eye.
+    """
+    updater = read_config("pve-http-boot-autoupdate")
+    assert SELECT_AWK in updater, "selection program changed; update this test"
+
+    manifest = "\n".join(
+        f"{'0' * 64}  {name}"
+        for name in (
+            "proxmox-ve_7.4-1.iso",
+            "proxmox-ve_8.4-1.iso",
+            "proxmox-ve_9.1-1.iso",
+            "proxmox-ve_9.2-1-arm64.iso",
+            "proxmox-ve_9.2-1.iso",
+            "proxmox-backup-server_4.2-1.iso",
+            "proxmox-mail-gateway_9.1-1.iso",
+            "proxmox-datacenter-manager_1.1-1.iso",
+        )
+    )
+
+    assert _select(SELECT_AWK, manifest) == "proxmox-ve_9.2-1.iso"
+
+    # The trap this anchoring exists to prevent, demonstrated rather than asserted
+    # in a comment: drop the anchors and the ARM image wins.
+    loose = "$2 ~ /proxmox-ve_/ { print $2 }"
+    assert _select(loose, manifest) == "proxmox-ve_9.2-1-arm64.iso"
+
+
+# --------------------------------------------------------------------------
+# lock handling: contention must not mask a stuck run
+# --------------------------------------------------------------------------
+
+
+def test_lock_file_is_opened_without_truncating_the_holders_timestamp() -> None:
+    """`9>` truncates before flock is even attempted, which would erase the
+    running instance's start time and make the stall check below blind."""
+    updater = read_config("pve-http-boot-autoupdate")
+
+    assert 'exec 9>>"$LOCK"' in updater
+    assert 'exec 9>"$LOCK"' not in updater
+    assert "printf 'pid=%s started=%s\\n'" in updater
+
+
+def test_a_stuck_run_is_reported_instead_of_being_reported_as_success() -> None:
+    """This is the one failure mode no alert could see: a wedged run holds the
+    lock, every later run exits 0 "another run is active", and the payload
+    silently stops tracking upstream with no failed unit anywhere."""
+    updater = read_config("pve-http-boot-autoupdate")
+
+    assert "STALL_AFTER=" in updater
+    assert "age > STALL_AFTER" in updater
+    assert 'fail "a run started $((age / 60))m ago still holds $LOCK' in updater
+
+
+def test_cleanup_trap_is_armed_only_after_the_lock_is_held() -> None:
+    """Armed earlier, a run exiting on contention wiped $STAGE and
+    $HTTP_BOOT_BUILD out from under the instance holding the lock."""
+    updater = read_config("pve-http-boot-autoupdate")
+
+    lock_taken = updater.index("if ! flock -n 9; then")
+    trap_armed = updater.index("trap cleanup_temp EXIT")
+
+    assert lock_taken < trap_armed
+
+
+def test_oneshot_unit_has_an_explicit_start_timeout() -> None:
+    """systemd disables TimeoutStartSec for Type=oneshot by default, so without
+    this a hung run is never killed and holds the lock indefinitely."""
+    unit = read_config("pve-http-boot-autoupdate.service")
+
+    assert "Type=oneshot" in unit
+    assert "TimeoutStartSec=" in unit
 
 
 def test_http_boot_autoupdate_cleans_temp_and_promotes_whole_tree() -> None:
