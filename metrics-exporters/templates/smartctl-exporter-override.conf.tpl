@@ -16,6 +16,17 @@
 #   --smartctl.path                normally /usr/sbin/smartctl; hosts setting
 #                                  metrics-exporters.smartctl_wrapper get the
 #                                  wrapper instead (see README).
+#
+# ExecStartPre holds the exporter back until the disk list stops changing,
+# because it registers its metric descriptors once at startup but keeps
+# rescanning for devices afterwards -- a disk that appears late makes /metrics
+# return HTTP 500 for every disk until the next restart. See the script's header
+# for the incident this comes from. Unlike ExecStart it is a list directive with
+# no packaged value, so it needs no reset line. TimeoutStartSec must exceed the
+# script's own timeout (180s) or systemd kills the wait before it can give up
+# gracefully; the packaged unit inherits the 90s default, which is too low.
 [Service]
+TimeoutStartSec=300
+ExecStartPre=/usr/local/bin/homelab-smartctl-wait-devices {{ SMARTCTL_PATH }}
 ExecStart=
 ExecStart=/usr/bin/smartctl_exporter --web.listen-address=:9633 --smartctl.path={{ SMARTCTL_PATH }} --smartctl.interval=10s --smartctl.powermode-check=standby

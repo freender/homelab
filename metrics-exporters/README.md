@@ -431,6 +431,44 @@ that the `disk-spindown` module has parked. `--smartctl.path` is per-host: hosts
 setting `metrics-exporters.smartctl_wrapper: true` get
 `/usr/local/bin/homelab-smartctl-wrapper` instead of `smartctl` itself.
 
+##### Late-enumerating disks (`ExecStartPre` device wait)
+
+The same drop-in adds an `ExecStartPre` running
+`configs/common/smartctl-exporter-wait-devices` (installed as
+`/usr/local/bin/homelab-smartctl-wait-devices`), plus `TimeoutStartSec=300` so
+systemd cannot kill that wait.
+
+`smartctl_exporter` registers its Prometheus metric descriptors once, from the
+devices it finds at startup, but keeps rescanning for new devices every 10
+minutes. A disk that appears *after* startup is collected with descriptors that
+were never registered, and client_golang's registry rejects the entire gather:
+
+```
+collected metric smartctl_device_attribute ... with unregistered descriptor
+```
+
+`/metrics` then returns HTTP 500 for **every** device, not just the late one,
+and keeps doing so until the process is restarted — the rescan that causes it
+also re-confirms it every 10 minutes, so there is no self-recovery.
+
+`ace` hit this after its 2026-08-23 rebuild: booted 19:02:53, exporter started
+19:03:10 seeing only the two NVMes, LSI SAS2308 finished enumerating `sda`/`sdb`
+at 19:04:14, and the 19:13 rescan poisoned the registry. `ace` was absent from
+the `pve-smartctl` job for two days — including its NVMe SMART data, which had
+nothing to do with the late SAS disks. HBA hosts (`ace`, `clovis`) are the
+obvious exposure, but any slow bus qualifies, which is why the wait is on the
+plain `baremetal` gate rather than on `hba`.
+
+The script polls `smartctl --json --scan` and returns once the device *name*
+list has been identical for 20s, giving up after 180s and starting the exporter
+anyway (a partial metrics outage beats a failed unit). It waits for stability
+rather than an expected device count on purpose — a count would have to live in
+`hosts.conf` and would drift the first time a disk is added or pulled. It takes
+`--smartctl.path` as its argument so a wrapper host scans the same way the
+exporter does. Deploy-time restarts skip the wait entirely: it exits immediately
+once the host is past 300s of uptime, since this is a boot-ordering race and a
+restart on a long-running host has nothing to wait for.
+
 ##### smartctl_wrapper (cottonwood)
 
 `cottonwood` sets `metrics-exporters.smartctl_wrapper: true`, which deploys

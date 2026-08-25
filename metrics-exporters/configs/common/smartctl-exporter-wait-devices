@@ -1,0 +1,164 @@
+#!/bin/bash
+# ExecStartPre for smartctl_exporter: block at boot until every disk this host
+# is known to have has been enumerated, then let the exporter start.
+#
+# Why this exists: smartctl_exporter builds its Prometheus descriptor set once,
+# from the devices present at startup, but keeps rescanning for new devices
+# every --smartctl.rescan interval (10m). A device that shows up after startup
+# is collected with descriptors that were never registered, and client_golang's
+# registry rejects the whole gather:
+#     collected metric smartctl_device_attribute ... with unregistered descriptor
+# /metrics then answers HTTP 500 for *every* device, not just the late one, and
+# keeps doing so until the exporter is restarted. There is no self-recovery: the
+# rescan that causes it also re-confirms it every 10 minutes.
+#
+# This is not hypothetical. ace booted 2026-08-23 19:02:53 after a rebuild; its
+# LSI SAS2308 took until 19:04:14 to enumerate sda/sdb (mpt3sas loads early, but
+# link training is slow), while the exporter started at 19:03:10 finding only
+# the two NVMes. The 19:13 rescan found the SAS disks and the endpoint 500ed
+# continuously for two days, which dropped ace out of the pve-smartctl job
+# entirely -- including its NVMe SMART data, which had nothing to do with the
+# late disks.
+#
+# Why it waits on a remembered device list rather than just on the list holding
+# still: on ace the list held perfectly still for the 64 seconds between the
+# exporter starting and the SAS disks appearing. Any stability window short
+# enough to be tolerable at boot is shorter than that, so "unchanged for N
+# seconds" would have declared victory on the two NVMes and reproduced the exact
+# bug. The previous run's device list is the only cheap signal that says how many
+# disks are still missing.
+#
+# Why not an expected count in hosts.conf: it would have to be updated by hand
+# every time a disk is added, pulled, or dies, and a stale one fails in the
+# worst direction (waiting forever for a disk that no longer exists). The state
+# file below is written by this script from the running system, so it cannot
+# drift; a genuinely removed disk costs exactly one boot's timeout and then
+# corrects itself.
+#
+# A timeout is not a failure. On timeout this exits 0 and lets the exporter
+# start with whatever is present, which is exactly the pre-existing behaviour --
+# degraded, not worse. Failing the unit instead would turn a partial metrics
+# outage into a total one, which is the opposite of the point.
+
+set -uo pipefail
+
+# Passed by the unit drop-in so this sees the same binary the exporter does:
+# hosts setting metrics-exporters.smartctl_wrapper get the wrapper, whose
+# --json --scan output differs from real smartctl's (it appends USB-NVMe
+# devices smartctl cannot see). Scanning with the other one would remember a
+# device list the exporter never uses.
+SMARTCTL="${1:-/usr/sbin/smartctl}"
+
+STATE_FILE="${HOMELAB_SMARTCTL_WAIT_STATE:-/var/lib/homelab/smartctl-devices}"
+
+# Give up and start anyway after this long. 180s covers ace's observed 81s from
+# boot to SAS enumeration with room to spare; the drop-in raises the unit's
+# TimeoutStartSec above it so systemd cannot kill the wait first.
+TIMEOUT="${HOMELAB_SMARTCTL_WAIT_TIMEOUT:-180}"
+# Once the expected disks are all present, how long the list must stay identical
+# before starting. Catches a disk arriving just after the expected set is
+# complete -- e.g. one added since the last boot.
+SETTLE="${HOMELAB_SMARTCTL_WAIT_SETTLE:-20}"
+POLL="${HOMELAB_SMARTCTL_WAIT_POLL:-5}"
+# Uptime past which this is not a boot-time start: a deploy restart or an admin
+# restart on a long-running host has nothing to wait for.
+GRACE="${HOMELAB_SMARTCTL_WAIT_GRACE:-300}"
+
+log() { echo "smartctl-wait-devices: $*"; }
+
+uptime_seconds() {
+    local raw
+    # Missing/unreadable /proc/uptime means we cannot prove this is a late
+    # start, so report 0 and take the safe branch (wait).
+    raw="$(cut -d' ' -f1 /proc/uptime 2>/dev/null)" || raw=""
+    if [[ "$raw" =~ ^([0-9]+) ]]; then
+        echo "${BASH_REMATCH[1]}"
+    else
+        echo 0
+    fi
+}
+
+# --json because that is the form the wrapper rewrites; plain --scan would pass
+# through it untouched. Device names only -- type and protocol can legitimately
+# change between two probes of the same device.
+scan_devices() {
+    "$SMARTCTL" --json --scan 2>/dev/null |
+        sed -n 's/.*"name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' |
+        sort |
+        tr '\n' ' '
+}
+
+remember_devices() {
+    local devices="$1"
+    [[ -z "$devices" ]] && return 0
+    mkdir -p "$(dirname "$STATE_FILE")" || return 0
+    # Best effort: a read-only or full filesystem must not fail the unit.
+    printf '%s\n' "$devices" > "$STATE_FILE" 2>/dev/null || true
+}
+
+# Every name recorded on the last run is present now. A superset is fine and
+# expected after a disk is added.
+has_expected_devices() {
+    local current="$1" expected="$2" name
+    [[ -z "$expected" ]] && return 0
+    for name in $expected; do
+        [[ " $current " == *" $name "* ]] || return 1
+    done
+    return 0
+}
+
+expected=""
+if [[ -r "$STATE_FILE" ]]; then
+    expected="$(tr -s '[:space:]' ' ' < "$STATE_FILE")"
+    expected="${expected# }"
+    expected="${expected% }"
+fi
+
+up="$(uptime_seconds)"
+if ((up > GRACE)); then
+    # Not a boot-time start, so the list is complete by definition -- and it is
+    # therefore the most trustworthy sample available. Record it and go.
+    current="$(scan_devices)"
+    remember_devices "$current"
+    log "uptime ${up}s > ${GRACE}s, not a boot-time start; skipping wait (${current:-none})"
+    exit 0
+fi
+
+if [[ -n "$expected" ]]; then
+    log "waiting for previously seen devices: ${expected}"
+else
+    log "no previous device list; waiting for the scan to settle"
+fi
+
+deadline=$((SECONDS + TIMEOUT))
+previous=""
+stable_since=$SECONDS
+
+while :; do
+    current="$(scan_devices)"
+
+    if [[ "$current" == "$previous" ]]; then
+        # An empty list never satisfies the -n guard, so "no disks at all" keeps
+        # waiting instead of settling on nothing.
+        if [[ -n "$current" ]] &&
+           ((SECONDS - stable_since >= SETTLE)) &&
+           has_expected_devices "$current" "$expected"; then
+            remember_devices "$current"
+            log "device list settled after ${SECONDS}s: ${current}"
+            exit 0
+        fi
+    else
+        previous="$current"
+        stable_since=$SECONDS
+    fi
+
+    if ((SECONDS >= deadline)); then
+        # Either a disk is genuinely gone or something is much slower than
+        # expected. Record what is actually here so the next boot expects this
+        # set and does not pay the timeout again.
+        remember_devices "$current"
+        log "gave up after ${TIMEOUT}s; starting with: ${current:-none} (expected: ${expected:-unknown})"
+        exit 0
+    fi
+    sleep "$POLL"
+done

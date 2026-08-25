@@ -17,6 +17,9 @@ REMOTE_ROOT = "/tmp/homelab-metrics-exporters"
 SMARTCTL_BIN = "/usr/sbin/smartctl"
 SMARTCTL_WRAPPER_BIN = "/usr/local/bin/homelab-smartctl-wrapper"
 
+# ExecStartPre gate for smartctl_exporter; see the script's header for why.
+SMARTCTL_WAIT_BIN = "/usr/local/bin/homelab-smartctl-wait-devices"
+
 TEXTFILE_DIR = "/var/lib/prometheus/node-exporter"
 
 # node_exporter flags shared by every host.
@@ -202,6 +205,16 @@ FILE_SPECS = (
     FileSpec(
         "smartctl-exporter-override.conf",
         "/etc/systemd/system/smartctl_exporter.service.d/override.conf",
+        feature="baremetal",
+    ),
+    # ExecStartPre for the unit above: holds the exporter back at boot until the
+    # disk list stops changing. Same `baremetal` gate as the override that
+    # references it -- the two are a pair, and installing one without the other
+    # would leave systemd pointing ExecStartPre at a missing binary.
+    FileSpec(
+        "smartctl-exporter-wait-devices",
+        SMARTCTL_WAIT_BIN,
+        mode="755",
         feature="baremetal",
     ),
     FileSpec(
@@ -457,6 +470,7 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
             "disk-label-textfile-exporter.py",
             "disk-label-textfile-exporter.service",
             "disk-label-textfile-exporter.timer",
+            "smartctl-exporter-wait-devices",
         ])
         if has_wrapper:
             copy_files(common_dir, build_dir, ["smartctl-wrapper.sh"])
