@@ -325,6 +325,13 @@ orphan their history. That case is live on ace, whose vault `D3` failed on
 `tests/test_disk_label_exporter.py` covers both, plus the deliberate cross-host
 name collision and the real `zpool status` output from all four layouts.
 
+Once the replacement is attached, `zpool status` nests the outgoing and incoming
+disk under a `replacing-N` container. Those two leaves are one physical slot, not
+two members, so the parser numbers them with a single position -- ace's new disk
+became `vault-hdd D3` rather than inventing a `D4` in a three-wide raidz1. The
+same handling applies to `spare-N`. Indentation is consulted only to find where
+such a group ends; the rest of the parse is still flat by design.
+
 #### The escape hatch: `metrics-exporters.disk_labels`
 
 For the rare disk whose useful name is not derivable -- in no pool, not the boot

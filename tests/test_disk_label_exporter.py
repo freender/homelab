@@ -80,6 +80,23 @@ config:
 \t    /dev/sdf1  ONLINE       0     0     0
 """
 
+# ace/vault-hdd again, captured 2026-08-25 while the replacement for that same
+# OFFLINE member was resilvering. `replacing-2` holds both the outgoing and the
+# incoming disk for one slot, so the pool still has three members, not four.
+ACE_REPLACING_STATUS = """  pool: vault-hdd
+ state: DEGRADED
+config:
+
+\tNAME                                                     STATE     READ WRITE CKSUM
+\tvault-hdd                                                DEGRADED     0     0     0
+\t  raidz1-0                                               DEGRADED     0     0     0
+\t    /dev/sda1                                            ONLINE       0     0     0
+\t    /dev/sdb1                                            ONLINE       0     0     0
+\t    replacing-2                                          DEGRADED     0     0     0
+\t      /dev/disk/by-id/ata-ST20000NM002C-ZXA0GL7W-part1   OFFLINE      0     0     0
+\t      /dev/sdc1                                          ONLINE       0     0     0  (resilvering)
+"""
+
 COTTONWOOD_STATUS = """  pool: cache
  state: ONLINE
 config:
@@ -176,6 +193,23 @@ def test_pool_names_the_disk_not_its_vdev_layout(exporter):
         "nvme1n1": "vm-flash",
         "sda": "vault-hdd D1",
         "sdb": "vault-hdd D2",
+    }
+
+
+def test_replacing_group_keeps_the_slot_it_replaces(exporter):
+    """A resilvering replacement takes the failed disk's position, not a new one.
+
+    `replacing-2` nests two leaves under one slot. Counting them as separate
+    members numbered the incoming disk D4 in a three-wide raidz1 -- a member
+    that does not exist -- and would have shifted every later member by one on
+    a wider pool for the length of the resilver. The outgoing by-id path still
+    resolves to nothing and so emits no series; the slot is what is shared.
+    """
+    disks = {name: _disk(name) for name in ("sda", "sdb", "sdc")}
+    assert _labels(exporter, disks, ACE_REPLACING_STATUS) == {
+        "sda": "vault-hdd D1",
+        "sdb": "vault-hdd D2",
+        "sdc": "vault-hdd D3",
     }
 
 

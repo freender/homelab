@@ -88,6 +88,12 @@ DEVICE_PATTERN = re.compile(r"^(sd[a-z]+|nvme\d+n\d+)$")
 # legend never mixes casing within one host's disks.
 ROOT_COMPONENT = "boot"
 
+# Transient container vdevs whose children are two views of one physical slot:
+# the disk on its way out and the disk taking its place. Numbering their
+# children separately would invent a member the pool does not have and shift
+# every later member by one for the duration of the resilver.
+SLOT_GROUP_PATTERN = re.compile(r"^(replacing|spare)-\d+\b")
+
 
 def read_sysfs(path: Path) -> str:
     try:
@@ -207,26 +213,56 @@ def parse_zpool_status(output: str) -> dict[str, dict[str, str]]:
     a pool with several vdevs numbers straight through them rather than
     restarting per vdev, and a cache/log/spare device would be numbered inline
     with the data members.
+
+    The one container vdev that is tracked is `replacing-N`/`spare-N`, because
+    its children are not separate members: they are the outgoing and incoming
+    disk for a single slot. Both are numbered with that one slot, so a
+    replacement in progress does not report a member the pool does not have.
+    Indentation is only consulted to find where such a group ends.
     """
-    order: dict[str, list[str]] = {}
+    # pool -> list of slots, each slot holding the devices that share it (one,
+    # except while a replacing-/spare- group is in flight).
+    order: dict[str, list[list[str]]] = {}
     pool = ""
     in_config = False
+    group_indent: int | None = None
 
     for raw in output.splitlines():
         line = raw.strip()
         if line.startswith("pool:"):
-            pool, in_config = line.split(":", 1)[1].strip(), False
-        elif line.startswith("config:"):
-            in_config = True
-        elif in_config and raw.startswith("\t") and line.startswith("/"):
-            # Count unresolvable members too, so a failed disk does not
-            # renumber the ones that are still there.
-            order.setdefault(pool, []).append(leaf_to_device(line.split()[0]))
+            pool, in_config, group_indent = line.split(":", 1)[1].strip(), False, None
+            continue
+        if line.startswith("config:"):
+            in_config, group_indent = True, None
+            continue
+        if not (in_config and raw.startswith("\t")):
+            continue
+
+        indent = len(raw) - len(raw.lstrip())
+        if group_indent is not None and indent <= group_indent:
+            group_indent = None
+
+        if SLOT_GROUP_PATTERN.match(line):
+            order.setdefault(pool, []).append([])
+            group_indent = indent
+            continue
+        if not line.startswith("/"):
+            continue
+
+        # Count unresolvable members too, so a failed disk does not renumber
+        # the ones that are still there.
+        device = leaf_to_device(line.split()[0])
+        slots = order.setdefault(pool, [])
+        if group_indent is not None and slots:
+            slots[-1].append(device)
+        else:
+            slots.append([device])
 
     return {
-        device: {"pool": pool, "position": f"D{index + 1}" if len(devices) > 1 else ""}
-        for pool, devices in order.items()
-        for index, device in enumerate(devices)
+        device: {"pool": pool, "position": f"D{index + 1}" if len(slots) > 1 else ""}
+        for pool, slots in order.items()
+        for index, slot in enumerate(slots)
+        for device in slot
         if device
     }
 
