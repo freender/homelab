@@ -313,12 +313,25 @@ time_intervals:
 
   # Used as active_time_intervals (not mute_time_intervals) by the
   # ProxmoxUpdatesAvailable and RebootRequired routes above, so those two
-  # weekly digests only send on a Saturday, any time of day. No `times:`
-  # entry deliberately -- an unset field matches everything for that
-  # dimension, so `weekdays` alone is the whole condition.
+  # weekly digests only send during a fixed 10-minute window on Saturday
+  # morning, not "any time of day".
+  #
+  # A day-wide window (no `times:`) collapses group members only within
+  # whatever 5m group_interval tick happens to catch a membership change --
+  # it does not force one send. Hosts cross their `for:` thresholds at
+  # different times as apt_upgrades_pending changes overnight, so a
+  # day-wide window produced a growing series of re-notifications
+  # (Firing x2 .. x6) across the day, 2026-08-29, instead of one message.
+  # Narrowing to 09:00-09:10 means anything that crossed threshold before
+  # 09:00 collapses into the single send when the window opens; anything
+  # that crosses after 09:10 is held until next Saturday's window, same as
+  # a day that never reaches 09:00 would have been held all week already.
   - name: saturday-digest
     time_intervals:
-      - weekdays: ["saturday"]
+      - times:
+          - start_time: "09:00"
+            end_time: "09:10"
+        weekdays: ["saturday"]
         location: America/New_York
 
 receivers:
