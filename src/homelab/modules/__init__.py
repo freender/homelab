@@ -39,6 +39,12 @@ from .zfs_automation import deploy as deploy_zfs_automation
 class ModuleDefinition:
     name: str
     deploy: Callable[[Path, str, bool, bool, DeploySession], int]
+    # False for modules that mutate host state at deploy time rather than
+    # converging config, so sweeping them up in `deploy all` would perform an
+    # unrequested live change. Excluding by omission from MODULE_ORDER is not
+    # enough: ordered_modules() appends unlisted modules as extras precisely so
+    # a newly added one is never silently skipped.
+    include_in_all: bool = True
 
 
 MODULES: dict[str, ModuleDefinition] = {
@@ -113,6 +119,11 @@ MODULES: dict[str, ModuleDefinition] = {
     "pve-upgrade": ModuleDefinition(
         name="PVE/PBS/PDM Upgrade",
         deploy=deploy_pve_upgrade,
+        # Runs apt-get dist-upgrade on the host during the deploy itself, unlike
+        # apt-upgrade which only installs a timer. Deploying "everything" must
+        # not dist-upgrade the cluster, and doing so ignores the ordering and
+        # preflight the runbook requires. Explicit target + --confirm-upgrade.
+        include_in_all=False,
     ),
     "pve-interface-pinning": ModuleDefinition(
         name="PVE Interface Pinning",
@@ -179,11 +190,22 @@ MODULE_ORDER = [
     # mutual-exclusion failure in the former surfaces before the latter runs.
     "apt-security-updates",
     "apt-upgrade",
-    "pve-upgrade",
+    # pve-upgrade is deliberately absent: it is include_in_all=False and is
+    # driven by the rolling runbook, not by deploy order.
 ]
 
 
-def ordered_modules() -> list[str]:
+def all_registered_modules() -> list[str]:
+    """Every registered module in deploy order, including `deploy all` exclusions.
+
+    Use for exhaustive checks (dry-run smoke, registry cross-checks) that must
+    still cover modules `deploy all` refuses to run.
+    """
     ordered = [name for name in MODULE_ORDER if name in MODULES]
     extras = sorted(name for name in MODULES if name not in MODULE_ORDER)
     return [*ordered, *extras]
+
+
+def ordered_modules() -> list[str]:
+    """Modules `deploy all` runs, in order."""
+    return [name for name in all_registered_modules() if MODULES[name].include_in_all]

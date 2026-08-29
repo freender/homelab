@@ -5,9 +5,21 @@ hosts (PVE nodes, PBS, PDM). It never reboots, and it has no timer — running i
 is always a deliberate act.
 
 ```bash
-./deploy --dry-run pve-upgrade ace
-./deploy pve-upgrade ace
+./deploy --dry-run pve-upgrade ace              # ungated: changes nothing
+./deploy --confirm-upgrade pve-upgrade ace      # live: dist-upgrades the host
 ```
+
+A live run **requires `--confirm-upgrade`** and this module is **excluded from
+`./deploy all`**. Both exist because this module is unlike every other one here:
+its deploy action *is* the mutation. Elsewhere `deploy` converges config and
+re-running is a no-op; here it upgrades packages on the target. So "deploy
+everything" must not reach it, and naming it explicitly should not be enough
+either — sweeping the cluster in registry order with no preflight is precisely
+what the runbook below exists to prevent.
+
+Note `--confirm-upgrade` is distinct from `--force`, which everywhere in this
+repo means `FORCE_UPDATE=true` (re-copy files that have not changed) and has no
+effect on whether packages are upgraded.
 
 ## Why this is manual
 
@@ -131,7 +143,7 @@ migration errors.
 ```bash
 cd ~/homelab
 ./deploy --dry-run pve-upgrade <node>
-./deploy pve-upgrade <node>
+./deploy --confirm-upgrade pve-upgrade <node>
 ```
 
 Read the output. It prints whether a reboot is required at the end.

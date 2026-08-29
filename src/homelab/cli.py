@@ -15,6 +15,7 @@ from . import op_secrets
 from .deploy import DeploySession
 from .hosts import HostLookupError, default_registry, validate_hosts_data
 from .modules import MODULES, ordered_modules
+from .modules.pve_upgrade import CONFIRM_ENV as CONFIRM_UPGRADE_ENV
 from .output import print_action, print_error, print_header, print_ok, print_sub, print_warn
 from .ssh import offline_mode
 
@@ -443,11 +444,20 @@ def list_stacks(host: str | None, stack: str | None) -> None:
 @main.command()
 @click.option("--dry-run", is_flag=True, default=False, help="Preview changes only.")
 @click.option("--force", is_flag=True, default=False, help="Force remote updates.")
+@click.option(
+    "--confirm-upgrade",
+    is_flag=True,
+    default=False,
+    help="Allow modules that upgrade packages at deploy time (pve-upgrade) to run.",
+)
 @click.argument("module")
 @click.argument("host")
-def deploy(dry_run: bool, force: bool, module: str, host: str) -> None:
+def deploy(dry_run: bool, force: bool, confirm_upgrade: bool, module: str, host: str) -> None:
     if host != "all" and host not in default_registry(repo_root()).list_hosts():
         raise click.ClickException(f"unknown host '{host}'")
+
+    if confirm_upgrade:
+        os.environ[CONFIRM_UPGRADE_ENV] = "1"
 
     if module == "all":
         failed_modules: list[str] = []

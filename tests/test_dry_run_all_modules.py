@@ -16,7 +16,7 @@ from __future__ import annotations
 import pytest
 
 from homelab.cli import execute_module
-from homelab.modules import ordered_modules
+from homelab.modules import all_registered_modules
 
 
 @pytest.fixture(autouse=True)
@@ -29,10 +29,12 @@ def _offline_mode(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_there_are_modules_to_dry_run() -> None:
     # Guard the guard: an empty registry would make the parametrize below iterate
     # nothing and pass vacuously.
-    assert ordered_modules()
+    assert all_registered_modules()
 
 
-@pytest.mark.parametrize("module_name", ordered_modules())
+# Deliberately all_registered_modules(), not ordered_modules(): a module excluded
+# from `deploy all` (include_in_all=False) still needs its dry-run to stay honest.
+@pytest.mark.parametrize("module_name", all_registered_modules())
 def test_module_dry_runs_cleanly(module_name: str) -> None:
     exit_code = execute_module(module_name, "all", True, False)
     assert exit_code == 0, f"{module_name} failed its offline dry-run against hosts.conf"

@@ -303,6 +303,21 @@ can take: every module against every host. Treat requests framed as "deploy
 everything"/"deploy all for all modules" as this exact invocation — no `--help`/`cat
 deploy` discovery needed.
 
+**`all` is not quite every module.** A `ModuleDefinition` with `include_in_all=False`
+is skipped by `ordered_modules()` and so never runs under `deploy all`; it must be
+named explicitly. `pve-upgrade` is the only one today, because its deploy action *is*
+the mutation (`apt-get dist-upgrade` on the target) rather than config convergence.
+It additionally refuses a live run without `--confirm-upgrade`:
+
+```bash
+./deploy --confirm-upgrade pve-upgrade ace   # live upgrade, one node
+```
+
+Note `--confirm-upgrade` is orthogonal to `--force` (`FORCE_UPDATE=true`, re-copy
+unchanged files). Use `all_registered_modules()` rather than `ordered_modules()` for
+exhaustive checks that must still cover excluded modules — `tests/test_dry_run_all_modules.py`
+does exactly that so `pve-upgrade` keeps its dry-run smoke coverage.
+
 ## Shipping (`/ship` pipeline)
 
 `/ship` wraps this CLI in validate -> dry-run -> deploy/canary -> verify -> commit -> push

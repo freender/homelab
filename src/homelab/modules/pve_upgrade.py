@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from ..deploy import DeploySession
@@ -9,6 +10,14 @@ from ..module_support import feature_paused, simple_root_installer_deploy
 FEATURE = "pve-upgrade"
 REMOTE_ROOT = "/tmp/homelab-pve-upgrade"
 
+# Set by `deploy --confirm-upgrade`. Passed out-of-band rather than as a deploy()
+# parameter so the gate does not change the signature every other module shares.
+CONFIRM_ENV = "HOMELAB_CONFIRM_UPGRADE"
+
+
+def confirmed() -> bool:
+    return os.environ.get(CONFIRM_ENV, "").strip().lower() in {"1", "true", "yes"}
+
 
 def deploy(
     root: Path,
@@ -17,6 +26,18 @@ def deploy(
     force: bool,
     session: DeploySession,
 ) -> int:
+    # This module dist-upgrades the host as the deploy action itself, so a bare
+    # `deploy pve-upgrade <host>` is a live package change, not a config
+    # convergence. Require the operator to say so. Dry-run stays ungated: it
+    # changes nothing and is what validate's per-module smoke test exercises.
+    if not dry_run and not confirmed():
+        raise ValueError(
+            "refusing to dist-upgrade without --confirm-upgrade. "
+            "This module upgrades packages on the target during the deploy; run "
+            "it per the rolling runbook in pve-upgrade/README.md "
+            "(osiris, bray, ace, clovis, one node at a time)."
+        )
+
     def env_for_host(host: str) -> dict[str, str]:
         return {"PAUSED": "true" if paused(root, host) else "false"}
 
