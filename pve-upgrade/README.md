@@ -85,10 +85,13 @@ Do **one node at a time**, in this order:
 
 **Two warnings for whoever runs this:**
 
-- **`riven` is on `bray`.** It hosts the OpenCode server. Step 2 will restart
-  it and kill any agent session driving this runbook. Run bray's step from a
-  different machine, or expect to reconnect and resume.
-- **`clovis` runs the monitoring stack.** During step 4 VictoriaMetrics,
+- **`riven` is on `bray`.** It hosts the OpenCode server *and* the shared SSH
+  agent. If bray needs a reboot, step 3a restarts riven, which kills any agent
+  session driving this runbook and empties the SSH agent — expect to reconnect
+  and re-run `addhomelabkeys`, or run bray's step from a different machine. If
+  bray needs no reboot, none of this happens, which is the main reason step 3a
+  is gated on the reboot check rather than run up front.
+- **`clovis` runs the monitoring stack.** If clovis reboots, VictoriaMetrics,
   vmalert, Alertmanager and Grafana are down, so no alert can fire, including
   one about clovis. The `Watchdog` dead-man's switch will go quiet and the
   external check will report it — that is expected, not an incident.
@@ -122,23 +125,7 @@ ssh <node> 'pvesh get /nodes/<node>/tasks --limit 5 --output-format json-pretty 
 active LRMs, any replication job failing, `zpool status -x` is not
 `all pools are healthy`, the UPS is on battery, or a backup is in progress.
 
-### 2. Move HA guests off (cluster nodes only — skip on osiris)
-
-```bash
-ssh <node> 'ha-manager crm-command node-maintenance enable <node>'
-
-# Watch until no HA service still lists <node>
-ssh <node> 'ha-manager status'
-```
-
-Doing this explicitly is better than relying on `shutdown_policy=migrate` during
-the reboot: it moves the guests while you are watching, and a migration that
-fails does so before the host has started shutting down.
-
-**Stop if:** any service is still on `<node>` after a few minutes, or a
-migration errors.
-
-### 3. Upgrade
+### 2. Upgrade
 
 ```bash
 cd ~/homelab
@@ -151,30 +138,68 @@ Read the output. It prints whether a reboot is required at the end.
 **Stop if:** the deploy reports a failed host, or `dist-upgrade` reports held
 or broken packages.
 
-### 4. Reboot only if needed
+### 3. Reboot only if needed
 
 ```bash
 # Authoritative answer — the metric this repo publishes
-ssh helm 'curl -s "localhost:8428/api/v1/query?query=homelab_reboot_required{host=\"<node>\"}"'
-
-# Or read it directly on the node
 ssh <node> 'cat /var/lib/prometheus/node-exporter/reboot.prom'
+
+# Or from the monitoring side (note the shell-quoting: use single quotes inside
+# the label selector, or the outer shell eats the escaping)
+ssh helm "curl -s --get localhost:8428/api/v1/query \
+  --data-urlencode 'query=homelab_reboot_required{host=\"<node>\"}'"
 ```
 
-If `homelab_reboot_required` is `1`, reboot. If `0`, skip to step 5 — most
-months there will be no kernel change and no reboot.
+If `homelab_reboot_required` is `0`, **skip the rest of this step entirely** and
+go to step 4. Most months there is no kernel change and no reboot, and in that
+case the node's guests must not be touched at all.
+
+If it is `1`, **stop and hand off to a human.** Everything below in this step —
+the migration and the reboot both — is a manual decision, never performed by a
+delegated or agent-driven run, no matter how healthy the pre-flight looked. An
+automated run ends here: report that the node needs a reboot, quote the commands
+below, and leave the node up and unmigrated. The guests are only worth
+restarting once someone has decided to take the reboot, so the migration is part
+of the reboot, not a prerequisite to be staged in advance.
+
+The rest of this step is the human's reference procedure.
+
+#### 3a. Move HA guests off (cluster nodes only — skip on osiris)
+
+```bash
+ssh <node> 'ha-manager crm-command node-maintenance enable <node>'
+
+# Watch until no HA service still lists <node>
+ssh <node> 'ha-manager status'
+```
+
+Doing this explicitly is better than relying on `shutdown_policy=migrate` during
+the reboot: it moves the guests while you are watching, and a migration that
+fails does so before the host has started shutting down.
+
+**This is why it is gated on the reboot check.** All guests are LXC and cannot
+live-migrate, so entering maintenance shuts down and restarts every HA guest on
+the node — and because `crs: ha-rebalance-on-start=1`, leaving maintenance in
+step 4 restarts them a *second* time when they return. Two restarts per guest is
+an acceptable price for a kernel reboot and a pure loss without one. That
+asymmetry is also why the whole step is manual: the cost lands on running
+services, so a human takes it deliberately or not at all.
+
+**Stop if:** any service is still on `<node>` after a few minutes, or a
+migration errors.
+
+#### 3b. Reboot
 
 ```bash
 ssh <node> 'systemctl reboot'
 ```
 
-### 5. Verify before touching the next node
+### 4. Verify before touching the next node
 
 ```bash
 ssh <node> 'uptime; uname -r'
 ssh <node> 'zpool status -x'
 ssh <node> 'pvecm status | grep -E "Quorate|Total votes"'     # cluster nodes
-ssh <node> 'ha-manager crm-command node-maintenance disable <node>'   # cluster nodes
 ssh <node> 'ha-manager status'
 ssh <node> 'pct list'
 ssh <node> 'systemctl is-active prometheus-node-exporter'
@@ -183,10 +208,20 @@ ssh <node> 'systemctl is-active prometheus-node-exporter'
 ssh <node> 'cat /var/lib/prometheus/node-exporter/reboot.prom'
 ```
 
+**Only if you entered maintenance in step 3a**, leave it — this is what pulls the
+guests back and restarts them a second time, so do not run it on a node you never
+put into maintenance:
+
+```bash
+ssh <node> 'ha-manager crm-command node-maintenance disable <node>'   # cluster nodes
+ssh <node> 'ha-manager status'
+```
+
 Then confirm from the monitoring side that the node is back:
 
 ```bash
-ssh helm 'curl -s "localhost:8428/api/v1/query?query=up{host=\"<node>\"}"'
+ssh helm "curl -s --get localhost:8428/api/v1/query \
+  --data-urlencode 'query=up{host=\"<node>\"}'"
 ```
 
 **Stop if:** guests are not running, a pool is degraded, quorum is not restored,
@@ -197,6 +232,11 @@ Only when all of the above pass, move to the next node.
 
 ## Never
 
+- **Never reboot as part of an automated or delegated run. The reboot is always a
+  manual step, taken by a human, every time.** Step 3 stops at the reboot check
+  and hands off; a green pre-flight is not authorization to proceed.
+- Never enter HA maintenance on a node you are not about to reboot — it is part
+  of the reboot, not a preparation for the upgrade.
 - Never reboot two cluster nodes at once — 3 nodes means quorum is lost at two.
 - Never reboot with a degraded pool or a failing replication job.
 - Never add a timer to this module, and never enable automatic reboots.
@@ -212,7 +252,9 @@ You do not need to poll for it:
   it arrives as **one Telegram message per week** listing every node with
   pending Proxmox packages. That is the prompt to schedule this runbook.
 - **`RebootRequired`** — fires 24h after an upgrade leaves a node running an
-  older kernel than the one installed. Normally that means step 4 was skipped.
+  older kernel than the one installed. Normally that means step 3's manual
+  reboot has not been taken yet — expected for a while, since that step waits on
+  a human by design. It is the reminder to schedule it, not a fault.
 - **`SecurityUpdatesPending`** — should never fire. If it does, it means
   `apt-security-updates` has stopped working on that host; that is a bug in the
   automation, not a reason to run this runbook.
