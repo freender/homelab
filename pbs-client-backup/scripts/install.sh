@@ -166,6 +166,16 @@ if [[ "${ENCRYPT:-false}" == "true" ]]; then
         install -m 0600 "$staged_keyfile" "$keyfile_dest"
         print_sub "Installed PBS encryption keyfile at $keyfile_dest"
     fi
+elif [[ "${PURGE_KEYFILE:-false}" == "true" ]]; then
+    # Encryption is off for this host and no pve-backup storage needs the key,
+    # so the shared keyfile must not linger on disk. The orchestrator clears
+    # PURGE_KEYFILE for PVE hosts with encrypted vzdump storages, which read the
+    # same path for guest and /etc/pve restores.
+    keyfile_dest="${KEYFILE:-/etc/homelab/pbs-encryption.key}"
+    if [[ -f "$keyfile_dest" ]]; then
+        rm -f "$keyfile_dest"
+        print_sub "Removed PBS encryption keyfile at $keyfile_dest (encryption disabled)"
+    fi
 fi
 
 changed=false

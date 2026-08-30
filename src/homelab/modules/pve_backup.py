@@ -13,6 +13,7 @@ from ..module_support import (
     copy_cached_secret,
     normalize_bool,
     normalize_string_list,
+    registry_has_encrypted_pve_storage,
     run_module_deploy,
     stage_encryption_keyfile,
     tmpfs_secret_stage,
@@ -401,20 +402,7 @@ def read_pbs_password(root: Path, password_var: str) -> str:
 
 
 def host_has_encrypted_storage(root: Path, host: str) -> bool:
-    registry = default_registry(root)
-    storages = registry.get(host, "pve-backup.pbs_setup.storages", [])
-    if not isinstance(storages, list):
-        return False
-    for index, storage in enumerate(storages):
-        if not isinstance(storage, dict):
-            continue
-        if normalize_bool(
-            storage.get("encryption", False),
-            False,
-            f"pve-backup.pbs_setup.storages[{index}].encryption must be boolean for {host}",
-        ):
-            return True
-    return False
+    return registry_has_encrypted_pve_storage(default_registry(root), host)
 
 
 def write_pbs_tokens_file(root: Path, host: str, destination: Path) -> None:

@@ -14,6 +14,7 @@ from ..module_support import (
     feature_paused,
     normalize_bool,
     normalize_string_list,
+    registry_has_encrypted_pve_storage,
     require_text,
     run_module_deploy,
     stage_encryption_keyfile,
@@ -71,6 +72,7 @@ class BackupPlan:
     backup_type: str
     host_type: str
     encrypt: bool
+    purge_keyfile: bool
     archives: tuple[ArchivePlan, ...]
     fallback_destinations: tuple[BackupDestination, ...]
 
@@ -211,6 +213,17 @@ def normalize_backup_plan(root: Path, registry, host: str) -> BackupPlan:
     if any(destination.repository == repository for destination in fallback_destinations):
         raise ValueError(f"duplicate PBS repository for {host}")
 
+    encrypt = normalize_bool(
+        registry.get(host, f"{prefix}.encrypt", None),
+        False,
+        f"{prefix}.encrypt for {host} must be true or false",
+    )
+    # When client archives are unencrypted, remove the shared keyfile from the
+    # host so it only exists where it is actually used. Never purge on a host
+    # whose pve-backup storages are encrypted: guest vzdump and /etc/pve
+    # restores read the same path.
+    purge_keyfile = not encrypt and not registry_has_encrypted_pve_storage(registry, host)
+
     return BackupPlan(
         enabled=normalize_bool(
             registry.get(host, f"{prefix}.enabled", None),
@@ -231,11 +244,8 @@ def normalize_backup_plan(root: Path, registry, host: str) -> BackupPlan:
         ),
         backup_type=str(registry.get(host, f"{prefix}.backup_type", "host")),
         host_type=host_type,
-        encrypt=normalize_bool(
-            registry.get(host, f"{prefix}.encrypt", None),
-            False,
-            f"{prefix}.encrypt for {host} must be true or false",
-        ),
+        encrypt=encrypt,
+        purge_keyfile=purge_keyfile,
         archives=tuple(archives),
         fallback_destinations=tuple(fallback_destinations),
     )
@@ -359,6 +369,7 @@ def write_config(path: Path, plan: BackupPlan) -> None:
         f'HOST_TYPE="{plan.host_type}"',
         f'PAUSED="{str(plan.paused).lower()}"',
         f'ENCRYPT="{str(plan.encrypt).lower()}"',
+        f'PURGE_KEYFILE="{str(plan.purge_keyfile).lower()}"',
         f'KEYFILE="{KEYFILE_REMOTE_PATH}"',
         f'RETIRE_PVE_CONFIG_BACKUP="{str(plan.host_type == "pve").lower()}"',
         f'ARCHIVE_COUNT="{len(plan.archives)}"',

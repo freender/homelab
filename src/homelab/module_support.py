@@ -139,6 +139,33 @@ ENCRYPTION_KEY_SECRET = "pbs-encryption-key"
 _ENCRYPTION_KEY_PREFIX = "PBS_ENCRYPTION_KEY="
 
 
+def registry_has_encrypted_pve_storage(registry, host: str) -> bool:
+    """True when any pve-backup PBS storage for ``host`` enables encryption.
+
+    The shared keyfile at ``/etc/homelab/pbs-encryption.key`` is written by both
+    pbs-client-backup and pve-backup. Callers use this to decide whether the
+    keyfile is still needed on a host whose *client* archives are unencrypted:
+    a PVE host with an encrypted vzdump storage still needs it for guest and
+    /etc/pve restores, so it must never be purged there.
+
+    Takes an already-built registry (not a root path) so this stays importable
+    from both modules without a circular import.
+    """
+    storages = registry.get(host, "pve-backup.pbs_setup.storages", [])
+    if not isinstance(storages, list):
+        return False
+    for index, storage in enumerate(storages):
+        if not isinstance(storage, dict):
+            continue
+        if normalize_bool(
+            storage.get("encryption", False),
+            False,
+            f"pve-backup.pbs_setup.storages[{index}].encryption must be boolean for {host}",
+        ):
+            return True
+    return False
+
+
 def stage_encryption_keyfile(root: Path, destination: Path) -> Path:
     """Render the PBS encryption key secret and write the raw JSON keyfile.
 
