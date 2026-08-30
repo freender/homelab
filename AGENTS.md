@@ -133,6 +133,39 @@ live deploy; it does not impose separate module risk tiers.
 Report what shipped or was skipped, the verification and observed value, commit hash, and
 CI status. If stopped, name the failed step and whether a host was left diverged.
 
+## PVE Upgrade (`/pve-upgrade`)
+
+`.opencode/command/pve-upgrade.md` rolls the monthly Proxmox upgrade across the nodes.
+`pve-upgrade/README.md` is the canonical runbook and owns the pre-flight commands, the
+stop conditions, the ordering rationale, and the verification steps — follow it rather
+than restating or improvising it. What must not be varied:
+
+1. **Order.** `osiris`, `bray`, `ace`, `clovis` — one node at a time, never two at once.
+   A requested subset keeps this relative order.
+2. **Per-node scope is exactly four things:** the README's pre-flight, one `./deploy
+   --confirm-upgrade pve-upgrade <node>`, the reboot check, and the README's
+   verification. `--confirm-upgrade` is required — the module dist-upgrades the target as
+   its deploy action, so it refuses without the flag and is excluded from `./deploy all`.
+3. **Never reboot, and never touch a node's guests.** The reboot is always a manual human
+   step. If `homelab_reboot_required` is `1`, stop at that node, report it with the
+   README's HA-migration and reboot commands, and leave the node up and unmigrated. HA
+   maintenance belongs to that manual step (README 3a), not to this run: entering it
+   restarts every LXC on the node twice, since none can live-migrate. A clean pre-flight
+   is not authorization.
+4. **Stop on any failed pre-flight check or failed deploy.** Do not continue to the next
+   node; report which node stopped the run and its observed state. This outranks
+   finishing the task.
+5. **Refuse to start** inside the 02:00 or 08:00 maintenance windows — alert suppression
+   there would hide problems the upgrade causes.
+
+`riven` runs on `bray` and hosts both the agent session and the shared SSH agent. A normal
+run never disturbs it, but if bray's reboot check returns `1`, say in the handoff that the
+human's reboot drops the session and empties the agent. `clovis` runs the monitoring
+stack, so the blind window during its manual reboot is expected, not an incident.
+
+Report per node: packages upgraded, whether a reboot is pending, and the verification
+result. If nothing was pending, say so rather than implying work was done.
+
 ## Module Retirement
 
 - Confirm it deploys nowhere first: no `<module>:` feature blocks in `hosts.conf`, and
