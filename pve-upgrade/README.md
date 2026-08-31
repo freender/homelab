@@ -98,12 +98,23 @@ what makes wave 1 below safe: taking osiris down costs no vote.
 
 `ha: shutdown_policy=migrate` is set, so a plain `reboot` on a cluster node hands
 its HA services off by itself. You do not have to enter maintenance mode first.
+The first wave is chosen at run time from tower's current HA placement, not from
+an inventory assumption:
+
+```bash
+ssh ace 'ha-manager status | grep "ct:101"' # ct:101 is tower
+```
 
 | Wave | Node(s) | Guests | Why here |
 | --- | --- | --- | --- |
-| 1 | `osiris` **+** `ace` | xur (PBS), deepstone / tower | osiris holds no vote, so this is one cluster node down, not two — cluster stays 2/3. ace has the largest blast radius (media, storage, primary Traefik/keepalived), so it goes while every tool you might need is still up. |
-| 2 | `clovis` | helm, `void` (VM) | Only after wave 1 is fully back and HA has finished rebalancing. |
+| 1 | `osiris` **+** the non-tower node (`ace` or `clovis`) | xur (PBS), deepstone / HA guests on that selected node | osiris holds no vote, so this is one cluster node down, not two — cluster stays 2/3. Pair osiris with the node that does **not** currently carry tower, leaving tower's node for wave 2. |
+| 2 | Tower's current node (`ace` or `clovis`) | tower / other guests on that selected node | Only after wave 1 is fully back and HA has finished rebalancing. If this is clovis, accept the monitoring blind window. |
 | 3 | `bray` | arc, riven, neo | **Last, and this is the point of the order.** |
+
+Concretely: tower on **ace** means `osiris` + `clovis`, then `ace`, then
+`bray`; tower on **clovis** means `osiris` + `ace`, then `clovis`, then `bray`.
+If tower is already on bray, retain the latter order: bray cannot move earlier
+because it hosts riven and the OpenCode session.
 
 **Why bray is last.** `riven` runs on bray, and riven is the OpenCode server *and*
 the shared SSH agent. Rebooting bray kills the session driving this runbook and
@@ -131,9 +142,10 @@ switch going quiet is expected, not an incident.
 
 ## Per-wave procedure
 
-Replace `<node>` throughout. Wave 1 may reboot `osiris` and `ace` together;
-they are deliberately paired because osiris is not a cluster voter. Every
-other wave has one node. Never reboot two cluster nodes concurrently.
+Replace `<node>` throughout. Wave 1 may reboot `osiris` and the selected
+non-tower node (`ace` or `clovis`) together; they are deliberately paired
+because osiris is not a cluster voter. Every other wave has one node. Never
+reboot two cluster nodes concurrently.
 
 ### 1. Pre-flight (stop if any check fails)
 
@@ -212,12 +224,13 @@ live-migrate, so it restarts every one during the drain and, with
 ssh <node> 'systemctl reboot'
 ```
 
-For wave 1, issue the confirmed reboots for `osiris` and `ace`; osiris is
-standalone, so only one of the three cluster votes is down. Do not send the
-clovis or bray reboot until this wave is fully recovered. For clovis, accept the
-monitoring blind window and wait for helm to return before continuing. For bray,
-the confirmed reboot terminates the OpenCode session running this workflow;
-stop after issuing it and have the human open a new session for verification.
+For wave 1, issue the confirmed reboots for `osiris` and the selected non-tower
+node; osiris is standalone, so only one of the three cluster votes is down. Do
+not send the tower node or bray reboot until this wave is fully recovered. If
+clovis is either selected node, accept the monitoring blind window and wait for
+helm to return before continuing. For bray, the confirmed reboot terminates the
+OpenCode session running this workflow; stop after issuing it and have the human
+open a new session for verification.
 
 ### 4. Verify before touching the next node
 

@@ -10,9 +10,14 @@ Follow AGENTS.md's **PVE Reboot (`/pve-reboot`)** section for every step and
 `pve-upgrade/README.md` for the runbook itself. Upgrades are already automated by
 `apt-upgrade`, so this run installs nothing.
 
-Use the three waves exactly: `osiris` + `ace`, then `clovis`, then `bray`. A
-requested subset keeps that relative order. Never take two cluster nodes
-(`ace`, `bray`, `clovis`) down at once.
+Choose the three waves from tower's **current** HA placement before doing any
+pre-flight: `ssh ace 'ha-manager status'` reports `ct:101` (tower)'s node.
+If tower is on ace, use `osiris` + `clovis`, then `ace`, then `bray`. Otherwise
+use `osiris` + `ace`, then `clovis`, then `bray`; bray is always last. This
+leaves the node carrying tower by itself when it is ace or clovis, while osiris
+(which holds no corosync vote) pairs safely with the other node. A requested
+subset preserves the selected order. Never take two cluster nodes (`ace`,
+`bray`, `clovis`) down at once.
 
 For each wave, complete the README's pre-flight and reboot checks for every node
 in it. If any check fails, stop. If no node needs a reboot, skip that wave. If

@@ -46,7 +46,7 @@ groups:
           severity: warning
         annotations:
           summary: "{{ $labels.host }} needs a reboot"
-          description: "{{ $labels.host }} has a reboot pending: it is running an older kernel than the newest one installed, or a package update set the reboot-required flag. Check homelab_kernel_info{host=\"{{ $labels.host }}\"} for the running vs installed kernel release, then schedule a reboot. Nothing reboots these hosts automatically. On the PVE nodes use the three waves in pve-upgrade/README.md: osiris + ace, then clovis, then bray; wait for every node and HA migration to settle between waves."
+          description: "{{ $labels.host }} has a reboot pending: it is running an older kernel than the newest one installed, or a package update set the reboot-required flag. Check homelab_kernel_info{host=\"{{ $labels.host }}\"} for the running vs installed kernel release, then schedule a reboot. Nothing reboots these hosts automatically. On the PVE nodes select the three waves from tower's current HA placement as documented in pve-upgrade/README.md, then wait for every node and HA migration to settle between waves."
 
       # Absence, per the pattern established by ZfsPoolMetricsMissing: one
       # absent_over_time() per exact host, because a regex matcher only detects

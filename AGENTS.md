@@ -146,13 +146,17 @@ is the canonical runbook and owns the pre-flight commands, the stop conditions, 
 ordering rationale, and the verification steps — follow it rather than restating or
 improvising it. What must not be varied:
 
-1. **Order.** Three waves: **`osiris` + `ace`**, then **`clovis`**, then **`bray`**.
-   A requested subset keeps this relative order. osiris is standalone and holds no
-   corosync vote, so pairing it with ace is one cluster node down, not two — never
-   take two *cluster* nodes (ace/bray/clovis) at once. Do not start a wave until the
-   previous one is fully back and HA has finished rebalancing. **`bray` is last
-   because `riven` lives there:** rebooting it kills the agent session and empties the
-   shared SSH agent, so it must happen when nothing is left to orchestrate.
+1. **Order.** Choose the three waves from tower's current HA placement at the start of
+   the run (`ha-manager status`, `ct:101`). If tower is on ace: **`osiris` +
+   `clovis`**, then **`ace`**, then **`bray`**. Otherwise: **`osiris` + `ace`**, then
+   **`clovis`**, then **`bray`**. A requested subset preserves that selected order.
+   osiris is standalone and holds no corosync vote, so pairing it with either ace or
+   clovis is one cluster node down, not two — never take two *cluster* nodes
+   (ace/bray/clovis) at once. This leaves the node currently carrying tower alone.
+   Do not start a wave until the previous one is fully back and HA has finished
+   rebalancing. **`bray` is last because `riven` lives there:** rebooting it kills the
+   agent session and empties the shared SSH agent, so it must happen when nothing is
+   left to orchestrate.
 2. **Per-node scope is exactly three things:** the README's pre-flight, the reboot check,
    and the README's verification. Do **not** run `./deploy --confirm-upgrade pve-upgrade`
    as part of this — `apt-upgrade` already owns these nodes, and that module is now only
