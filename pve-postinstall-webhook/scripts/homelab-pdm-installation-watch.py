@@ -14,7 +14,7 @@ from typing import Any
 
 import yaml
 
-CONFIG_FILE = Path("/etc/homelab-postinstall-webhook/env")
+CONFIG_FILE = Path("/etc/homelab-postinstall-webhook/poller.env")
 STATE_DIR = Path("/var/lib/homelab-postinstall-webhook/state")
 EVENT_DIR = Path("/var/lib/homelab-postinstall-webhook/events")
 

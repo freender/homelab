@@ -28,6 +28,7 @@ TEMPLATE_FILES = [
 
 @dataclass(frozen=True)
 class DiskSpindownConfig:
+    retire: bool
     paused: bool
     idle_seconds: int
     command_type: str
@@ -91,6 +92,10 @@ def normalize_config(registry, host: str) -> DiskSpindownConfig:
     if host_type != "pve":
         raise ValueError(f"disk-spindown supports PVE hosts only: {host}")
 
+    retire = registry.get(host, "disk-spindown.retire", False)
+    if not isinstance(retire, bool):
+        raise ValueError(f"disk-spindown.retire must be boolean for {host}")
+
     # NOTE: `disk-spindown.paused` is a separate knob from the host-level
     # `deploy: false` targeting gate (see hosts.conf header comment). Setting
     # `deploy: false` removes the host from deploy targets entirely and never
@@ -117,6 +122,7 @@ def normalize_config(registry, host: str) -> DiskSpindownConfig:
     )
 
     return DiskSpindownConfig(
+        retire=retire,
         paused=paused,
         idle_seconds=idle_seconds,
         command_type=command_type,
@@ -161,6 +167,8 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
 def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
     registry = default_registry(root)
     config = normalize_config(registry, host)
+    if config.retire:
+        print_sub(f"disk-spindown retired for {host}; will remove hd-idle and managed files")
     if config.paused:
         print_sub(f"disk-spindown paused for {host}; will stop hd-idle on deploy")
     artifacts = build_host_artifacts(root, host)
@@ -193,7 +201,10 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
         ],
         "scripts/install.sh",
         host,
-        env=force_env(force),
+        env={
+            **force_env(force),
+            "RETIRE_DISK_SPINDOWN": "true" if config.retire else "false",
+        },
         require_root=True,
         remote_subdirs=("build", "lib"),
     )

@@ -1,9 +1,4 @@
-"""ZFS send/receive access normalization and managed-pool resolution.
-
-Pull-source and push-target access lists (who may pull from / push to this
-host over the dedicated zfs-pull/zfs-push service accounts), plus the list of
-ZFS pools this host manages (for scrub coverage).
-"""
+"""ZFS receive access normalization and managed-pool resolution."""
 
 from __future__ import annotations
 
@@ -18,96 +13,7 @@ from .normalize import (
     require_string,
 )
 from .replication import normalize_replication_config
-from .types import ZfsPuller, ZfsPullSourceAccess, ZfsPusher, ZfsPushTargetAccess
-
-
-def normalize_pull_source_access(
-    registry,
-    host: str,
-    *,
-    include_disabled: bool = False,
-) -> ZfsPullSourceAccess | None:
-    config = registry.get(host, "zfs-automation.pull_source_access", None)
-    if config is None:
-        return None
-    if not isinstance(config, dict):
-        raise ValueError(f"zfs-automation.pull_source_access must be a mapping for {host}")
-    template_ref = config.get("template", config.get("pull_source_access_template"))
-    if template_ref is not None:
-        source_host, template_name = parse_migratable_lxc_group_ref(
-            template_ref,
-            host,
-            "pull_source_access template",
-        )
-        templates = registry.get(source_host, "zfs-automation.pull_source_access_templates", None)
-        if not isinstance(templates, dict):
-            raise ValueError(
-                f"zfs-automation.pull_source_access_templates must be a dict for {source_host}"
-            )
-        template = templates.get(template_name)
-        if not isinstance(template, dict):
-            raise ValueError(
-                f"pull_source_access template {source_host}:{template_name} not found for {host}"
-            )
-        expanded_config = dict(template)
-        expanded_config.update(
-            (key, value)
-            for key, value in config.items()
-            if key not in {"template", "pull_source_access_template"}
-        )
-        config = expanded_config
-
-    enabled = normalize_bool(
-        config.get("enabled"),
-        True,
-        f"zfs-automation.pull_source_access.enabled must be true or false for {host}",
-    )
-    if not enabled and not include_disabled:
-        return None
-
-    user = require_safe_authorized_key_option(
-        config.get("user", "zfs-pull"),
-        f"zfs-automation.pull_source_access.user is invalid for {host}",
-    )
-    datasets = normalize_string_list(
-        config.get("datasets", []),
-        f"zfs-automation.pull_source_access.datasets must be a list for {host}",
-    )
-    if not datasets:
-        raise ValueError(f"zfs-automation.pull_source_access.datasets is required for {host}")
-
-    puller_configs = config.get("allowed_pullers", [])
-    if not isinstance(puller_configs, list) or not puller_configs:
-        raise ValueError(
-            f"zfs-automation.pull_source_access.allowed_pullers must be a non-empty list"
-            f" for {host}"
-        )
-    pullers: list[ZfsPuller] = []
-    for index, puller_config in enumerate(puller_configs):
-        if not isinstance(puller_config, dict):
-            raise ValueError(f"invalid pull source allowed_puller at index {index} for {host}")
-        name = require_safe_authorized_key_option(
-            puller_config.get("name", ""),
-            f"puller name required at index {index} for {host}",
-        )
-        from_address = require_safe_authorized_key_option(
-            puller_config.get("from", ""),
-            f"puller from address required at index {index} for {host}",
-        )
-        public_key = require_string(
-            puller_config.get("public_key", ""),
-            f"puller public_key required at index {index} for {host}",
-        )
-        if not public_key.startswith(("ssh-ed25519 ", "sk-ssh-ed25519@openssh.com ")):
-            raise ValueError(f"puller public_key at index {index} for {host} must be ed25519")
-        pullers.append(ZfsPuller(name=name, from_address=from_address, public_key=public_key))
-
-    return ZfsPullSourceAccess(
-        enabled=enabled,
-        user=user,
-        datasets=tuple(datasets),
-        pullers=tuple(pullers),
-    )
+from .types import ZfsPusher, ZfsPushTargetAccess
 
 
 def normalize_push_target_access(
@@ -213,11 +119,6 @@ def resolve_pools(registry, host: str) -> list[str]:
         for plan in job.plans
         for dataset in (
             *([plan.source] if plan.source else []),
-            *(
-                [candidate.source for candidate in plan.dynamic_lxc_source.candidates]
-                if plan.dynamic_lxc_source
-                else []
-            ),
             plan.target,
         )
         if not is_remote_dataset(dataset)
@@ -229,5 +130,4 @@ def resolve_pools(registry, host: str) -> list[str]:
     if pools:
         return pools
     return ["cache"]
-
 

@@ -3,7 +3,7 @@ set -euo pipefail
 
 HOST=${1:?host required}
 EVENT_FILE=${2:-}
-CONFIG_FILE=/etc/homelab-postinstall-webhook/env
+CONFIG_FILE=/etc/homelab-postinstall-webhook/poller.env
 
 if [[ -r "$CONFIG_FILE" ]]; then
     # shellcheck source=/dev/null

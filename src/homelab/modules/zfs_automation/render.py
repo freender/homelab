@@ -1,5 +1,5 @@
 """Render generated bash: sanoid config, snapshot script, replication script,
-and authorized_keys files for the zfs-pull/zfs-push service accounts.
+and authorized_keys files for the zfs-push service account.
 
 These functions build root-executed shell scripts as Python string
 concatenation rather than through the repo's Jinja templating (used
@@ -12,20 +12,15 @@ from __future__ import annotations
 
 from shlex import quote
 
-from .normalize import is_remote_dataset, normalize_dataset_under_root
 from .types import (
-    DynamicLxcSourceCandidate,
     KnownHostRefresh,
-    ReplicationJob,
     ReplicationPlan,
     SnapshotPlan,
-    TargetSnapshotPrune,
-    ZfsPullSourceAccess,
     ZfsPushTargetAccess,
 )
 
 
-def sanoid_plan_lines(plan: SnapshotPlan, replication_datasets: set[str]) -> list[str]:
+def sanoid_plan_lines(plan: SnapshotPlan) -> list[str]:
     lines = [
         f"[{plan.dataset}]",
         f"recursive = {'yes' if plan.recursive else 'no'}",
@@ -40,28 +35,15 @@ def sanoid_plan_lines(plan: SnapshotPlan, replication_datasets: set[str]) -> lis
         "",
     ]
 
-    excluded = {normalize_dataset_under_root(dataset, plan.dataset) for dataset in plan.excludes}
-    if plan.auto_exclude_replication:
-        excluded.update(
-            replication_exclude
-            for dataset in replication_datasets
-            for replication_exclude in local_replication_excludes(dataset, plan.dataset)
-        )
-
-    for dataset in sorted(excluded):
-        lines.extend([f"[{dataset}]", "autosnap = no", "autoprune = no", ""])
-
     return lines
 
 
 def build_sanoid_config(
     snapshot_plans: list[SnapshotPlan],
-    replication_jobs: list[ReplicationJob],
 ) -> str:
     lines: list[str] = []
-    replication_datasets = {plan.target for job in replication_jobs for plan in job.plans}
     for plan in snapshot_plans:
-        lines.extend(sanoid_plan_lines(plan, replication_datasets))
+        lines.extend(sanoid_plan_lines(plan))
 
     return "\n".join(lines).rstrip() + "\n"
 
@@ -85,9 +67,7 @@ def append_snapshot_plan_script(
 
 def build_snapshot_script(
     snapshot_plans: list[SnapshotPlan],
-    replication_jobs: list[ReplicationJob],
 ) -> str:
-    replication_datasets = {plan.target for job in replication_jobs for plan in job.plans}
     lines = [
         "#!/bin/bash",
         "",
@@ -113,7 +93,7 @@ def build_snapshot_script(
         lines.extend(["echo 'No snapshot plans configured; nothing to do'", "exit 0", ""])
     else:
         for plan in snapshot_plans:
-            config_lines = sanoid_plan_lines(plan, replication_datasets)
+            config_lines = sanoid_plan_lines(plan)
             if plan.require_active_lxc is None:
                 append_snapshot_plan_script(lines, plan, config_lines)
                 continue
@@ -153,20 +133,6 @@ def build_snapshot_script(
     return "\n".join(lines)
 
 
-def local_replication_excludes(dataset: str, root_dataset: str) -> list[str]:
-    if is_remote_dataset(dataset):
-        return []
-    if dataset != root_dataset and not dataset.startswith(f"{root_dataset}/"):
-        return []
-
-    parts = dataset.split("/")
-    root_parts = root_dataset.split("/")
-    excludes = []
-    for index in range(len(root_parts) + 1, len(parts) + 1):
-        excludes.append("/".join(parts[:index]))
-    return excludes
-
-
 def shell_array_block(name: str, values: list[str]) -> str:
     lines = [f"{name}=("]
     for value in values:
@@ -177,28 +143,10 @@ def shell_array_block(name: str, values: list[str]) -> str:
 
 def build_replication_script(
     replication_plans: list[ReplicationPlan],
-    after_commands: list[str],
     syncoid_options: list[str],
     delete_target_snapshots: bool,
-    target_snapshot_prune: TargetSnapshotPrune | None,
 ) -> str:
-    def candidate_options(candidate: DynamicLxcSourceCandidate) -> list[str]:
-        options = list(candidate.syncoid_options)
-        if not any(option.startswith("--sshkey=") for option in options):
-            options.append(f"--sshkey={candidate.sshkey}")
-        return options
-
     syncoid_options_block = shell_array_block("SYNCOID_OPTIONS", syncoid_options)
-    prune_config_lines: list[str] = []
-    if target_snapshot_prune:
-        prune_config_lines = [
-            shell_array_block(
-                "TARGET_PRUNE_PATTERNS",
-                list(target_snapshot_prune.patterns),
-            ),
-            f"TARGET_PRUNE_KEEP_DAYS={target_snapshot_prune.keep_days}",
-            "",
-        ]
     lines = [
         "#!/bin/bash",
         "",
@@ -206,7 +154,6 @@ def build_replication_script(
         "",
         syncoid_options_block,
         "",
-        *prune_config_lines,
         'SCRIPT_LOCK_FILE="/run/lock/$(basename "$0").lock"',
         'GLOBAL_LOCK_FILE="/run/lock/homelab-zfs-replication.lock"',
         'exec 9>"$SCRIPT_LOCK_FILE"',
@@ -294,137 +241,36 @@ def build_replication_script(
         "  rm -f \"$source_snaps\" \"$target_snaps\" \"$common_snaps\"",
         "}",
         "",
-        "remote_lxc_active() {",
-        "  local remote=\"$1\"",
-        "  local sshkey=\"$2\"",
-        "  local vmid=\"$3\"",
-        "  ssh -i \"$sshkey\" -o BatchMode=yes \"$remote\" homelab-lxc-active \"$vmid\"",
-        "}",
-        "",
         "wait_for_existing_replication",
         "",
     ]
-    if target_snapshot_prune:
-        lines.extend(
-            [
-                "snapshot_matches_target_prune_pattern() {",
-                "  local snapshot_name=\"$1\"",
-                "  local pattern",
-                "  for pattern in \"${TARGET_PRUNE_PATTERNS[@]}\"; do",
-                "    # shellcheck disable=SC2254",
-                "    case \"$snapshot_name\" in",
-                "      $pattern) return 0 ;;",
-                "    esac",
-                "  done",
-                "  return 1",
-                "}",
-                "",
-                "prune_target_snapshots() {",
-                "  local dataset=\"$1\"",
-                "  local cutoff snapshot created snapshot_name",
-                "",
-                "  if ! zfs list -H -o name \"$dataset\" >/dev/null 2>&1; then",
-                "    echo \"Target prune skipped: dataset $dataset does not exist\"",
-                "    return 0",
-                "  fi",
-                "",
-                "  cutoff=$(($(date +%s) - TARGET_PRUNE_KEEP_DAYS * 86400))",
-                "  while IFS=$'\\t' read -r snapshot created; do",
-                "    [[ -n \"$snapshot\" && -n \"$created\" ]] || continue",
-                "    snapshot_name=\"${snapshot#*@}\"",
-                "    snapshot_matches_target_prune_pattern \"$snapshot_name\" || continue",
-                "    [[ \"$created\" =~ ^[0-9]+$ ]] || continue",
-                "    if (( created < cutoff )); then",
-                "      echo \"Destroying old target snapshot $snapshot\"",
-                "      zfs destroy \"$snapshot\"",
-                "    fi",
-                "  done < <(zfs list -H -p -r -t snapshot -o name,creation "
-                "-s creation \"$dataset\")",
-                "}",
-                "",
-            ]
-        )
     if not replication_plans:
         lines.extend(["echo 'No replication plans configured; nothing to do'", ""])
     else:
         for plan in replication_plans:
             inactive_message = ""
-            if plan.dynamic_lxc_source:
-                resolve_message = (
-                    f"Resolving active LXC {plan.dynamic_lxc_source.vmid} source for {plan.target}"
+            if plan.require_active_lxc is not None:
+                unit_name = f"pve-container@{plan.require_active_lxc}.service"
+                inactive_message = (
+                    f"Skipping {plan.source}; LXC {plan.require_active_lxc} is not active locally"
                 )
+                active_message = f"Active LXC {plan.require_active_lxc}; replicating {plan.source}"
                 lines.extend(
                     [
-                        f"echo {quote(resolve_message)}",
-                        "SOURCE=''",
-                        "ACTIVE_COUNT=0",
-                        "SOURCE_OPTIONS=()",
+                        f"if systemctl is-active --quiet {quote(unit_name)}; then",
+                        f"  echo {quote(active_message)}",
                     ]
                 )
-                for candidate in plan.dynamic_lxc_source.candidates:
-                    remote = candidate.source.split(":", 1)[0]
-                    lines.extend(
-                        [
-                            f"if remote_lxc_active {quote(remote)} {quote(candidate.sshkey)} "
-                            f"{quote(str(plan.dynamic_lxc_source.vmid))}; then",
-                            f"  echo {quote(f'Active source candidate: {candidate.name}')}",
-                            "  ACTIVE_COUNT=$((ACTIVE_COUNT + 1))",
-                            f"  SOURCE={quote(candidate.source)}",
-                            *(
-                                f"  {line}"
-                                for line in shell_array_block(
-                                    "SOURCE_OPTIONS",
-                                    candidate_options(candidate),
-                                ).splitlines()
-                            ),
-                            "fi",
-                        ]
-                    )
-                lines.extend(
-                    [
-                        "if [[ $ACTIVE_COUNT -ne 1 ]]; then",
-                        "  echo \"ERROR: expected exactly one active LXC source; "
-                        "found $ACTIVE_COUNT\" >&2",
-                        "  exit 1",
-                        "fi",
-                        f"require_common_snapshot_lineage \"$SOURCE\" {quote(plan.target)} "
-                        '"${SOURCE_OPTIONS[@]}"',
-                    ]
-                )
-                command = [
-                    "/usr/sbin/syncoid",
-                    "-r",
-                    '"${SYNCOID_OPTIONS[@]}"',
-                    '"${SOURCE_OPTIONS[@]}"',
-                    '"$SOURCE"',
-                    plan.target,
-                ]
-            else:
-                if plan.require_active_lxc is not None:
-                    unit_name = f"pve-container@{plan.require_active_lxc}.service"
-                    inactive_message = (
-                        f"Skipping {plan.source}; LXC {plan.require_active_lxc} "
-                        "is not active locally"
-                    )
-                    active_message = (
-                        f"Active LXC {plan.require_active_lxc}; replicating {plan.source}"
-                    )
-                    lines.extend(
-                        [
-                            f"if systemctl is-active --quiet {quote(unit_name)}; then",
-                            f"  echo {quote(active_message)}",
-                        ]
-                    )
-                lines.append(
-                    f"require_common_snapshot_lineage {quote(plan.source)} {quote(plan.target)}"
-                )
-                command = [
-                    "/usr/sbin/syncoid",
-                    "-r",
-                    '"${SYNCOID_OPTIONS[@]}"',
-                    plan.source,
-                    plan.target,
-                ]
+            lines.append(
+                f"require_common_snapshot_lineage {quote(plan.source)} {quote(plan.target)}"
+            )
+            command = [
+                "/usr/sbin/syncoid",
+                "-r",
+                '"${SYNCOID_OPTIONS[@]}"',
+                plan.source,
+                plan.target,
+            ]
 
             if delete_target_snapshots:
                 command[2:2] = ["--delete-target-snapshots", "--force-delete"]
@@ -433,38 +279,17 @@ def build_replication_script(
                     item
                     if item in {
                         '"${SYNCOID_OPTIONS[@]}"',
-                        '"${SOURCE_OPTIONS[@]}"',
-                        '"$SOURCE"',
                     }
                     else quote(item)
                     for item in command
                 )
             )
-            if plan.post_hook:
-                lines.append(plan.post_hook)
-            if target_snapshot_prune and not is_remote_dataset(plan.target):
-                lines.append(f"prune_target_snapshots {quote(plan.target)}")
             if inactive_message:
                 lines.extend(["else", f"  echo {quote(inactive_message)}", "fi"])
             lines.append("")
 
-    for command in after_commands:
-        lines.append(command)
     lines.append("")
     return "\n".join(lines)
-
-
-def build_zfs_pull_source_authorized_keys(access: ZfsPullSourceAccess) -> str:
-    allowed_roots = " ".join(access.datasets)
-    lines = []
-    for puller in access.pullers:
-        options = [
-            f'from="{puller.from_address}"',
-            "restrict",
-            f'command="/usr/local/sbin/homelab-zfs-send-only {allowed_roots}"',
-        ]
-        lines.append(f"{','.join(options)} {puller.public_key}")
-    return "\n".join(lines) + "\n"
 
 
 def build_known_host_refresh_script(entries: tuple[KnownHostRefresh, ...]) -> str:
@@ -517,5 +342,3 @@ def build_zfs_push_target_authorized_keys(access: ZfsPushTargetAccess) -> str:
         ]
         lines.append(f"{','.join(options)} {pusher.public_key}")
     return "\n".join(lines) + "\n"
-
-

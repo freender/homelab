@@ -110,6 +110,8 @@ Then `./deploy metrics-exporters <host>` from the repo.
   textfile collector (`homelab_hba_*`) on hosts with `hba: true`
 - Pending-reboot state via node_exporter textfile collector
   (`homelab_reboot_required`, `homelab_kernel_info`) on bare metal
+- Managed PVE source-patch health via node_exporter textfile collector
+  (`homelab_pve_patch_healthy`) on patch-enabled PVE hosts
 - Human-readable disk names via node_exporter textfile collector
   (`homelab_disk_label`, `homelab_smart_disk_label`) on bare metal
 
@@ -140,6 +142,7 @@ Then `./deploy metrics-exporters <host>` from the repo.
 - `/usr/local/bin/reboot-textfile-exporter`
 - `/etc/systemd/system/reboot-textfile-exporter.service`
 - `/etc/systemd/system/reboot-textfile-exporter.timer`
+- `/etc/homelab/pve-patch-statuses.conf`
 - `/usr/local/bin/disk-label-textfile-exporter`
 - `/etc/systemd/system/disk-label-textfile-exporter.service`
 - `/etc/systemd/system/disk-label-textfile-exporter.timer`
@@ -163,6 +166,7 @@ Then `./deploy metrics-exporters <host>` from the repo.
 - `configs/common/reboot-textfile-exporter`
 - `configs/common/reboot-textfile-exporter.service`
 - `configs/common/reboot-textfile-exporter.timer`
+- `templates/pve-patch-statuses.conf.tpl`
 - `configs/common/disk-label-textfile-exporter.py`
 - `configs/common/disk-label-textfile-exporter.service`
 - `configs/common/disk-label-textfile-exporter.timer`

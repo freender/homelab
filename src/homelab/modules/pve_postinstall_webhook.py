@@ -17,19 +17,16 @@ from ..ssh import HostConnection, diff_many
 
 REMOTE_ROOT = "/tmp/homelab-pve-postinstall-webhook"
 FEATURE = "pve-postinstall-webhook"
-SECRET_NAME = "pve-postinstall-webhook"
-TOKEN_ENV_KEY = "PVE_POSTINSTALL_WEBHOOK_TOKEN"
+SECRET_NAME = "pdm-deploy-token"
 PDM_TOKEN_ENV_KEY = "PDM_DEPLOY_TOKEN"
 
 REQUIRED_SCRIPTS = [
-    "homelab-postinstall-webhook.py",
     "homelab-pdm-installation-watch.py",
     "homelab-pdm-refresh-remote.py",
     "homelab-postinstall-deploy.sh",
     "op-ssh-add",
     "addhomelabkeys",
     "op-ssh-agent.conf",
-    "homelab-postinstall-webhook.service",
     "homelab-pdm-installation-watch.service",
     "homelab-pdm-installation-watch.timer",
     "homelab-ssh-agent.service",
@@ -71,11 +68,9 @@ def validate(root: Path) -> None:
 
 def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
     registry = default_registry(root)
-    listen_host = str(registry.get(host, f"{FEATURE}.listen_host", "0.0.0.0"))
-    listen_port = str(registry.get(host, f"{FEATURE}.listen_port", "9443"))
     repo_dir = str(registry.get(host, f"{FEATURE}.repo_dir", "/root/homelab"))
-    webhook_dry_run_enabled = normalize_webhook_dry_run(registry, host)
-    webhook_dry_run = "true" if webhook_dry_run_enabled else "false"
+    deploy_dry_run_enabled = normalize_deploy_dry_run(registry, host)
+    deploy_dry_run = "true" if deploy_dry_run_enabled else "false"
     ssh_timeout = str(registry.get(host, f"{FEATURE}.ssh_timeout_seconds", "1200"))
     deploy_timeout = str(registry.get(host, f"{FEATURE}.deploy_timeout_seconds", "3600"))
 
@@ -94,10 +89,6 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
         connection,
         [
             (
-                scripts_dir / "homelab-postinstall-webhook.py",
-                "/usr/local/sbin/homelab-postinstall-webhook",
-            ),
-            (
                 scripts_dir / "homelab-postinstall-deploy.sh",
                 "/usr/local/sbin/homelab-postinstall-deploy",
             ),
@@ -108,10 +99,6 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
             (
                 scripts_dir / "homelab-pdm-installation-watch.py",
                 "/usr/local/sbin/homelab-pdm-installation-watch",
-            ),
-            (
-                scripts_dir / "homelab-postinstall-webhook.service",
-                "/etc/systemd/system/homelab-postinstall-webhook.service",
             ),
             (
                 scripts_dir / "homelab-pdm-installation-watch.service",
@@ -150,23 +137,19 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
         print_sub(message)
 
     if dry_run:
-        print_sub(f"[DRY-RUN] Would install post-install webhook listener on {host}:{listen_port}")
-        mode = "dry-run" if webhook_dry_run == "true" else "real deploy"
-        print_sub(f"[DRY-RUN] Webhook deploy mode: {mode}")
+        mode = "dry-run" if deploy_dry_run == "true" else "real deploy"
+        print_sub(f"[DRY-RUN] PDM post-install deploy mode: {mode}")
         return
 
-    token, pdm_token = _read_tokens(root)
+    pdm_token = _read_pdm_token(root)
     with tmpfs_secret_stage("homelab-pve-postinstall-webhook.") as secret_dir:
         env_path = secret_dir / "env"
         _write_env(
             env_path,
             _env_values(
-                listen_host,
-                listen_port,
                 repo_dir,
-                token,
                 pdm_token,
-                webhook_dry_run,
+                deploy_dry_run,
                 ssh_timeout,
                 deploy_timeout,
             ),
@@ -188,7 +171,7 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
         )
 
 
-def normalize_webhook_dry_run(registry, host: str) -> bool:
+def normalize_deploy_dry_run(registry, host: str) -> bool:
     return normalize_bool(
         registry.get(host, f"{FEATURE}.dry_run", None),
         True,
@@ -197,21 +180,15 @@ def normalize_webhook_dry_run(registry, host: str) -> bool:
 
 
 def _env_values(
-    listen_host: str,
-    listen_port: str,
     repo_dir: str,
-    token: str,
     pdm_token: str,
-    webhook_dry_run: str,
+    deploy_dry_run: str,
     ssh_timeout: str,
     deploy_timeout: str,
 ) -> dict[str, str]:
     return {
-        "LISTEN_HOST": listen_host,
-        "LISTEN_PORT": listen_port,
         "REPO_DIR": repo_dir,
-        "WEBHOOK_TOKEN": token,
-        "DRY_RUN": webhook_dry_run,
+        "DRY_RUN": deploy_dry_run,
         "SSH_TIMEOUT_SECONDS": ssh_timeout,
         "DEPLOY_TIMEOUT_SECONDS": deploy_timeout,
         "SSH_AUTH_SOCK": "/root/.ssh/agent.sock",
@@ -227,16 +204,13 @@ def _env_values(
     }
 
 
-def _read_tokens(root: Path) -> tuple[str, str]:
+def _read_pdm_token(root: Path) -> str:
     path = op_secrets.secret_file(root, SECRET_NAME)
     env = op_secrets.parse_env_file(path)
-    token = env.get(TOKEN_ENV_KEY, "").strip()
-    if not token:
-        raise ValueError(f"{TOKEN_ENV_KEY} is empty in rendered secret '{SECRET_NAME}'")
     pdm_token = env.get(PDM_TOKEN_ENV_KEY, "").strip()
     if not pdm_token:
         raise ValueError(f"{PDM_TOKEN_ENV_KEY} is empty in rendered secret '{SECRET_NAME}'")
-    return token, pdm_token
+    return pdm_token
 
 
 def _write_env(path: Path, values: dict[str, str]) -> None:

@@ -40,6 +40,56 @@ HOST="${HOSTNAME_OVERRIDE:-$(hostname -s)}"
 OUT_DIR="${TEXTFILE_DIR:-/var/lib/prometheus/node-exporter}"
 OUT_FILE="$OUT_DIR/reboot.prom"
 REBOOT_FLAG_FILE="${REBOOT_FLAG_FILE:-/var/run/reboot-required}"
+PVE_PATCH_MANIFEST="${PVE_PATCH_MANIFEST:-/etc/homelab/pve-patch-statuses.conf}"
+PVE_PATCH_OUT_FILE="$OUT_DIR/pve-patches.prom"
+
+export_pve_patch_statuses() {
+    local tmp_file patch status_file allowed_states state line healthy
+
+    # The manifest is optional because only some PVE hosts carry source patches.
+    # Removing the metric prevents a retired patch from retaining a false state.
+    if [[ ! -e "$PVE_PATCH_MANIFEST" ]]; then
+        rm -f "$PVE_PATCH_OUT_FILE"
+        return 0
+    fi
+
+    mkdir -p "$OUT_DIR"
+    tmp_file="$(mktemp "$OUT_DIR/.pve-patches.prom.XXXXXX")"
+    {
+        printf '# HELP homelab_pve_patch_healthy Whether a managed PVE source patch has an allowed status (1) or not (0).\n'
+        printf '# TYPE homelab_pve_patch_healthy gauge\n'
+
+        while IFS='|' read -r patch status_file allowed_states; do
+            [[ "$patch" =~ ^[a-z0-9-]+$ ]] || continue
+            [[ "$status_file" == /* ]] || continue
+            [[ "$allowed_states" =~ ^[a-z0-9-]+(,[a-z0-9-]+)*$ ]] || continue
+
+            state=""
+            if [[ -r "$status_file" ]]; then
+                while IFS= read -r line || [[ -n "$line" ]]; do
+                    if [[ "$line" =~ ^state=([a-z0-9-]+)$ ]]; then
+                        if [[ -n "$state" ]]; then
+                            state=""
+                            break
+                        fi
+                        state="${BASH_REMATCH[1]}"
+                    elif [[ "$line" == state=* ]]; then
+                        state=""
+                        break
+                    fi
+                done < "$status_file"
+            fi
+
+            healthy=0
+            if [[ -n "$state" && ",$allowed_states," == *",$state,"* ]]; then
+                healthy=1
+            fi
+            printf 'homelab_pve_patch_healthy{patch="%s"} %s\n' "$patch" "$healthy"
+        done < "$PVE_PATCH_MANIFEST"
+    } > "$tmp_file"
+    chmod 0644 "$tmp_file"
+    mv "$tmp_file" "$PVE_PATCH_OUT_FILE"
+}
 
 if systemd-detect-virt --container --quiet; then
     echo "reboot-textfile-exporter: container guest shares the host kernel, nothing to report" >&2
@@ -52,6 +102,7 @@ if ! command -v dpkg-query >/dev/null 2>&1; then
 fi
 
 mkdir -p "$OUT_DIR"
+export_pve_patch_statuses
 TMP_FILE="$(mktemp "$OUT_DIR/.reboot.prom.XXXXXX")"
 
 cleanup() {

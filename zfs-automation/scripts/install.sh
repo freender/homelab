@@ -135,21 +135,6 @@ cleanup_legacy_rebuild_bundle() {
     fi
 }
 
-prepare_zfs_pull_source_user() {
-    if [[ "${ENABLE_ZFS_PULL_SOURCE:-false}" != "true" ]]; then
-        return 0
-    fi
-
-    if ! id "$ZFS_PULL_SOURCE_USER" >/dev/null 2>&1; then
-        useradd --system --home-dir "$ZFS_PULL_SOURCE_HOME" --create-home --shell /bin/bash "$ZFS_PULL_SOURCE_USER"
-        print_ok "Created $ZFS_PULL_SOURCE_USER user"
-    fi
-
-    mkdir -p "$ZFS_PULL_SOURCE_HOME/.ssh" /etc/homelab
-    chmod 700 "$ZFS_PULL_SOURCE_HOME/.ssh"
-    chown -R "$ZFS_PULL_SOURCE_USER:$ZFS_PULL_SOURCE_USER" "$ZFS_PULL_SOURCE_HOME"
-}
-
 prepare_zfs_push_target_user() {
     if [[ "${ENABLE_ZFS_PUSH_TARGET:-false}" != "true" ]]; then
         return 0
@@ -205,28 +190,6 @@ cleanup_zfs_push_target_access() {
     done
 }
 
-configure_zfs_pull_source_access() {
-    local dataset
-
-    if [[ "${ENABLE_ZFS_PULL_SOURCE:-false}" != "true" ]]; then
-        return 0
-    fi
-
-    require_file /etc/homelab/zfs-pull-datasets.conf /etc/homelab/zfs-pull-datasets.conf || exit 1
-    require_file "$ZFS_PULL_SOURCE_HOME/.ssh/authorized_keys" "$ZFS_PULL_SOURCE_HOME/.ssh/authorized_keys" || exit 1
-    require_file /usr/local/sbin/homelab-zfs-send-only /usr/local/sbin/homelab-zfs-send-only || exit 1
-
-    chown -R "$ZFS_PULL_SOURCE_USER:$ZFS_PULL_SOURCE_USER" "$ZFS_PULL_SOURCE_HOME"
-    chmod 700 "$ZFS_PULL_SOURCE_HOME/.ssh"
-    chmod 600 "$ZFS_PULL_SOURCE_HOME/.ssh/authorized_keys"
-    chmod 755 /usr/local/sbin/homelab-zfs-send-only
-
-    while IFS= read -r dataset; do
-        [[ -n "$dataset" ]] || continue
-        grant_zfs_pull_source_dataset "$dataset"
-    done < /etc/homelab/zfs-pull-datasets.conf
-}
-
 configure_zfs_push_target_access() {
     local dataset
 
@@ -247,29 +210,6 @@ configure_zfs_push_target_access() {
         [[ -n "$dataset" ]] || continue
         grant_zfs_push_target_dataset "$dataset"
     done < /etc/homelab/zfs-push-datasets.conf
-}
-
-grant_zfs_pull_source_dataset() {
-    local dataset="$1"
-    local parent="$dataset"
-
-    if zfs list -H -o name "$dataset" >/dev/null 2>&1; then
-        zfs allow -u "$ZFS_PULL_SOURCE_USER" send,hold,release "$dataset"
-        print_ok "Granted send-only pull access for $dataset"
-        return 0
-    fi
-
-    while [[ "$parent" == */* ]]; do
-        parent="${parent%/*}"
-        if zfs list -H -o name "$parent" >/dev/null 2>&1; then
-            zfs allow -d -u "$ZFS_PULL_SOURCE_USER" send,hold,release "$parent"
-            print_warn "ZFS pull source dataset not present yet: $dataset; granted future descendant access at $parent"
-            return 0
-        fi
-    done
-
-    print_error "ZFS pull source dataset parent not found: $dataset"
-    exit 1
 }
 
 grant_zfs_push_target_dataset() {
@@ -323,7 +263,6 @@ else
 fi
 
 mkdir -p /etc/sanoid "$HOMELAB_STATE_DIR" "$MANAGED_DIR"
-prepare_zfs_pull_source_user
 prepare_zfs_push_target_user
 cleanup_zfs_pull_source_access
 cleanup_zfs_push_target_access
@@ -361,7 +300,6 @@ for unit in "${!FILE_MAP_DEST[@]}"; do
     [[ $rc -eq 0 ]] && units_changed=true
 done
 
-configure_zfs_pull_source_access
 configure_zfs_push_target_access
 
 if [[ -x /usr/local/sbin/homelab-zfs-refresh-known-hosts ]]; then

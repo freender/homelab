@@ -15,7 +15,7 @@ from typing import Any
 
 import yaml
 
-CONFIG_FILE = Path("/etc/homelab-postinstall-webhook/env")
+CONFIG_FILE = Path("/etc/homelab-postinstall-webhook/poller.env")
 
 
 def log(message: str) -> None:

@@ -35,13 +35,6 @@ else
     print_sub "PBS config restore not required; skipping"
 fi
 
-if [[ -f "$BUILD_DIR/restore-ct-plan.conf" ]]; then
-    print_sub "Restoring prepared LXC backups if needed..."
-    bash "$SCRIPT_DIR/scripts/install-prepared-lxcs.sh" "$HOST" || exit 1
-else
-    print_sub "Prepared LXC restore not configured; skipping"
-fi
-
 if [[ -f "$BUILD_DIR/jobs-plan.conf" ]]; then
     print_sub "Configuring standalone backup jobs..."
     bash "$SCRIPT_DIR/scripts/install-backup-jobs.sh" "$HOST" || exit 1

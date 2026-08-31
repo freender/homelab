@@ -17,6 +17,8 @@ from pathlib import Path
 
 import pytest
 
+from homelab.modules.metrics_exporters import pve_patch_statuses
+
 ROOT = Path(__file__).resolve().parents[1]
 EXPORTER = ROOT / "metrics-exporters" / "configs" / "common" / "reboot-textfile-exporter"
 
@@ -52,11 +54,13 @@ def run_exporter(
     proxmox_kernel_rows: str = "",
     container: bool = False,
     reboot_flag: bool = False,
+    patch_manifest: str | None = None,
+    patch_statuses: dict[str, str] | None = None,
 ) -> tuple[subprocess.CompletedProcess[str], Path]:
     stub_dir = tmp_path / "bin"
     stub_dir.mkdir()
     out_dir = tmp_path / "textfile"
-    out_dir.mkdir()
+    out_dir.mkdir(exist_ok=True)
 
     (tmp_path / "linux-image.rows").write_text(linux_image_rows, encoding="utf-8")
     (tmp_path / "proxmox-kernel.rows").write_text(proxmox_kernel_rows, encoding="utf-8")
@@ -87,10 +91,18 @@ cat "$rows"
     if reboot_flag:
         flag_file.write_text("", encoding="utf-8")
 
+    manifest_file = tmp_path / "pve-patch-statuses.conf"
+    if patch_manifest is not None:
+        manifest_file.write_text(patch_manifest, encoding="utf-8")
+    for path, content in (patch_statuses or {}).items():
+        status_file = tmp_path / path
+        status_file.write_text(content, encoding="utf-8")
+
     env = dict(os.environ)
     env["PATH"] = f"{stub_dir}:{env['PATH']}"
     env["TEXTFILE_DIR"] = str(out_dir)
     env["REBOOT_FLAG_FILE"] = str(flag_file)
+    env["PVE_PATCH_MANIFEST"] = str(manifest_file)
 
     result = subprocess.run(
         ["bash", str(EXPORTER)],
@@ -204,3 +216,57 @@ def test_container_writes_nothing(tmp_path: Path) -> None:
     )
     assert result.returncode == 0
     assert not prom.exists()
+
+
+def test_pve_patch_health_reports_only_allowed_statuses(tmp_path: Path) -> None:
+    manifest = f"""\
+zfs-migration-sync|{tmp_path}/migration|patched,already-patched,repaired-partial-patch
+zfs-large-block|{tmp_path}/large-block|patched,already-patched
+lxc-pre-replication|{tmp_path}/pre-replication|patched,already-patched
+"""
+    result, _prom = run_exporter(
+        tmp_path,
+        running_kernel="7.0.14-8-pve",
+        proxmox_kernel_rows=PVE_ROWS,
+        patch_manifest=manifest,
+        patch_statuses={
+            "migration": "state=repaired-partial-patch\n",
+            "large-block": "state=failed-validation\n",
+            "pre-replication": "state=patched\nstate=already-patched\n",
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    text = (tmp_path / "textfile" / "pve-patches.prom").read_text(encoding="utf-8")
+    assert 'homelab_pve_patch_healthy{patch="zfs-migration-sync"} 1' in text
+    assert 'homelab_pve_patch_healthy{patch="zfs-large-block"} 0' in text
+    assert 'homelab_pve_patch_healthy{patch="lxc-pre-replication"} 0' in text
+
+
+def test_absent_pve_patch_manifest_removes_stale_metric(tmp_path: Path) -> None:
+    out_dir = tmp_path / "textfile"
+    out_dir.mkdir()
+    stale_metric = out_dir / "pve-patches.prom"
+    stale_metric.write_text("stale\n", encoding="utf-8")
+
+    result, _prom = run_exporter(
+        tmp_path,
+        running_kernel="7.0.14-8-pve",
+        proxmox_kernel_rows=PVE_ROWS,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert not stale_metric.exists()
+
+
+def test_pve_patch_manifest_is_derived_from_enabled_features() -> None:
+    assert [patch for patch, _path, _states in pve_patch_statuses(ROOT, "ace")] == [
+        "zfs-migration-sync",
+        "zfs-large-block",
+        "lxc-pre-replication",
+    ]
+    assert [patch for patch, _path, _states in pve_patch_statuses(ROOT, "bray")] == [
+        "zfs-migration-sync",
+        "lxc-pre-replication",
+    ]
+    assert pve_patch_statuses(ROOT, "osiris") == []

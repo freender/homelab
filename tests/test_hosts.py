@@ -48,7 +48,7 @@ disabled:
     sshkey: infra
   features:
     pve-postinstall:
-      enabled: false
+      deploy: false
       timezone: UTC
     docker: false
     keepalived:
@@ -90,14 +90,8 @@ def test_deploy_false_gate_does_not_warn(hosts_file: Path) -> None:
     registry = HostRegistry(hosts_file)
     with warnings.catch_warnings():
         warnings.simplefilter("error")
-        # keepalived uses `deploy: false`; must not emit the legacy warning.
+        # deploy: false is the host-level gate and has no warning path.
         assert registry.has("disabled", "keepalived") is False
-
-
-def test_legacy_enabled_false_warns(hosts_file: Path) -> None:
-    registry = HostRegistry(hosts_file)
-    with pytest.warns(DeprecationWarning, match="deploy: false"):
-        assert registry.has("disabled", "pve-postinstall") is False
 
 
 def test_deploy_true_overrides_and_keeps_host(tmp_path: Path) -> None:
@@ -143,15 +137,15 @@ ace:
     user: root
     sshkey: infra
   features:
-    disk-spindown:
+    pbs-client-backup:
       paused: true
 """.lstrip(),
         encoding="utf-8",
     )
     registry = HostRegistry(path)
-    assert feature_paused(registry, "ace", "disk-spindown") is True
+    assert feature_paused(registry, "ace", "pbs-client-backup") is True
     # Paused host is still a deploy target (distinct from deploy: false).
-    assert registry.list_hosts(feature="disk-spindown") == ["ace"]
+    assert registry.list_hosts(feature="pbs-client-backup") == ["ace"]
 
 
 def test_get_returns_default_for_missing_or_none_values(hosts_file: Path) -> None:

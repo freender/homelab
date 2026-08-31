@@ -1,0 +1,25 @@
+groups:
+  - name: pve-patches
+    interval: 1m
+    rules:
+      # Every listed host+patch pair is enabled in hosts.conf. Keep these exact
+      # selectors rather than a regex: absent_over_time only detects complete
+      # vector absence, not one missing patch from an otherwise healthy host.
+      - alert: PvePatchUnhealthy
+        expr: |
+          homelab_pve_patch_healthy{host=~"ace|bray|clovis"} == 0
+          or absent_over_time(homelab_pve_patch_healthy{host="ace",patch="zfs-migration-sync"}[15m])
+          or absent_over_time(homelab_pve_patch_healthy{host="ace",patch="zfs-large-block"}[15m])
+          or absent_over_time(homelab_pve_patch_healthy{host="ace",patch="lxc-pre-replication"}[15m])
+          or absent_over_time(homelab_pve_patch_healthy{host="bray",patch="zfs-migration-sync"}[15m])
+          or absent_over_time(homelab_pve_patch_healthy{host="bray",patch="lxc-pre-replication"}[15m])
+          or absent_over_time(homelab_pve_patch_healthy{host="clovis",patch="zfs-migration-sync"}[15m])
+          or absent_over_time(homelab_pve_patch_healthy{host="clovis",patch="zfs-large-block"}[15m])
+          or absent_over_time(homelab_pve_patch_healthy{host="clovis",patch="lxc-pre-replication"}[15m])
+          or time() - node_textfile_mtime_seconds{host=~"ace|bray|clovis",file=~".*/pve-patches\\.prom"} > 900
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.host }} PVE patch health is unhealthy or stale"
+          description: "A managed PVE source patch on {{ $labels.host }} is unhealthy, missing its health metric, or pve-patches.prom has not been rewritten for over 15 minutes. Check /etc/homelab/pve-patch-statuses.conf, the patch status files, and reboot-textfile-exporter.timer."

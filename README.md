@@ -187,14 +187,6 @@ VRRP virtual IP for the Traefik HA frontend
 ./deploy keepalived all
 ```
 
-### [disk-spindown](disk-spindown/)
-HDD idle spindown and wakeup timers
-- Supports `paused: true`
-
-```bash
-./deploy disk-spindown all
-```
-
 ### [pve-notifications](pve-notifications/)
 PVE notification endpoints and matchers (Telegram webhook)
 
@@ -203,7 +195,7 @@ PVE notification endpoints and matchers (Telegram webhook)
 ```
 
 ### [pve-postinstall-webhook](pve-postinstall-webhook/)
-Post-install webhook that triggers a deploy when a node finishes autoinstall
+PDM post-install polling trigger that deploys a node when its automated install finishes
 
 ```bash
 ./deploy pve-postinstall-webhook all

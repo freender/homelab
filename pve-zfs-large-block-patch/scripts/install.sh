@@ -17,9 +17,25 @@ cat > "${PATCH_SCRIPT}" <<'SCRIPT'
 #!/usr/bin/env bash
 set -euo pipefail
 
+IF_TARGET_CHANGED=false
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --if-target-changed)
+      IF_TARGET_CHANGED=true
+      ;;
+    *)
+      echo "usage: $0 [--if-target-changed]" >&2
+      exit 2
+      ;;
+  esac
+  shift
+done
+
 TARGET=/usr/share/perl5/PVE/Storage/ZFSPoolPlugin.pm
 STATE_DIR=/var/lib/homelab/pve-zfs-large-block-patch
 BACKUP_DIR=/var/backups/homelab/pve-zfs-large-block-patch
+TARGET_CHECKSUM_DIR=/var/lib/homelab/pve-patches/target-checksums
 STATUS_FILE=${STATE_DIR}/status
 LOCK_FILE=/run/lock/homelab-pve-patches.lock
 
@@ -49,8 +65,33 @@ acquire_patch_lock() {
   fi
 }
 
-mkdir -p "${STATE_DIR}" "${BACKUP_DIR}"
+target_checksum_file() {
+  printf '%s/%s.checksum\n' "${TARGET_CHECKSUM_DIR}" "$(basename "$1")"
+}
+
+target_unchanged() {
+  local target=$1
+  local checksum_file
+  checksum_file=$(target_checksum_file "${target}")
+  [[ -f ${target} && -f ${checksum_file} ]] || return 1
+  [[ $(cksum < "${target}") == $(< "${checksum_file}") ]]
+}
+
+record_target_checksum() {
+  local target=$1
+  local checksum_file
+  checksum_file=$(target_checksum_file "${target}")
+  cksum < "${target}" > "${checksum_file}.tmp"
+  mv "${checksum_file}.tmp" "${checksum_file}"
+}
+
+mkdir -p "${STATE_DIR}" "${BACKUP_DIR}" "${TARGET_CHECKSUM_DIR}"
 acquire_patch_lock
+
+if [[ ${IF_TARGET_CHANGED} == true ]] && target_unchanged "${TARGET}"; then
+  echo "target unchanged; skipping patch reapply"
+  exit 0
+fi
 
 if [[ ! -f ${TARGET} ]]; then
   echo "missing target: ${TARGET}" >&2
@@ -71,6 +112,12 @@ elif [[ ${patched_count} -eq 0 && ${original_count} -eq 1 ]]; then
   backup="${BACKUP_DIR}/ZFSPoolPlugin.pm.$(date -u +%Y%m%dT%H%M%SZ).bak"
   cp "${TARGET}" "${backup}"
   PATCHED_LINE=${PATCHED} ORIGINAL_LINE=${ORIGINAL} perl -0pi -e 's/\Q$ENV{ORIGINAL_LINE}\E/$ENV{PATCHED_LINE}/' "${TARGET}"
+  if ! perl -c "${TARGET}" >/dev/null; then
+    cp "${backup}" "${TARGET}"
+    echo "validation failed; restored ${TARGET} from ${backup}" >&2
+    write_status failed-validation
+    exit 1
+  fi
   state=patched
 else
   echo "unexpected ZFS send line in ${TARGET}; refusing to patch" >&2
@@ -81,6 +128,7 @@ fi
 
 # Replication and migration tasks run in forked workers, which load this module
 # from disk on the next job; no Proxmox service restart is required.
+record_target_checksum "${TARGET}"
 write_status "${state}"
 
 cat "${STATUS_FILE}"
@@ -95,7 +143,7 @@ cat > "${APT_HOOK}" <<EOF
 // unpatched after a libpve-storage-perl upgrade). Falls back to inline if
 // systemd-run is unavailable.
 DPkg::Post-Invoke {
-  "if command -v systemd-run >/dev/null 2>&1 && [ -x ${PATCH_SCRIPT} ]; then systemd-run --collect --unit=homelab-pve-zfs-large-block-patch --on-active=30s ${PATCH_SCRIPT} >/var/log/homelab-pve-zfs-large-block-patch.log 2>&1 || true; elif [ -x ${PATCH_SCRIPT} ]; then ${PATCH_SCRIPT} >/var/log/homelab-pve-zfs-large-block-patch.log 2>&1 || true; fi";
+  "if command -v systemd-run >/dev/null 2>&1 && [ -x ${PATCH_SCRIPT} ]; then systemd-run --collect --unit=homelab-pve-zfs-large-block-patch --on-active=30s ${PATCH_SCRIPT} --if-target-changed >/var/log/homelab-pve-zfs-large-block-patch.log 2>&1 || true; elif [ -x ${PATCH_SCRIPT} ]; then ${PATCH_SCRIPT} --if-target-changed >/var/log/homelab-pve-zfs-large-block-patch.log 2>&1 || true; fi";
 };
 EOF
 chmod 0644 "${APT_HOOK}"

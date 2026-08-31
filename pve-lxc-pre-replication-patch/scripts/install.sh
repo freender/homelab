@@ -18,14 +18,18 @@ cat > "${PATCH_SCRIPT}" <<'SCRIPT'
 set -euo pipefail
 
 RESTART_SERVICES=false
+IF_TARGET_CHANGED=false
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --restart-services)
       RESTART_SERVICES=true
       ;;
+    --if-target-changed)
+      IF_TARGET_CHANGED=true
+      ;;
     *)
-      echo "usage: $0 [--restart-services]" >&2
+      echo "usage: $0 [--restart-services] [--if-target-changed]" >&2
       exit 2
       ;;
   esac
@@ -36,6 +40,7 @@ LXC_MIGRATE_TARGET=/usr/share/perl5/PVE/LXC/Migrate.pm
 HA_PVECT_TARGET=/usr/share/perl5/PVE/HA/Resources/PVECT.pm
 STATE_DIR=/var/lib/homelab/pve-lxc-pre-replication-patch
 BACKUP_DIR=/var/backups/homelab/pve-lxc-pre-replication-patch
+TARGET_CHECKSUM_DIR=/var/lib/homelab/pve-patches/target-checksums
 STATUS_FILE=${STATE_DIR}/status
 LOCK_FILE=/run/lock/homelab-pve-patches.lock
 
@@ -135,6 +140,30 @@ acquire_patch_lock() {
   fi
 }
 
+target_checksum_file() {
+  printf '%s/%s.checksum\n' "${TARGET_CHECKSUM_DIR}" "$(basename "$1")"
+}
+
+target_unchanged() {
+  local target=$1
+  local checksum_file
+  checksum_file=$(target_checksum_file "${target}")
+  [[ -f ${target} && -f ${checksum_file} ]] || return 1
+  [[ $(cksum < "${target}") == $(< "${checksum_file}") ]]
+}
+
+all_targets_unchanged() {
+  target_unchanged "${LXC_MIGRATE_TARGET}" && target_unchanged "${HA_PVECT_TARGET}"
+}
+
+record_target_checksum() {
+  local target=$1
+  local checksum_file
+  checksum_file=$(target_checksum_file "${target}")
+  cksum < "${target}" > "${checksum_file}.tmp"
+  mv "${checksum_file}.tmp" "${checksum_file}"
+}
+
 patch_target() {
   local target=$1
   local original=$2
@@ -144,6 +173,7 @@ patch_target() {
   local timestamp
   local patched_count
   local original_count
+  local backup=
 
   if [[ ! -f ${target} ]]; then
     echo "missing target: ${target}" >&2
@@ -161,9 +191,16 @@ patch_target() {
 
   if [[ ${patched_count} -eq 0 && ${original_count} -eq 1 ]]; then
     timestamp=$(date -u +%Y%m%dT%H%M%SZ)
-    cp "${target}" "${BACKUP_DIR}/$(basename "${target}").${timestamp}.bak"
+    backup="${BACKUP_DIR}/$(basename "${target}").${timestamp}.bak"
+    cp "${target}" "${backup}"
     PATCHED_BLOCK=${patched} ORIGINAL_BLOCK=${original} \
       perl -0pi -e 's/\Q$ENV{ORIGINAL_BLOCK}\E/$ENV{PATCHED_BLOCK}/' "${target}"
+    if ! perl -c "${target}" >/dev/null; then
+      cp "${backup}" "${target}"
+      echo "${label} validation failed; restored ${target} from ${backup}" >&2
+      write_status "failed-validation-${label}"
+      exit 1
+    fi
     printf '%s=patched\n' "${label}"
     return
   fi
@@ -174,17 +211,19 @@ patch_target() {
   exit 1
 }
 
-mkdir -p "${STATE_DIR}" "${BACKUP_DIR}"
+mkdir -p "${STATE_DIR}" "${BACKUP_DIR}" "${TARGET_CHECKSUM_DIR}"
 acquire_patch_lock
+
+if [[ ${IF_TARGET_CHANGED} == true ]] && all_targets_unchanged; then
+  echo "targets unchanged; skipping patch reapply and service restart"
+  exit 0
+fi
 
 tmp_status=$(mktemp)
 patch_target "${LXC_MIGRATE_TARGET}" "${LXC_ORIGINAL}" "${LXC_PATCHED}" \
   'pre-stop replication before shutdown' 'lxc_migrate' | tee -a "${tmp_status}"
 patch_target "${HA_PVECT_TARGET}" "${HA_ORIGINAL}" "${HA_PATCHED}" \
   'can run pre-stop replication before shutdown' 'ha_pvect' | tee -a "${tmp_status}"
-
-perl -c "${LXC_MIGRATE_TARGET}" >/dev/null
-perl -c "${HA_PVECT_TARGET}" >/dev/null
 
 if [[ ${RESTART_SERVICES} == true ]]; then
   systemctl try-restart pvedaemon.service pve-ha-lrm.service
@@ -197,6 +236,8 @@ else
 fi
 rm -f "${tmp_status}"
 
+record_target_checksum "${LXC_MIGRATE_TARGET}"
+record_target_checksum "${HA_PVECT_TARGET}"
 write_status "${state}"
 cat "${STATUS_FILE}"
 SCRIPT
@@ -210,7 +251,7 @@ cat > "${APT_HOOK}" <<EOF
 // unpatched after a package upgrade). Falls back to inline if systemd-run is
 // unavailable.
 DPkg::Post-Invoke {
-  "if command -v systemd-run >/dev/null 2>&1 && [ -x ${PATCH_SCRIPT} ]; then systemd-run --collect --unit=homelab-pve-lxc-pre-replication-patch --on-active=30s ${PATCH_SCRIPT} --restart-services >/var/log/homelab-pve-lxc-pre-replication-patch.log 2>&1 || true; elif [ -x ${PATCH_SCRIPT} ]; then ${PATCH_SCRIPT} --restart-services >/var/log/homelab-pve-lxc-pre-replication-patch.log 2>&1 || true; fi";
+  "if command -v systemd-run >/dev/null 2>&1 && [ -x ${PATCH_SCRIPT} ]; then systemd-run --collect --unit=homelab-pve-lxc-pre-replication-patch --on-active=30s ${PATCH_SCRIPT} --if-target-changed --restart-services >/var/log/homelab-pve-lxc-pre-replication-patch.log 2>&1 || true; elif [ -x ${PATCH_SCRIPT} ]; then ${PATCH_SCRIPT} --if-target-changed --restart-services >/var/log/homelab-pve-lxc-pre-replication-patch.log 2>&1 || true; fi";
 };
 EOF
 chmod 0644 "${APT_HOOK}"

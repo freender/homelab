@@ -298,6 +298,17 @@ if [[ -z "${FILE_MAP_DEST[disk-labels.conf]:-}" ]] && [[ -e /etc/homelab/disk-la
     print_sub "Removed disk-labels.conf (no overrides configured)"
 fi
 
+# PVE patch statuses are optional: hosts without any managed source patch must
+# not retain an old manifest or textfile metric from a previous configuration.
+if [[ -z "${FILE_MAP_DEST[pve-patch-statuses.conf]:-}" ]]; then
+    if [[ -e /etc/homelab/pve-patch-statuses.conf ]] || \
+       [[ -e /var/lib/prometheus/node-exporter/pve-patches.prom ]]; then
+        rm -f /etc/homelab/pve-patch-statuses.conf \
+              /var/lib/prometheus/node-exporter/pve-patches.prom
+        print_sub "Removed pve patch status manifest and metrics (no patches configured)"
+    fi
+fi
+
 # Install/update every file this host's file-map declares (native node-exporter
 # and smartctl-exporter config are simply absent from the map in docker mode;
 # apcupsd/igpu config are absent unless those features are configured for the

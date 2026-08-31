@@ -15,7 +15,7 @@ from ...hosts import default_registry
 from ...module_support import feature_paused, tmpfs_secret_stage
 from ...output import print_sub
 from ...ssh import HostConnection, build_files, diff_many
-from .access import normalize_pull_source_access, normalize_push_target_access, resolve_pools
+from .access import normalize_push_target_access, resolve_pools
 from .normalize import (
     normalize_bool,
     normalize_known_host_refresh,
@@ -28,7 +28,6 @@ from .render import (
     build_replication_script,
     build_sanoid_config,
     build_snapshot_script,
-    build_zfs_pull_source_authorized_keys,
     build_zfs_push_target_authorized_keys,
     shell_array_block,
 )
@@ -187,11 +186,6 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
         True,
         f"zfs-automation.manage_snapshots must be true or false for {host}",
     )
-    manage_replication = normalize_bool(
-        registry.get(host, "zfs-automation.manage_replication", None),
-        True,
-        f"zfs-automation.manage_replication must be true or false for {host}",
-    )
     replication_recovery_start_failed = normalize_bool(
         registry.get(host, "zfs-automation.replication_recovery.start_failed", None),
         False,
@@ -213,13 +207,7 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
         registry,
         host,
     )
-    replication_exclude_jobs = normalize_replication_config(
-        registry,
-        host,
-        include_disabled=True,
-    )
     known_host_refresh = normalize_known_host_refresh(registry, host)
-    pull_source_access = normalize_pull_source_access(registry, host)
     push_target_access = normalize_push_target_access(registry, host)
     source_private_keys = normalize_source_private_keys(registry, host)
 
@@ -227,7 +215,7 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
     prepare_build_dir(build_dir)
     copy_files(config_dir, build_dir, STATIC_CONFIG_FILES)
     (build_dir / "sanoid.conf").write_text(
-        build_sanoid_config(snapshot_plans, replication_exclude_jobs),
+        build_sanoid_config(snapshot_plans),
         encoding="utf-8",
     )
     render_file(
@@ -240,7 +228,7 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
         SNAPSHOT_SCHEDULE=snapshot_schedule,
     )
     (build_dir / "homelab-zfs-snapshots.sh").write_text(
-        build_snapshot_script(snapshot_plans, replication_exclude_jobs),
+        build_snapshot_script(snapshot_plans),
         encoding="utf-8",
     )
 
@@ -275,10 +263,8 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
         (build_dir / script_name).write_text(
             build_replication_script(
                 list(job.plans),
-                list(job.after_commands),
                 list(job.syncoid_options),
                 job.delete_target_snapshots,
-                job.target_snapshot_prune,
             ),
             encoding="utf-8",
         )
@@ -296,35 +282,6 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
                     script_name,
                     f"/usr/local/bin/homelab-zfs-replication-{job.name}",
                     mode="755",
-                ),
-            ]
-        )
-
-    if pull_source_access is not None:
-        copy_file(
-            root / "zfs-automation" / "templates" / "homelab-zfs-send-only.sh",
-            build_dir / "homelab-zfs-send-only.sh",
-        )
-        (build_dir / "zfs-pull-datasets.conf").write_text(
-            "\n".join(pull_source_access.datasets) + "\n",
-            encoding="utf-8",
-        )
-        (build_dir / "zfs-pull-authorized-keys").write_text(
-            build_zfs_pull_source_authorized_keys(pull_source_access),
-            encoding="utf-8",
-        )
-        file_specs.extend(
-            [
-                FileSpec(
-                    "homelab-zfs-send-only.sh",
-                    "/usr/local/sbin/homelab-zfs-send-only",
-                    mode="755",
-                ),
-                FileSpec("zfs-pull-datasets.conf", "/etc/homelab/zfs-pull-datasets.conf"),
-                FileSpec(
-                    "zfs-pull-authorized-keys",
-                    "/var/lib/homelab-zfs-pull/.ssh/authorized_keys",
-                    mode="600",
                 ),
             ]
         )
@@ -391,14 +348,15 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
             "PAUSED_REPLICATION_TIMERS": paused_replication_timers,
             "ENABLE_ZFS_SNAPSHOTS": "true" if snapshot_plans and manage_snapshots else "false",
             "ENABLE_ZFS_REPLICATION": (
-                "true" if replication_jobs and manage_replication else "false"
+                "true" if replication_jobs else "false"
             ),
             "ZFS_REPLICATION_RECOVERY_START_FAILED": (
                 "true" if replication_recovery_start_failed else "false"
             ),
             "ENABLE_ZFS_SCRUB": "true" if pools and manage_scrub else "false",
-            "ENABLE_ZFS_PULL_SOURCE": "true" if pull_source_access is not None else "false",
-            "ZFS_PULL_SOURCE_USER": pull_source_access.user if pull_source_access else "zfs-pull",
+            # These retained cleanup inputs remove access artifacts created by old releases.
+            "ENABLE_ZFS_PULL_SOURCE": "false",
+            "ZFS_PULL_SOURCE_USER": "zfs-pull",
             "ZFS_PULL_SOURCE_HOME": "/var/lib/homelab-zfs-pull",
             "ENABLE_ZFS_PUSH_TARGET": "true" if push_target_access is not None else "false",
             "ZFS_PUSH_TARGET_USER": push_target_access.user if push_target_access else "zfs-push",

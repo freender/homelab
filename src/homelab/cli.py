@@ -63,30 +63,26 @@ def check_stack_placement(root: Path) -> None:
     file, and a compose directory no host declares, are both hard failures. The
     second case is the important one: without it a `git mv` between host
     directories would relocate a service with no inventory change to review.
+
+    The checks themselves are `docker_stacks.validate`, which is what the module
+    runs at deploy time. Calling it rather than re-walking the same three checks
+    keeps validate and deploy from drifting on what "correctly placed" means.
     """
-    from .modules.docker_stacks import (
-        all_stacks,
-        check_placement,
-        check_shared_orphans,
-        check_stack_tree,
-        shared_stacks,
-    )
+    from .modules.docker_stacks import all_stacks, shared_stacks, validate
 
     registry = default_registry(root)
     stack_hosts = registry.list_hosts(feature="docker-stacks")
     if not stack_hosts:
         return
 
-    total = 0
     try:
-        check_stack_tree(root)
-        for host in stack_hosts:
-            check_placement(root, host)
-            total += len(registry.get(host, "docker-stacks.stacks", []) or [])
-        check_shared_orphans(root)
+        validate(root, stack_hosts)
     except ValueError as error:
         raise click.ClickException(str(error)) from error
 
+    total = sum(
+        len(registry.get(host, "docker-stacks.stacks", []) or []) for host in stack_hosts
+    )
     shared = len(shared_stacks(root))
     print_ok(
         f"{total} placement(s) of {len(all_stacks(root))} stack(s) across "
@@ -637,88 +633,6 @@ def secrets_cache_clear() -> None:
     except op_secrets.OpSecretsError as exc:
         raise click.ClickException(str(exc)) from exc
     print_ok("secret cache cleared")
-
-
-@secrets.command("bootstrap")
-@click.option(
-    "--force",
-    is_flag=True,
-    default=False,
-    help="Overwrite existing fields on items already present in 1Password.",
-)
-@click.option(
-    "--dry-run",
-    is_flag=True,
-    default=False,
-    help="Show what would be created/updated without writing to 1Password.",
-)
-@click.argument("names", nargs=-1)
-def secrets_bootstrap(force: bool, dry_run: bool, names: tuple[str, ...]) -> None:
-    """One-time migration: create 1Password items from legacy secrets/*.env files.
-
-    Requires the service-account token (or session) to have rw on the vault.
-    After bootstrap, downgrade the service account back to read-only and
-    run `homelab secrets purge-local`.
-    """
-    root = repo_root()
-    print_header("Homelab Secrets Bootstrap")
-    if dry_run:
-        print_sub("Dry-run: no writes will be sent to 1Password.")
-    if force:
-        print_sub("Force enabled: existing items will be overwritten.")
-    exit_code = op_secrets.bootstrap(
-        root,
-        names if names else None,
-        force=force,
-        dry_run=dry_run,
-    )
-    raise SystemExit(exit_code)
-
-
-@secrets.command("purge-local")
-@click.option("--yes", is_flag=True, default=False, help="Skip confirmation.")
-def secrets_purge_local(yes: bool) -> None:
-    """Shred and remove plaintext secrets/*.env files on this machine.
-
-    Run only AFTER `homelab secrets doctor` confirms every catalog entry
-    resolves from 1Password. Examples and templates are kept.
-    """
-    root = repo_root()
-    secrets_dir = root / "secrets"
-    candidates = sorted(
-        path
-        for path in secrets_dir.glob("*.env")
-        if path.is_file() and not path.name.endswith(".example")
-    )
-    if not candidates:
-        print_action("No plaintext .env files under secrets/ to purge.")
-        return
-
-    print_action(f"Found {len(candidates)} plaintext file(s) under {secrets_dir}:")
-    for path in candidates:
-        print_sub(path.name)
-
-    if not yes:
-        click.confirm(
-            "Shred and remove these files? Confirm 1Password has every value first.",
-            abort=True,
-        )
-
-    shred = shutil.which("shred")
-    for path in candidates:
-        try:
-            if shred:
-                subprocess.run(
-                    [shred, "-u", "-n", "1", str(path)],
-                    check=False,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                )
-            if path.exists():
-                path.unlink()
-            print_ok(f"removed {path.name}")
-        except OSError as exc:
-            print_error(f"failed to remove {path}: {exc}")
 
 
 if __name__ == "__main__":

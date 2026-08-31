@@ -22,6 +22,27 @@ SMARTCTL_WAIT_BIN = "/usr/local/bin/homelab-smartctl-wait-devices"
 
 TEXTFILE_DIR = "/var/lib/prometheus/node-exporter"
 
+PVE_PATCH_STATUSES = (
+    (
+        "pve-zfs-migration-sync-patch",
+        "zfs-migration-sync",
+        "/var/lib/homelab/pve-zfs-recv-cache-patch/status",
+        "patched,already-patched,repaired-partial-patch",
+    ),
+    (
+        "pve-zfs-large-block-patch",
+        "zfs-large-block",
+        "/var/lib/homelab/pve-zfs-large-block-patch/status",
+        "patched,already-patched",
+    ),
+    (
+        "pve-lxc-pre-replication-patch",
+        "lxc-pre-replication",
+        "/var/lib/homelab/pve-lxc-pre-replication-patch/status",
+        "patched,already-patched",
+    ),
+)
+
 # node_exporter flags shared by every host.
 _NODE_EXPORTER_COMMON_ARGS = (
     "--web.listen-address=:9100",
@@ -197,6 +218,11 @@ FILE_SPECS = (
         "/etc/systemd/system/reboot-textfile-exporter.timer",
         feature="baremetal",
     ),
+    FileSpec(
+        "pve-patch-statuses.conf",
+        "/etc/homelab/pve-patch-statuses.conf",
+        feature="pve_patch_statuses",
+    ),
     FileSpec("node-exporter.defaults", "/etc/default/prometheus-node-exporter"),
     # smartctl_exporter itself comes from the distro package
     # (prometheus-smartctl-exporter); we only override the packaged unit's
@@ -251,6 +277,7 @@ _TEMPLATED_ONLY_BUILD_NAMES = {
     "apcupsd-exporter.env",
     "zfs-expected-pools.conf",
     "disk-labels.conf",
+    "pve-patch-statuses.conf",
     "smartctl-exporter-override.conf",
     "node-exporter.defaults",
 }
@@ -292,7 +319,11 @@ def validate(root: Path) -> None:
     overrides_template = disk_labels_template(root)
     if not overrides_template.is_file():
         raise ValueError(f"Missing required config: {overrides_template}")
-    for template in (smartctl_override_template(root), node_exporter_defaults_template(root)):
+    for template in (
+        smartctl_override_template(root),
+        node_exporter_defaults_template(root),
+        pve_patch_statuses_template(root),
+    ):
         if not template.is_file():
             raise ValueError(f"Missing required config: {template}")
 
@@ -368,6 +399,10 @@ def node_exporter_defaults_template(root: Path) -> Path:
     return root / "metrics-exporters" / "templates" / "node-exporter.defaults.tpl"
 
 
+def pve_patch_statuses_template(root: Path) -> Path:
+    return root / "metrics-exporters" / "templates" / "pve-patch-statuses.conf.tpl"
+
+
 def zfs_expected_pools(root: Path, host: str) -> list[str]:
     registry = default_registry(root)
     configured = registry.get(host, "metrics-exporters.zfs_expected_pools", None)
@@ -419,6 +454,18 @@ def disk_label_overrides(root: Path, host: str) -> list[tuple[str, str]]:
     return overrides
 
 
+def pve_patch_statuses(root: Path, host: str) -> list[tuple[str, str, str]]:
+    """Enabled PVE patch status files, with stable metric labels and success states."""
+    registry = default_registry(root)
+    if str(registry.get(host, "config.type")) != "pve":
+        return []
+    return [
+        (label, status_path, successful_states)
+        for feature, label, status_path, successful_states in PVE_PATCH_STATUSES
+        if registry.has(host, feature)
+    ]
+
+
 def build_file_specs(
     *,
     has_apcupsd: bool,
@@ -426,6 +473,7 @@ def build_file_specs(
     has_hba: bool,
     has_expected_pools: bool,
     has_disk_label_overrides: bool,
+    has_pve_patch_statuses: bool,
     has_wrapper: bool,
     lxc_guest: bool,
 ) -> tuple[FileSpec, ...]:
@@ -436,6 +484,7 @@ def build_file_specs(
         "hba": has_hba and not lxc_guest,
         "zfs_expected_pools": has_expected_pools and not lxc_guest,
         "disk_label_overrides": has_disk_label_overrides and not lxc_guest,
+        "pve_patch_statuses": has_pve_patch_statuses and not lxc_guest,
         "smartctl_wrapper": has_wrapper and not lxc_guest,
     }
     return tuple(
@@ -552,12 +601,21 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
             DISK_LABEL_OVERRIDES=label_overrides,
         )
 
+    patch_statuses = [] if lxc_guest else pve_patch_statuses(root, host)
+    if patch_statuses:
+        render_file(
+            pve_patch_statuses_template(root),
+            build_dir / "pve-patch-statuses.conf",
+            PVE_PATCH_STATUSES=patch_statuses,
+        )
+
     file_specs = build_file_specs(
         has_apcupsd=has_apcupsd,
         has_igpu=has_igpu,
         has_hba=has_hba,
         has_expected_pools=bool(expected_pools),
         has_disk_label_overrides=bool(label_overrides),
+        has_pve_patch_statuses=bool(patch_statuses),
         has_wrapper=has_wrapper,
         lxc_guest=lxc_guest,
     )

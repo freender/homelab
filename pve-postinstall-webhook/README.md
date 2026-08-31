@@ -41,12 +41,11 @@ Deployed only to `arc` (the PDM host itself, `10.0.0.50`).
    - Standalone PVE nodes (osiris): gated two-pass — deploy, reboot, wait for
      SSH again, deploy again.
 
-There is a second, parallel HTTP path: `homelab-postinstall-webhook.py`
-listens on `:9443` for `POST /pve-installed` with a JSON body containing
-`{"token": WEBHOOK_TOKEN, ...}`, running the same host-matching and
-`enqueue_deploy()` logic. This exists as a manual/alternate trigger — it is
-**not** what PDM's own `post-hook` calls (see step 2); PDM must call its own
-API base, not this receiver.
+The former `:9443` HTTP listener was retired. The polling watcher is now the
+only automatic trigger, and direct invocation of
+`homelab-postinstall-deploy <host>` remains the manual recovery path. PDM's
+own `post-hook` must continue to target PDM's API base, not an external
+receiver.
 
 ## Known failure mode: `post_hook_base_url` must be PDM's own base
 
@@ -66,14 +65,14 @@ https://10.0.0.50:8443`). Confirm the fix is live in PDM's own record before
 assuming a stuck install is this bug recurring:
 
 ```bash
-ssh arc 'set -a; source /etc/homelab-postinstall-webhook/env; set +a
+ssh arc 'set -a; source /etc/homelab-postinstall-webhook/poller.env; set +a
 curl -sk -H "Authorization: PDMAPIToken ${PDM_TOKEN_ID}:${PDM_TOKEN_SECRET}" \
   https://127.0.0.1:8443/api2/json/auto-install/prepared/<answer_name> \
   | python3 -m json.tool'
 ```
 
-Look for `"post-hook-base-url": "https://10.0.0.50:8443"` (PDM's own base, not
-`:9443`).
+Look for `"post-hook-base-url": "https://10.0.0.50:8443"` (PDM's own base,
+not the retired listener).
 
 **A stuck `in-progress` record CAN be completed after the fact — PDM 1.1.7
 has no admin API for it (`/api2/json/auto-install/installations` only
@@ -142,14 +141,14 @@ rm /var/lib/homelab-postinstall-webhook/state/<uuid>.queued
 systemctl start homelab-pdm-installation-watch.service
 
 # Skip PDM entirely and run the deploy trigger directly (safe/idempotent —
-# same script the watcher/webhook would have queued):
+# same script the watcher would have queued):
 /usr/local/sbin/homelab-postinstall-deploy <host>
 ```
 
 Check what PDM currently has recorded:
 
 ```bash
-ssh arc 'set -a; source /etc/homelab-postinstall-webhook/env; set +a
+ssh arc 'set -a; source /etc/homelab-postinstall-webhook/poller.env; set +a
 curl -sk -H "Authorization: PDMAPIToken ${PDM_TOKEN_ID}:${PDM_TOKEN_SECRET}" \
   https://127.0.0.1:8443/api2/json/auto-install/installations | python3 -m json.tool'
 ```
@@ -202,23 +201,20 @@ ssh arc "/root/.local/bin/addhomelabkeys"   # force an immediate reload
 ## Configuration Files
 
 **On `arc`:**
-- `/usr/local/sbin/homelab-postinstall-webhook` — `:9443` HTTP listener (manual/alternate trigger path)
 - `/usr/local/sbin/homelab-pdm-installation-watch` — PDM API poller (primary trigger path)
 - `/usr/local/sbin/homelab-pdm-refresh-remote` — refreshes a standalone PVE host's PDM remote trust/token post-deploy
 - `/usr/local/sbin/homelab-postinstall-deploy` — waits for SSH, git pulls, runs `./deploy all <host>`
 - `/root/.local/bin/op-ssh-add` — 1Password-backed single-key loader (`main`|`pve`)
 - `/root/.local/bin/addhomelabkeys` — loads both keys into `/root/.ssh/agent.sock`
 - `/root/.config/op-ssh-agent.env` — item refs, TTLs, offsite forbidden-item guard
-- `/etc/systemd/system/homelab-postinstall-webhook.service`
 - `/etc/systemd/system/homelab-pdm-installation-watch.{service,timer}` (60s poll)
 - `/etc/systemd/system/homelab-ssh-agent.service` — persistent root `ssh-agent -a /root/.ssh/agent.sock`
 - `/etc/systemd/system/homelab-op-ssh-load.{service,timer}` — reloads both keys (`OnBootSec=10s`, `OnUnitActiveSec=7h`)
-- `/etc/homelab-postinstall-webhook/env` — `WEBHOOK_TOKEN`, `PDM_TOKEN_ID`/`PDM_TOKEN_SECRET`, `REPO_DIR`, `DRY_RUN`, timeouts
+- `/etc/homelab-postinstall-webhook/poller.env` — `PDM_TOKEN_ID`/`PDM_TOKEN_SECRET`, `REPO_DIR`, `DRY_RUN`, timeouts
 - `/var/lib/homelab-postinstall-webhook/state/<uuid>.queued` — dedup marker, one per queued install
-- `/var/lib/homelab-postinstall-webhook/events/*.json` — raw install/webhook payloads for each queued deploy
+- `/var/lib/homelab-postinstall-webhook/events/*.json` — raw PDM installation payloads for each queued deploy
 
 **In this repo:**
-- `scripts/homelab-postinstall-webhook.py`
 - `scripts/homelab-pdm-installation-watch.py`
 - `scripts/homelab-pdm-refresh-remote.py`
 - `scripts/homelab-postinstall-deploy.sh`
@@ -241,7 +237,7 @@ See also the `pve-autoinstall` module, which owns the prepared-answer content
 ## Verification
 
 ```bash
-ssh arc "systemctl status homelab-postinstall-webhook.service --no-pager"
 ssh arc "systemctl list-timers homelab-pdm-installation-watch.timer --no-pager"
 ssh arc "journalctl -u homelab-pdm-installation-watch.service -n 20 --no-pager"
+ssh arc "test ! -e /etc/systemd/system/homelab-postinstall-webhook.service && test ! -e /usr/local/sbin/homelab-postinstall-webhook"
 ```

@@ -1,10 +1,10 @@
 """Unit tests for `zfs_automation.normalize` — the hosts.conf -> typed-plan layer.
 
 This is the largest single file in the repo (749 lines) and it decides what gets
-snapshotted, what gets replicated where, and which snapshots the target is allowed
-to prune. Until now its only assertion-backed coverage was per-job pause semantics
-(`test_zfs_replication_pause.py`); everything else was exercised only by the
-offline dry-run smoke test, which asserts nothing beyond "did not raise".
+snapshotted and what gets replicated where. Until now its only assertion-backed
+coverage was per-job pause semantics (`test_zfs_replication_pause.py`); everything
+else was exercised only by the offline dry-run smoke test, which asserts nothing
+beyond "did not raise".
 
 The failure modes worth pinning down here are quiet ones:
   * A validator that stops rejecting bad input lets a malformed plan render into a
@@ -55,7 +55,7 @@ def test_normalize_string_list_shapes(value: object, expected: list[str]) -> Non
 
 
 def test_normalize_string_list_rejects_a_mapping() -> None:
-    """A YAML author writing `excludes: {a: b}` must fail loudly, not silently
+    """A YAML author writing list configuration as `{a: b}` must fail loudly, not silently
     normalize to the dict's keys."""
     with pytest.raises(ValueError, match="boom"):
         n.normalize_string_list({"a": "b"}, "boom")
@@ -214,61 +214,6 @@ def test_normalize_dataset_under_root_is_prefix_safe() -> None:
 
 
 # --------------------------------------------------------------------------
-# snapshot pattern / target prune validation
-# --------------------------------------------------------------------------
-
-
-def test_snapshot_patterns_accept_plain_globs() -> None:
-    assert n.normalize_snapshot_patterns(["autosnap_*", "__replicate_*"], "boom") == (
-        "autosnap_*",
-        "__replicate_*",
-    )
-
-
-@pytest.mark.parametrize("pattern", ["tank/auto*", "auto@snap", "auto\nsnap", "auto\rsnap"])
-def test_snapshot_patterns_reject_dataset_and_snapshot_separators(pattern: str) -> None:
-    """A pattern is matched against the snapshot *name* only.
-
-    Letting `/` or `@` through would widen a destructive prune from "snapshots on
-    this dataset" to something that can address other datasets entirely.
-    """
-    with pytest.raises(ValueError, match="boom"):
-        n.normalize_snapshot_patterns([pattern], "boom")
-
-
-def test_snapshot_patterns_reject_an_empty_list() -> None:
-    with pytest.raises(ValueError, match="boom"):
-        n.normalize_snapshot_patterns([], "boom")
-
-
-def test_target_snapshot_prune_disabled_forms_return_none() -> None:
-    assert n.normalize_target_snapshot_prune(None, "ace", "job") is None
-    assert n.normalize_target_snapshot_prune(False, "ace", "job") is None
-    assert n.normalize_target_snapshot_prune({"enabled": False}, "ace", "job") is None
-
-
-def test_target_snapshot_prune_defaults_are_conservative() -> None:
-    prune = n.normalize_target_snapshot_prune({}, "ace", "job")
-
-    assert prune is not None
-    assert prune.keep_days == 90
-    assert prune.patterns == ("autosnap_*", "__replicate_*")
-
-
-def test_target_snapshot_prune_rejects_a_zero_retention() -> None:
-    """keep_days=0 would mean "delete everything, including today's".
-
-    normalize_positive_int is what stands between a typo and that.
-    """
-    with pytest.raises(ValueError, match="keep_days"):
-        n.normalize_target_snapshot_prune({"keep_days": 0}, "ace", "job")
-
-
-def test_target_snapshot_prune_rejects_a_non_mapping() -> None:
-    with pytest.raises(ValueError, match="must be a mapping"):
-        n.normalize_target_snapshot_prune(["nope"], "ace", "job")
-
-
 # --------------------------------------------------------------------------
 # snapshot_plan_from_config
 # --------------------------------------------------------------------------
@@ -291,9 +236,6 @@ def test_snapshot_plan_inherits_defaults_and_stringifies_retention() -> None:
     )
     assert plan.recursive is True
     assert plan.process_children_only is True
-    # Always set here, regardless of config: replication snapshots must never be
-    # captured by the local snapshot policy.
-    assert plan.auto_exclude_replication is True
     assert plan.require_active_lxc is None
 
 
@@ -307,21 +249,6 @@ def test_snapshot_plan_overrides_beat_defaults() -> None:
 
     assert plan.daily == "1"
     assert plan.recursive is False
-
-
-def test_snapshot_plan_accepts_the_excludes_alias() -> None:
-    plan = n.snapshot_plan_from_config({"excludes": ["tank/a"]}, {}, "tank", "ace")
-
-    assert plan.excludes == ("tank/a",)
-
-
-def test_snapshot_plan_rejects_exclude_and_excludes_together() -> None:
-    """Both spellings are accepted individually, so a config carrying both is
-    ambiguous about which one wins — refuse rather than pick."""
-    with pytest.raises(ValueError, match="use only 'exclude'"):
-        n.snapshot_plan_from_config(
-            {"exclude": ["a"], "excludes": ["b"]}, {}, "tank", "ace"
-        )
 
 
 def test_snapshot_plan_require_active_lxc_must_be_positive() -> None:
@@ -522,7 +449,6 @@ def test_group_ref_requires_a_host_qualifier(ref: str) -> None:
 GROUP_HOST = """    zfs-automation:
       migratable_lxc_groups:
         lxc:
-          nodes: [bray, clovis]
           plans:
             - name: traefik
               vmid: 110
@@ -542,11 +468,10 @@ def group_registry(tmp_path: Path) -> HostRegistry:
     )
 
 
-def test_migratable_groups_parse_nodes_and_plans(tmp_path: Path) -> None:
+def test_migratable_groups_parse_plans(tmp_path: Path) -> None:
     groups = n.normalize_migratable_lxc_groups(group_registry(tmp_path), "ace")
 
     assert set(groups) == {"lxc"}
-    assert groups["lxc"].nodes == ("bray", "clovis")
     assert [(p.name, p.vmid, p.dataset) for p in groups["lxc"].plans] == [
         ("traefik", 110, "rpool/lxc/subvol-110-disk-0"),
         ("redis", 111, "rpool/lxc/subvol-111-disk-0"),
@@ -591,8 +516,7 @@ def test_migratable_group_plan_validation(
             "ace",
             "    zfs-automation:\n"
             "      migratable_lxc_groups:\n"
-            "        lxc:\n"
-            "          nodes: [bray]\n" + plans_yaml,
+            "        lxc:\n" + plans_yaml,
         ),
         tmp_path,
     )
@@ -648,81 +572,6 @@ def test_snapshot_plans_can_embed_a_migratable_group(tmp_path: Path) -> None:
 
 
 # --------------------------------------------------------------------------
-# dynamic LXC source resolution
-# --------------------------------------------------------------------------
-
-
-def test_node_mgmt_ip_strips_the_cidr_suffix(tmp_path: Path) -> None:
-    """mgmt_ip is stored as CIDR for pve-postinstall's interfaces render, but an
-    ssh target must be a bare address."""
-    assert n.node_mgmt_ip(group_registry(tmp_path), "bray") == "10.0.10.11"
-
-
-def test_dynamic_source_from_candidates_builds_pull_targets(tmp_path: Path) -> None:
-    source = n.normalize_dynamic_lxc_source_from_candidates(
-        group_registry(tmp_path),
-        {"vmid": 110, "dataset": "rpool/lxc/subvol-110-disk-0"},
-        ["bray", "clovis"],
-        "osiris",
-        "lxc",
-        0,
-    )
-
-    assert source.vmid == 110
-    assert [c.source for c in source.candidates] == [
-        "zfs-pull@10.0.10.11:rpool/lxc/subvol-110-disk-0",
-        "zfs-pull@10.0.10.12:rpool/lxc/subvol-110-disk-0",
-    ]
-    # The per-candidate identifier is what keeps syncoid's bookmark/state naming
-    # distinct per source node; without it a failover corrupts resume state.
-    assert [c.syncoid_options for c in source.candidates] == [
-        ("--identifier=bray",),
-        ("--identifier=clovis",),
-    ]
-    assert source.candidates[0].sshkey == "/root/.ssh/homelab-zfs-pull_bray_ed25519"
-
-
-def test_dynamic_source_rejects_duplicate_candidates(tmp_path: Path) -> None:
-    with pytest.raises(ValueError, match="duplicate"):
-        n.normalize_dynamic_lxc_source_from_candidates(
-            group_registry(tmp_path),
-            {"vmid": 110, "dataset": "rpool/a"},
-            ["bray", "bray"],
-            "osiris",
-            "lxc",
-            0,
-        )
-
-
-def test_dynamic_source_explicit_form_requires_candidates() -> None:
-    with pytest.raises(ValueError, match="non-empty list"):
-        n.normalize_dynamic_lxc_source(
-            {"vmid": 110, "candidates": []}, "osiris", "lxc", 0
-        )
-
-
-def test_dynamic_source_explicit_form_parses_candidates() -> None:
-    source = n.normalize_dynamic_lxc_source(
-        {
-            "vmid": 110,
-            "candidates": [
-                {
-                    "name": "bray",
-                    "source": "zfs-pull@10.0.10.11:rpool/a",
-                    "sshkey": "/root/.ssh/k",
-                    "syncoid_options": ["--identifier=bray"],
-                }
-            ],
-        },
-        "osiris",
-        "lxc",
-        0,
-    )
-
-    assert source.candidates[0].name == "bray"
-    assert source.candidates[0].syncoid_options == ("--identifier=bray",)
-
-
 # --------------------------------------------------------------------------
 # migratable LXC replication expansion
 # --------------------------------------------------------------------------
@@ -742,7 +591,8 @@ def test_relative_targets_are_anchored_under_target_root(tmp_path: Path) -> None
     plans = expand(tmp_path, base_job(), [{"name": "traefik", "target": "traefik"}])
 
     assert plans[0].target == "backup/lxc/traefik"
-    assert plans[0].dynamic_lxc_source is not None
+    assert plans[0].source == "rpool/lxc/subvol-110-disk-0"
+    assert plans[0].require_active_lxc == 110
 
 
 def test_absolute_and_remote_targets_are_left_alone(tmp_path: Path) -> None:
@@ -792,55 +642,6 @@ def test_duplicate_targets_are_rejected(tmp_path: Path) -> None:
 def test_plan_must_exist_in_the_referenced_group(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="does not exist in group"):
         expand(tmp_path, base_job(), [{"name": "ghost", "target": "ghost"}])
-
-
-def test_active_lxc_source_local_pins_to_the_local_dataset(tmp_path: Path) -> None:
-    """`local` means "this host runs the container": replicate from the local
-    dataset guarded by require_active_lxc, with no dynamic pull candidates."""
-    job = base_job() | {"active_lxc_source": "local"}
-
-    plans = expand(tmp_path, job, [{"name": "traefik", "target": "traefik"}])
-
-    assert plans[0].source == "rpool/lxc/subvol-110-disk-0"
-    assert plans[0].require_active_lxc == 110
-    assert plans[0].dynamic_lxc_source is None
-
-
-def test_active_lxc_source_must_be_dynamic_or_local(tmp_path: Path) -> None:
-    job = base_job() | {"active_lxc_source": "remote"}
-
-    with pytest.raises(ValueError, match="must be 'dynamic' or 'local'"):
-        expand(tmp_path, job, [{"name": "traefik", "target": "traefik"}])
-
-
-def test_candidate_address_and_sshkey_overrides_are_honoured(tmp_path: Path) -> None:
-    job = base_job() | {
-        "dynamic_lxc_candidates": ["bray"],
-        "dynamic_lxc_candidate_addresses": {"bray": "10.9.9.9"},
-        "dynamic_lxc_candidate_sshkeys": {"bray": "/root/.ssh/custom"},
-    }
-
-    plans = expand(tmp_path, job, [{"name": "traefik", "target": "traefik"}])
-    candidate = plans[0].dynamic_lxc_source.candidates[0]
-
-    assert candidate.source == "zfs-pull@10.9.9.9:rpool/lxc/subvol-110-disk-0"
-    assert candidate.sshkey == "/root/.ssh/custom"
-
-
-def test_candidates_default_to_the_group_nodes(tmp_path: Path) -> None:
-    plans = expand(tmp_path, base_job(), [{"name": "traefik", "target": "traefik"}])
-
-    assert [c.name for c in plans[0].dynamic_lxc_source.candidates] == ["bray", "clovis"]
-
-
-def test_post_hook_is_carried_through(tmp_path: Path) -> None:
-    plans = expand(
-        tmp_path,
-        base_job(),
-        [{"name": "traefik", "target": "traefik", "post_hook": "  /usr/local/bin/hook  "}],
-    )
-
-    assert plans[0].post_hook == "/usr/local/bin/hook"
 
 
 # --------------------------------------------------------------------------

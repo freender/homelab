@@ -8,7 +8,6 @@ from ..deploy import DeploySession
 from .apcupsd import deploy as deploy_apcupsd
 from .apt_upgrade import deploy as deploy_apt_upgrade
 from .base_packages import deploy as deploy_base_packages
-from .disk_spindown import deploy as deploy_disk_spindown
 from .docker import deploy as deploy_docker
 from .docker_stacks import deploy as deploy_docker_stacks
 from .keepalived import deploy as deploy_keepalived
@@ -66,10 +65,6 @@ MODULES: dict[str, ModuleDefinition] = {
     "docker-stacks": ModuleDefinition(
         name="Docker Compose Stacks",
         deploy=deploy_docker_stacks,
-    ),
-    "disk-spindown": ModuleDefinition(
-        name="Disk Spindown",
-        deploy=deploy_disk_spindown,
     ),
     "keepalived": ModuleDefinition(
         name="Keepalived",
@@ -169,7 +164,6 @@ MODULE_ORDER = [
     "pve-zfs-large-block-patch",
     "pve-zfs-migration-sync-patch",
     "pve-lxc-pre-replication-patch",
-    "disk-spindown",
     "pve-gpu-passthrough",
     "keepalived",
     "ssh-config",

@@ -18,6 +18,7 @@ RULE_FILES = (
     "important-containers.yml",
     "nic-link.yml",
     "node-down.yml",
+    "pve-patches.yml",
     "reboot.yml",
     "sas-links.yml",
     "smart-disks.yml",

@@ -18,6 +18,38 @@ else
     exit 1
 fi
 
+retire_disk_spindown() {
+    print_action "Retiring disk spindown"
+
+    systemctl disable --now \
+        homelab-disk-wakeup.timer \
+        homelab-disk-wakeup.service \
+        homelab-disk-spindown.service \
+        hd-idle.service 2>/dev/null || true
+
+    rm -f \
+        /etc/default/homelab-disk-spindown \
+        /etc/systemd/system/homelab-disk-spindown.service \
+        /usr/local/sbin/homelab-disk-wakeup \
+        /etc/systemd/system/homelab-disk-wakeup.service \
+        /etc/systemd/system/homelab-disk-wakeup.timer
+    systemctl daemon-reload
+
+    if dpkg-query -W -f='${db:Status-Status}' hd-idle 2>/dev/null | grep -qx installed; then
+        apt-get purge -y -q hd-idle
+        print_ok "hd-idle purged"
+    else
+        print_sub "hd-idle already absent"
+    fi
+
+    print_header "Disk Spindown Retired"
+}
+
+if [[ "${RETIRE_DISK_SPINDOWN:-false}" == "true" ]]; then
+    retire_disk_spindown
+    exit 0
+fi
+
 require_dir "$BUILD_DIR" "$BUILD_DIR" || exit 1
 require_file "$BUILD_DIR/file-map.conf" "$BUILD_DIR/file-map.conf" || exit 1
 load_file_map

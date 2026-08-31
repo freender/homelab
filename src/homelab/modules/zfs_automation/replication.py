@@ -1,7 +1,7 @@
 """Replication job normalization: expand and validate hosts.conf replication config.
 
 Builds `ReplicationJob`/`ReplicationPlan` objects on top of `.normalize`'s
-generic helpers and dynamic-source resolution.
+generic helpers.
 """
 
 from __future__ import annotations
@@ -9,11 +9,8 @@ from __future__ import annotations
 from .normalize import (
     expand_migratable_lxc_replication_plans,
     normalize_bool,
-    normalize_dynamic_lxc_source,
-    normalize_dynamic_lxc_source_from_candidates,
     normalize_replication_job_name,
     normalize_string_list,
-    normalize_target_snapshot_prune,
     parse_migratable_lxc_group_ref,
     require_string,
 )
@@ -118,12 +115,6 @@ def expand_replication_jobs(registry, host: str, jobs: dict) -> list[tuple[str, 
 def normalize_replication_config(
     registry, host: str, *, include_disabled: bool = False
 ) -> list[ReplicationJob]:
-    defaults = registry.get(host, "zfs-automation.replication_defaults", {})
-    if defaults is None:
-        defaults = {}
-    if not isinstance(defaults, dict):
-        raise ValueError(f"zfs-automation.replication_defaults must be a mapping for {host}")
-
     for legacy_key in ("replication_plans", "replication"):
         if registry.get(host, f"zfs-automation.{legacy_key}", None) is not None:
             raise ValueError(
@@ -136,25 +127,6 @@ def normalize_replication_config(
         return []
     if not isinstance(jobs, dict):
         raise ValueError(f"zfs-automation.replication_jobs must be a dict for {host}")
-
-    default_after_commands = normalize_string_list(
-        defaults.get("after_replication_commands", []),
-        f"replication_defaults.after_replication_commands must be a list for {host}",
-    )
-    default_syncoid_options = normalize_string_list(
-        defaults.get("syncoid_options", []),
-        f"replication_defaults.syncoid_options must be a list for {host}",
-    )
-    default_delete_target_snapshots = normalize_bool(
-        defaults.get("delete_target_snapshots"),
-        True,
-        f"replication_defaults.delete_target_snapshots must be true or false for {host}",
-    )
-    default_target_snapshot_prune = normalize_target_snapshot_prune(
-        defaults.get("target_snapshot_prune"),
-        host,
-        "replication_defaults",
-    )
 
     parsed_jobs: list[ReplicationJob] = []
     seen_job_names: set[str] = set()
@@ -183,7 +155,7 @@ def normalize_replication_config(
             f"paused for replication job '{normalized_job_name}' must be true or false for {host}",
         )
 
-        schedule = str(job_config.get("schedule", defaults.get("schedule", "*-*-* 02:30:00")))
+        schedule = str(job_config.get("schedule", "*-*-* 02:30:00"))
         explicit_plans = job_config.get("plans", [])
         if not isinstance(explicit_plans, list):
             raise ValueError(
@@ -199,41 +171,16 @@ def normalize_replication_config(
             )
         else:
             plans = []
-            dynamic_lxc_candidates = normalize_string_list(
-                job_config.get("dynamic_lxc_candidates", []),
-                f"dynamic_lxc_candidates for job '{normalized_job_name}' must be a list for {host}",
-            )
-
             for index, plan in enumerate(explicit_plans):
                 if not isinstance(plan, dict):
                     raise ValueError(
                         f"invalid plan at index {index} in job '{normalized_job_name}' for {host}"
                     )
-                dynamic_lxc_source = (
-                    normalize_dynamic_lxc_source(
-                        plan.get("dynamic_lxc_source"),
-                        host,
-                        normalized_job_name,
-                        index,
-                    )
-                    if "dynamic_lxc_source" in plan
-                    else normalize_dynamic_lxc_source_from_candidates(
-                        registry,
-                        plan,
-                        dynamic_lxc_candidates,
-                        host,
-                        normalized_job_name,
-                        index,
-                    )
-                    if dynamic_lxc_candidates and "vmid" in plan and "dataset" in plan
-                    else None
-                )
                 source = str(plan.get("source", "")).strip()
-                if bool(source) == bool(dynamic_lxc_source):
+                if not source:
                     raise ValueError(
                         f"plan at index {index} in job '{normalized_job_name}' for {host} "
-                        "must specify "
-                        "exactly one of source or dynamic_lxc_source"
+                        "must specify source"
                     )
                 plans.append(
                     ReplicationPlan(
@@ -243,54 +190,27 @@ def normalize_replication_config(
                             f" '{normalized_job_name}' for {host}",
                         ),
                         source=source,
-                        dynamic_lxc_source=dynamic_lxc_source,
-                        post_hook=str(plan.get("post_hook", "")).strip(),
                     )
                 )
 
-        after_commands = [
-            *default_after_commands,
-            *normalize_string_list(
-                job_config.get("after_replication_commands", []),
-                f"after_replication_commands for job '{normalized_job_name}' must be a list"
-                f" for {host}",
-            ),
-        ]
-        syncoid_options = [
-            *default_syncoid_options,
-            *normalize_string_list(
-                job_config.get("syncoid_options", []),
-                f"syncoid_options for job '{normalized_job_name}' must be a list for {host}",
-            ),
-        ]
+        syncoid_options = normalize_string_list(
+            job_config.get("syncoid_options", []),
+            f"syncoid_options for job '{normalized_job_name}' must be a list for {host}",
+        )
         delete_target_snapshots = normalize_bool(
             job_config.get("delete_target_snapshots"),
-            default_delete_target_snapshots,
+            True,
             "delete_target_snapshots for replication job "
             f"'{normalized_job_name}' must be true or false for {host}",
         )
-        target_snapshot_prune = (
-            normalize_target_snapshot_prune(
-                job_config.get("target_snapshot_prune"),
-                host,
-                normalized_job_name,
-            )
-            if "target_snapshot_prune" in job_config
-            else default_target_snapshot_prune
-        )
-
         parsed_jobs.append(
             ReplicationJob(
                 name=normalized_job_name,
                 schedule=schedule,
                 plans=tuple(plans),
-                after_commands=tuple(after_commands),
                 syncoid_options=tuple(syncoid_options),
                 delete_target_snapshots=delete_target_snapshots,
-                target_snapshot_prune=target_snapshot_prune,
                 paused=paused,
             )
         )
     return parsed_jobs
-
-

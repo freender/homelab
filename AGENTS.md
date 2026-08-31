@@ -94,9 +94,12 @@ network-critical modules) and which test owns which area; update tests when touc
 
 Three distinct "off/freeze" switches in `hosts.conf` — do not conflate them:
 
-- **`deploy: false`** (host-level feature gate; formerly `enabled: false`) — removes the
-  host from the module's deploy targets: module skipped, running service **never
-  touched**. `deploy` wins if both are present; legacy `enabled: false` warns.
+- **`deploy: false`** (host-level feature gate) — removes the host from the module's
+  deploy targets: module skipped, running service **never touched**. This is the only
+  framework-level gate. A feature-level `enabled:` key is **module-owned** and is not
+  read by the framework (`pbs-client-backup.enabled` is its own flag with its own
+  meaning); the legacy `enabled: false` spelling of this gate was removed because the
+  same key silently meant two things depending on which layer read it first.
 - **`<feature>.paused: true`** (module-wide) — stays deployed, but its managed systemd
   units are **stopped and disabled**; reversible. Supported by `disk-spindown`,
   `apt-upgrade`, `pbs-client-backup`, `zfs-automation`.

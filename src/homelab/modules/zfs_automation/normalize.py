@@ -1,9 +1,8 @@
 """Config normalization: turn raw hosts.conf values into typed objects.
 
-Covers generic scalar/list validation, snapshot plans, migratable-LXC groups,
-and dynamic-source resolution. Replication-job and pull/push-access
-normalization live in sibling `.replication` / `.access` modules since they
-build on top of what's here.
+Covers generic scalar/list validation, snapshot plans, and migratable-LXC
+groups. Replication-job and push-access normalization live in sibling
+`.replication` / `.access` modules since they build on top of what's here.
 """
 
 from __future__ import annotations
@@ -13,15 +12,12 @@ from pathlib import Path
 
 from ... import op_secrets
 from .types import (
-    DynamicLxcSource,
-    DynamicLxcSourceCandidate,
     KnownHostRefresh,
     MigratableLxcGroup,
     MigratableLxcPlan,
     ReplicationPlan,
     SnapshotPlan,
     SourcePrivateKey,
-    TargetSnapshotPrune,
 )
 
 REPLICATION_JOB_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
@@ -186,215 +182,6 @@ def normalize_positive_int(value: object, message: str) -> int:
     return normalized
 
 
-def normalize_snapshot_patterns(value: object, message: str) -> tuple[str, ...]:
-    patterns = normalize_string_list(value, message)
-    if not patterns:
-        raise ValueError(message)
-    for pattern in patterns:
-        if any(char in pattern for char in ["/", "@", "\0", "\n", "\r"]):
-            raise ValueError(message)
-    return tuple(patterns)
-
-
-def normalize_target_snapshot_prune(
-    value: object,
-    host: str,
-    job_name: str,
-) -> TargetSnapshotPrune | None:
-    if value in (None, False):
-        return None
-    if not isinstance(value, dict):
-        raise ValueError(f"target_snapshot_prune must be a mapping for job '{job_name}' on {host}")
-    enabled = normalize_bool(
-        value.get("enabled"),
-        True,
-        f"target_snapshot_prune.enabled must be true or false for job '{job_name}' on {host}",
-    )
-    if not enabled:
-        return None
-    return TargetSnapshotPrune(
-        keep_days=normalize_positive_int(
-            value.get("keep_days", 90),
-            "target_snapshot_prune.keep_days must be a positive integer for job "
-            f"'{job_name}' on {host}",
-        ),
-        patterns=normalize_snapshot_patterns(
-            value.get("patterns", ["autosnap_*", "__replicate_*"]),
-            "target_snapshot_prune.patterns must be a non-empty list of snapshot "
-            f"name patterns for job '{job_name}' on {host}",
-        ),
-    )
-
-
-def normalize_dynamic_lxc_source(
-    value: object,
-    host: str,
-    job_name: str,
-    plan_index: int,
-) -> DynamicLxcSource:
-    if not isinstance(value, dict):
-        raise ValueError(
-            "dynamic_lxc_source must be a mapping for plan "
-            f"{plan_index} in job '{job_name}' on {host}"
-        )
-
-    vmid = normalize_positive_int(
-        value.get("vmid"),
-        f"dynamic_lxc_source.vmid must be a positive integer for job '{job_name}' on {host}",
-    )
-    candidates_config = value.get("candidates", [])
-    if not isinstance(candidates_config, list) or not candidates_config:
-        raise ValueError(
-            "dynamic_lxc_source.candidates must be a non-empty list for job "
-            f"'{job_name}' on {host}"
-        )
-
-    candidates: list[DynamicLxcSourceCandidate] = []
-    seen_names: set[str] = set()
-    for candidate_index, candidate_config in enumerate(candidates_config):
-        if not isinstance(candidate_config, dict):
-            raise ValueError(
-                "invalid dynamic_lxc_source candidate at index "
-                f"{candidate_index} for job '{job_name}' on {host}"
-            )
-        name = require_safe_authorized_key_option(
-            candidate_config.get("name", ""),
-            "dynamic_lxc_source candidate name must be safe for job "
-            f"'{job_name}' on {host}",
-        )
-        if name in seen_names:
-            raise ValueError(
-                f"duplicate dynamic_lxc_source candidate '{name}' for job '{job_name}' on {host}"
-            )
-        seen_names.add(name)
-
-        candidates.append(
-            DynamicLxcSourceCandidate(
-                name=name,
-                source=require_string(
-                    candidate_config.get("source", ""),
-                    "dynamic_lxc_source candidate source required for job "
-                    f"'{job_name}' on {host}",
-                ),
-                sshkey=require_string(
-                    candidate_config.get("sshkey", ""),
-                    "dynamic_lxc_source candidate sshkey required for job "
-                    f"'{job_name}' on {host}",
-                ),
-                syncoid_options=tuple(
-                    normalize_string_list(
-                        candidate_config.get("syncoid_options", []),
-                        "dynamic_lxc_source candidate syncoid_options must be a list for job "
-                        f"'{job_name}' on {host}",
-                    )
-                ),
-            )
-        )
-
-    return DynamicLxcSource(vmid=vmid, candidates=tuple(candidates))
-
-
-def node_mgmt_ip(registry, node: str) -> str:
-    mgmt_ip = require_string(
-        registry.get(node, "pve-postinstall.interfaces.mgmt_ip", ""),
-        f"pve-postinstall.interfaces.mgmt_ip required for dynamic LXC source node {node}",
-    )
-    return mgmt_ip.split("/", 1)[0]
-
-
-def normalize_dynamic_lxc_source_from_candidates(
-    registry,
-    plan: dict,
-    candidate_names: list[str],
-    host: str,
-    job_name: str,
-    plan_index: int,
-) -> DynamicLxcSource:
-    vmid = normalize_positive_int(
-        plan.get("vmid"),
-        "vmid must be a positive integer for dynamic plan "
-        f"{plan_index} in job '{job_name}' on {host}",
-    )
-    dataset = require_string(
-        plan.get("dataset", ""),
-        f"dataset required for dynamic plan {plan_index} in job '{job_name}' on {host}",
-    )
-
-    candidates = []
-    seen_names: set[str] = set()
-    for candidate_name in candidate_names:
-        name = require_safe_authorized_key_option(
-            candidate_name,
-            f"dynamic_lxc_candidates contains invalid node name for job '{job_name}' on {host}",
-        )
-        if name in seen_names:
-            raise ValueError(
-                f"duplicate dynamic_lxc_candidates entry '{name}' for job '{job_name}' on {host}"
-            )
-        seen_names.add(name)
-        source = f"zfs-pull@{node_mgmt_ip(registry, name)}:{dataset}"
-        candidates.append(
-            DynamicLxcSourceCandidate(
-                name=name,
-                source=source,
-                sshkey=f"/root/.ssh/homelab-zfs-pull_{name}_ed25519",
-                syncoid_options=(f"--identifier={name}",),
-            )
-        )
-
-    return DynamicLxcSource(vmid=vmid, candidates=tuple(candidates))
-
-
-def normalize_string_map(value: object, message: str) -> dict[str, str]:
-    if value in (None, ""):
-        return {}
-    if not isinstance(value, dict):
-        raise ValueError(message)
-    return {
-        require_safe_authorized_key_option(key, message): require_string(item, message)
-        for key, item in value.items()
-    }
-
-
-def normalize_dynamic_lxc_source_from_group(
-    registry,
-    group: MigratableLxcGroup,
-    group_plan: MigratableLxcPlan,
-    candidate_names: list[str],
-    candidate_addresses: dict[str, str],
-    candidate_sshkeys: dict[str, str],
-    host: str,
-    job_name: str,
-) -> DynamicLxcSource:
-    candidates = []
-    seen_names: set[str] = set()
-    for candidate_name in candidate_names:
-        name = require_safe_authorized_key_option(
-            candidate_name,
-            f"dynamic LXC candidate node is invalid for job '{job_name}' on {host}",
-        )
-        if name in seen_names:
-            raise ValueError(
-                f"duplicate dynamic LXC candidate '{name}' for job '{job_name}' on {host}"
-            )
-        seen_names.add(name)
-        address = candidate_addresses.get(name, node_mgmt_ip(registry, name))
-        sshkey = candidate_sshkeys.get(name, f"/root/.ssh/homelab-zfs-pull_{name}_ed25519")
-        source = f"zfs-pull@{address}:{group_plan.dataset}"
-        candidates.append(
-            DynamicLxcSourceCandidate(
-                name=name,
-                source=source,
-                sshkey=sshkey,
-                syncoid_options=(f"--identifier={name}",),
-            )
-        )
-
-    if not candidates:
-        raise ValueError(f"migratable LXC group '{group.name}' has no candidates for {host}")
-    return DynamicLxcSource(vmid=group_plan.vmid, candidates=tuple(candidates))
-
-
 def expand_migratable_lxc_replication_plans(
     registry,
     job_config: dict,
@@ -412,27 +199,6 @@ def expand_migratable_lxc_replication_plans(
         job_config.get("target_root", ""),
         f"target_root required for migratable LXC replication job '{job_name}' on {host}",
     ).rstrip("/")
-    candidate_names = normalize_string_list(
-        job_config.get("dynamic_lxc_candidates", list(group.nodes)),
-        f"dynamic_lxc_candidates for job '{job_name}' must be a list for {host}",
-    )
-    candidate_addresses = normalize_string_map(
-        job_config.get("dynamic_lxc_candidate_addresses", {}),
-        f"dynamic_lxc_candidate_addresses for job '{job_name}' must be a mapping for {host}",
-    )
-    candidate_sshkeys = normalize_string_map(
-        job_config.get("dynamic_lxc_candidate_sshkeys", {}),
-        f"dynamic_lxc_candidate_sshkeys for job '{job_name}' must be a mapping for {host}",
-    )
-    active_lxc_source = str(job_config.get("active_lxc_source", "dynamic")).strip()
-    if active_lxc_source not in {"dynamic", "local"}:
-        raise ValueError(
-            f"active_lxc_source for job '{job_name}' must be 'dynamic' or 'local' for {host}"
-        )
-    if active_lxc_source == "local":
-        candidate_names = []
-        candidate_addresses = {}
-        candidate_sshkeys = {}
     group_plans = {plan.name: plan for plan in group.plans}
     plans: list[ReplicationPlan] = []
     seen_targets: set[str] = set()
@@ -457,31 +223,11 @@ def expand_migratable_lxc_replication_plans(
         if target in seen_targets:
             raise ValueError(f"duplicate target {target} in job '{job_name}' for {host}")
         seen_targets.add(target)
-        if active_lxc_source == "local":
-            plans.append(
-                ReplicationPlan(
-                    target=target,
-                    source=group_plan.dataset,
-                    require_active_lxc=group_plan.vmid,
-                    post_hook=str(plan.get("post_hook", "")).strip(),
-                )
-            )
-            continue
-
         plans.append(
             ReplicationPlan(
                 target=target,
-                dynamic_lxc_source=normalize_dynamic_lxc_source_from_group(
-                    registry,
-                    group,
-                    group_plan,
-                    candidate_names,
-                    candidate_addresses,
-                    candidate_sshkeys,
-                    host,
-                    job_name,
-                ),
-                post_hook=str(plan.get("post_hook", "")).strip(),
+                source=group_plan.dataset,
+                require_active_lxc=group_plan.vmid,
             )
         )
     return plans
@@ -515,18 +261,8 @@ def snapshot_plan_from_config(
     dataset: str,
     host: str,
 ) -> SnapshotPlan:
-    if "exclude" in plan and "excludes" in plan:
-        raise ValueError(
-            f"snapshot plan for {dataset} on {host} specifies both 'exclude' and 'excludes'; "
-            "use only 'exclude'"
-        )
-    excludes = normalize_string_list(
-        plan.get("exclude", plan.get("excludes", [])),
-        f"snapshot plan excludes must be a list for {host}",
-    )
     return SnapshotPlan(
         dataset=dataset,
-        excludes=tuple(excludes),
         hourly=str(plan.get("hourly", defaults.get("hourly", 0))),
         daily=str(plan.get("daily", defaults.get("daily", 7))),
         weekly=str(plan.get("weekly", defaults.get("weekly", 4))),
@@ -542,7 +278,6 @@ def snapshot_plan_from_config(
             True,
             f"process_children_only for snapshot plan {dataset} must be true or false for {host}",
         ),
-        auto_exclude_replication=True,
         require_active_lxc=(
             normalize_positive_int(
                 plan.get("require_active_lxc"),
@@ -574,11 +309,6 @@ def normalize_migratable_lxc_groups(
             raise ValueError(
                 f"duplicate migratable LXC group '{normalized_group_name}' for {host}"
             )
-        nodes = normalize_string_list(
-            group_config.get("nodes", []),
-            f"migratable LXC group '{normalized_group_name}' nodes must be a list for {host}",
-        )
-
         explicit_plans = group_config.get("plans", [])
         if not isinstance(explicit_plans, list) or not explicit_plans:
             raise ValueError(
@@ -625,7 +355,6 @@ def normalize_migratable_lxc_groups(
 
         groups[normalized_group_name] = MigratableLxcGroup(
             name=normalized_group_name,
-            nodes=tuple(nodes),
             plans=tuple(plans),
         )
     return groups
@@ -745,5 +474,3 @@ def normalize_snapshot_plans(registry, host: str) -> list[SnapshotPlan]:
         )
 
     return []
-
-

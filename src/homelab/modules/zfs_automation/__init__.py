@@ -7,7 +7,7 @@ module here. The submodules form a small DAG with no cycles:
     types        - dataclasses only, no deps on siblings
     normalize    - generic hosts.conf -> typed-object validation, built on types
     replication  - replication-job expansion, built on normalize
-    access       - pull/push send-only access + pool list, built on normalize/replication
+    access       - push receive-only access + pool list, built on normalize/replication
     render       - generated bash (sanoid/snapshot/replication scripts), built on types/normalize
     staging      - per-host build + deploy, built on all of the above
 
@@ -25,7 +25,7 @@ from ... import op_secrets
 from ...deploy import DeploySession
 from ...hosts import default_registry
 from ...module_support import run_module_deploy, validate_secret_reference
-from .access import normalize_pull_source_access, resolve_pools
+from .access import resolve_pools
 from .normalize import (
     normalize_bool,
     normalize_known_host_refresh,
@@ -81,8 +81,6 @@ def validate(root: Path, hosts: list[str]) -> None:
             False,
             f"zfs-automation.replication_recovery.start_failed must be true or false for {host}",
         )
-        normalize_pull_source_access(registry, host)
-        normalize_pull_source_access(registry, host, include_disabled=True)
         for private_key in normalize_source_private_keys(registry, host):
             try:
                 validate_secret_reference(root, private_key.secret)
@@ -91,5 +89,4 @@ def validate(root: Path, hosts: list[str]) -> None:
         pools = resolve_pools(registry, host)
         if not pools:
             raise ValueError(f"zfs-automation requires at least one managed pool for {host}")
-
 

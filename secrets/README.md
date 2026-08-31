@@ -55,11 +55,6 @@ the 1Password UI.
 ## Workflow
 
 ```bash
-# One-time bootstrap from existing secrets/*.env files.
-# Requires temporary rw on the Homelab vault.
-homelab secrets bootstrap --dry-run
-homelab secrets bootstrap
-
 # Verify every catalog entry resolves without printing values.
 homelab secrets doctor
 
@@ -69,26 +64,16 @@ homelab secrets list
 # Render every secret into /dev/shm for manual inspection.
 # The directory is shredded when this process exits.
 homelab secrets render
-
-# After confirming op has every value, shred the legacy plaintext files.
-homelab secrets purge-local
 ```
 
-After `homelab secrets bootstrap` succeeds, downgrade the service account from
-rw to read-only on the `Homelab` vault. Normal deploys and `homelab secrets
-doctor` only need read access.
+The service account needs only **read** access on the `Homelab` vault. Deploys
+and `homelab secrets doctor` never write.
 
-Bootstrap skips existing items by default. Use `--force` only when you want to
-overwrite the expected fields on existing 1Password items:
-
-```bash
-homelab secrets bootstrap --force
-```
-
-Secret values are never passed on the command line. Bootstrap reads legacy
-`secrets/*.env` files, writes temporary 1Password JSON item templates under
-`/dev/shm`, and calls `op item create --template ...` / `op item edit --template ...`.
-Those temporary files are shredded on exit.
+Items are created and edited in the 1Password UI. There is no repo-side write
+path: the one-time `secrets bootstrap` / `secrets purge-local` migration from
+legacy plaintext `secrets/*.env` files completed, no such files remain, and the
+commands were removed rather than left as a rw-capable code path nothing uses.
+See git history if the migration itself is ever of interest.
 
 ## Adding a new secret
 

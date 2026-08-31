@@ -108,7 +108,6 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
     build_dir = root / "pve-backup" / "build" / host
     prepare_build_dir(build_dir)
     build_standalone_backup_plans(root, host, build_dir)
-    build_prepared_lxc_restore_plan(root, host, build_dir)
     build_config_restore_plan(root, host, build_dir)
 
     if dry_run:
@@ -126,11 +125,6 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
             "Config restore plan: enabled"
             if (build_dir / "restore-plan.conf").is_file()
             else "Config restore plan: disabled"
-        )
-        print_sub(
-            "Prepared LXC restore plan: enabled"
-            if (build_dir / "restore-ct-plan.conf").is_file()
-            else "Prepared LXC restore plan: disabled"
         )
         return
 
@@ -310,60 +304,6 @@ def build_standalone_backup_plans(root: Path, host: str, build_dir: Path) -> Non
             )
     (build_dir / "jobs-plan.conf").write_text(
         "\n".join(job_lines) + "\n",
-        encoding="utf-8",
-    )
-
-
-def build_prepared_lxc_restore_plan(root: Path, host: str, build_dir: Path) -> None:
-    registry = default_registry(root)
-    entries = registry.get(host, "pve-backup.restore_prepared_lxcs", [])
-    if not entries:
-        return
-    if not isinstance(entries, list):
-        raise ValueError(f"pve-backup.restore_prepared_lxcs must be a list for {host}")
-
-    lines = [f"RESTORE_CT_COUNT='{len(entries)}'"]
-    for index, entry in enumerate(entries):
-        for required in ["vmid", "storage", "target_storage"]:
-            if not entry.get(required):
-                raise ValueError(
-                    f"Invalid prepared LXC restore entry at index {index} for {host}"
-                )
-        vmid = str(entry["vmid"])
-        if not re.fullmatch(r"[1-9][0-9]{0,8}", vmid):
-            raise ValueError(
-                f"Invalid prepared LXC VMID at index {index} for {host}: {vmid}"
-            )
-        root_authorized_keys = normalize_string_list(
-            entry.get("root_authorized_keys", []),
-            "root_authorized_keys for prepared LXC restore entry "
-            f"{index} for {host} must be a list",
-        )
-        start_enabled = normalize_bool(
-            entry.get("start", False),
-            False,
-            f"restore_prepared_lxcs[{index}].start must be boolean for {host}",
-        )
-        ignore_unpack_errors = normalize_bool(
-            entry.get("ignore_unpack_errors", False),
-            False,
-            f"restore_prepared_lxcs[{index}].ignore_unpack_errors must be boolean for {host}",
-        )
-        lines.extend([
-            f"RESTORE_CT_{index}_VMID='{shell_quote(vmid)}'",
-            f"RESTORE_CT_{index}_STORAGE='{shell_quote(entry['storage'])}'",
-            f"RESTORE_CT_{index}_TARGET_STORAGE='{shell_quote(entry['target_storage'])}'",
-            f"RESTORE_CT_{index}_UNPRIVILEGED='{shell_quote(entry.get('unprivileged', ''))}'",
-            f"RESTORE_CT_{index}_IGNORE_UNPACK_ERRORS='{str(ignore_unpack_errors).lower()}'",
-            f"RESTORE_CT_{index}_START='{str(start_enabled).lower()}'",
-            f"RESTORE_CT_{index}_ROOT_AUTHORIZED_KEY_COUNT='{len(root_authorized_keys)}'",
-        ])
-        for key_index, public_key in enumerate(root_authorized_keys):
-            lines.append(
-                f"RESTORE_CT_{index}_ROOT_AUTHORIZED_KEY_{key_index}='{shell_quote(public_key)}'"
-            )
-    (build_dir / "restore-ct-plan.conf").write_text(
-        "\n".join(lines) + "\n",
         encoding="utf-8",
     )
 

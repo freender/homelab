@@ -38,7 +38,7 @@ class KeyedRegistry:
 
 # Each of these gates a destructive or noisy action, and each has a deliberately
 # *safe* default when the key is absent: no unattended dist-upgrade, no host GPU
-# torn away from the console, webhook stays in dry-run.
+# torn away from the console, post-install deploy stays in dry-run.
 DANGEROUS_BOOLEANS = [
     (apt_upgrade.normalize_autoupgrade, "apt-upgrade.autoupgrade", False),
     (
@@ -47,7 +47,7 @@ DANGEROUS_BOOLEANS = [
         False,
     ),
     (
-        pve_postinstall_webhook.normalize_webhook_dry_run,
+        pve_postinstall_webhook.normalize_deploy_dry_run,
         "pve-postinstall-webhook.dry_run",
         True,
     ),
@@ -71,6 +71,17 @@ def test_dangerous_booleans_read_their_own_key(normalizer, key: str, safe_defaul
     """
     assert normalizer(KeyedRegistry(key, "true"), "ace") is True
     assert normalizer(KeyedRegistry("some.other.key", "true"), "ace") is safe_default
+
+
+def test_postinstall_poller_env_excludes_retired_listener_values() -> None:
+    env = pve_postinstall_webhook._env_values(
+        "/root/homelab", "pdm-token", "false", "1200", "3600"
+    )
+
+    assert env["PDM_TOKEN_SECRET"] == "pdm-token"
+    assert "WEBHOOK_TOKEN" not in env
+    assert "LISTEN_HOST" not in env
+    assert "LISTEN_PORT" not in env
 
 
 @pytest.mark.parametrize(("normalizer", "key", "safe_default"), DANGEROUS_BOOLEANS)

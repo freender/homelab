@@ -1,9 +1,9 @@
 [Unit]
 Description=Watch PDM completed auto-installs and queue homelab deploys
-After=network-online.target homelab-postinstall-webhook.service
+After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=oneshot
-EnvironmentFile=/etc/homelab-postinstall-webhook/env
+EnvironmentFile=/etc/homelab-postinstall-webhook/poller.env
 ExecStart=/usr/local/sbin/homelab-pdm-installation-watch

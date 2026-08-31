@@ -46,7 +46,6 @@ class HostArtifacts:
 @dataclass(frozen=True)
 class SnapshotPlan:
     dataset: str
-    excludes: tuple[str, ...]
     hourly: str
     daily: str
     weekly: str
@@ -54,22 +53,7 @@ class SnapshotPlan:
     yearly: str
     recursive: bool = True
     process_children_only: bool = True
-    auto_exclude_replication: bool = False
     require_active_lxc: int | None = None
-
-
-@dataclass(frozen=True)
-class DynamicLxcSourceCandidate:
-    name: str
-    source: str
-    sshkey: str
-    syncoid_options: tuple[str, ...]
-
-
-@dataclass(frozen=True)
-class DynamicLxcSource:
-    vmid: int
-    candidates: tuple[DynamicLxcSourceCandidate, ...]
 
 
 @dataclass(frozen=True)
@@ -82,7 +66,6 @@ class MigratableLxcPlan:
 @dataclass(frozen=True)
 class MigratableLxcGroup:
     name: str
-    nodes: tuple[str, ...]
     plans: tuple[MigratableLxcPlan, ...]
 
 
@@ -90,15 +73,7 @@ class MigratableLxcGroup:
 class ReplicationPlan:
     target: str
     source: str = ""
-    dynamic_lxc_source: DynamicLxcSource | None = None
     require_active_lxc: int | None = None
-    post_hook: str = ""
-
-
-@dataclass(frozen=True)
-class TargetSnapshotPrune:
-    keep_days: int
-    patterns: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -106,26 +81,9 @@ class ReplicationJob:
     name: str
     schedule: str
     plans: tuple[ReplicationPlan, ...]
-    after_commands: tuple[str, ...]
     syncoid_options: tuple[str, ...]
     delete_target_snapshots: bool
-    target_snapshot_prune: TargetSnapshotPrune | None
     paused: bool = False
-
-
-@dataclass(frozen=True)
-class ZfsPuller:
-    name: str
-    from_address: str
-    public_key: str
-
-
-@dataclass(frozen=True)
-class ZfsPullSourceAccess:
-    enabled: bool
-    user: str
-    datasets: tuple[str, ...]
-    pullers: tuple[ZfsPuller, ...]
 
 
 @dataclass(frozen=True)
