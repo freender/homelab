@@ -246,7 +246,8 @@ and use that number.
 | `tests/test_docker_stacks.py`, `tests/test_docker_start.py` | `docker-stacks` orchestration and the `docker` module's `start.sh`. |
 | `tests/test_monitoring_config.py`, `tests/test_vmalert_rules.py` | Monitoring config rendering and vmalert rule validity. |
 | `tests/test_disk_label_exporter.py`, `tests/test_hba_exporter.py`, `tests/test_reboot_exporter.py` | The three `metrics-exporters` textfile collectors (naming, label identity, behavior). |
-| `tests/test_pbs_client_backup.py`, `tests/test_pve_backup.py`, `tests/test_pve_http_boot.py`, `tests/test_pve_notifications.py`, `tests/test_apt_security_updates.py`, `tests/test_base_packages.py` | Module-specific behavior. |
+| `tests/test_pbs_client_backup.py`, `tests/test_pve_backup.py`, `tests/test_pve_http_boot.py`, `tests/test_pve_notifications.py`, `tests/test_base_packages.py` | Module-specific behavior. |
+| `tests/test_apt_upgrade.py` | `apt-upgrade`, the single apt mechanism for the fleet since `apt-security-updates` was archived. Pins `auto_reboot` against live inventory (only the offsite hosts opt in) and `SUPPORTED_TYPES` against every host declaring the feature. |
 
 If a new module can take a host off the network or off SSH — or can desynchronize
 a cross-host quorum, VIP, or failover group — it belongs in the golden-render set.

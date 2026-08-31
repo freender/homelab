@@ -21,21 +21,33 @@ Note `--confirm-upgrade` is distinct from `--force`, which everywhere in this
 repo means `FORCE_UPDATE=true` (re-copy files that have not changed) and has no
 effect on whether packages are upgraded.
 
-## Why this is manual
+## What is automated, and what this runbook is now for
 
-Package updates on these hosts are split into two streams that are managed
-differently:
+**Upgrades on the four PVE nodes are no longer manual.** `apt-upgrade` runs a
+full `apt-get -y dist-upgrade` on each node daily — Proxmox packages, ZFS and
+the kernel included — at 05:00, 05:05, 05:10 and 05:15 (osiris, bray, ace,
+clovis). `arc` and `xur` are on the same module at 04:05 and 04:00. The
+`apt-security-updates` module that previously narrowed the nodes to the
+Debian-Security origin has been archived; `apt-upgrade` is now the single apt
+mechanism for the fleet.
 
-| Stream | Origin | How it is applied |
-| --- | --- | --- |
-| Debian security | `o=Debian, l=Debian-Security` | **Automatic** — `apt-security-updates` |
-| Proxmox | `o=Proxmox` | **Manual** — this module, monthly |
+| Stream | How it is applied |
+| --- | --- |
+| Debian security | **Automatic** — `apt-upgrade`, daily |
+| Proxmox, ZFS, kernel | **Automatic** — `apt-upgrade`, daily |
+| **Reboot into a new kernel** | **Manual** — this runbook |
 
-`apt-security-updates` installs `unattended-upgrades` scoped so tightly it
-cannot see the Proxmox repository, so CVE fixes land on their own and never
-need a window. What is left for this module is `pve-manager`, `qemu-server`,
-the kernel and ZFS — where the risk is real, a reboot is usually required, and
-the decision of *when* is the part that should not be automated.
+What was never automated, and still is not, is the reboot. Installing a kernel
+is cheap and reversible; booting into it on a node whose guests are all LXC and
+cannot live-migrate is neither. With `ha shutdown_policy=migrate`, entering HA
+maintenance restarts every guest on the node twice. That decision — *when*, and
+in *what order* — is the judgement this runbook exists to hold.
+
+The prompt to run it is the Saturday 09:00 `RebootRequired` Telegram digest.
+Nothing else will tell you.
+
+This module still deploys to `arc` and `xur` as an on-demand "upgrade now"
+escape hatch, and remains `include_in_all=False` behind `--confirm-upgrade`.
 
 Do not add a timer to this module. The scripting is trivial; the judgement is
 the point.
@@ -251,10 +263,15 @@ You do not need to poll for it:
 - **`ProxmoxUpdatesAvailable`** — an `info` alert routed with a 168h repeat, so
   it arrives as **one Telegram message per week** listing every node with
   pending Proxmox packages. That is the prompt to schedule this runbook.
-- **`RebootRequired`** — fires 24h after an upgrade leaves a node running an
-  older kernel than the one installed. Normally that means step 3's manual
-  reboot has not been taken yet — expected for a while, since that step waits on
-  a human by design. It is the reminder to schedule it, not a fault.
-- **`SecurityUpdatesPending`** — should never fire. If it does, it means
-  `apt-security-updates` has stopped working on that host; that is a bug in the
-  automation, not a reason to run this runbook.
+- **`RebootRequired`** — fires 1h after an upgrade leaves a node running an
+  older kernel than the one installed, and is delivered as a single collapsed
+  Telegram message in the Saturday 09:00–09:10 window. **This is now the primary
+  trigger for this runbook.** The 1h `for:` is deliberately short and coupled to
+  the 05:00–05:15 upgrade band: a kernel installed then must cross the threshold
+  before 09:00 or the prompt is held a further week. Do not move either without
+  the other.
+- **`SecurityUpdatesPending`** / **`ProxmoxUpdatesAvailable`** — should now both
+  be silent. Either firing means `apt-upgrade`'s daily dist-upgrade has stopped
+  achieving anything on that host, which is a bug in the automation, not a
+  reason to run this runbook. The faster signal for a hard failure is
+  `SystemdUnitFailed` on `homelab-apt-dist-upgrade.service`.

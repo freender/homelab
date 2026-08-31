@@ -8,16 +8,19 @@ groups:
       # it was simply never alerted on, which is how four hypervisors reached 20
       # pending security updates unnoticed.
 
-      # Safety net for apt-security-updates, not a patching reminder. On the
-      # hosts that module covers, Debian security updates install themselves
-      # within a day, so this expression should be empty almost all the time; a
-      # host that stays non-zero for a week means the automation stopped working
-      # (unattended-upgrades disabled, apt-daily-upgrade.timer masked, a held
-      # package, no disk space). It is deliberately not scoped to those hosts:
-      # anything with an unpatched security backlog for a week is worth knowing
-      # about, and the hosts covered by apt-upgrade clear it daily on their own,
-      # so they can never reach 7d. That makes the rule self-selecting rather
-      # than carrying a host list that drifts out of step with hosts.conf.
+      # Safety net for apt-upgrade, not a patching reminder. Every apt-capable
+      # host in the fleet now runs that module's daily dist-upgrade, so this
+      # expression should be empty almost all the time; a host that stays
+      # non-zero for a week means the automation stopped working (timer masked,
+      # a held package, no disk space, a repo that fails without apt-get
+      # exiting non-zero).
+      #
+      # This used to be the safety net for apt-security-updates, which covered
+      # only the PVE nodes and only the Debian-Security origin. That module is
+      # archived; the sentence about "hosts covered by apt-upgrade clear it
+      # daily so they can never reach 7d" is now true of every host, which is
+      # what makes the rule self-selecting rather than carrying a host list
+      # that drifts out of step with hosts.conf.
       #
       # 7d survives a vmalert restart: vmalert runs with -remoteWrite.url and
       # -remoteRead.url, so pending-alert start times persist to
@@ -35,25 +38,42 @@ groups:
           severity: warning
         annotations:
           summary: "{{ $labels.host }} has had security updates pending for a week"
-          description: "{{ $labels.host }} has carried at least one unapplied security update continuously for 7 days ({{ $value }} pending now). On a host covered by apt-security-updates this means the automation has stopped: check `systemctl status apt-daily-upgrade.timer` and `journalctl -u unattended-upgrades`, and confirm `apt-config dump Unattended-Upgrade::Origins-Pattern` still resolves. Elsewhere it means the host is genuinely behind."
+          description: "{{ $labels.host }} has carried at least one unapplied security update continuously for 7 days ({{ $value }} pending now). Every apt-capable host runs apt-upgrade's daily dist-upgrade, so this means that automation has stopped achieving anything: check `systemctl status homelab-apt-dist-upgrade.timer` and `journalctl -u homelab-apt-dist-upgrade` on {{ $labels.host }}, and look for held packages with `apt-mark showhold`."
 
-      # The weekly digest, not an incident. Proxmox packages are upgraded by
-      # hand during the monthly window (pve-upgrade/README.md), so this
-      # expression is true nearly all the time by design -- it exists to
-      # produce one summary message, not to be actioned on sight.
+      # This rule inverted when the PVE nodes moved from apt-security-updates to
+      # apt-upgrade. It used to be a reminder for a condition that was true
+      # nearly all the time by design -- Proxmox packages were left standing
+      # between manual monthly windows. Now apt-upgrade dist-upgrades all four
+      # nodes daily at 05:00-05:15, so this expression should be empty almost
+      # always, and a host that stays non-zero means the automation stopped.
+      # Same shape and same job as SecurityUpdatesPending above.
       #
-      # severity: info is what routes it: monitoring-config sends this alertname
-      # to its own Alertmanager route with group_by [alertname] and an
-      # active_time_intervals gate that only opens on Saturday, so all four
-      # nodes collapse into a single notification once a week. Do not give it
-      # warning/critical severity or shorten the `for:` without changing that
-      # route, or it becomes a daily nag for a condition that is deliberately
-      # left standing between maintenance windows.
+      # 3d, not the old 1h: at 1h this would fire every single morning in the
+      # window between the repo publishing a package and that node's 05:0x run
+      # picking it up. 3d clears any normal daily run, a missed run, and a
+      # weekend, so firing means several consecutive runs achieved nothing --
+      # held package, dpkg lock, repo failure that apt-get did not exit non-zero
+      # on. The unit *failing* is caught far sooner and by a different rule:
+      # homelab-apt-dist-upgrade.service is matched by SystemdUnitFailed's
+      # homelab-.* expression, which pages in minutes. This is the backstop for
+      # the case where the unit succeeds and still upgrades nothing.
+      #
+      # The alertname is now slightly stale -- it reads as "updates exist" when
+      # it means "updates are not being applied" -- but it is deliberately not
+      # renamed here: monitoring-config's Alertmanager route matches on
+      # alertname="ProxmoxUpdatesAvailable", and a rename landing in only one of
+      # the two files drops it onto the default 4h-repeat route. Rename both or
+      # neither.
+      #
+      # Kept on the Saturday digest route (group_by [alertname],
+      # active_time_intervals) so all four nodes still collapse into one weekly
+      # message. Weekly is fast enough for a backstop whose fast path is
+      # SystemdUnitFailed.
       - alert: ProxmoxUpdatesAvailable
         expr: sum by (host) (apt_upgrades_pending{origin=~"Proxmox.*"}) > 0
-        for: 1h
+        for: 3d
         labels:
-          severity: info
+          severity: warning
         annotations:
-          summary: "{{ $labels.host }}: {{ $value }} Proxmox updates available"
-          description: "{{ $labels.host }} has {{ $value }} pending packages from the Proxmox repository. These are deliberately not applied automatically -- run the monthly rolling upgrade documented at https://github.com/freender/homelab/blob/main/pve-upgrade/README.md (osiris, bray, ace, clovis, one node at a time), and reboot only where homelab_reboot_required is 1."
+          summary: "{{ $labels.host }}: {{ $value }} Proxmox updates unapplied for 3 days"
+          description: "{{ $labels.host }} has carried {{ $value }} pending packages from the Proxmox repository for 3 days, but apt-upgrade dist-upgrades this node daily at 05:00-05:15 -- so the automation has stopped achieving anything. Check `systemctl status homelab-apt-dist-upgrade.timer` and `journalctl -u homelab-apt-dist-upgrade` on {{ $labels.host }}, and look for held packages with `apt-mark showhold`."

@@ -18,25 +18,35 @@ groups:
       # which on Debian/Proxmox has no hook creating the file and so reads 0
       # forever. Alerting on it would look correct and never fire.
       #
-      # 24h rather than the minutes-scale `for:` used elsewhere in this repo. A
-      # pending kernel is not urgent -- it is a scheduling reminder, and firing
-      # while the daily apt-upgrade window is still in progress would page for
-      # something that has existed for ten minutes.
+      # 1h, not the 24h this carried until the PVE nodes moved to apt-upgrade.
+      # The `for:` is no longer what debounces this rule -- monitoring-config
+      # routes RebootRequired to a Saturday 09:00-09:10 window with
+      # continue: false, so it can only ever notify once a week no matter how
+      # long the pending state has stood. All 24h bought after that was a race:
+      # apt-upgrade runs the PVE nodes at 05:00-05:15 and the exporter refreshes
+      # every 15m, so a Saturday-morning kernel crossed the threshold at ~05:30,
+      # too late for a 24h `for:` to elapse before 09:00 -- and was then held
+      # until the *following* Saturday. A ~1-in-7 chance of a week-late reboot
+      # notice, on the one signal whose whole job is to be timely.
       #
-      # This survives a vmalert restart. vmalert runs with -remoteWrite.url and
-      # -remoteRead.url (docker-stacks/stacks/vmalert/helm.yml), so pending-alert
-      # start times are persisted to VictoriaMetrics as ALERTS_FOR_STATE and
-      # restored on startup; confirmed live on helm 2026-08-17. An earlier
-      # revision of this comment claimed a redeploy reset the timer, which was
-      # wrong -- long `for:` durations are safe here.
+      # 1h fires by ~06:30 worst case, 2.5h of margin before the window opens,
+      # while still absorbing a host that reboots on its own mid-window. Do not
+      # raise this without moving the apt-upgrade schedules earlier to match,
+      # and do not drop the Saturday route without raising it back -- the two
+      # are coupled, and at 1h with the default 4h-repeat route this becomes a
+      # six-times-a-day page for a deliberately standing condition.
+      #
+      # Survives a vmalert restart either way: vmalert runs with -remoteWrite.url
+      # and -remoteRead.url (docker-stacks/stacks/vmalert/helm.yml), so pending
+      # start times persist as ALERTS_FOR_STATE and are restored on startup.
       - alert: RebootRequired
         expr: homelab_reboot_required == 1
-        for: 24h
+        for: 1h
         labels:
           severity: warning
         annotations:
           summary: "{{ $labels.host }} needs a reboot"
-          description: "{{ $labels.host }} has had a reboot pending for over 24h: it is running an older kernel than the newest one installed, or a package update set the reboot-required flag. Check homelab_kernel_info{host=\"{{ $labels.host }}\"} for the running vs installed kernel release, then schedule a reboot. Nothing reboots these hosts automatically."
+          description: "{{ $labels.host }} has a reboot pending: it is running an older kernel than the newest one installed, or a package update set the reboot-required flag. Check homelab_kernel_info{host=\"{{ $labels.host }}\"} for the running vs installed kernel release, then schedule a reboot. Nothing reboots these hosts automatically. On the PVE nodes reboot one at a time in the order osiris, bray, ace, clovis, following pve-upgrade/README.md."
 
       # Absence, per the pattern established by ZfsPoolMetricsMissing: one
       # absent_over_time() per exact host, because a regex matcher only detects

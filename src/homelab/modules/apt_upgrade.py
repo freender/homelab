@@ -15,6 +15,19 @@ TIMER_NAME = "homelab-apt-dist-upgrade.timer"
 AUTO_REBOOT_PATH = "/etc/apt/apt.conf.d/53homelab-auto-reboot"
 DEFAULT_AUTO_REBOOT_TIME = "now"
 
+# Every Debian/Ubuntu-derived host type in the fleet. This was `ubuntu` alone
+# until the Proxmox stream was automated: pve (the four nodes), pbs (xur) and
+# lxc (arc) all previously deferred their full dist-upgrade to the manual
+# pve-upgrade runbook, with apt-security-updates covering only Debian security
+# on the nodes. That module is now archived and this one is the single apt
+# mechanism for the whole fleet.
+#
+# An allow-list rather than a deny-list, even though it now covers all but two
+# types: exo (macos) and pi-kvm (pikvm) have no apt at all, and a typo'd
+# `type:` should skip loudly rather than run apt-get on something that cannot
+# take it. Neither declares the feature, so this only ever fires on a mistake.
+SUPPORTED_TYPES = ("ubuntu", "pve", "pbs", "lxc")
+
 
 def deploy(
     root: Path,
@@ -39,8 +52,11 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
     except HostLookupError as exc:
         raise ValueError(str(exc)) from exc
 
-    if host_type != "ubuntu":
-        print_sub(f"Skipping {host}: apt-upgrade supports type ubuntu only")
+    if host_type not in SUPPORTED_TYPES:
+        print_sub(
+            f"Skipping {host}: apt-upgrade supports types "
+            f"{', '.join(SUPPORTED_TYPES)} only"
+        )
         return
 
     autoupgrade_enabled = normalize_autoupgrade(registry, host)
@@ -121,11 +137,15 @@ def normalize_autoupgrade(registry, host: str) -> bool:
 def normalize_auto_reboot(registry, host: str) -> bool:
     """Opt-in unattended reboot, default false.
 
-    Only ever true for hosts where an unattended reboot is acceptable. The PVE
-    nodes are not candidates -- they are not on this module at all, and their
-    reboots belong to the pve-upgrade runbook. tower/helm/neo/riven are on this
-    module but must stay false: they carry HA Traefik/keepalived, the monitoring
-    stack, and the OpenCode server respectively.
+    Only ever true for hosts where an unattended reboot is acceptable.
+    tower/helm/neo/riven must stay false: they carry HA Traefik/keepalived, the
+    monitoring stack, and the OpenCode server respectively.
+
+    The PVE nodes are on this module now, but are the strongest false: their
+    guests are all LXC and cannot live-migrate, and with ha shutdown_policy=
+    migrate an unattended reboot restarts every guest on the node. Rebooting
+    them stays a manual, one-node-at-a-time act per pve-upgrade/README.md,
+    prompted by the Saturday RebootRequired digest.
     """
     return normalize_bool(
         registry.get(host, "apt-upgrade.auto_reboot", None),
@@ -180,8 +200,23 @@ def write_service(build_dir: Path, cleanup: bool) -> None:
         "",
         "[Service]",
         "Type=oneshot",
-        "ExecStart=/usr/bin/apt-get update",
-        "ExecStart=/usr/bin/env DEBIAN_FRONTEND=noninteractive /usr/bin/apt-get -y dist-upgrade",
+        # DPkg::Lock::Timeout makes apt-get wait for the lock instead of exiting
+        # non-zero the moment it is held. Stock Debian/Ubuntu runs two other apt
+        # jobs on every one of these hosts -- apt-daily.timer (index refresh) and
+        # apt-daily-upgrade.timer (unattended-upgrades) -- and apt-daily carries
+        # a RandomizedDelaySec of 12h, so it can fire at essentially any hour and
+        # will eventually land on top of this unit's window. Without the timeout
+        # that collision is a failed unit, and homelab-apt-dist-upgrade.service
+        # is matched by vmalert's SystemdUnitFailed rule, so it would page for a
+        # lock contention that resolves itself in seconds.
+        #
+        # 600s comfortably outlasts an index refresh; if it ever expires, the
+        # unit fails and the page is then correct.
+        "ExecStart=/usr/bin/apt-get -o DPkg::Lock::Timeout=600 update",
+        (
+            "ExecStart=/usr/bin/env DEBIAN_FRONTEND=noninteractive "
+            "/usr/bin/apt-get -o DPkg::Lock::Timeout=600 -y dist-upgrade"
+        ),
     ]
     if cleanup:
         lines.extend(

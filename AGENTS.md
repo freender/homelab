@@ -135,10 +135,16 @@ CI status. If stopped, name the failed step and whether a host was left diverged
 
 ## PVE Upgrade (`/pve-upgrade`)
 
-`.opencode/command/pve-upgrade.md` rolls the monthly Proxmox upgrade across the nodes.
-`pve-upgrade/README.md` is the canonical runbook and owns the pre-flight commands, the
-stop conditions, the ordering rationale, and the verification steps — follow it rather
-than restating or improvising it. What must not be varied:
+**Upgrades are automated; only the reboot is manual.** `apt-upgrade` dist-upgrades
+every PVE node daily at 05:00–05:15 (and `arc`/`xur` at 04:05/04:00), kernel included.
+This command is now the *reboot* runbook: its trigger is the Saturday 09:00
+`RebootRequired` Telegram digest, and step 2's `./deploy --confirm-upgrade` is
+redundant on the four nodes (it remains the on-demand escape hatch for `arc`/`xur`).
+
+`.opencode/command/pve-upgrade.md` rolls that across the nodes. `pve-upgrade/README.md`
+is the canonical runbook and owns the pre-flight commands, the stop conditions, the
+ordering rationale, and the verification steps — follow it rather than restating or
+improvising it. What must not be varied:
 
 1. **Order.** `osiris`, `bray`, `ace`, `clovis` — one node at a time, never two at once.
    A requested subset keeps this relative order.

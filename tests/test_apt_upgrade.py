@@ -22,7 +22,26 @@ ROOT = Path(__file__).resolve().parents[1]
 # tower is primary keepalived/Traefik and the media/storage host, helm is the
 # whole monitoring stack, neo is tertiary keepalived, riven is the OpenCode
 # server. A reboot flag landing on any of these is the regression to catch.
-MUST_NEVER_AUTO_REBOOT = ("tower", "helm", "neo", "riven")
+#
+# The four PVE nodes joined this list when they moved onto this module. They are
+# the most important entries: their guests are all LXC and cannot live-migrate,
+# so with ha shutdown_policy=migrate an unattended reboot restarts every guest
+# on the node. arc and xur are here for a different reason -- both are LXC
+# guests on bray's kernel, so a reboot of *them* is meaningless, but xur is the
+# primary PBS and arc is the PDM host, and neither should ever acquire the flag
+# by a copy-paste from an offsite block.
+MUST_NEVER_AUTO_REBOOT = (
+    "tower",
+    "helm",
+    "neo",
+    "riven",
+    "ace",
+    "bray",
+    "clovis",
+    "osiris",
+    "arc",
+    "xur",
+)
 
 HOSTS_TEMPLATE = """\
 {host}:
@@ -75,6 +94,38 @@ def test_ha_and_singleton_hosts_never_auto_reboot() -> None:
     registry = default_registry(ROOT)
     for host in MUST_NEVER_AUTO_REBOOT:
         assert apt_upgrade.normalize_auto_reboot(registry, host) is False, host
+
+
+def test_every_enabled_host_has_a_supported_type() -> None:
+    """A host declaring apt-upgrade but skipped by the type gate is a silent no-op.
+
+    deploy_host() prints a skip and returns 0, so an unsupported type does not
+    fail the deploy -- the host simply never gets the timer while hosts.conf
+    claims it does. That is exactly the drift this module exists to remove, so
+    pin the two sides together against live inventory.
+    """
+    registry = default_registry(ROOT)
+    enabled = registry.list_hosts(feature="apt-upgrade")
+    assert enabled, "no host enables apt-upgrade; the gate test is vacuous"
+    for host in enabled:
+        host_type = registry.get(host, "config.type")
+        assert host_type in apt_upgrade.SUPPORTED_TYPES, f"{host}: {host_type}"
+
+
+def test_pve_nodes_are_scheduled_before_the_saturday_reboot_digest() -> None:
+    """The 05:00-05:15 band is coupled to RebootRequired's 1h `for:`.
+
+    A kernel installed on a PVE node must cross that threshold before the
+    Saturday 09:00-09:10 Alertmanager window, or the prompt to reboot is held
+    for a further week. The exporter refreshes every 15m, so the run must
+    finish comfortably before 08:00. Moving these later without also moving the
+    alert is the regression.
+    """
+    registry = default_registry(ROOT)
+    for host in ("ace", "bray", "clovis", "osiris"):
+        schedule = str(registry.get(host, "apt-upgrade.schedule"))
+        hour = int(schedule.rsplit(" ", 1)[1].split(":")[0])
+        assert 3 <= hour <= 6, f"{host} runs at {schedule}, too close to the 09:00 digest"
 
 
 def test_generated_conf_sets_the_keys_unattended_upgrades_reads(tmp_path: Path) -> None:
