@@ -86,7 +86,13 @@ services:
       net.internal: {}
       net_overlay: {}
     healthcheck:
-      test: ["CMD", "redis-cli", "-a", "$${REDIS_PASS}", "ping"]
+      # CMD-SHELL, not CMD: the exec form passed the literal string
+      # "${REDIS_PASS}" as the password, so this check authenticated with a
+      # wrong password on every run. It still passed, because `redis-cli`
+      # exits 0 on NOAUTH/WRONGPASS -- it only reports transport failure.
+      # Grepping for PONG is what actually distinguishes "answering" from
+      # "rejecting us". REDISCLI_AUTH keeps the password out of argv.
+      test: ["CMD-SHELL", "REDISCLI_AUTH=\"$$REDIS_PASS\" redis-cli ping 2>/dev/null | grep -q PONG"]
       interval: 10s
       timeout: 3s
       retries: 3
