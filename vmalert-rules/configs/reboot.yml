@@ -71,21 +71,26 @@ groups:
           summary: "Pending-reboot metrics missing on {{ $labels.host }}"
           description: "homelab_reboot_required has produced no samples for {{ $labels.host }} in 1 hour, so pending-kernel alerting is blind there. The window is 1h because the exporter only refreshes every 15 minutes. Check `systemctl status reboot-textfile-exporter.timer` and `journalctl -u reboot-textfile-exporter` on {{ $labels.host }}."
 
-      # No offsite absence rule yet, deliberately. cinci and cottonwood are the
-      # other two bare-metal hosts and belong in this coverage, but the exporter
-      # has not been deployed to them: they authenticate with the `offsite` key,
-      # which was encrypted at ship time, so metrics-exporters was skipped there.
-      # Adding the rule now would mean shipping an alert that is guaranteed to
-      # fire within 15 minutes and stay firing until that deploy happens --
-      # accurate, but pure noise for a gap we already know about.
+      # The offsite half of the same coverage, split out only for its window:
+      # 3h rather than the 1h above, to tolerate offsite link flaps, matching
+      # ZfsPoolMetricsMissingOffsite in zfs-pools.yml. cinci and cottonwood are
+      # the other two bare-metal hosts (systemd-detect-virt reports none on
+      # both), so they own their kernels and belong in this rule.
       #
-      # When metrics-exporters is next deployed to cinci and cottonwood, add:
-      #
-      #   - alert: RebootMetricsMissingOffsite
-      #     expr: |
-      #       absent_over_time(homelab_reboot_required{host="cinci"}[3h])
-      #       or absent_over_time(homelab_reboot_required{host="cottonwood"}[3h])
-      #     for: 15m
-      #
-      # with the 3h window (vs 1h on-prem) to tolerate offsite link flaps, the
-      # same rationale as ZfsPoolMetricsMissingOffsite in zfs-pools.yml.
+      # This matters more here than on-prem, not less. cinci and cottonwood are
+      # the only two hosts in the fleet with apt-upgrade.auto_reboot true: they
+      # hand the reboot to unattended-upgrades and take it themselves. That is
+      # only safe while something can tell you it has stopped happening. If the
+      # exporter dies, RebootRequired goes quiet for these two and a host that
+      # has silently stopped rebooting itself looks identical to one that never
+      # needed to.
+      - alert: RebootMetricsMissingOffsite
+        expr: |
+          absent_over_time(homelab_reboot_required{host="cinci"}[3h])
+          or absent_over_time(homelab_reboot_required{host="cottonwood"}[3h])
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Pending-reboot metrics missing on {{ $labels.host }}"
+          description: "homelab_reboot_required has produced no samples for {{ $labels.host }} in 3 hours, so pending-kernel alerting is blind there. The window is longer than the on-prem rule's to tolerate offsite link flaps. This host reboots itself via unattended-upgrades, so a blind exporter also hides an auto-reboot that has stopped working. Check `systemctl status reboot-textfile-exporter.timer` and `journalctl -u reboot-textfile-exporter` on {{ $labels.host }}."
