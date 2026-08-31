@@ -133,44 +133,46 @@ live deploy; it does not impose separate module risk tiers.
 Report what shipped or was skipped, the verification and observed value, commit hash, and
 CI status. If stopped, name the failed step and whether a host was left diverged.
 
-## PVE Upgrade (`/pve-upgrade`)
+## PVE Reboot (`/pve-reboot`)
 
 **Upgrades are automated; only the reboot is manual.** `apt-upgrade` dist-upgrades
 every PVE node daily at 05:00–05:15 (and `arc`/`xur` at 04:05/04:00), kernel included.
-This command is now the *reboot* runbook: its trigger is the Saturday 09:00
-`RebootRequired` Telegram digest, and step 2's `./deploy --confirm-upgrade` is
-redundant on the four nodes (it remains the on-demand escape hatch for `arc`/`xur`).
+This command installs nothing. Its whole job is to decide, per node and in a safe order,
+whether a reboot is owed — and to hand that reboot to a human. Its trigger is the
+Saturday 09:00 `RebootRequired` Telegram digest.
 
-`.opencode/command/pve-upgrade.md` rolls that across the nodes. `pve-upgrade/README.md`
+`.opencode/command/pve-reboot.md` rolls that across the nodes. `pve-upgrade/README.md`
 is the canonical runbook and owns the pre-flight commands, the stop conditions, the
 ordering rationale, and the verification steps — follow it rather than restating or
 improvising it. What must not be varied:
 
 1. **Order.** `osiris`, `bray`, `ace`, `clovis` — one node at a time, never two at once.
    A requested subset keeps this relative order.
-2. **Per-node scope is exactly four things:** the README's pre-flight, one `./deploy
-   --confirm-upgrade pve-upgrade <node>`, the reboot check, and the README's
-   verification. `--confirm-upgrade` is required — the module dist-upgrades the target as
-   its deploy action, so it refuses without the flag and is excluded from `./deploy all`.
+2. **Per-node scope is exactly three things:** the README's pre-flight, the reboot check,
+   and the README's verification. Do **not** run `./deploy --confirm-upgrade pve-upgrade`
+   as part of this — `apt-upgrade` already owns these nodes, and that module is now only
+   an on-demand escape hatch (chiefly for `arc`/`xur`). Running it here would dist-upgrade
+   a node mid-runbook, which is exactly the unreviewed package change the ordering exists
+   to prevent.
 3. **Never reboot, and never touch a node's guests.** The reboot is always a manual human
    step. If `homelab_reboot_required` is `1`, stop at that node, report it with the
    README's HA-migration and reboot commands, and leave the node up and unmigrated. HA
    maintenance belongs to that manual step (README 3a), not to this run: entering it
    restarts every LXC on the node twice, since none can live-migrate. A clean pre-flight
    is not authorization.
-4. **Stop on any failed pre-flight check or failed deploy.** Do not continue to the next
-   node; report which node stopped the run and its observed state. This outranks
-   finishing the task.
+4. **Stop on any failed pre-flight check.** Do not continue to the next node; report which
+   node stopped the run and its observed state. This outranks finishing the task.
 5. **Refuse to start** inside the 02:00 or 08:00 maintenance windows — alert suppression
-   there would hide problems the upgrade causes.
+   there would hide problems a reboot causes.
 
 `riven` runs on `bray` and hosts both the agent session and the shared SSH agent. A normal
 run never disturbs it, but if bray's reboot check returns `1`, say in the handoff that the
 human's reboot drops the session and empties the agent. `clovis` runs the monitoring
 stack, so the blind window during its manual reboot is expected, not an incident.
 
-Report per node: packages upgraded, whether a reboot is pending, and the verification
-result. If nothing was pending, say so rather than implying work was done.
+Report per node: whether a reboot is pending, the running vs installed kernel, and the
+verification result. If nothing was pending, say so rather than implying work was done —
+that is the expected outcome most weeks.
 
 ## Module Retirement
 

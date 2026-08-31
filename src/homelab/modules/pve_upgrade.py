@@ -33,9 +33,11 @@ def deploy(
     if not dry_run and not confirmed():
         raise ValueError(
             "refusing to dist-upgrade without --confirm-upgrade. "
-            "This module upgrades packages on the target during the deploy; run "
-            "it per the rolling runbook in pve-upgrade/README.md "
-            "(osiris, bray, ace, clovis, one node at a time)."
+            "This module upgrades packages on the target during the deploy. "
+            "It is now an on-demand escape hatch only: apt-upgrade dist-upgrades "
+            "every host here on a daily timer, so reach for this to force an "
+            "upgrade off-schedule, one host at a time. Do not run it as part of "
+            "/pve-reboot -- see pve-upgrade/README.md."
         )
 
     def env_for_host(host: str) -> dict[str, str]:

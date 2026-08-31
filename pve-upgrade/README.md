@@ -54,11 +54,17 @@ the point.
 
 ---
 
-# Monthly rolling upgrade runbook
+# Rolling reboot runbook
 
-Written to be delegable. Every step has an explicit command and an explicit
-stop condition. **If a check fails, stop and report — do not continue to the
-next node.**
+Driven by `/pve-reboot`. Written to be delegable. Every step has an explicit
+command and an explicit stop condition. **If a check fails, stop and report — do
+not continue to the next node.**
+
+This runbook no longer upgrades anything. `apt-upgrade` has already installed
+the packages by the time you get here; what remains is deciding whether a node
+owes a reboot, and taking it in an order that never leaves the cluster short of
+quorum or a migration target. Most weeks the correct outcome is "nothing
+pending" — say so rather than finding work.
 
 ## Facts this procedure depends on
 
@@ -137,18 +143,25 @@ ssh <node> 'pvesh get /nodes/<node>/tasks --limit 5 --output-format json-pretty 
 active LRMs, any replication job failing, `zpool status -x` is not
 `all pools are healthy`, the UPS is on battery, or a backup is in progress.
 
-### 2. Upgrade
+### 2. Confirm the automation is current
+
+Do **not** run `./deploy --confirm-upgrade pve-upgrade <node>` here. `apt-upgrade`
+owns these nodes; dist-upgrading one mid-runbook introduces the unreviewed
+package change the ordering exists to prevent. This step only reads state:
 
 ```bash
-cd ~/homelab
-./deploy --dry-run pve-upgrade <node>
-./deploy --confirm-upgrade pve-upgrade <node>
+# The daily upgrade ran and succeeded
+ssh <node> 'systemctl status homelab-apt-dist-upgrade.timer --no-pager | head -4'
+ssh <node> 'systemctl show homelab-apt-dist-upgrade.service -p Result -p ExecMainStatus'
+
+# Nothing left pending
+ssh <node> 'apt-get -s -o DPkg::Lock::Timeout=600 dist-upgrade | tail -2'
 ```
 
-Read the output. It prints whether a reboot is required at the end.
-
-**Stop if:** the deploy reports a failed host, or `dist-upgrade` reports held
-or broken packages.
+**Stop if:** the service's last `Result` is anything but `success`, or packages
+are still pending — that means the automation is failing and the reboot you are
+about to take will not land on the kernel you think it will. Fix that first;
+`SystemdUnitFailed` and `ProxmoxUpdatesAvailable` both cover this condition.
 
 ### 3. Reboot only if needed
 
@@ -254,7 +267,10 @@ Only when all of the above pass, move to the next node.
 - Never add a timer to this module, and never enable automatic reboots.
 - Never run this during the 02:00 or 08:00 maintenance windows (see the
   `scheduled-maintenance` interval in `monitoring-config`), or the alert
-  suppression there will hide real problems caused by the upgrade.
+  suppression there will hide real problems caused by the reboot.
+- Never run `./deploy --confirm-upgrade pve-upgrade <node>` as a step of this
+  runbook. `apt-upgrade` owns these nodes; forcing an off-schedule dist-upgrade
+  mid-roll is the unreviewed package change the ordering exists to prevent.
 
 ## What tells you this is due
 
