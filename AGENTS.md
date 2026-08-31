@@ -135,10 +135,10 @@ CI status. If stopped, name the failed step and whether a host was left diverged
 
 ## PVE Reboot (`/pve-reboot`)
 
-**Upgrades are automated; only the reboot is manual.** `apt-upgrade` dist-upgrades
-every PVE node daily at 05:00–05:15 (and `arc`/`xur` at 04:05/04:00), kernel included.
-This command installs nothing. Its whole job is to decide, per node and in a safe order,
-whether a reboot is owed — and to hand that reboot to a human. Its trigger is the
+**Upgrades are automated; reboots are human-authorized per wave.** `apt-upgrade`
+dist-upgrades every PVE node daily at 05:00–05:15 (and `arc`/`xur` at 04:05/04:00),
+kernel included. This command installs nothing. It performs the reboot only after a
+human explicitly confirms the current wave in the `question` tool; its trigger is the
 Saturday 09:00 `RebootRequired` Telegram digest.
 
 `.opencode/command/pve-reboot.md` rolls that across the nodes. `pve-upgrade/README.md`
@@ -159,21 +159,27 @@ improvising it. What must not be varied:
    an on-demand escape hatch (chiefly for `arc`/`xur`). Running it here would dist-upgrade
    a node mid-runbook, which is exactly the unreviewed package change the ordering exists
    to prevent.
-3. **Never reboot, and never touch a node's guests.** The reboot is always a manual human
-   step. If `homelab_reboot_required` is `1`, stop at that node, report it with the
-   README's HA-migration and reboot commands, and leave the node up and unmigrated. HA
-   maintenance belongs to that manual step (README 3a), not to this run: entering it
-   restarts every LXC on the node twice, since none can live-migrate. A clean pre-flight
-   is not authorization.
-4. **Stop on any failed pre-flight check.** Do not continue to the next node; report which
-   node stopped the run and its observed state. This outranks finishing the task.
+3. **Confirmation is the authorization.** After a clean pre-flight and a positive
+   `homelab_reboot_required` check for one or more nodes in a wave, present the exact
+   nodes needing a reboot, affected guests, running vs installed kernels and expected
+   impact through the `question` tool. Only an explicit confirmation authorizes those
+   nodes' reboot. A green pre-flight does not. A declined wave stops the run; do not
+   proceed to a later wave with an earlier one deliberately left pending. Do **not**
+   enter HA maintenance: `ha: shutdown_policy=migrate` handles HA services during a
+   direct reboot, and maintenance would restart every LXC twice because none can
+   live-migrate.
+4. **Recover before continuing.** After a confirmed reboot, wait for every node in the
+   wave to return, verify the README's recovery conditions, and wait for HA to settle.
+   Stop on any failed pre-flight or recovery check; do not continue to the next wave.
+   This outranks finishing the task.
 5. **Refuse to start** inside the 02:00 or 08:00 maintenance windows — alert suppression
    there would hide problems a reboot causes.
 
-`riven` runs on `bray` and hosts both the agent session and the shared SSH agent. A normal
-run never disturbs it, but if bray's reboot check returns `1`, say in the handoff that the
-human's reboot drops the session and empties the agent. `clovis` runs the monitoring
-stack, so the blind window during its manual reboot is expected, not an incident.
+`riven` runs on `bray` and hosts both the agent session and the shared SSH agent. Before
+asking for bray's final-wave confirmation, state that it terminates this session and
+empties the agent. After the confirmed reboot command, stop: the human starts a new
+session to verify bray. `clovis` runs the monitoring stack, so the blind window during
+its reboot is expected, not an incident.
 
 Report per node: whether a reboot is pending, the running vs installed kernel, and the
 verification result. If nothing was pending, say so rather than implying work was done —
