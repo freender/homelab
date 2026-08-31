@@ -92,27 +92,42 @@ restore.
 
 ## Order — and why
 
-Do **one node at a time**, in this order:
+Only **ace, bray and clovis** are in the cluster (`net-cluster`, 3 votes, quorum
+at 2). **`osiris` is standalone** — `pvecm status` fails there by design. That is
+what makes wave 1 below safe: taking osiris down costs no vote.
 
-| # | Node | Guests affected | Why here |
+`ha: shutdown_policy=migrate` is set, so a plain `reboot` on a cluster node hands
+its HA services off by itself. You do not have to enter maintenance mode first.
+
+| Wave | Node(s) | Guests | Why here |
 | --- | --- | --- | --- |
-| 1 | `osiris` | xur (PBS), deepstone | Standalone: no quorum impact, no HA, no migration. Safest canary. |
-| 2 | `bray` | arc, riven, neo | First cluster node, three guests, none user-facing. |
-| 3 | `ace` | tower | Largest blast radius: media, storage, primary Traefik/keepalived. |
-| 4 | `clovis` | helm | **Last** — helm is the whole monitoring stack. Keep observability through the three riskier nodes; accept one short blind window at the end. |
+| 1 | `osiris` **+** `ace` | xur (PBS), deepstone / tower | osiris holds no vote, so this is one cluster node down, not two — cluster stays 2/3. ace has the largest blast radius (media, storage, primary Traefik/keepalived), so it goes while every tool you might need is still up. |
+| 2 | `clovis` | helm, `void` (VM) | Only after wave 1 is fully back and HA has finished rebalancing. |
+| 3 | `bray` | arc, riven, neo | **Last, and this is the point of the order.** |
 
-**Two warnings for whoever runs this:**
+**Why bray is last.** `riven` runs on bray, and riven is the OpenCode server *and*
+the shared SSH agent. Rebooting bray kills the session driving this runbook and
+empties the agent. Doing it last means every other node is already verified, so
+losing your tooling costs nothing — you reconnect, re-run `addhomelabkeys`, and
+the roll is already done. An order that put bray in the middle would drop the
+agent with two nodes still to go, which is why the earlier
+`osiris, bray, ace, clovis` ordering was wrong for a delegated run.
 
-- **`riven` is on `bray`.** It hosts the OpenCode server *and* the shared SSH
-  agent. If bray needs a reboot, step 3a restarts riven, which kills any agent
-  session driving this runbook and empties the SSH agent — expect to reconnect
-  and re-run `addhomelabkeys`, or run bray's step from a different machine. If
-  bray needs no reboot, none of this happens, which is the main reason step 3a
-  is gated on the reboot check rather than run up front.
-- **`clovis` runs the monitoring stack.** If clovis reboots, VictoriaMetrics,
-  vmalert, Alertmanager and Grafana are down, so no alert can fire, including
-  one about clovis. The `Watchdog` dead-man's switch will go quiet and the
-  external check will report it — that is expected, not an incident.
+By the same logic, clovis (wave 2) comes *before* bray, not last: helm is the
+whole monitoring stack, and finishing it in wave 2 means observability is back
+up before the one reboot you take with no agent. Accept the blind window during
+clovis itself — VictoriaMetrics, vmalert, Alertmanager and Grafana are all down,
+so no alert can fire, including one about clovis. The `Watchdog` dead-man's
+switch going quiet is expected, not an incident.
+
+**Two things HA does not cover:**
+
+- **osiris has no HA at all.** It is standalone, so xur (your primary PBS) and
+  deepstone simply go down with it and come back on boot — nothing migrates.
+  Confirm no backup or sync is running before you take it.
+- **`void` on clovis is not an HA resource** (`ha-manager status` lists only
+  ct:101, 104, 106, 107, 108). It will not migrate; it stops with clovis and
+  returns on boot.
 
 ## Per-node procedure
 
