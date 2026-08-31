@@ -17,7 +17,9 @@ groups:
           or absent_over_time(homelab_pve_patch_healthy{host="clovis",patch="zfs-large-block"}[15m])
           or absent_over_time(homelab_pve_patch_healthy{host="clovis",patch="lxc-pre-replication"}[15m])
           or time() - node_textfile_mtime_seconds{host=~"ace|bray|clovis",file=~".*/pve-patches\\.prom"} > 900
-        for: 5m
+        # A package reapply can briefly delay the textfile refresh; give the
+        # patch scripts and node exporter a full 10 minutes to settle first.
+        for: 10m
         labels:
           severity: warning
         annotations:
