@@ -14,13 +14,33 @@ groups:
 
       # smartctl_exporter doesn't expose each drive's own reported critical
       # temperature threshold (unlike TrueNAS, which alerts against that
-      # drive-specific value), so these are fixed thresholds. NVMe runs
-      # meaningfully hotter than HDD/SATA-SSD under normal load in this fleet
-      # (checked live: NVMe 42-59C vs HDD/SATA 33-54C across all hosts), so
-      # device names starting "nvme" get a higher bound to avoid false
-      # positives on normal NVMe operating temperatures.
+      # drive-specific value), so these are fixed thresholds. Spinning rust runs
+      # meaningfully cooler than flash under normal load in this fleet, so the
+      # two classes need different bounds.
+      #
+      # The split is on smartctl_device_rotation_rate, NOT on the device name.
+      # The name-based form this replaces (device!~"nvme.*" >= 58) assumed the
+      # kernel name tells you the media type, and it does not: cinci's sda is a
+      # Samsung 970 EVO Plus in a USB enclosure, so it enumerates as sd* and was
+      # handed the 58C HDD bound. It peaked at 65-67C during the 00:00 snapshot
+      # and 00:30 PBS backup window on 08-01, 08-09 and 09-01 -- entirely normal
+      # for that drive (rated 0-70C, throttles ~80C) and reported as a hardware
+      # problem every time. Any future SATA/USB-attached SSD would have hit the
+      # same trap.
+      #
+      # smartctl_exporter only emits rotation_rate for drives that actually
+      # report one, so its presence is the media type: series exists -> HDD,
+      # absent -> SSD/NVMe. `unless on(host,device)` is what expresses "absent"
+      # here; a plain negative matcher cannot, because the label is missing
+      # rather than empty. Verified live 2026-09-01: 10 rotational series across
+      # ace/clovis/cottonwood, 13 non-rotational including both cinci sd* SSDs.
       - alert: SmartDeviceTemperatureHigh
-        expr: smartctl_device_temperature{temperature_type="current", device!~"nvme.*"} >= 58 or smartctl_device_temperature{temperature_type="current", device=~"nvme.*"} >= 75
+        expr: |
+          (smartctl_device_temperature{temperature_type="current"} >= 58
+            and on(host, device) smartctl_device_rotation_rate)
+          or
+          (smartctl_device_temperature{temperature_type="current"} >= 75
+            unless on(host, device) smartctl_device_rotation_rate)
         for: 10m
         labels:
           severity: warning
