@@ -21,10 +21,11 @@ Thumbs.db
 .vscode/
 .idea/
 
-# Claude Code: ignore local settings, but track the project skills dir
-# (.claude/skills/* symlinks into .opencode/skill/ so both CLIs see one copy)
+# Claude Code: ignore local settings, but track the project skills and commands
+# dirs (.claude/{skills,commands}/* symlink into .opencode/ so both CLIs see one copy)
 .claude/*
 !.claude/skills/
+!.claude/commands/
 
 # Logs
 *.log
