@@ -137,7 +137,7 @@ Keep unit files installed when paused. Removing them is retirement
 
 A unit left in `systemctl --failed` after a fix is redeployed stays "failed" until
 its next successful run or an explicit `reset-failed` — that gap is what
-container-alerting/vmalert failed-unit checks see. Four shared `lib/utils.sh`
+homelab-alerting/vmalert failed-unit checks see. Four shared `lib/utils.sh`
 helpers cover this; reach for them before writing `systemctl reset-failed` by hand.
 Which one you want depends on whether the redeploy changed anything:
 changed content -> `homelab_reload_and_clear_failed`; unchanged content but a

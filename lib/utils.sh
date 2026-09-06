@@ -500,7 +500,7 @@ homelab_apply_pause() {
 #
 # The gate matters. An unconditional reset-failed on a unit that did not
 # change would silently hide a real, ongoing failure from `systemctl
-# --failed`-based alerting (see container-alerting). Tying it to "new content
+# --failed`-based alerting (see homelab-alerting). Tying it to "new content
 # was just written" keeps the reset meaning "a fix was deployed", not "a
 # deploy happened to run".
 #
