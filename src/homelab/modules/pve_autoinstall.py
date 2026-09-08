@@ -18,16 +18,15 @@ Architecture:
 from __future__ import annotations
 
 import json
-import os
-import shutil
-import tempfile
 from pathlib import Path
 from typing import Any
 
+from invoke.exceptions import UnexpectedExit
+
 from .. import op_secrets
-from ..deploy import DeploySession
+from ..deploy import DeploySession, stage_and_run_remote_installer
 from ..hosts import HostLookupError, default_registry
-from ..module_support import validate_secret_reference
+from ..module_support import tmpfs_secret_stage, validate_secret_reference
 from ..output import print_action, print_error, print_ok, print_sub
 from ..ssh import HostConnection, offline_mode
 
@@ -184,6 +183,17 @@ def validate(
 # Remote execution
 # ---------------------------------------------------------------------------
 
+def _cleanup_remote_pdm_dir(connection: HostConnection) -> None:
+    """Best-effort remote rm -rf of the PDM staging dir; it holds secrets so we
+    always attempt it, but a connection drop here must not fail a deploy whose
+    sync-answers.py run already succeeded.
+    """
+    try:
+        connection.connection.run(f'rm -rf "{REMOTE_ROOT}"', hide=True, warn=True)
+    except (UnexpectedExit, OSError) as exc:
+        print_sub(f"warning: could not confirm remote cleanup of {REMOTE_ROOT}: {exc}")
+
+
 def _run_on_pdm_host(
     root: Path,
     registry: Any,
@@ -199,10 +209,7 @@ def _run_on_pdm_host(
         hostname=str(registry.get(pdm_host_name, "config.hostname")),
     )
 
-    # Write plan and combined secrets file to tmpfs.
-    tmpdir = Path(tempfile.mkdtemp(prefix="homelab-pve-autoinstall.", dir="/dev/shm"))
-    tmpdir.chmod(0o700)
-    try:
+    with tmpfs_secret_stage("homelab-pve-autoinstall.") as tmpdir:
         plan_path = tmpdir / "answer-plan.json"
         plan_path.write_text(json.dumps(plan, indent=2), encoding="utf-8")
 
@@ -216,37 +223,26 @@ def _run_on_pdm_host(
 
         script_src = root / "pve-autoinstall" / "scripts" / "sync-answers.py"
 
-        print_sub(f"Staging bundle to {pdm_host_name}...")
-        connection.prepare_remote_dir(REMOTE_ROOT)
-        connection.upload(plan_path, f"{REMOTE_ROOT}/answer-plan.json")
-        connection.upload(token_path, f"{REMOTE_ROOT}/pdm-api-token")
-        connection.upload(script_src, f"{REMOTE_ROOT}/sync-answers.py")
-
-        force_flag = " --force" if force else ""
-        print_sub(f"Running sync-answers.py on {pdm_host_name}...")
-        connection.connection.run(
-            f'chmod +x "{REMOTE_ROOT}/sync-answers.py" && '
-            f'python3 "{REMOTE_ROOT}/sync-answers.py"{force_flag}',
-            pty=False,
-        )
-        print_ok("PDM answers synced")
-    finally:
-        # Shred secrets from tmpfs.
-        shred = shutil.which("shred")
-        for f in tmpdir.glob("*"):
-            if shred:
-                os.system(f'{shred} -u -n 1 "{f}"')
-            else:
-                f.unlink(missing_ok=True)
-        tmpdir.rmdir()
-
-        # Clean up remote staging dir (contains secrets).
         try:
-            connection.connection.run(
-                f'rm -rf "{REMOTE_ROOT}"', hide=True, warn=True
+            stage_and_run_remote_installer(
+                root,
+                connection,
+                REMOTE_ROOT,
+                [
+                    (plan_path, f"{REMOTE_ROOT}/answer-plan.json"),
+                    (token_path, f"{REMOTE_ROOT}/pdm-api-token"),
+                    (script_src, f"{REMOTE_ROOT}/sync-answers.py"),
+                ],
+                "sync-answers.py",
+                *(["--force"] if force else []),
+                interpreter="python3",
+                remote_subdirs=("lib",),
             )
-        except Exception:
-            pass
+            print_ok("PDM answers synced")
+        finally:
+            # Remote staging dir holds the same secrets tmpfs_secret_stage just
+            # shredded locally; it must not survive on the PDM host either.
+            _cleanup_remote_pdm_dir(connection)
 
 
 # ---------------------------------------------------------------------------

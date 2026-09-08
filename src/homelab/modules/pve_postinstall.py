@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Protocol
 
 from ..build import copy_files, render_file
 from ..deploy import DeploySession, force_env, prepare_build_dir, stage_and_run_remote_installer
@@ -8,6 +10,10 @@ from ..hosts import HostLookupError, default_registry
 from ..module_support import FileSpec, normalize_bool, run_module_deploy, write_file_map
 from ..output import print_sub
 from ..ssh import HostConnection, build_files, diff_many
+
+
+class _Registry(Protocol):
+    def get(self, host: str, key: str, default: object = None) -> object: ...
 
 REMOTE_ROOT = "/tmp/homelab-pve-postinstall"
 PVE_FILES = [
@@ -73,36 +79,57 @@ def validate(root: Path) -> None:
         raise ValueError(f"missing interfaces template: {interfaces_template}")
 
 
-def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
-    registry = default_registry(root)
+@dataclass(frozen=True)
+class HostSettings:
+    """Normalized pve-postinstall config for one host, ready for the installer."""
+
+    host_type: str
+    timezone: str
+    import_pools: str
+    mounts: str
+    expected_clustered: str
+    cluster_link0: str
+
+
+def _host_settings(registry: _Registry, host: str) -> HostSettings:
+    """Read and validate hosts.conf for `host`, raising ValueError on bad input.
+
+    Pure function of the registry: no filesystem or network access, so it is
+    unit-testable with a plain dict-backed registry stub.
+    """
     try:
         host_type = registry.get(host, "config.type")
     except HostLookupError as exc:
         raise ValueError(str(exc)) from exc
+    if host_type != "pve":
+        raise ValueError(f"Unsupported host type for {host}: {host_type}")
 
     timezone = str(registry.get(host, "pve-postinstall.timezone", "UTC"))
+
     import_pools_raw = registry.get(host, "pve-postinstall.import_pools", [])
     if not isinstance(import_pools_raw, list):
         raise ValueError(f"pve-postinstall.import_pools must be a list for {host}")
     import_pools = " ".join(str(p) for p in import_pools_raw)
 
-    mounts: list[str] = []
     mounts_raw = registry.get(host, "pve-postinstall.mounts", None)
     if mounts_raw is None:
         mounts_raw = []
     if not isinstance(mounts_raw, list):
         raise ValueError(f"pve-postinstall.mounts must be a list for {host}")
+    mounts: list[str] = []
     for m in mounts_raw:
         if not isinstance(m, dict) or "label" not in m or "path" not in m:
             raise ValueError(f"pve-postinstall.mounts entry must have label and path for {host}")
         mounts.append(f"{m['label']}:{m['path']}")
-    mounts_str = " ".join(mounts)
+
     is_standalone = normalize_bool(
         registry.get(host, "config.standalone", None),
         False,
         f"config.standalone must be true or false for {host}",
     )
-    expected_clustered = str(host_type == "pve" and not is_standalone).lower()
+    # host_type == "pve" is already enforced above, so clustering only depends
+    # on config.standalone from this point on.
+    expected_clustered = str(not is_standalone).lower()
     cluster_link0 = ""
     if expected_clustered == "true":
         mgmt_ip = str(registry.get(host, "pve-postinstall.interfaces.mgmt_ip", ""))
@@ -112,8 +139,19 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
             else str(registry.get(host, "config.hostname"))
         )
 
-    if host_type != "pve":
-        raise ValueError(f"Unsupported host type for {host}: {host_type}")
+    return HostSettings(
+        host_type=host_type,
+        timezone=timezone,
+        import_pools=import_pools,
+        mounts=" ".join(mounts),
+        expected_clustered=expected_clustered,
+        cluster_link0=cluster_link0,
+    )
+
+
+def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
+    registry = default_registry(root)
+    settings = _host_settings(registry, host)
 
     module_dir = root / "pve-postinstall"
     config_dir = module_dir / "configs" / "pve"
@@ -167,16 +205,17 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
     stage_and_install(
         root,
         host,
-        host_type,
-        timezone,
-        import_pools,
-        mounts_str,
-        expected_clustered,
-        cluster_link0,
+        settings.host_type,
+        settings.timezone,
+        settings.import_pools,
+        settings.mounts,
+        settings.expected_clustered,
+        settings.cluster_link0,
         build_dir,
         connection,
         force=force,
     )
+
 
 def build_network_interfaces_bundle(root: Path, host: str, build_dir: Path) -> None:
     registry = default_registry(root)
