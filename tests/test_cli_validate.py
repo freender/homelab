@@ -70,7 +70,7 @@ def test_validate_warns_when_pytest_missing(monkeypatch, tmp_path: Path) -> None
     result = CliRunner().invoke(cli.main, ["validate"])
 
     assert result.exit_code == 0
-    assert any("skipping tests and per-module dry-run" in message for message in messages)
+    assert any("skipping tests, per-module dry-run, and CRAP" in message for message in messages)
 
 
 def test_node_down_coverage_accepts_the_live_repo_config() -> None:

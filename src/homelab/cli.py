@@ -1,17 +1,19 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 import re
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 import click
 import yaml
 
-from . import op_secrets
+from . import crap, op_secrets
 from .deploy import DeploySession
 from .hosts import HostLookupError, default_registry, validate_hosts_data
 from .modules import MODULES, ordered_modules
@@ -480,6 +482,59 @@ def deploy(dry_run: bool, force: bool, confirm_upgrade: bool, module: str, host:
     raise SystemExit(exit_code)
 
 
+CRAP_TOP_N = 10
+
+
+def report_crap(root: Path) -> None:
+    """Print the worst CRAP scores from the coverage data pytest just wrote.
+
+    Never raises: this is a pointer at code worth reviewing, not a gate. Anything
+    that stops it working (old coverage, no data file) degrades to a warning, the
+    same way a missing ruff or shellcheck does.
+    """
+    if not _module_available("coverage"):
+        print_warn("coverage not installed; skipping CRAP report")
+        return
+
+    import coverage
+
+    data_file = root / ".coverage"
+    if not data_file.is_file():
+        print_warn("no .coverage data file; skipping CRAP report")
+        return
+
+    try:
+        cov = coverage.Coverage(data_file=str(data_file))
+        cov.load()
+        with tempfile.NamedTemporaryFile("r+", suffix=".json") as handle:
+            cov.json_report(outfile=handle.name)
+            handle.seek(0)
+            report = json.load(handle)
+    except Exception as exc:
+        # Broad by design: a metrics report must never be the reason validate fails.
+        print_warn(f"could not build coverage JSON report; skipping CRAP ({exc})")
+        return
+
+    rows = crap.score_report(report, root)
+    if not rows:
+        print_warn(
+            "no per-function coverage in report; CRAP needs coverage >= 7.13 "
+            "(start_line) — skipping"
+        )
+        return
+
+    flagged = crap.over_threshold(rows)
+    for row in flagged[:CRAP_TOP_N]:
+        print_sub(row.format())
+    if len(flagged) > CRAP_TOP_N:
+        print_sub(f"... and {len(flagged) - CRAP_TOP_N} more over threshold")
+
+    print_ok(
+        f"{len(flagged)}/{len(rows)} function(s) over CRAP "
+        f"{crap.DEFAULT_THRESHOLD:g} (report only)"
+    )
+
+
 @main.command()
 def validate() -> None:
     # Validation is intentionally offline: no SSH, no op CLI calls.
@@ -511,10 +566,16 @@ def validate() -> None:
         print_action("Pytest (includes per-module dry-run)")
         _run_command([sys.executable, "-m", "pytest", "-q", "tests"], cwd=root)
         print_ok("Tests passed")
+
+        # Report-only, and deliberately so. Coverage records execution, not
+        # assertion, and test_dry_run_all_modules.py asserts only exit_code == 0 —
+        # so gating on CRAP would reward running code over checking it.
+        print_action("Code Risk (CRAP)")
+        report_crap(root)
     else:
         print_warn(
-            "pytest not installed; skipping tests and per-module dry-run "
-            "(CI will still run them)"
+            "pytest not installed; skipping tests, per-module dry-run, and CRAP "
+            "(CI will still run the tests)"
         )
 
     print_action("YAML Syntax")
