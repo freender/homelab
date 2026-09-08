@@ -99,6 +99,67 @@ def validate_standalone_backup_config(root: Path, host: str) -> None:
         seen_jobs.add(key)
 
 
+def report_dry_run(build_dir: Path, host: str) -> None:
+    """Print the build contents and which of the two subfeatures the plans enabled.
+
+    Both lines are reported even when disabled: "no standalone backup here" is a
+    deliberate inventory state on most nodes, and silence would not distinguish it
+    from a plan that failed to render.
+    """
+    print_sub(f"[DRY-RUN] Would deploy to {host}:{REMOTE_ROOT}/")
+    print_sub("Build files:")
+    for file_name in build_files(build_dir):
+        print_sub(f"    {file_name}")
+    standalone = (build_dir / "storage-plan.conf").is_file() or (
+        build_dir / "jobs-plan.conf"
+    ).is_file()
+    print_sub(f"Standalone backup subfeature: {'enabled' if standalone else 'disabled'}")
+    restore = (build_dir / "restore-plan.conf").is_file()
+    print_sub(f"Config restore plan: {'enabled' if restore else 'disabled'}")
+
+
+def stage_secret_uploads(
+    root: Path,
+    host: str,
+    build_dir: Path,
+    secret_dir: Path,
+) -> list[tuple[Path, str]]:
+    """Render this host's PBS credentials into `secret_dir` and return their uploads.
+
+    Both pbs-tokens.env and pbs-<n>.env hold live PBS credentials, and the encryption
+    keyfile is the only thing standing between an offsite datastore and plaintext.
+    None of them is rendered into build/ — a persistent, mode-0644 directory in the
+    repo working tree. They exist only under the caller's tmpfs stage, which shreds
+    them on teardown.
+
+    Which secrets are needed follows from what the plan builders actually emitted, so
+    a host with neither subfeature configured stages nothing at all.
+    """
+    uploads: list[tuple[Path, str]] = []
+
+    if (build_dir / "storage-plan.conf").is_file():
+        tokens_path = secret_dir / "pbs-tokens.env"
+        write_pbs_tokens_file(root, host, tokens_path)
+        uploads.append((tokens_path, f"{REMOTE_ROOT}/build/{host}/pbs-tokens.env"))
+        if host_has_encrypted_storage(root, host):
+            keyfile_path = stage_encryption_keyfile(root, secret_dir / "pbs-encryption.key")
+            uploads.append((keyfile_path, f"{REMOTE_ROOT}/build/{host}/pbs-encryption.key"))
+
+    if (build_dir / "restore-plan.conf").is_file():
+        plan = pbs_client_backup.normalize_backup_plan(root, default_registry(root), host)
+        for index, destination in enumerate(pbs_client_backup.destinations_for(plan)):
+            uploads.append((
+                copy_cached_secret(
+                    root,
+                    pbs_client_backup.secret_name_for_profile(destination.secret_profile),
+                    secret_dir / f"pbs-{index}.env",
+                ),
+                f"{REMOTE_ROOT}/build/{host}/pbs-{index}.env",
+            ))
+
+    return uploads
+
+
 def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
     registry = default_registry(root)
     if str(registry.get(host, "config.type")) != "pve":
@@ -111,60 +172,18 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
     build_config_restore_plan(root, host, build_dir)
 
     if dry_run:
-        print_sub(f"[DRY-RUN] Would deploy to {host}:{REMOTE_ROOT}/")
-        print_sub("Build files:")
-        for file_name in build_files(build_dir):
-            print_sub(f"    {file_name}")
-        print_sub(
-            "Standalone backup subfeature: enabled"
-            if (build_dir / "storage-plan.conf").is_file()
-            or (build_dir / "jobs-plan.conf").is_file()
-            else "Standalone backup subfeature: disabled"
-        )
-        print_sub(
-            "Config restore plan: enabled"
-            if (build_dir / "restore-plan.conf").is_file()
-            else "Config restore plan: disabled"
-        )
+        report_dry_run(build_dir, host)
         return
 
-    upload_paths = [
-        (build_dir, f"{REMOTE_ROOT}/build/{host}"),
-        (root / "pve-backup" / "scripts", f"{REMOTE_ROOT}/scripts"),
-    ]
-
-    # Both pbs-tokens.env and pbs.env hold live PBS credentials. Neither is rendered
-    # into build/ (a persistent, mode-0644 directory in the repo); they are staged in
-    # tmpfs and shredded on teardown.
     with tmpfs_secret_stage("homelab-pve-backup.") as secret_dir:
-        if (build_dir / "storage-plan.conf").is_file():
-            tokens_path = secret_dir / "pbs-tokens.env"
-            write_pbs_tokens_file(root, host, tokens_path)
-            upload_paths.append((tokens_path, f"{REMOTE_ROOT}/build/{host}/pbs-tokens.env"))
-            if host_has_encrypted_storage(root, host):
-                keyfile_path = stage_encryption_keyfile(
-                    root, secret_dir / "pbs-encryption.key"
-                )
-                upload_paths.append(
-                    (keyfile_path, f"{REMOTE_ROOT}/build/{host}/pbs-encryption.key")
-                )
-
-        if (build_dir / "restore-plan.conf").is_file():
-            plan = pbs_client_backup.normalize_backup_plan(root, default_registry(root), host)
-            for index, destination in enumerate(pbs_client_backup.destinations_for(plan)):
-                upload_paths.append((
-                    copy_cached_secret(
-                        root,
-                        pbs_client_backup.secret_name_for_profile(destination.secret_profile),
-                        secret_dir / f"pbs-{index}.env",
-                    ),
-                    f"{REMOTE_ROOT}/build/{host}/pbs-{index}.env",
-                ))
-
-        connection = HostConnection(host)
+        upload_paths = [
+            (build_dir, f"{REMOTE_ROOT}/build/{host}"),
+            (root / "pve-backup" / "scripts", f"{REMOTE_ROOT}/scripts"),
+            *stage_secret_uploads(root, host, build_dir, secret_dir),
+        ]
         stage_and_run_remote_installer(
             root,
-            connection,
+            HostConnection(host),
             REMOTE_ROOT,
             upload_paths,
             "scripts/install.sh",

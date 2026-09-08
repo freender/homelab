@@ -7,7 +7,9 @@ scripts from `.render` into an actual build directory and remote deploy.
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 from pathlib import Path
+from typing import Any
 
 from ...build import copy_file, copy_files, render_file, write_env_file
 from ...deploy import force_env, prepare_build_dir, stage_and_run_remote_installer
@@ -69,6 +71,75 @@ def stage_secret_files(
     return staged
 
 
+def diff_pairs_for(
+    artifacts: HostArtifacts,
+    secret_paths: dict[str, Path],
+) -> list[tuple[Path, str]]:
+    """Local/remote pairs to diff: rendered build files, then any staged secrets.
+
+    Secrets appear only when they were actually staged (a real deploy). On a dry
+    run they are not rendered at all, so there is nothing to compare against.
+    """
+    pairs = [
+        (artifacts.build_dir / spec.build_name, resolve_remote_path(spec))
+        for spec in artifacts.file_specs
+    ]
+    pairs.extend(
+        (secret_paths[spec.build_name], spec.remote_path)
+        for spec in artifacts.secret_file_specs
+        if spec.build_name in secret_paths
+    )
+    return pairs
+
+
+def upload_paths_for(
+    module_dir: Path,
+    host: str,
+    artifacts: HostArtifacts,
+    secret_paths: dict[str, Path],
+) -> list[tuple[Path, str]]:
+    """The upload set: the build dir, the installer scripts, and staged secrets.
+
+    Secret files are uploaded individually into the remote build dir rather than
+    living in the local build dir, which is a persistent mode-0644 directory in
+    the repo. They exist only in tmpfs on this side.
+    """
+    paths = [
+        (artifacts.build_dir, f"{REMOTE_ROOT}/build/{host}"),
+        (module_dir / "scripts", f"{REMOTE_ROOT}/scripts"),
+    ]
+    paths.extend(
+        (secret_paths[spec.build_name], f"{REMOTE_ROOT}/build/{host}/{spec.build_name}")
+        for spec in artifacts.secret_file_specs
+        if spec.build_name in secret_paths
+    )
+    return paths
+
+
+def report_dry_run(registry: Any, host: str, artifacts: HostArtifacts) -> None:
+    """Print what a real deploy would do, including which timers it would pause."""
+    if feature_paused(registry, host, "zfs-automation"):
+        print_sub(
+            f"[DRY-RUN] Would pause zfs-automation on {host} "
+            "(stop and disable snapshot, scrub, and all replication timers)"
+        )
+    else:
+        for job in normalize_replication_config(registry, host):
+            if job.paused:
+                print_sub(
+                    f"[DRY-RUN] Would pause replication job '{job.name}' on {host} "
+                    "(stop and disable its timer; job stays deployed)"
+                )
+    print_sub(f"[DRY-RUN] Would deploy zfs-automation to {host}")
+    print_sub("Build files:")
+    for file_name in build_files(artifacts.build_dir):
+        print_sub(f"    {file_name}")
+    if artifacts.secret_file_specs:
+        print_sub("Secret files staged only during real deploy:")
+        for spec in artifacts.secret_file_specs:
+            print_sub(f"    {spec.build_name}")
+
+
 def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
     registry = default_registry(root)
     ssh_hostname = str(registry.get(host, "config.hostname", host))
@@ -78,91 +149,34 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
     artifacts = build_host_artifacts(root, host)
     connection = HostConnection(host, user=ssh_user, hostname=ssh_hostname)
 
+    # Secrets are staged in tmpfs for a real deploy only; a dry run neither renders
+    # nor uploads them. nullcontext keeps that a single code path -- the two arms
+    # previously duplicated the diff, upload, and installer calls between them.
+    stage_secrets = bool(artifacts.secret_file_specs) and not dry_run
     secret_context = (
-        tmpfs_secret_stage("homelab-zfs-automation.")
-        if artifacts.secret_file_specs and not dry_run
-        else None
+        tmpfs_secret_stage("homelab-zfs-automation.") if stage_secrets else nullcontext()
     )
 
-    if secret_context is None:
+    with secret_context as secret_dir:
+        secret_paths = (
+            stage_secret_files(root, secret_dir, artifacts.secret_file_specs)
+            if stage_secrets
+            else {}
+        )
+
         print_sub("Comparing with remote configs...")
-        diff_pairs = [
-            (artifacts.build_dir / spec.build_name, resolve_remote_path(spec))
-            for spec in artifacts.file_specs
-        ]
-        for message in diff_many(connection, diff_pairs):
+        for message in diff_many(connection, diff_pairs_for(artifacts, secret_paths)):
             print_sub(message)
 
         if dry_run:
-            if feature_paused(registry, host, "zfs-automation"):
-                print_sub(
-                    f"[DRY-RUN] Would pause zfs-automation on {host} "
-                    "(stop and disable snapshot, scrub, and all replication timers)"
-                )
-            else:
-                paused_jobs = [
-                    job.name
-                    for job in normalize_replication_config(registry, host)
-                    if job.paused
-                ]
-                for job_name in paused_jobs:
-                    print_sub(
-                        f"[DRY-RUN] Would pause replication job '{job_name}' on {host} "
-                        "(stop and disable its timer; job stays deployed)"
-                    )
-            print_sub(f"[DRY-RUN] Would deploy zfs-automation to {host}")
-            print_sub("Build files:")
-            for file_name in build_files(artifacts.build_dir):
-                print_sub(f"    {file_name}")
-            if artifacts.secret_file_specs:
-                print_sub("Secret files staged only during real deploy:")
-                for spec in artifacts.secret_file_specs:
-                    print_sub(f"    {spec.build_name}")
+            report_dry_run(registry, host, artifacts)
             return
 
         stage_and_run_remote_installer(
             root,
             connection,
             REMOTE_ROOT,
-            [
-                (artifacts.build_dir, f"{REMOTE_ROOT}/build/{host}"),
-                (module_dir / "scripts", f"{REMOTE_ROOT}/scripts"),
-            ],
-            "scripts/install.sh",
-            host,
-            env=force_env(force),
-            require_root=True,
-            remote_subdirs=("build", "lib"),
-        )
-        return
-
-    with secret_context as secret_dir:
-        secret_paths = stage_secret_files(root, secret_dir, artifacts.secret_file_specs)
-        print_sub("Comparing with remote configs...")
-        diff_pairs = [
-            (artifacts.build_dir / spec.build_name, resolve_remote_path(spec))
-            for spec in artifacts.file_specs
-        ]
-        diff_pairs.extend(
-            (secret_paths[spec.build_name], spec.remote_path)
-            for spec in artifacts.secret_file_specs
-        )
-        for message in diff_many(connection, diff_pairs):
-            print_sub(message)
-
-        upload_paths = [
-            (artifacts.build_dir, f"{REMOTE_ROOT}/build/{host}"),
-            (module_dir / "scripts", f"{REMOTE_ROOT}/scripts"),
-        ]
-        upload_paths.extend(
-            (secret_paths[spec.build_name], f"{REMOTE_ROOT}/build/{host}/{spec.build_name}")
-            for spec in artifacts.secret_file_specs
-        )
-        stage_and_run_remote_installer(
-            root,
-            connection,
-            REMOTE_ROOT,
-            upload_paths,
+            upload_paths_for(module_dir, host, artifacts, secret_paths),
             "scripts/install.sh",
             host,
             env=force_env(force),

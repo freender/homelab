@@ -131,3 +131,143 @@ def test_osiris_config_restore_plan_uses_encryption_key(tmp_path: Path) -> None:
     assert "ENCRYPT='true'" in text
     assert "KEYFILE='/etc/homelab/pbs-encryption.key'" in text
     assert "ARCHIVE_NAME='etc-pve'" in text
+
+
+# --------------------------------------------------------------------------------------
+# Secret staging for the live deploy
+#
+# `deploy_host` used to assemble this inline, so it was reachable only by a real SSH
+# deploy and nothing asserted it. What matters is which credentials get staged, and
+# that every one of them comes from the caller's tmpfs directory rather than from the
+# build dir, which persists in the repo working tree at mode 0644.
+# --------------------------------------------------------------------------------------
+
+
+@pytest.fixture
+def secret_dir(tmp_path: Path) -> Path:
+    path = tmp_path / "shm"
+    path.mkdir()
+    return path
+
+
+def _stub_secret_writers(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        pve_backup,
+        "write_pbs_tokens_file",
+        lambda root, host, destination: destination.write_text("tokens\n", encoding="utf-8"),
+    )
+    monkeypatch.setattr(
+        pve_backup,
+        "stage_encryption_keyfile",
+        lambda root, destination: destination,
+    )
+    monkeypatch.setattr(
+        pve_backup,
+        "copy_cached_secret",
+        lambda root, name, destination: destination,
+    )
+
+
+def test_stage_secret_uploads_stages_nothing_without_plans(
+    tmp_path: Path, secret_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A node with neither subfeature must not pull PBS credentials it has no use for."""
+    _stub_secret_writers(monkeypatch)
+    build_dir = tmp_path / "build"
+    build_dir.mkdir()
+
+    assert pve_backup.stage_secret_uploads(tmp_path, "ace", build_dir, secret_dir) == []
+
+
+def test_stage_secret_uploads_adds_tokens_for_a_storage_plan(
+    tmp_path: Path, secret_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _stub_secret_writers(monkeypatch)
+    monkeypatch.setattr(pve_backup, "host_has_encrypted_storage", lambda root, host: False)
+    build_dir = tmp_path / "build"
+    build_dir.mkdir()
+    (build_dir / "storage-plan.conf").write_text("x\n", encoding="utf-8")
+
+    uploads = pve_backup.stage_secret_uploads(tmp_path, "ace", build_dir, secret_dir)
+
+    assert uploads == [
+        (secret_dir / "pbs-tokens.env", f"{pve_backup.REMOTE_ROOT}/build/ace/pbs-tokens.env")
+    ]
+
+
+def test_stage_secret_uploads_adds_the_encryption_key_only_when_encrypted(
+    tmp_path: Path, secret_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The keyfile is what makes an offsite datastore unreadable; it ships only where used."""
+    _stub_secret_writers(monkeypatch)
+    monkeypatch.setattr(pve_backup, "host_has_encrypted_storage", lambda root, host: True)
+    build_dir = tmp_path / "build"
+    build_dir.mkdir()
+    (build_dir / "storage-plan.conf").write_text("x\n", encoding="utf-8")
+
+    uploads = pve_backup.stage_secret_uploads(tmp_path, "osiris", build_dir, secret_dir)
+
+    assert uploads[-1] == (
+        secret_dir / "pbs-encryption.key",
+        f"{pve_backup.REMOTE_ROOT}/build/osiris/pbs-encryption.key",
+    )
+
+
+def test_stage_secret_uploads_adds_one_env_per_restore_destination(
+    tmp_path: Path, secret_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Each destination has its own PBS credentials; indexes must not collide."""
+    _stub_secret_writers(monkeypatch)
+    build_dir = tmp_path / "build"
+    build_dir.mkdir()
+    (build_dir / "restore-plan.conf").write_text("x\n", encoding="utf-8")
+
+    class FakeDestination:
+        def __init__(self, profile: str) -> None:
+            self.secret_profile = profile
+
+    monkeypatch.setattr(pve_backup, "default_registry", lambda root: object())
+    monkeypatch.setattr(
+        pve_backup.pbs_client_backup, "normalize_backup_plan", lambda root, reg, host: object()
+    )
+    monkeypatch.setattr(
+        pve_backup.pbs_client_backup,
+        "destinations_for",
+        lambda plan: [FakeDestination("backup-main"), FakeDestination("backup-cinci")],
+    )
+
+    uploads = pve_backup.stage_secret_uploads(tmp_path, "osiris", build_dir, secret_dir)
+
+    assert uploads == [
+        (secret_dir / "pbs-0.env", f"{pve_backup.REMOTE_ROOT}/build/osiris/pbs-0.env"),
+        (secret_dir / "pbs-1.env", f"{pve_backup.REMOTE_ROOT}/build/osiris/pbs-1.env"),
+    ]
+
+
+def test_report_dry_run_reports_both_subfeatures_as_disabled(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    build_dir = tmp_path / "build"
+    build_dir.mkdir()
+
+    pve_backup.report_dry_run(build_dir, "ace")
+
+    output = capsys.readouterr().out
+    assert "Standalone backup subfeature: disabled" in output
+    assert "Config restore plan: disabled" in output
+
+
+def test_report_dry_run_counts_a_jobs_only_plan_as_enabled(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A host can declare backup jobs against storages another host defines."""
+    build_dir = tmp_path / "build"
+    build_dir.mkdir()
+    (build_dir / "jobs-plan.conf").write_text("x\n", encoding="utf-8")
+    (build_dir / "restore-plan.conf").write_text("x\n", encoding="utf-8")
+
+    pve_backup.report_dry_run(build_dir, "ace")
+
+    output = capsys.readouterr().out
+    assert "Standalone backup subfeature: enabled" in output
+    assert "Config restore plan: enabled" in output
