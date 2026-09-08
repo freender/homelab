@@ -264,21 +264,6 @@ install_other_subfeatures() {
     else
         print_sub "Network interfaces not configured; skipping"
     fi
-
-    if [[ -f "$BUILD_DIR/homelab-site-routes" ]]; then
-        print_sub "Configuring site routes..."
-        if systemctl list-unit-files homelab-cinci-pikvm-routes.service >/dev/null 2>&1; then
-            systemctl disable --now homelab-cinci-pikvm-routes.service >/dev/null 2>&1 || true
-            rm -f /etc/systemd/system/homelab-cinci-pikvm-routes.service /usr/local/sbin/homelab-cinci-pikvm-routes
-        fi
-        install_file homelab-site-routes || return 1
-        install_file homelab-site-routes.service || return 1
-        systemctl daemon-reload
-        systemctl enable --now homelab-site-routes.service >/dev/null
-        print_ok "homelab-site-routes.service enabled"
-    else
-        print_sub "Site routes not configured; skipping"
-    fi
 }
 
 report_cluster_join_if_needed() {
