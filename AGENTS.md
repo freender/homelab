@@ -67,20 +67,39 @@ judgment calls above are still yours.
 ./deploy --dry-run all all                            # full dry-run
 .venv/bin/python -m pytest tests/                     # unit tests
 .venv/bin/python -m ruff check src/homelab/cli.py     # targeted lint
+PYTHONPATH=src .venv/bin/python -m homelab.cli crap   # CRAP scores from the last pytest run
 shellcheck -S warning pve-postinstall/scripts/install.sh
 find . -name '*.sh' -not -path './.bin/*' -exec shellcheck -S warning {} +   # repo root only
 yq eval '.' hosts.conf >/dev/null
 ```
 
-`./validate` runs Python compile, Ruff, Pytest, `hosts.conf` parse validation, the
-inventory/module cross-check, the leak check, ShellCheck, and module dry-runs — the same
-set CI runs on push/PR to `main` (`.github/workflows/validate.yml`). Ruff and Pytest are
-skipped with a warning when missing,
+`./validate` runs Python compile, Ruff, Pytest, the CRAP gate, `hosts.conf` parse
+validation, the inventory/module cross-check, the leak check, ShellCheck, and module
+dry-runs — the same set CI runs on push/PR to `main` (`.github/workflows/validate.yml`).
+Ruff and Pytest are skipped with a warning when missing,
 so run it from the repo `.venv` (or `uv run`) for true CI parity. After any push, check
 that push's Actions run and inspect failures immediately if any job is red.
 
 The `deploy-module` skill carries the test coverage map (golden renders, pause semantics,
 network-critical modules) and which test owns which area; update tests when touching them.
+
+### The CRAP Gate
+
+`CRAP = complexity^2 * (1 - coverage/100)^3 + complexity`, scored per function from the
+coverage data Pytest just wrote. **`validate` fails above 10.** Because CRAP collapses to
+plain complexity at 100% coverage, the gate reads first as "no function above complexity
+10", and only second as a coverage rule — you cannot pass it by having
+`test_dry_run_all_modules.py` merely execute the code.
+
+`crap-baseline.json` is a **ratchet, not an exemption list**: it grandfathers the
+functions that were already over 10, and it may only shrink.
+
+- New or moved code is held to 10 from its first commit — it is never in the baseline.
+- A baselined function that gets *worse* fails too (0.5 tolerance for coverage noise).
+- Never hand-add or hand-raise an entry. Regenerate with
+  `homelab crap --update-baseline` only to lock in an improvement.
+- Clearing an entry means splitting the function or adding tests that **assert**, not
+  tests that merely execute it. Coverage-gaming is this metric's known hole.
 
 ## Layout
 

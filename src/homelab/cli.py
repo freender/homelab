@@ -485,23 +485,23 @@ def deploy(dry_run: bool, force: bool, confirm_upgrade: bool, module: str, host:
 CRAP_TOP_N = 10
 
 
-def report_crap(root: Path) -> None:
-    """Print the worst CRAP scores from the coverage data pytest just wrote.
+def _coverage_json(root: Path) -> dict | None:
+    """Build a coverage JSON report from the data file pytest just wrote.
 
-    Never raises: this is a pointer at code worth reviewing, not a gate. Anything
-    that stops it working (old coverage, no data file) degrades to a warning, the
-    same way a missing ruff or shellcheck does.
+    Returns None, having warned, when coverage cannot produce one — the same
+    degradation `validate` applies to a missing ruff or shellcheck. A broken
+    metrics pipeline must not be indistinguishable from crappy code.
     """
     if not _module_available("coverage"):
-        print_warn("coverage not installed; skipping CRAP report")
-        return
+        print_warn("coverage not installed; skipping CRAP gate")
+        return None
 
     import coverage
 
     data_file = root / ".coverage"
     if not data_file.is_file():
-        print_warn("no .coverage data file; skipping CRAP report")
-        return
+        print_warn("no .coverage data file; skipping CRAP gate")
+        return None
 
     try:
         cov = coverage.Coverage(data_file=str(data_file))
@@ -509,11 +509,18 @@ def report_crap(root: Path) -> None:
         with tempfile.NamedTemporaryFile("r+", suffix=".json") as handle:
             cov.json_report(outfile=handle.name)
             handle.seek(0)
-            report = json.load(handle)
+            return json.load(handle)
     except Exception as exc:
-        # Broad by design: a metrics report must never be the reason validate fails.
+        # Broad by design: an unreadable report is a tooling fault, not a verdict.
         print_warn(f"could not build coverage JSON report; skipping CRAP ({exc})")
-        return
+        return None
+
+
+def crap_rows(root: Path) -> list[crap.CrapRow] | None:
+    """Score every function from the last coverage run, worst first."""
+    report = _coverage_json(root)
+    if report is None:
+        return None
 
     rows = crap.score_report(report, root)
     if not rows:
@@ -521,18 +528,75 @@ def report_crap(root: Path) -> None:
             "no per-function coverage in report; CRAP needs coverage >= 7.13 "
             "(start_line) — skipping"
         )
+        return None
+    return rows
+
+
+def crap_failure(verdict: crap.BaselineVerdict) -> str:
+    """Render the gate failure with the exact repair target for each function."""
+    lines = [f"  NEW    {row.format()}" for row in verdict.new]
+    lines += [
+        f"  WORSE  {row.format()}  (baseline {recorded:.1f})"
+        for row, recorded in verdict.regressed
+    ]
+    return (
+        f"CRAP gate failed at {crap.FAIL_THRESHOLD:g}:\n"
+        + "\n".join(lines)
+        + "\n\nSplit the function to lower its complexity, or add tests that assert "
+        f"its behaviour. {crap.BASELINE_FILENAME} may only shrink: regenerate it with "
+        "`homelab crap --update-baseline` after an improvement, never to admit a "
+        "new entry."
+    )
+
+
+def check_crap(root: Path) -> None:
+    """Fail on any function over the CRAP gate the baseline does not already own.
+
+    The baseline is a ratchet, not an exemption list. New code is held to
+    FAIL_THRESHOLD from its first commit; grandfathered code may only improve.
+    """
+    rows = crap_rows(root)
+    if rows is None:
         return
 
-    flagged = crap.over_threshold(rows)
-    for row in flagged[:CRAP_TOP_N]:
-        print_sub(row.format())
-    if len(flagged) > CRAP_TOP_N:
-        print_sub(f"... and {len(flagged) - CRAP_TOP_N} more over threshold")
+    baseline = crap.load_baseline(root / crap.BASELINE_FILENAME)
+    verdict = crap.check_baseline(rows, baseline)
+    if verdict.failed:
+        raise click.ClickException(crap_failure(verdict))
 
+    for key in verdict.cleared[:CRAP_TOP_N]:
+        print_sub(f"cleared: {key}")
+    if verdict.cleared:
+        print_warn(
+            f"{len(verdict.cleared)} baseline entry(ies) no longer over "
+            f"{crap.FAIL_THRESHOLD:g}; run `homelab crap --update-baseline` to lock that in"
+        )
     print_ok(
-        f"{len(flagged)}/{len(rows)} function(s) over CRAP "
-        f"{crap.DEFAULT_THRESHOLD:g} (report only)"
+        f"{len(rows)} function(s) scored, 0 new over CRAP {crap.FAIL_THRESHOLD:g} "
+        f"({len(baseline)} baselined)"
     )
+
+
+def run_crap_report(root: Path, update_baseline: bool, top: int, threshold: float) -> int:
+    """Body of the `crap` command, kept out of the click wrapper so it is testable."""
+    rows = crap_rows(root)
+    if rows is None:
+        return 1
+
+    flagged = crap.over_threshold(rows, threshold=threshold)
+    for row in flagged[:top]:
+        print_sub(row.format())
+    if len(flagged) > top:
+        print_sub(f"... and {len(flagged) - top} more over {threshold:g}")
+
+    if update_baseline:
+        path = root / crap.BASELINE_FILENAME
+        crap.write_baseline(path, rows)
+        print_ok(f"{len(crap.load_baseline(path))} entry(ies) written to {crap.BASELINE_FILENAME}")
+        return 0
+
+    print_ok(f"{len(flagged)}/{len(rows)} function(s) over CRAP {threshold:g}")
+    return 0
 
 
 @main.command()
@@ -567,11 +631,12 @@ def validate() -> None:
         _run_command([sys.executable, "-m", "pytest", "-q", "tests"], cwd=root)
         print_ok("Tests passed")
 
-        # Report-only, and deliberately so. Coverage records execution, not
-        # assertion, and test_dry_run_all_modules.py asserts only exit_code == 0 —
-        # so gating on CRAP would reward running code over checking it.
+        # Gated, via a shrinking baseline. Coverage records execution rather than
+        # assertion, so the gate is set where it reads primarily as a complexity
+        # ceiling (see crap.FAIL_THRESHOLD) — a function cannot pass it by being
+        # merely executed by test_dry_run_all_modules.py.
         print_action("Code Risk (CRAP)")
-        report_crap(root)
+        check_crap(root)
     else:
         print_warn(
             "pytest not installed; skipping tests, per-module dry-run, and CRAP "
@@ -620,6 +685,22 @@ def execute_module(module_name: str, host: str, dry_run: bool, force: bool) -> i
     except (HostLookupError, ValueError) as exc:
         print_error(f"{module_name}: {exc}")
         return 1
+
+
+@main.command("crap")
+@click.option("--update-baseline", is_flag=True, help="Rewrite the baseline from this run.")
+@click.option("--top", default=CRAP_TOP_N, show_default=True, help="Rows to print.")
+@click.option(
+    "--threshold",
+    type=float,
+    default=crap.FAIL_THRESHOLD,
+    show_default=True,
+    help="Score to list against.",
+)
+def crap_report(update_baseline: bool, top: int, threshold: float) -> None:
+    """Score functions by CRAP using the coverage data from the last pytest run."""
+    print_header("Code Risk (CRAP)")
+    raise SystemExit(run_crap_report(repo_root(), update_baseline, top, threshold))
 
 
 @main.group()

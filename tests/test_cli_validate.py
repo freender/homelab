@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import click
 import pytest
 from click.testing import CliRunner
 
-from homelab import cli
+from homelab import cli, crap
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -101,3 +102,85 @@ def test_node_down_coverage_flags_a_rule_for_an_unscraped_host(tmp_path: Path) -
 
     with pytest.raises(click.ClickException, match="does not scrape: retired"):
         cli.check_node_down_coverage(tmp_path)
+
+
+def _crap_row(name: str, score: float) -> crap.CrapRow:
+    return crap.CrapRow(
+        score=score, complexity=5, coverage=0.0, filename="src/homelab/mod.py", name=name, line=1
+    )
+
+
+def _stub_rows(monkeypatch, rows: list[crap.CrapRow] | None) -> None:
+    """Bypass the coverage-report build; the gate's logic is what is under test."""
+    monkeypatch.setattr(cli, "crap_rows", lambda root: rows)
+
+
+def test_crap_gate_fails_on_a_function_the_baseline_does_not_own(monkeypatch, tmp_path) -> None:
+    _stub_rows(monkeypatch, [_crap_row("fresh", 12.0)])
+
+    with pytest.raises(click.ClickException, match="CRAP gate failed at 10"):
+        cli.check_crap(tmp_path)
+
+
+def test_crap_gate_passes_a_grandfathered_function(monkeypatch, tmp_path: Path) -> None:
+    crap.write_baseline(tmp_path / crap.BASELINE_FILENAME, [_crap_row("old", 31.1)])
+    _stub_rows(monkeypatch, [_crap_row("old", 31.1)])
+
+    cli.check_crap(tmp_path)
+
+
+def test_crap_gate_fails_when_a_grandfathered_function_gets_worse(monkeypatch, tmp_path) -> None:
+    crap.write_baseline(tmp_path / crap.BASELINE_FILENAME, [_crap_row("old", 31.1)])
+    _stub_rows(monkeypatch, [_crap_row("old", 44.0)])
+
+    with pytest.raises(click.ClickException, match="WORSE"):
+        cli.check_crap(tmp_path)
+
+
+def test_crap_gate_warns_but_passes_when_an_entry_can_be_dropped(monkeypatch, tmp_path) -> None:
+    messages: list[str] = []
+    monkeypatch.setattr(cli, "print_warn", messages.append)
+    crap.write_baseline(tmp_path / crap.BASELINE_FILENAME, [_crap_row("old", 31.1)])
+    _stub_rows(monkeypatch, [_crap_row("old", 3.0)])
+
+    cli.check_crap(tmp_path)
+
+    assert any("--update-baseline" in message for message in messages)
+
+
+def test_crap_gate_skips_rather_than_fails_when_coverage_is_unusable(monkeypatch, tmp_path) -> None:
+    # A broken metrics pipeline must not be indistinguishable from crappy code.
+    _stub_rows(monkeypatch, None)
+
+    cli.check_crap(tmp_path)
+
+
+def test_crap_report_update_baseline_writes_only_the_over_gate_rows(monkeypatch, tmp_path) -> None:
+    _stub_rows(monkeypatch, [_crap_row("bad", 12.0), _crap_row("fine", 2.0)])
+
+    assert cli.run_crap_report(tmp_path, update_baseline=True, top=10, threshold=10.0) == 0
+    written = crap.load_baseline(tmp_path / crap.BASELINE_FILENAME)
+    assert written == {"src/homelab/mod.py::bad": 12.0}
+
+
+def test_crap_report_exits_nonzero_without_coverage(monkeypatch, tmp_path: Path) -> None:
+    _stub_rows(monkeypatch, None)
+
+    assert cli.run_crap_report(tmp_path, update_baseline=False, top=10, threshold=10.0) == 1
+
+
+def test_crap_report_truncates_to_top_n(monkeypatch, tmp_path: Path) -> None:
+    lines: list[str] = []
+    monkeypatch.setattr(cli, "print_sub", lines.append)
+    _stub_rows(monkeypatch, [_crap_row(f"f{index}", 12.0) for index in range(5)])
+
+    cli.run_crap_report(tmp_path, update_baseline=False, top=2, threshold=10.0)
+
+    assert lines[-1] == "... and 3 more over 10"
+
+
+def test_repo_baseline_matches_the_gate_threshold() -> None:
+    """A hand-edited baseline written against a looser gate would silently exempt code."""
+    path = ROOT / crap.BASELINE_FILENAME
+    data = json.loads(path.read_text(encoding="utf-8"))
+    assert data["threshold"] == crap.FAIL_THRESHOLD

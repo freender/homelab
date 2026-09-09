@@ -195,3 +195,83 @@ class TestScoreReport:
         )
         assert [row.name for row in crap.over_threshold(rows, threshold=5)] == ["risky"]
         assert crap.over_threshold(rows) == []
+
+
+def row(name: str, score: float, filename: str = "mod.py") -> crap.CrapRow:
+    return crap.CrapRow(
+        score=score, complexity=5, coverage=0.0, filename=filename, name=name, line=1
+    )
+
+
+class TestBaselineKey:
+    def test_key_is_file_and_name_without_the_line(self) -> None:
+        # Keying on the line would make every edit above a function look like a
+        # new offender, and hide real regressions in the churn.
+        assert crap.baseline_key(row("f", 12.0)) == "mod.py::f"
+
+    def test_same_name_in_two_files_is_two_entries(self) -> None:
+        keys = {crap.baseline_key(row("deploy_host", 12.0, name)) for name in ("a.py", "b.py")}
+        assert len(keys) == 2
+
+
+class TestBaselineFile:
+    def test_missing_file_grandfathers_nothing(self, tmp_path: Path) -> None:
+        assert crap.load_baseline(tmp_path / "absent.json") == {}
+
+    def test_write_records_only_functions_over_the_gate(self, tmp_path: Path) -> None:
+        path = tmp_path / crap.BASELINE_FILENAME
+        crap.write_baseline(path, [row("bad", 12.0), row("fine", 9.9)])
+        assert crap.load_baseline(path) == {"mod.py::bad": 12.0}
+
+    def test_round_trip_preserves_scores(self, tmp_path: Path) -> None:
+        path = tmp_path / crap.BASELINE_FILENAME
+        crap.write_baseline(path, [row("a", 31.116), row("b", 12.264)])
+        assert crap.load_baseline(path) == {"mod.py::a": 31.1, "mod.py::b": 12.3}
+
+    def test_rounding_stays_well_inside_the_tolerance(self, tmp_path: Path) -> None:
+        # Writing a rounded score must never make the next run look regressed.
+        path = tmp_path / crap.BASELINE_FILENAME
+        crap.write_baseline(path, [row("a", 12.349)])
+        verdict = crap.check_baseline([row("a", 12.349)], crap.load_baseline(path))
+        assert not verdict.failed
+
+
+class TestCheckBaseline:
+    def test_new_function_over_the_gate_fails(self) -> None:
+        verdict = crap.check_baseline([row("fresh", 12.0)], {})
+        assert [item.name for item in verdict.new] == ["fresh"]
+        assert verdict.failed
+
+    def test_new_function_under_the_gate_passes(self) -> None:
+        verdict = crap.check_baseline([row("fresh", 9.9)], {})
+        assert not verdict.failed
+
+    def test_grandfathered_function_at_its_baseline_passes(self) -> None:
+        verdict = crap.check_baseline([row("old", 31.1)], {"mod.py::old": 31.1})
+        assert not verdict.failed
+
+    def test_grandfathered_function_getting_worse_fails(self) -> None:
+        verdict = crap.check_baseline([row("old", 40.0)], {"mod.py::old": 31.1})
+        assert verdict.regressed[0][1] == 31.1
+        assert verdict.failed
+
+    def test_coverage_noise_within_tolerance_is_not_a_regression(self) -> None:
+        verdict = crap.check_baseline([row("old", 31.4)], {"mod.py::old": 31.1})
+        assert not verdict.failed
+
+    def test_improved_function_is_reported_as_cleared_not_failed(self) -> None:
+        # Dropping under the gate must free the entry, or the baseline becomes a
+        # permanent exemption list instead of a ratchet.
+        verdict = crap.check_baseline([row("old", 4.0)], {"mod.py::old": 31.1})
+        assert verdict.cleared == ["mod.py::old"]
+        assert not verdict.failed
+
+    def test_deleted_function_is_reported_as_cleared(self) -> None:
+        verdict = crap.check_baseline([], {"mod.py::gone": 31.1})
+        assert verdict.cleared == ["mod.py::gone"]
+        assert not verdict.failed
+
+    def test_a_stale_baseline_entry_never_exempts_a_different_function(self) -> None:
+        verdict = crap.check_baseline([row("other", 12.0)], {"mod.py::old": 99.0})
+        assert [item.name for item in verdict.new] == ["other"]
+        assert verdict.cleared == ["mod.py::old"]
