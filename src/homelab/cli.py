@@ -613,8 +613,8 @@ def validate() -> None:
     print_ok("Python sources compile")
 
     # Ruff and pytest both gate CI. Running them here is what makes `./validate` an
-    # honest pre-PR check: without them you could follow the AGENTS.md checklist,
-    # see a green validate, push, and still land a red build.
+    # honest pre-PR check: without them you could run the targeted checks, see a
+    # green validate, push, and still land a red build.
     if _module_available("ruff"):
         print_action("Ruff")
         _run_command([sys.executable, "-m", "ruff", "check", "src", "tests"], cwd=root)

@@ -12,11 +12,20 @@ Load this skill when the user asks to:
 - Work with `hosts.conf`, `src/homelab/`, or the deployment framework
 - Invoke `./deploy` itself — dry-run or live, for one module/host or `all all`
 - Run or troubleshoot `/ship` — success predicates, verification, stop reasons
+- Retire a module (`reference/module-retirement.md`)
 
 This skill lives in the repo it describes. `AGENTS.md` is loaded automatically
-alongside it and owns repo layout, build/test commands, deploy/pause semantics,
-shipping policy, retirement, and secret rules. This skill owns the **how**: module
+alongside it and owns repo layout, build/test commands, the three off-switches, the
+shipping and reboot rails, and secret rules. This skill owns the **how**: module
 internals, helper APIs, and execution detail. Do not restate `AGENTS.md` here.
+
+## Reference files (read on demand, not up front)
+
+| File | When |
+|---|---|
+| `reference/systemd-failed-state.md` | An installer manages systemd units — clearing, recovering, masking, or retiring failed state |
+| `reference/test-coverage.md` | Adding or updating tests, or judging whether an area is genuinely covered |
+| `reference/module-retirement.md` | Removing a module from the framework, or clearing `./validate`'s orphan-module warning |
 
 ## Python module shape
 
@@ -133,134 +142,31 @@ deployed.
 Keep unit files installed when paused. Removing them is retirement
 (`enabled: false`), not pause, and breaks resume.
 
+**Why the gate is spelled `deploy:` and never `enabled:`.** A feature-level `enabled:`
+key is module-owned and the framework never reads it — `pbs-client-backup.enabled` is
+that module's own flag with its own meaning. The legacy `enabled: false` spelling of the
+host-level gate was removed precisely because the same key silently meant two different
+things depending on which layer read it first. When adding a new flag, never reuse
+`enabled` for anything the framework must interpret.
+
 ## Clearing systemd failed-unit state
 
-A unit left in `systemctl --failed` after a fix is redeployed stays "failed" until
-its next successful run or an explicit `reset-failed` — that gap is what
-homelab-alerting/vmalert failed-unit checks see. Four shared `lib/utils.sh`
-helpers cover this; reach for them before writing `systemctl reset-failed` by hand.
-Which one you want depends on whether the redeploy changed anything:
+Installers that manage systemd units should use the shared `lib/utils.sh` helpers
+rather than hand-rolling `systemctl reset-failed`. Pick by what the redeploy did:
 changed content -> `homelab_reload_and_clear_failed`; unchanged content but a
-transient fault -> `homelab_recover_failed_units`; unit going away ->
-`retire_systemd_unit`.
+transient fault -> `homelab_recover_failed_units`; a unit that should never run
+here -> `homelab_mask_unwanted_service`; a unit going away -> `retire_systemd_unit`.
 
-- **`homelab_reload_and_clear_failed "$changed" unit1 [unit2 ...]`** — the
-  standard follow-up to `install_file_map`. Runs `daemon-reload` and clears the
-  named units' failed records, but only when the caller's changed flag is
-  `true`. **The helper owns the gate — call it unguarded**, not inside another
-  `if [[ "$changed" == true ]]`:
+Full semantics, the load-bearing gate, return-code conventions, and which modules
+deliberately opt out: `reference/systemd-failed-state.md`.
 
-  ```bash
-  changed=false
-  install_file_map || rc=$?
-  [[ $rc -eq 0 ]] && changed=true
+## Tests
 
-  homelab_reload_and_clear_failed "$changed" homelab-mymodule.service
-  ```
-
-  The gate is load-bearing: an unconditional reset would hide a real ongoing
-  failure until the next redeploy. Note it clears failure state without proving
-  the fix works — the unit goes from "known failed" to "unknown" until its next
-  run. Where an immediate verdict matters, follow it with an explicit
-  `systemctl start` and check the result, as `zfs-automation`'s replication
-  recovery does.
-- **`homelab_mask_unwanted_service unit.service ["reason"]`** — mask a unit that
-  should never run on this host (LSB init script with no matching hardware, an
-  unwanted distro default) and clear its failed record. Idempotent, and a
-  reported no-op when the unit isn't installed. The reason is optional and
-  echoed to output — omit it rather than asserting something host-specific you
-  haven't verified. Used by `pve-postinstall` and `ubuntu-setup`.
-- **`homelab_recover_failed_units unit1 [unit2 ...]`** — for units that fail
-  from *transient external* causes (registry rate limits, network blips), where
-  a redeploy sees no file change and so the gated helper above does nothing.
-  Acts only on units currently in the failed state: resets them (which also
-  clears the `StartLimitBurst` limiter that otherwise makes systemd refuse the
-  start outright) and then starts them, so the unit's own run decides the
-  outcome — transient faults recover, persistent ones fail again immediately
-  and stay visible. Healthy units are never touched, and a still-failing unit
-  warns rather than failing the deploy.
-
-  Only for units that are cheap, idempotent, and safe to run off-schedule.
-  `docker` uses it for `homelab-docker-update.service` (a `docker compose up -d`
-  oneshot whose `start.sh` pulls images). Deliberately **not** used by
-  `pbs-client-backup` (multi-hour backup) or `apt-upgrade` (a start there means
-  running a dist-upgrade at deploy time); those have daily timers that clear a
-  stale failure on their next successful run, and keeping a possibly-real
-  failure visible beats silencing it. Waits up to `HOMELAB_RECOVER_TIMEOUT`
-  seconds (default 300), since a `Type=oneshot` start blocks and oneshot
-  disables `TimeoutStartSec` by default.
-- **`retire_systemd_unit unit-name /path/to/unit-file`** — stop, disable,
-  remove, and clear the failed record for a unit being retired. Returns **0
-  when it retired something, 1 when there was nothing to do** (the
-  `copy_if_changed` convention). Under `set -e` a bare call therefore aborts
-  the installer on the common no-op path — consume the status with `if ...;
-  then`, a flag assignment, or an explicit `|| true`. Call it once per unit for
-  multi-unit retirements and delete any remaining non-unit files (script,
-  textfile-collector output) alongside it; `zfs-automation`'s
-  `cleanup_retired_health_check` and both `metrics-exporters` cleanups follow
-  that shape.
-
-Two hand-rolled `reset-failed` call sites remain on purpose, both outside this
-model: `zfs-automation`'s replication recovery (resets *and* starts, to get a
-verdict) and `docker/scripts/rebuild.sh` (not a module installer).
-
-The systemd helpers are covered in `tests/test_safety_regressions.py` and the
-file helpers in `tests/test_utils_file_helpers.py`, both running real bash
-against a stubbed `systemctl` — extend them when changing helper behavior.
-
-## Test coverage map
-
-Add or update tests when touching these areas.
-
-**Read coverage numbers carefully.** `--cov` reports ~68% overall, but roughly
-half of that comes from `test_dry_run_all_modules.py`, which asserts only
-`exit_code == 0`. Excluding it, assertion-backed coverage is ~42%. A module can
-be "covered" and still render semantically wrong output. When judging whether an
-area needs tests, run `pytest --ignore=tests/test_dry_run_all_modules.py --cov`
-and use that number.
-
-### Cross-cutting
-
-| Test | Covers |
-| --- | --- |
-| `tests/test_dry_run_all_modules.py` | Parametrized offline dry-run of every registered module against the real `hosts.conf` (`execute_module(name, "all", True, False)` under `HOMELAB_OFFLINE=1`). This is what `homelab validate` relies on for its per-module dry-run gate — it no longer has its own for-loop. A new module is covered automatically via `MODULES`/`ordered_modules()`; no per-module addition needed. **Smoke only** — it proves a module does not raise, never that its output is correct. Do not treat a module as tested because this passes. |
-| `tests/test_render_golden.py` | Golden renders for the **network-critical** modules — `pve-postinstall`, `pve-interface-pinning`, `pve-gpu-passthrough`, `pve-autoinstall`, `keepalived`. A bad render is only discovered after a reboot on a host you can no longer reach. Renders against the real `hosts.conf`, so it also catches inventory drift, and asserts no unsubstituted Jinja placeholders survive. The `keepalived` block is different in kind: its assertions are **cross-host invariants** (shared VRID, unique priorities, symmetric self-excluding unicast peer lists, agreed VIP, `dev` matching `interface`, agreed `advert_int`, per-host healthcheck), because a split-brain VIP is invisible to any single host's own validation. |
-| `tests/test_hosts.py`, `tests/test_cli_validate.py` | Inventory parsing and the validate command. |
-| `tests/test_build_and_templates.py`, `tests/test_module_fallbacks.py` | Build/render plumbing and module fallback (offline `.example` secret) behavior. |
-| `tests/test_leak_check.py`, `tests/test_env_example_check.py` | The public-repo leak check and `.env.example` placeholder check (see `AGENTS.md` § Public Repo Boundary). |
-| `tests/test_ssh_helpers.py` | `HostConnection` / staging helpers. |
-
-### `lib/utils.sh` — runs as root on every host
-
-| Test | Covers |
-| --- | --- |
-| `tests/test_safety_regressions.py` | The **systemd** helpers: `retire_systemd_unit`, `homelab_apply_pause`, `homelab_reload_and_clear_failed`, `homelab_recover_failed_units`, `homelab_mask_unwanted_service`, plus assorted footgun regressions (strict boolean normalizers, unknown-host rejection, tmpfs staging). Harness: `run_utils_snippet` (bash function stub) and `run_recover_snippet` (real on-PATH stub, needed because `timeout` execs the binary and bypasses a shell function). |
-| `tests/test_utils_file_helpers.py` | The **file-installation** helpers: `file_needs_update`, `copy_if_changed`, `install_if_changed`, the `backup_and_*` variants, `backup_config`, `prune_backup_history`, `load_file_map`/`mapped_dest`/`mapped_mode`, `install_file_map`, `install_build_file_validated`, `require_env`/`require_file`/`require_dir`, `ensure_timer_state`. Includes a cross-language contract test pinning `module_support.write_file_map` (Python writer) to `load_file_map` (bash reader) — they share no schema, and a delimiter change on either side breaks every module at deploy time. Also holds the regression for the 0=changed / 2=error distinction: these helpers must never report a failed `cp`/`install` as a successful change, because installers feed that status into `homelab_reload_and_clear_failed`. |
-
-### Module-specific
-
-| Test | Covers |
-| --- | --- |
-| `tests/test_zfs_normalize.py` | `zfs_automation/normalize.py` — validators, dataset-path helpers, snapshot plans and templates, migratable-LXC groups, dynamic-LXC source resolution, `source_private_keys` path confinement, `known_host_refresh` validation. Uses a real `HostRegistry` over a temp `hosts.conf`. This is where to add coverage for anything that turns `hosts.conf` into typed plans. |
-| `tests/test_zfs_replication_pause.py` | Pause semantics — per-job `paused` vs `enabled: false` in `zfs-automation`. Imports `normalize_replication_config` from the package's `__init__.py` re-export, not `.replication` directly — keep that export if you touch it. |
-| `tests/test_docker_stacks.py`, `tests/test_docker_start.py` | `docker-stacks` orchestration and the `docker` module's `start.sh`. |
-| `tests/test_monitoring_config.py`, `tests/test_vmalert_rules.py` | Monitoring config rendering and vmalert rule validity. |
-| `tests/test_disk_label_exporter.py`, `tests/test_hba_exporter.py`, `tests/test_reboot_exporter.py` | The three `metrics-exporters` textfile collectors (naming, label identity, behavior). |
-| `tests/test_pbs_client_backup.py`, `tests/test_pve_backup.py`, `tests/test_pve_http_boot.py`, `tests/test_pve_notifications.py`, `tests/test_base_packages.py` | Module-specific behavior. |
-| `tests/test_apt_upgrade.py` | `apt-upgrade`, the single apt mechanism for the fleet since `apt-security-updates` was archived. Pins `auto_reboot` against live inventory (only the offsite hosts opt in) and `SUPPORTED_TYPES` against every host declaring the feature. |
-
-If a new module can take a host off the network or off SSH — or can desynchronize
-a cross-host quorum, VIP, or failover group — it belongs in the golden-render set.
-
-### Known thin spots
-
-Modules with no dedicated test, carried only by the dry-run smoke test:
-`ubuntu_setup`, `wsl_conf`, `apcupsd`, `disk_spindown`, `apt_upgrade`,
-`ssh_config`, `pve_postinstall_webhook`, and the three `pve_*_patch` wrappers.
-`zfs_automation/{access,render,staging}.py` and `op_secrets.py` are likewise
-largely unasserted. Prefer adding to these over re-covering well-tested areas.
-The ~4,000 lines of active `scripts/install.sh` have no execution coverage at
-all — ShellCheck only.
+Add or update tests when touching a module. The coverage map — which test owns
+which area, the golden-render set for network-critical modules, and the known
+thin spots — is in `reference/test-coverage.md`. Note that headline `--cov`
+numbers are inflated by the dry-run smoke test; that file explains how to read
+them.
 
 ## Output/logging
 
@@ -322,5 +228,6 @@ does exactly that so `pve-upgrade` keeps its dry-run smoke coverage.
 ## Shipping (`/ship` pipeline)
 
 `/ship` wraps this CLI in validate -> dry-run -> deploy/canary -> verify -> commit -> push
--> CI. `AGENTS.md` owns the behavior and stop conditions for every step; this skill only
-provides the deployment CLI and implementation mechanics used by that pipeline.
+-> CI. `.opencode/command/ship.md` owns the behavior and stop conditions for every step
+(`AGENTS.md` keeps only the rails that outlive the command); this skill provides the
+deployment CLI and implementation mechanics used by that pipeline.
