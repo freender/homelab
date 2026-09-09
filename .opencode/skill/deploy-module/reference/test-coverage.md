@@ -3,12 +3,24 @@
 Read this when adding or updating tests, or when judging whether an area is
 actually covered. Not needed for a routine module edit.
 
-**Read coverage numbers carefully.** `--cov` reports ~68% overall, but roughly
-half of that comes from `test_dry_run_all_modules.py`, which asserts only
-`exit_code == 0`. Excluding it, assertion-backed coverage is ~42%. A module can
-be "covered" and still render semantically wrong output. When judging whether an
-area needs tests, run `pytest --ignore=tests/test_dry_run_all_modules.py --cov`
-and use that number.
+**Read coverage numbers carefully.** The full suite reports ~83%, but roughly a
+quarter of that (~24 points) comes from `test_dry_run_all_modules.py`, which
+asserts only `exit_code == 0`. Excluding it, assertion-backed coverage is ~59%.
+A module can be "covered" and still render semantically wrong output. When
+judging whether an area needs tests, use the assertion-backed number:
+
+```bash
+COVERAGE_FILE=/tmp/cov_nosmoke .venv/bin/python -m pytest tests/ \
+    --ignore=tests/test_dry_run_all_modules.py --cov=src/homelab --cov-report=term
+```
+
+Use a separate `COVERAGE_FILE` and an explicit `--cov-report=term`: reusing the
+repo's `.coverage` (which `validate` has already written from the full suite) or
+passing an empty `--cov-report=` will print the *previous* run's totals and make
+the smoke test look like it contributes nothing.
+
+Re-measure rather than trusting the figures above — they move with every coverage
+commit, and this paragraph has been stale before.
 
 ## Cross-cutting
 
@@ -48,7 +60,9 @@ a cross-host quorum, VIP, or failover group — it belongs in the golden-render 
 Modules with no dedicated test, carried only by the dry-run smoke test:
 `ubuntu_setup`, `wsl_conf`, `apcupsd`, `disk_spindown`, `apt_upgrade`,
 `ssh_config`, `pve_postinstall_webhook`, and the three `pve_*_patch` wrappers.
-`zfs_automation/{access,render,staging}.py` and `op_secrets.py` are likewise
-largely unasserted. Prefer adding to these over re-covering well-tested areas.
+`zfs_automation/{access,render,staging}.py` are likewise largely unasserted (7% /
+11% / 37% assertion-backed). `op_secrets.py` and `ssh.py` are no longer thin —
+commit `6273be2` took them to 71% / 72%. Prefer adding to these over re-covering
+well-tested areas.
 The ~4,000 lines of active `scripts/install.sh` have no execution coverage at
 all — ShellCheck only.
