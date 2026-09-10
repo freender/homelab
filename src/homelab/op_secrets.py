@@ -85,6 +85,38 @@ def offline_mode() -> bool:
     return os.environ.get("HOMELAB_OFFLINE", "").lower() in {"1", "true", "yes"}
 
 
+def _resolve_example(root: Path, example_field: Any, template_path: Path) -> Path | None:
+    """Locate a catalog entry's offline example, or None if there isn't one.
+
+    An explicit `example:` wins; otherwise the `<template>.example` convention is
+    tried. A named-but-absent example is treated as absent rather than fatal, so
+    an online-only secret can carry the key without breaking `load_catalog`.
+    """
+    if isinstance(example_field, str) and example_field.strip():
+        candidate = (root / example_field).resolve()
+        return candidate if candidate.is_file() else None
+    default_example = template_path.with_suffix(template_path.suffix + ".example")
+    return default_example if default_example.is_file() else None
+
+
+def _catalog_entry(root: Path, catalog_file: Path, name: str, value: Any) -> SecretEntry:
+    """Validate and build one `secrets:` entry; every failure names the entry."""
+    if not isinstance(value, dict):
+        raise OpSecretsError(f"{catalog_file}: entry '{name}' must be a mapping")
+    template_field = value.get("template")
+    if not isinstance(template_field, str) or not template_field.strip():
+        raise OpSecretsError(f"{catalog_file}: entry '{name}' missing template path")
+    template_path = (root / template_field).resolve()
+    if not template_path.is_file():
+        raise OpSecretsError(f"{catalog_file}: entry '{name}' template not found: {template_path}")
+    return SecretEntry(
+        name=name,
+        template=template_path,
+        example=_resolve_example(root, value.get("example"), template_path),
+        description=str(value.get("description", "")).strip(),
+    )
+
+
 def load_catalog(root: Path) -> dict[str, SecretEntry]:
     catalog_file = root / CATALOG_PATH
     if not catalog_file.is_file():
@@ -95,37 +127,10 @@ def load_catalog(root: Path) -> dict[str, SecretEntry]:
     if not isinstance(secrets_raw, dict) or not secrets_raw:
         raise OpSecretsError(f"{catalog_file}: no `secrets:` entries defined")
 
-    entries: dict[str, SecretEntry] = {}
-    for name, value in secrets_raw.items():
-        if not isinstance(value, dict):
-            raise OpSecretsError(f"{catalog_file}: entry '{name}' must be a mapping")
-        template_field = value.get("template")
-        if not isinstance(template_field, str) or not template_field.strip():
-            raise OpSecretsError(f"{catalog_file}: entry '{name}' missing template path")
-        template_path = (root / template_field).resolve()
-        if not template_path.is_file():
-            raise OpSecretsError(
-                f"{catalog_file}: entry '{name}' template not found: {template_path}"
-            )
-        example_field = value.get("example")
-        example_path: Path | None = None
-        if isinstance(example_field, str) and example_field.strip():
-            candidate = (root / example_field).resolve()
-            if candidate.is_file():
-                example_path = candidate
-        else:
-            # Default convention: <template>.example
-            default_example = template_path.with_suffix(template_path.suffix + ".example")
-            if default_example.is_file():
-                example_path = default_example
-        description = str(value.get("description", "")).strip()
-        entries[name] = SecretEntry(
-            name=name,
-            template=template_path,
-            example=example_path,
-            description=description,
-        )
-    return entries
+    return {
+        name: _catalog_entry(root, catalog_file, name, value)
+        for name, value in secrets_raw.items()
+    }
 
 
 def _find_token_path() -> Path:
@@ -435,26 +440,27 @@ def secret_file(root: Path, name: str) -> Path:
     return destination
 
 
-def doctor(root: Path, names: Iterable[str] | None = None) -> int:
-    """Verify each catalog entry resolves via `op inject` without printing values.
-
-    Returns 0 on success, non-zero if any entry fails.
-    """
-    catalog = load_catalog(root)
-    targets = list(names) if names else list(catalog.keys())
+def _doctor_offline(catalog: dict[str, SecretEntry], targets: list[str]) -> int:
+    """Check the offline example fallbacks only; `op` is never invoked."""
     failures: list[tuple[str, str]] = []
-    if offline_mode():
-        for name in targets:
-            entry = catalog.get(name)
-            if entry is None:
-                failures.append((name, "not in catalog"))
-                continue
-            if entry.example is None:
-                failures.append((name, "missing offline example"))
-                continue
-            print(f"  [offline] {name}: example OK ({entry.example.name})")
-        return 0 if not failures else 1
+    for name in targets:
+        entry = catalog.get(name)
+        if entry is None:
+            failures.append((name, "not in catalog"))
+            continue
+        if entry.example is None:
+            failures.append((name, "missing offline example"))
+            continue
+        print(f"  [offline] {name}: example OK ({entry.example.name})")
+    return 0 if not failures else 1
 
+
+def _doctor_online(catalog: dict[str, SecretEntry], targets: list[str]) -> int:
+    """Render every target through `op inject` into tmpfs, then shred it.
+
+    Renders are never printed; only the pass/fail verdict per name is. Cleanup
+    runs in a `finally` so a mid-loop failure cannot leave rendered secrets behind.
+    """
     try:
         ensure_op_session()
     except OpSecretsError as exc:
@@ -462,6 +468,7 @@ def doctor(root: Path, names: Iterable[str] | None = None) -> int:
         return 1
 
     session = _ensure_session_dir()
+    failures: list[tuple[str, str]] = []
     try:
         for name in targets:
             entry = catalog.get(name)
@@ -469,9 +476,8 @@ def doctor(root: Path, names: Iterable[str] | None = None) -> int:
                 failures.append((name, "not in catalog"))
                 print(f"  FAIL  {name}: not in catalog")
                 continue
-            destination = session / entry.filename
             try:
-                _render_with_op(entry.template, destination)
+                _render_with_op(entry.template, session / entry.filename)
                 print(f"  OK    {name}")
             except OpSecretsError as exc:
                 failures.append((name, str(exc)))
@@ -483,6 +489,18 @@ def doctor(root: Path, names: Iterable[str] | None = None) -> int:
         print(f"\n{len(failures)} secret(s) failed to resolve.", file=sys.stderr)
         return 1
     return 0
+
+
+def doctor(root: Path, names: Iterable[str] | None = None) -> int:
+    """Verify each catalog entry resolves via `op inject` without printing values.
+
+    Returns 0 on success, non-zero if any entry fails.
+    """
+    catalog = load_catalog(root)
+    targets = list(names) if names else list(catalog.keys())
+    if offline_mode():
+        return _doctor_offline(catalog, targets)
+    return _doctor_online(catalog, targets)
 
 
 def render_all(root: Path) -> Path:

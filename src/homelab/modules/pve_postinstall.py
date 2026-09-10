@@ -91,36 +91,58 @@ class HostSettings:
     cluster_link0: str
 
 
-def _host_settings(registry: _Registry, host: str) -> HostSettings:
-    """Read and validate hosts.conf for `host`, raising ValueError on bad input.
-
-    Pure function of the registry: no filesystem or network access, so it is
-    unit-testable with a plain dict-backed registry stub.
-    """
+def _pve_host_type(registry: _Registry, host: str) -> str:
+    """The host's type, refusing anything this module cannot post-install."""
     try:
         host_type = registry.get(host, "config.type")
     except HostLookupError as exc:
         raise ValueError(str(exc)) from exc
     if host_type != "pve":
         raise ValueError(f"Unsupported host type for {host}: {host_type}")
+    return str(host_type)
 
-    timezone = str(registry.get(host, "pve-postinstall.timezone", "UTC"))
 
-    import_pools_raw = registry.get(host, "pve-postinstall.import_pools", [])
-    if not isinstance(import_pools_raw, list):
+def _import_pools(registry: _Registry, host: str) -> str:
+    """Pools to `zpool import` at boot, as the space-separated list install.sh reads."""
+    raw = registry.get(host, "pve-postinstall.import_pools", [])
+    if not isinstance(raw, list):
         raise ValueError(f"pve-postinstall.import_pools must be a list for {host}")
-    import_pools = " ".join(str(p) for p in import_pools_raw)
+    return " ".join(str(pool) for pool in raw)
 
-    mounts_raw = registry.get(host, "pve-postinstall.mounts", None)
-    if mounts_raw is None:
-        mounts_raw = []
-    if not isinstance(mounts_raw, list):
+
+def _mounts(registry: _Registry, host: str) -> str:
+    """Declared mounts as `label:path` pairs; both keys are required per entry."""
+    raw = registry.get(host, "pve-postinstall.mounts", None)
+    if raw is None:
+        raw = []
+    if not isinstance(raw, list):
         raise ValueError(f"pve-postinstall.mounts must be a list for {host}")
     mounts: list[str] = []
-    for m in mounts_raw:
-        if not isinstance(m, dict) or "label" not in m or "path" not in m:
+    for entry in raw:
+        if not isinstance(entry, dict) or "label" not in entry or "path" not in entry:
             raise ValueError(f"pve-postinstall.mounts entry must have label and path for {host}")
-        mounts.append(f"{m['label']}:{m['path']}")
+        mounts.append(f"{entry['label']}:{entry['path']}")
+    return " ".join(mounts)
+
+
+def _cluster_link0(registry: _Registry, host: str) -> str:
+    """The address corosync link0 should bind, preferring the mgmt IP over DNS."""
+    mgmt_ip = str(registry.get(host, "pve-postinstall.interfaces.mgmt_ip", ""))
+    if mgmt_ip:
+        return mgmt_ip.split("/", 1)[0]
+    return str(registry.get(host, "config.hostname"))
+
+
+def _host_settings(registry: _Registry, host: str) -> HostSettings:
+    """Read and validate hosts.conf for `host`, raising ValueError on bad input.
+
+    Pure function of the registry: no filesystem or network access, so it is
+    unit-testable with a plain dict-backed registry stub.
+    """
+    host_type = _pve_host_type(registry, host)
+    timezone = str(registry.get(host, "pve-postinstall.timezone", "UTC"))
+    import_pools = _import_pools(registry, host)
+    mounts = _mounts(registry, host)
 
     is_standalone = normalize_bool(
         registry.get(host, "config.standalone", None),
@@ -130,20 +152,13 @@ def _host_settings(registry: _Registry, host: str) -> HostSettings:
     # host_type == "pve" is already enforced above, so clustering only depends
     # on config.standalone from this point on.
     expected_clustered = str(not is_standalone).lower()
-    cluster_link0 = ""
-    if expected_clustered == "true":
-        mgmt_ip = str(registry.get(host, "pve-postinstall.interfaces.mgmt_ip", ""))
-        cluster_link0 = (
-            mgmt_ip.split("/", 1)[0]
-            if mgmt_ip
-            else str(registry.get(host, "config.hostname"))
-        )
+    cluster_link0 = "" if is_standalone else _cluster_link0(registry, host)
 
     return HostSettings(
         host_type=host_type,
         timezone=timezone,
         import_pools=import_pools,
-        mounts=" ".join(mounts),
+        mounts=mounts,
         expected_clustered=expected_clustered,
         cluster_link0=cluster_link0,
     )

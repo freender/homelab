@@ -168,3 +168,99 @@ def test_installer_removes_the_drop_in_when_disabled() -> None:
     assert "apt-config dump Unattended-Upgrade::Automatic-Reboot" in text
     # The reboot only happens at the end of a u-u run, so its timer is required.
     assert "apt-daily-upgrade.timer" in text
+
+
+# ---------------------------------------------------------------------------
+# stage_and_install: which files reach the host.
+#
+# deploy_host decides *whether* auto-reboot.conf is written; this decides
+# whether it is uploaded. A conf built into build/ but left out of the upload
+# list would make the flag a no-op with a fully successful deploy, so the
+# file-map is asserted directly rather than inferred from a dry run.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def staged(monkeypatch: pytest.MonkeyPatch) -> list[dict]:
+    """Capture stage_and_run_remote_installer's arguments instead of connecting."""
+    calls: list[dict] = []
+
+    def record(root, connection, remote_root, upload_paths, installer, *args, **kwargs):
+        calls.append(
+            {
+                "root": root,
+                "connection": connection,
+                "remote_root": remote_root,
+                "upload_paths": upload_paths,
+                "installer": installer,
+                "args": args,
+                **kwargs,
+            }
+        )
+
+    monkeypatch.setattr(apt_upgrade, "stage_and_run_remote_installer", record)
+    return calls
+
+
+def _build_dir(tmp_path: Path, *names: str) -> Path:
+    build_dir = tmp_path / "build"
+    build_dir.mkdir(parents=True, exist_ok=True)
+    for name in names:
+        (build_dir / name).write_text(f"{name}\n", encoding="utf-8")
+    return build_dir
+
+
+def test_stage_uploads_the_scripts_dir_and_every_built_file(
+    tmp_path: Path, staged: list[dict]
+) -> None:
+    build_dir = _build_dir(tmp_path, "service", "env", "timer", "auto-reboot.conf")
+
+    apt_upgrade.stage_and_install(tmp_path, build_dir, connection=object(), force=False)
+
+    remote_targets = [remote for _local, remote in staged[0]["upload_paths"]]
+    assert remote_targets == [
+        f"{apt_upgrade.REMOTE_ROOT}/scripts",
+        f"{apt_upgrade.REMOTE_ROOT}/build/service",
+        f"{apt_upgrade.REMOTE_ROOT}/build/env",
+        f"{apt_upgrade.REMOTE_ROOT}/build/timer",
+        f"{apt_upgrade.REMOTE_ROOT}/build/auto-reboot.conf",
+    ]
+    assert staged[0]["upload_paths"][0][0] == tmp_path / "apt-upgrade" / "scripts"
+
+
+def test_stage_omits_auto_reboot_conf_when_it_was_not_built(
+    tmp_path: Path, staged: list[dict]
+) -> None:
+    """Uploading a stale conf would re-enable a flag deploy_host declined to set."""
+    build_dir = _build_dir(tmp_path, "service", "env", "timer")
+
+    apt_upgrade.stage_and_install(tmp_path, build_dir, connection=object(), force=False)
+
+    remote_targets = [remote for _local, remote in staged[0]["upload_paths"]]
+    assert f"{apt_upgrade.REMOTE_ROOT}/build/auto-reboot.conf" not in remote_targets
+    assert len(remote_targets) == 4
+
+
+def test_stage_requires_root_and_makes_the_three_remote_subdirs(
+    tmp_path: Path, staged: list[dict]
+) -> None:
+    apt_upgrade.stage_and_install(
+        tmp_path, _build_dir(tmp_path, "env"), connection=object(), force=False
+    )
+
+    call = staged[0]
+    assert call["installer"] == "scripts/install.sh"
+    assert call["require_root"] is True  # install.sh writes to /etc and systemd
+    assert call["remote_subdirs"] == ("build", "lib", "scripts")
+
+
+def test_stage_passes_force_through_to_the_installer_env(
+    tmp_path: Path, staged: list[dict]
+) -> None:
+    build_dir = _build_dir(tmp_path, "env")
+
+    apt_upgrade.stage_and_install(tmp_path, build_dir, connection=object(), force=True)
+    apt_upgrade.stage_and_install(tmp_path, build_dir, connection=object(), force=False)
+
+    assert staged[0]["env"] == apt_upgrade.force_env(True)
+    assert staged[1]["env"] == apt_upgrade.force_env(False)

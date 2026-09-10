@@ -17,10 +17,14 @@ what exit code came back, and whether a remote run was attempted at all.
 
 from __future__ import annotations
 
+import contextlib
+import json
 from pathlib import Path
 from typing import Any
 
 import pytest
+from invoke.exceptions import UnexpectedExit
+from invoke.runners import Result
 
 from homelab import op_secrets
 from homelab.deploy import DeploySession
@@ -340,3 +344,245 @@ class TestSuccessPaths:
         assert code == 0
         assert [entry["_host"] for entry in captured["plan"]["answers"]] == ["ace", "bray"]
         assert sorted(captured["passwords"]) == ["ace", "bray"]
+
+
+# ---------------------------------------------------------------------------
+# _run_on_pdm_host: the staging step deploy() delegates to.
+#
+# Every test above stubs this out, which left the one function that writes
+# plaintext PVE root passwords to disk unexercised. What matters here is the
+# file map and the cleanup: the token file must be 0600, the remote staging dir
+# must be torn down even when the sync run fails, and the local tmpfs stage must
+# be released on both paths. A leaked staging dir is a root password at rest.
+# ---------------------------------------------------------------------------
+
+
+class _StubConnection:
+    def __init__(self, host: str, user: str | None = None, hostname: str | None = None) -> None:
+        self.host = host
+        self.user = user
+        self.hostname = hostname
+        self.connection = self
+
+
+class _StubRegistry:
+    def get(self, host: str, key: str) -> str:
+        return {"config.user": "root", "config.hostname": f"{host}.internal"}[key]
+
+
+@pytest.fixture
+def pdm_run(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> dict[str, Any]:
+    """Stub the connection, the tmpfs stage, and the remote installer.
+
+    The staged files are snapshotted at the moment the installer would run,
+    because the stage is torn down before _run_on_pdm_host returns.
+    """
+    state: dict[str, Any] = {
+        "stage_prefix": None,
+        "stages": [],
+        "stage_dir": None,
+        "stage_open": False,
+        "installer": None,
+        "cleanups": [],
+        "files": {},
+        "modes": {},
+        "raise_from_installer": None,
+    }
+
+    @contextlib.contextmanager
+    def fake_stage(prefix: str):
+        state["stage_prefix"] = prefix
+        stage_dir = tmp_path / f"stage-{len(state['stages'])}"
+        stage_dir.mkdir()
+        state["stages"].append(stage_dir)
+        state["stage_dir"] = stage_dir
+        state["stage_open"] = True
+        try:
+            yield stage_dir
+        finally:
+            state["stage_open"] = False
+
+    def fake_installer(root, connection, remote_root, upload_paths, installer, *args, **kwargs):
+        state["installer"] = {
+            "root": root,
+            "connection": connection,
+            "remote_root": remote_root,
+            "upload_paths": upload_paths,
+            "installer": installer,
+            "args": args,
+            **kwargs,
+        }
+        for local_path, _remote in upload_paths:
+            if local_path.is_file():
+                state["files"][local_path.name] = local_path.read_text(encoding="utf-8")
+                state["modes"][local_path.name] = local_path.stat().st_mode & 0o777
+        if state["raise_from_installer"] is not None:
+            raise state["raise_from_installer"]
+
+    monkeypatch.setattr(pve_autoinstall, "HostConnection", _StubConnection)
+    monkeypatch.setattr(pve_autoinstall, "tmpfs_secret_stage", fake_stage)
+    monkeypatch.setattr(pve_autoinstall, "stage_and_run_remote_installer", fake_installer)
+    monkeypatch.setattr(
+        pve_autoinstall,
+        "_cleanup_remote_pdm_dir",
+        lambda connection: state["cleanups"].append(connection),
+    )
+    return state
+
+
+def _run_pdm(root: Path, force: bool = False, **overrides: Any) -> None:
+    kwargs: dict[str, Any] = {
+        "plan": {"answers": [{"_host": "ace"}]},
+        "pdm_token_secret": "pdm-token-value",
+        "root_passwords": {"bray": "bray-pw", "ace": "ace-pw"},
+    }
+    kwargs.update(overrides)
+    pve_autoinstall._run_on_pdm_host(
+        root,
+        _StubRegistry(),
+        "arc",
+        kwargs["plan"],
+        kwargs["pdm_token_secret"],
+        kwargs["root_passwords"],
+        force,
+    )
+
+
+class TestRunOnPdmHost:
+    def test_stages_the_plan_token_and_script_to_the_remote_root(
+        self, tmp_path: Path, pdm_run: dict[str, Any]
+    ) -> None:
+        _run_pdm(tmp_path)
+
+        remote = [target for _local, target in pdm_run["installer"]["upload_paths"]]
+        assert remote == [
+            f"{pve_autoinstall.REMOTE_ROOT}/answer-plan.json",
+            f"{pve_autoinstall.REMOTE_ROOT}/pdm-api-token",
+            f"{pve_autoinstall.REMOTE_ROOT}/sync-answers.py",
+        ]
+        assert pdm_run["installer"]["upload_paths"][2][0] == (
+            tmp_path / "pve-autoinstall" / "scripts" / "sync-answers.py"
+        )
+
+    def test_plan_is_written_as_json(self, tmp_path: Path, pdm_run: dict[str, Any]) -> None:
+        _run_pdm(tmp_path, plan={"answers": [{"_host": "ace", "fqdn": "ace.internal"}]})
+
+        assert json.loads(pdm_run["files"]["answer-plan.json"]) == {
+            "answers": [{"_host": "ace", "fqdn": "ace.internal"}]
+        }
+
+    def test_token_file_carries_the_pdm_token_then_sorted_root_passwords(
+        self, tmp_path: Path, pdm_run: dict[str, Any]
+    ) -> None:
+        _run_pdm(tmp_path)
+
+        assert pdm_run["files"]["pdm-api-token"].splitlines() == [
+            "PDM_DEPLOY_TOKEN=pdm-token-value",
+            "PVE_ROOT_PASSWORD__ace=ace-pw",
+            "PVE_ROOT_PASSWORD__bray=bray-pw",
+        ]
+
+    def test_token_file_is_not_readable_by_group_or_world(
+        self, tmp_path: Path, pdm_run: dict[str, Any]
+    ) -> None:
+        _run_pdm(tmp_path)
+
+        assert pdm_run["modes"]["pdm-api-token"] == 0o600
+
+    def test_secrets_are_staged_in_tmpfs_and_released_before_returning(
+        self, tmp_path: Path, pdm_run: dict[str, Any]
+    ) -> None:
+        _run_pdm(tmp_path)
+
+        assert pdm_run["stage_prefix"] == "homelab-pve-autoinstall."
+        assert pdm_run["stage_open"] is False
+
+    def test_runs_the_sync_script_under_python3_with_only_a_lib_subdir(
+        self, tmp_path: Path, pdm_run: dict[str, Any]
+    ) -> None:
+        _run_pdm(tmp_path)
+
+        call = pdm_run["installer"]
+        assert call["installer"] == "sync-answers.py"
+        assert call["interpreter"] == "python3"
+        assert call["remote_subdirs"] == ("lib",)
+
+    def test_force_flag_is_only_passed_when_requested(
+        self, tmp_path: Path, pdm_run: dict[str, Any]
+    ) -> None:
+        _run_pdm(tmp_path, force=False)
+        assert pdm_run["installer"]["args"] == ()
+
+        _run_pdm(tmp_path, force=True)
+        assert pdm_run["installer"]["args"] == ("--force",)
+
+    def test_connects_to_the_pdm_host_using_its_inventory_credentials(
+        self, tmp_path: Path, pdm_run: dict[str, Any]
+    ) -> None:
+        _run_pdm(tmp_path)
+
+        connection = pdm_run["installer"]["connection"]
+        assert (connection.host, connection.user, connection.hostname) == (
+            "arc",
+            "root",
+            "arc.internal",
+        )
+
+    def test_remote_staging_dir_is_cleaned_up_on_success(
+        self, tmp_path: Path, pdm_run: dict[str, Any]
+    ) -> None:
+        _run_pdm(tmp_path)
+
+        assert len(pdm_run["cleanups"]) == 1
+
+    def test_remote_staging_dir_is_cleaned_up_when_the_sync_run_fails(
+        self, tmp_path: Path, pdm_run: dict[str, Any]
+    ) -> None:
+        """The failing dir is the one still holding the root passwords."""
+        pdm_run["raise_from_installer"] = RuntimeError("sync-answers.py exited 1")
+
+        with pytest.raises(RuntimeError):
+            _run_pdm(tmp_path)
+
+        assert len(pdm_run["cleanups"]) == 1
+        assert pdm_run["stage_open"] is False  # local tmpfs stage released too
+
+
+class TestCleanupRemotePdmDir:
+    def test_removes_the_remote_staging_dir(self) -> None:
+        commands: list[tuple[str, dict]] = []
+
+        class Connection:
+            def run(self, command: str, **kwargs) -> None:
+                commands.append((command, kwargs))
+
+        class Wrapper:
+            connection = Connection()
+
+        pve_autoinstall._cleanup_remote_pdm_dir(Wrapper())
+
+        assert commands[0][0] == f'rm -rf "{pve_autoinstall.REMOTE_ROOT}"'
+        assert commands[0][1] == {"hide": True, "warn": True}
+
+    @pytest.mark.parametrize(
+        "error",
+        [
+            OSError("connection reset"),
+            UnexpectedExit(result=Result(command="rm -rf ...", exited=1)),
+        ],
+    )
+    def test_a_failed_cleanup_warns_instead_of_failing_the_deploy(
+        self, capsys, error: Exception
+    ) -> None:
+        """sync-answers.py has already run by this point; the deploy succeeded."""
+
+        class Connection:
+            def run(self, command: str, **kwargs) -> None:
+                raise error
+
+        class Wrapper:
+            connection = Connection()
+
+        pve_autoinstall._cleanup_remote_pdm_dir(Wrapper())  # must not raise
+
+        assert "could not confirm remote cleanup" in capsys.readouterr().out

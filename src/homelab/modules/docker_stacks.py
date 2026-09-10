@@ -126,16 +126,6 @@ def declared_stacks(root: Path, host: str) -> list[str]:
     return sorted(str(stack) for stack in declared)
 
 
-def present_stacks(root: Path, host: str) -> list[str]:
-    """Stacks the tree can actually produce a compose file for, on this host."""
-    present = []
-    for stack in all_stacks(root):
-        base = stack_dir(root, stack)
-        if (base / f"{host}.yml").is_file() or (base / TEMPLATE_NAME).is_file():
-            present.append(stack)
-    return present
-
-
 def host_stacks(root: Path, host: str) -> list[str]:
     """Deployable stacks for a host: the hosts.conf declaration, once verified."""
     check_placement(root, host)
@@ -174,6 +164,45 @@ def check_placement(root: Path, host: str) -> None:
         )
 
 
+def _check_no_definition_mix(base: Path, files: list[str]) -> None:
+    """A stack is defined one way or the other, never both.
+
+    A mix means some hosts silently follow the template and others do not, so
+    editing the template would quietly skip whichever hosts carry their own file.
+    """
+    host_files = [name for name in files if name.endswith(".yml") and name != TEMPLATE_NAME]
+    if TEMPLATE_NAME in files and host_files:
+        raise ValueError(
+            f"{base} mixes {TEMPLATE_NAME} with per-host file(s) "
+            f"{', '.join(host_files)}; a stack is one or the other"
+        )
+
+
+def _check_filenames_name_known_hosts(base: Path, files: list[str], known: set[str]) -> None:
+    """Every non-template file must be `<host>.yml` for a host that runs stacks.
+
+    `towerr.yml` sitting in the tree deploying to nothing is the failure here.
+    """
+    for name in files:
+        if name == TEMPLATE_NAME:
+            continue
+        host = name[:-4] if name.endswith(".yml") else None
+        if host not in known:
+            raise ValueError(
+                f"{base / name}: expected {TEMPLATE_NAME} or <host>.yml for a host "
+                f"with the docker-stacks feature ({', '.join(sorted(known))})"
+            )
+
+
+def _check_stack_dir(base: Path, known: set[str]) -> None:
+    """Structural rules for one stack directory."""
+    files = sorted(entry.name for entry in base.iterdir() if entry.is_file())
+    if not files:
+        raise ValueError(f"empty stack directory: {base}")
+    _check_no_definition_mix(base, files)
+    _check_filenames_name_known_hosts(base, files, known)
+
+
 def check_stack_tree(root: Path) -> None:
     """Structural rules for stacks/, independent of any one host.
 
@@ -185,29 +214,7 @@ def check_stack_tree(root: Path) -> None:
     known = set(registry.list_hosts(feature="docker-stacks"))
 
     for stack in all_stacks(root):
-        base = stack_dir(root, stack)
-        files = sorted(entry.name for entry in base.iterdir() if entry.is_file())
-        if not files:
-            raise ValueError(f"empty stack directory: {base}")
-
-        has_template = TEMPLATE_NAME in files
-        host_files = [name for name in files if name.endswith(".yml") and name != TEMPLATE_NAME]
-
-        if has_template and host_files:
-            raise ValueError(
-                f"{base} mixes {TEMPLATE_NAME} with per-host file(s) "
-                f"{', '.join(host_files)}; a stack is one or the other"
-            )
-
-        for name in files:
-            if name == TEMPLATE_NAME:
-                continue
-            host = name[:-4] if name.endswith(".yml") else None
-            if host not in known:
-                raise ValueError(
-                    f"{base / name}: expected {TEMPLATE_NAME} or <host>.yml for a host "
-                    f"with the docker-stacks feature ({', '.join(sorted(known))})"
-                )
+        _check_stack_dir(stack_dir(root, stack), known)
 
 
 def check_shared_orphans(root: Path) -> None:

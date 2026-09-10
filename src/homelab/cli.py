@@ -15,7 +15,7 @@ import yaml
 
 from . import crap, op_secrets
 from .deploy import DeploySession
-from .hosts import HostLookupError, default_registry, validate_hosts_data
+from .hosts import HostLookupError, HostRegistry, default_registry, validate_hosts_data
 from .modules import MODULES, ordered_modules
 from .modules.pve_upgrade import CONFIRM_ENV as CONFIRM_UPGRADE_ENV
 from .output import print_action, print_error, print_header, print_ok, print_sub, print_warn
@@ -93,6 +93,47 @@ def check_stack_placement(root: Path) -> None:
     )
 
 
+def _pve_node_scrape_jobs(scrape_path: Path) -> list[dict]:
+    """The `pve-node` scrape jobs in scrape.yml, ignoring every other job."""
+    data = yaml.safe_load(scrape_path.read_text(encoding="utf-8")) or {}
+    return [
+        job
+        for job in data.get("scrape_configs") or []
+        if job.get("job_name") == "pve-node"
+    ]
+
+
+def _scraped_pve_nodes(scrape_path: Path) -> set[str]:
+    """Hosts the `pve-node` scrape job actually targets, by their `host` label."""
+    scraped: set[str] = set()
+    for job in _pve_node_scrape_jobs(scrape_path):
+        for static in job.get("static_configs") or []:
+            host = (static.get("labels") or {}).get("host")
+            if host:
+                scraped.add(str(host))
+    return scraped
+
+
+def _nodedown_rules(rules_text: str) -> list[dict]:
+    """Every alert rule whose name starts with NodeDown, across all groups."""
+    data = yaml.safe_load(rules_text) or {}
+    return [
+        rule
+        for group in data.get("groups") or []
+        for rule in group.get("rules") or []
+        if str(rule.get("alert", "")).startswith("NodeDown")
+    ]
+
+
+def _nodedown_covered_hosts(rules_text: str) -> set[str]:
+    """Hosts named by a `host="a"` or `host=~"a|b"` selector in a NodeDown alert."""
+    covered: set[str] = set()
+    for rule in _nodedown_rules(rules_text):
+        for selector in re.findall(r'host=~?"([^"]+)"', str(rule.get("expr", ""))):
+            covered.update(part for part in selector.split("|") if part)
+    return covered
+
+
 def check_node_down_coverage(root: Path) -> None:
     """Cross-check NodeDown's host lists against the pve-node targets in scrape.yml.
 
@@ -112,25 +153,9 @@ def check_node_down_coverage(root: Path) -> None:
     if not scrape_path.exists() or not rules_path.exists():
         return
 
-    scrape_data = yaml.safe_load(scrape_path.read_text(encoding="utf-8")) or {}
-    scraped: set[str] = set()
-    for job in scrape_data.get("scrape_configs") or []:
-        if job.get("job_name") != "pve-node":
-            continue
-        for static in job.get("static_configs") or []:
-            host = (static.get("labels") or {}).get("host")
-            if host:
-                scraped.add(str(host))
-
+    scraped = _scraped_pve_nodes(scrape_path)
     rules_text = rules_path.read_text(encoding="utf-8")
-    rules_data = yaml.safe_load(rules_text) or {}
-    covered: set[str] = set()
-    for group in rules_data.get("groups") or []:
-        for rule in group.get("rules") or []:
-            if not str(rule.get("alert", "")).startswith("NodeDown"):
-                continue
-            for selector in re.findall(r'host=~?"([^"]+)"', str(rule.get("expr", ""))):
-                covered.update(part for part in selector.split("|") if part)
+    covered = _nodedown_covered_hosts(rules_text)
 
     # Exclusions live in the rule file, next to the prose explaining them, so the
     # reviewer of a deliberate omission and the enforcement read the same lines.
@@ -260,6 +285,38 @@ def _tracked_files(root: Path) -> list[Path]:
     return [root / name for name in result.stdout.split("\0") if name]
 
 
+def _external_url_hosts(text: str) -> list[str]:
+    """URL hosts in `text` that are genuinely externally routable.
+
+    Everything skipped here is unroutable or deliberately public per AGENTS.md:
+    internal TLDs, bare IP literals, localhost, and the vendor allow-list.
+    """
+    external: list[str] = []
+    for raw_host in set(_URL_HOST.findall(text)):
+        host = raw_host.lower().strip(".")
+        if "." not in host or host == "localhost":
+            continue
+        if re.fullmatch(r"[\d.]+", host):
+            continue  # bare IP literal
+        if host.rsplit(".", 1)[-1] in _INTERNAL_TLDS:
+            continue
+        if _registrable(host) in _VENDOR_DOMAINS:
+            continue
+        external.append(host)
+    return external
+
+
+def _scan_for_leaks(rel: Path, text: str, banned: list[str]) -> list[str]:
+    """Every leak one file's contents contains, labelled by kind."""
+    lowered = text.lower()
+    findings = [f"{rel}: {label}" for label, pattern in _SECRET_PATTERNS if pattern.search(text)]
+    findings.extend(f"{rel}: banned domain" for domain in banned if domain in lowered)
+    findings.extend(
+        f"{rel}: external host {_redact(host)}" for host in _external_url_hosts(text)
+    )
+    return findings
+
+
 def check_public_repo_leaks(root: Path) -> None:
     """Fail the build on anything that must never be published from this repo."""
     banned = _configured_leak_domains()
@@ -275,28 +332,7 @@ def check_public_repo_leaks(root: Path) -> None:
             text = path.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
             continue  # binary or unreadable; nothing scannable
-        rel = path.relative_to(root)
-
-        for label, pattern in _SECRET_PATTERNS:
-            if pattern.search(text):
-                findings.append(f"{rel}: {label}")
-
-        lowered = text.lower()
-        for domain in banned:
-            if domain in lowered:
-                findings.append(f"{rel}: banned domain")
-
-        for host in set(_URL_HOST.findall(text)):
-            host = host.lower().strip(".")
-            if "." not in host or host == "localhost":
-                continue
-            if re.fullmatch(r"[\d.]+", host):
-                continue  # bare IP literal
-            if host.rsplit(".", 1)[-1] in _INTERNAL_TLDS:
-                continue
-            if _registrable(host) in _VENDOR_DOMAINS:
-                continue
-            findings.append(f"{rel}: external host {_redact(host)}")
+        findings.extend(_scan_for_leaks(path.relative_to(root), text, banned))
 
     if findings:
         raise click.ClickException(
@@ -328,33 +364,71 @@ _XPLACEHOLDER = re.compile(r"^[xX][xX:-]*$")
 _SAFE_LITERALS = frozenset({"true", "false", "info", "debug", "warn", "warning", "error"})
 
 
-def _is_placeholder_value(raw: str) -> bool:
-    """Whether an `.env.example` value looks like a placeholder, not a real one."""
+def _unquoted(raw: str) -> str:
+    """Strip one matching pair of surrounding quotes, if present."""
     value = raw.strip()
     if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
-        value = value[1:-1].strip()
-    if not value:
-        return True
+        return value[1:-1].strip()
+    return value
+
+
+def _has_placeholder_shape(value: str) -> bool:
+    """Its *form* marks it as a stand-in: <FOO>, {{ FOO }}, xxxx, xx:xx:xx."""
     if value.startswith("<") and value.endswith(">"):
         return True
-    if _JINJA_PLACEHOLDER.match(value):
-        return True
+    return bool(_JINJA_PLACEHOLDER.match(value) or _XPLACEHOLDER.match(value))
+
+
+def _is_non_secret_literal(value: str) -> bool:
+    """A real value that cannot be a credential: number, duration, path, socket."""
     if re.fullmatch(r"-?\d+", value):
-        return True
-    if value.lower() in _SAFE_LITERALS:
         return True
     if _DURATION_LITERAL.fullmatch(value):
         return True
-    if value.startswith("/") or value.startswith("unix://"):
-        return True
-    if _XPLACEHOLDER.match(value):
-        return True
+    return value.startswith("/") or value.startswith("unix://")
+
+
+def _is_documented_stand_in(value: str) -> bool:
+    """It says 'fill me in', or points at an RFC 2606 reserved example domain."""
     lowered = value.lower()
     if lowered.startswith("replace-with") or "changeme" in lowered:
         return True
-    if any(domain in lowered for domain in ("example.com", "example.net", "example.org")):
+    return any(domain in lowered for domain in ("example.com", "example.net", "example.org"))
+
+
+def _is_placeholder_value(raw: str) -> bool:
+    """Whether an `.env.example` value looks like a placeholder, not a real one.
+
+    The three predicates are independent and order between them does not matter;
+    each answers a different question about the same value. Only the empty check
+    has to come first, since the others assume a non-empty string.
+    """
+    value = _unquoted(raw)
+    if not value:
         return True
-    return False
+    if value.lower() in _SAFE_LITERALS:
+        return True
+    return (
+        _has_placeholder_shape(value)
+        or _is_non_secret_literal(value)
+        or _is_documented_stand_in(value)
+    )
+
+
+def _non_placeholder_assignments(rel: Path, text: str) -> list[str]:
+    """Assignments in one `.env.example` whose value does not look like a placeholder."""
+    findings: list[str] = []
+    for lineno, line in enumerate(text.splitlines(), start=1):
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        match = _ENV_ASSIGNMENT.match(stripped)
+        if not match:
+            continue
+        key, value = match.group(1), match.group(2)
+        if not _is_placeholder_value(value):
+            findings.append(f"{rel}:{lineno}: {key} is not a placeholder value")
+    return findings
 
 
 def check_env_example_placeholders(root: Path) -> None:
@@ -364,20 +438,10 @@ def check_env_example_placeholders(root: Path) -> None:
 
     for path in examples:
         try:
-            lines = path.read_text(encoding="utf-8").splitlines()
+            text = path.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
             continue
-        rel = path.relative_to(root)
-        for lineno, line in enumerate(lines, start=1):
-            stripped = line.strip()
-            if not stripped or stripped.startswith("#"):
-                continue
-            match = _ENV_ASSIGNMENT.match(stripped)
-            if not match:
-                continue
-            key, value = match.group(1), match.group(2)
-            if not _is_placeholder_value(value):
-                findings.append(f"{rel}:{lineno}: {key} is not a placeholder value")
+        findings.extend(_non_placeholder_assignments(path.relative_to(root), text))
 
     if findings:
         raise click.ClickException(
@@ -409,6 +473,32 @@ def list_hosts(feature: str | None) -> None:
         click.echo(host)
 
 
+def _stack_hosts(registry: HostRegistry, host: str | None) -> list[str]:
+    """The hosts to report on, refusing a host that does not enable the feature.
+
+    Silence would read as 'that host runs nothing', which is a different fact.
+    """
+    target_hosts = registry.list_hosts(feature="docker-stacks")
+    if host is None:
+        return target_hosts
+    if host not in target_hosts:
+        raise click.ClickException(f"host '{host}' does not enable docker-stacks")
+    return [host]
+
+
+def _stack_placements(
+    registry: HostRegistry, target_hosts: list[str], stack: str | None
+) -> list[tuple[str, str]]:
+    """Every (stack, host) pair hosts.conf declares, optionally filtered."""
+    rows: list[tuple[str, str]] = []
+    for target in target_hosts:
+        declared = registry.get(target, "docker-stacks.stacks", []) or []
+        for name in sorted(str(entry) for entry in declared):
+            if stack is None or name == stack:
+                rows.append((name, target))
+    return rows
+
+
 @hosts.command("stacks")
 @click.option("--host", help="Only show stacks for this host.")
 @click.option("--stack", help="Only show hosts running this stack.")
@@ -419,18 +509,7 @@ def list_stacks(host: str | None, stack: str | None) -> None:
     inventory's answer. `validate` is what guarantees the two agree.
     """
     registry = default_registry(repo_root())
-    target_hosts = registry.list_hosts(feature="docker-stacks")
-    if host is not None:
-        if host not in target_hosts:
-            raise click.ClickException(f"host '{host}' does not enable docker-stacks")
-        target_hosts = [host]
-
-    rows: list[tuple[str, str]] = []
-    for target in target_hosts:
-        declared = registry.get(target, "docker-stacks.stacks", []) or []
-        for name in sorted(str(entry) for entry in declared):
-            if stack is None or name == stack:
-                rows.append((name, target))
+    rows = _stack_placements(registry, _stack_hosts(registry, host), stack)
 
     if stack is not None and not rows:
         raise click.ClickException(f"no host declares stack '{stack}'")

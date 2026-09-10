@@ -9,6 +9,8 @@ the real /dev/shm.
 
 from __future__ import annotations
 
+import os
+import signal
 import subprocess
 from collections.abc import Iterator
 from pathlib import Path
@@ -27,10 +29,16 @@ def reset_op_secrets_globals() -> Iterator[None]:
     calls within one deploy invocation. Left alone across tests it would leak:
     a test that sets _session_initialized=True would make a later test skip
     ensure_op_session's real checks.
+
+    OP_SERVICE_ACCOUNT_TOKEN is restored here rather than via monkeypatch
+    because ensure_op_session writes it into os.environ itself; monkeypatch
+    only rolls back assignments it made, so an unguarded run would leak a
+    token-shaped value into the rest of the session.
     """
     session_dir = op_secrets._session_dir
     rendered = dict(op_secrets._rendered)
     initialized = op_secrets._session_initialized
+    token_env = os.environ.get("OP_SERVICE_ACCOUNT_TOKEN")
     op_secrets._session_dir = None
     op_secrets._rendered.clear()
     op_secrets._session_initialized = False
@@ -41,6 +49,9 @@ def reset_op_secrets_globals() -> Iterator[None]:
         op_secrets._rendered.clear()
         op_secrets._rendered.update(rendered)
         op_secrets._session_initialized = initialized
+        os.environ.pop("OP_SERVICE_ACCOUNT_TOKEN", None)
+        if token_env is not None:
+            os.environ["OP_SERVICE_ACCOUNT_TOKEN"] = token_env
 
 
 def _write_catalog(
@@ -619,3 +630,467 @@ def test_doctor_online_unknown_explicit_name_is_a_failure(
     monkeypatch.setattr(op_secrets, "cleanup", lambda: None)
 
     assert op_secrets.doctor(tmp_path, names=["does-not-exist"]) == 1
+
+
+# ---------------------------------------------------------------------------
+# load_catalog and its per-entry helpers
+# ---------------------------------------------------------------------------
+
+
+def _write_raw_catalog(root: Path, body: str) -> None:
+    catalog_file = root / "secrets" / "catalog.yml"
+    catalog_file.parent.mkdir(parents=True, exist_ok=True)
+    catalog_file.write_text(body, encoding="utf-8")
+
+
+def test_load_catalog_missing_file_raises(tmp_path: Path) -> None:
+    with pytest.raises(op_secrets.OpSecretsError, match="missing secrets catalog"):
+        op_secrets.load_catalog(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "",  # empty file -> safe_load returns None
+        "- not-a-mapping\n",  # top level is a list
+        "secrets:\n",  # key present but null
+        "secrets: {}\n",  # key present but empty
+    ],
+)
+def test_load_catalog_without_usable_secrets_key_raises(tmp_path: Path, body: str) -> None:
+    _write_raw_catalog(tmp_path, body)
+
+    with pytest.raises(op_secrets.OpSecretsError, match="no `secrets:` entries defined"):
+        op_secrets.load_catalog(tmp_path)
+
+
+def test_load_catalog_entry_must_be_a_mapping(tmp_path: Path) -> None:
+    _write_raw_catalog(tmp_path, "secrets:\n  svc: just-a-string\n")
+
+    with pytest.raises(op_secrets.OpSecretsError, match="entry 'svc' must be a mapping"):
+        op_secrets.load_catalog(tmp_path)
+
+
+@pytest.mark.parametrize("template_value", ["", "   ", "null", "[]"])
+def test_load_catalog_entry_requires_a_template_path(
+    tmp_path: Path, template_value: str
+) -> None:
+    _write_raw_catalog(tmp_path, f"secrets:\n  svc:\n    template: {template_value}\n")
+
+    with pytest.raises(op_secrets.OpSecretsError, match="entry 'svc' missing template path"):
+        op_secrets.load_catalog(tmp_path)
+
+
+def test_load_catalog_entry_template_must_exist(tmp_path: Path) -> None:
+    _write_raw_catalog(
+        tmp_path, "secrets:\n  svc:\n    template: secrets/templates/gone.env.tpl\n"
+    )
+
+    with pytest.raises(op_secrets.OpSecretsError, match="entry 'svc' template not found"):
+        op_secrets.load_catalog(tmp_path)
+
+
+def test_load_catalog_carries_description_and_conventional_example(tmp_path: Path) -> None:
+    entry = _write_catalog(tmp_path, "svc")
+    _write_raw_catalog(
+        tmp_path,
+        "secrets:\n"
+        "  svc:\n"
+        "    template: secrets/templates/svc.env.tpl\n"
+        "    description: '  PBS backup credentials  '\n",
+    )
+
+    result = op_secrets.load_catalog(tmp_path)["svc"]
+
+    assert result.template == entry.template
+    assert result.example == tmp_path / "secrets" / "templates" / "svc.env.tpl.example"
+    assert result.description == "PBS backup credentials"  # whitespace stripped
+    assert result.filename == "svc.env"
+
+
+def test_load_catalog_explicit_example_overrides_the_convention(tmp_path: Path) -> None:
+    _write_catalog(tmp_path, "svc")  # also writes svc.env.tpl.example
+    explicit = tmp_path / "secrets" / "templates" / "custom.example"
+    explicit.write_text("VALUE=custom\n", encoding="utf-8")
+    _write_raw_catalog(
+        tmp_path,
+        "secrets:\n"
+        "  svc:\n"
+        "    template: secrets/templates/svc.env.tpl\n"
+        "    example: secrets/templates/custom.example\n",
+    )
+
+    assert op_secrets.load_catalog(tmp_path)["svc"].example == explicit
+
+
+def test_load_catalog_explicit_example_that_is_missing_yields_none(tmp_path: Path) -> None:
+    # A named-but-absent example must not fall back to the <template>.example
+    # convention, or an online-only secret would silently pass offline checks.
+    _write_catalog(tmp_path, "svc")
+    _write_raw_catalog(
+        tmp_path,
+        "secrets:\n"
+        "  svc:\n"
+        "    template: secrets/templates/svc.env.tpl\n"
+        "    example: secrets/templates/nope.example\n",
+    )
+
+    assert op_secrets.load_catalog(tmp_path)["svc"].example is None
+
+
+def test_load_catalog_without_any_example_yields_none(tmp_path: Path) -> None:
+    _write_catalog(tmp_path, "svc", example_content=None)
+
+    assert op_secrets.load_catalog(tmp_path)["svc"].example is None
+
+
+def test_list_secret_names_is_sorted(tmp_path: Path) -> None:
+    _write_catalog(tmp_path, "zulu")
+    _write_catalog(tmp_path, "alpha")
+
+    assert op_secrets.list_secret_names(tmp_path) == ["alpha", "zulu"]
+
+
+# ---------------------------------------------------------------------------
+# _find_token_path / _ensure_secure_token_path / ensure_op_session
+#
+# The credential-loading path proper. Nothing else in the suite reaches it:
+# every other test either runs with HOMELAB_OFFLINE=1 or stubs
+# ensure_op_session out entirely.
+# ---------------------------------------------------------------------------
+
+
+def test_find_token_path_returns_the_first_candidate_that_exists(
+    monkeypatch, tmp_path: Path
+) -> None:
+    preferred = tmp_path / "homelab.token"
+    fallback = tmp_path / "service-account-token"
+    preferred.write_text("ops_preferred\n", encoding="utf-8")
+    fallback.write_text("ops_fallback\n", encoding="utf-8")
+    monkeypatch.setattr(op_secrets, "TOKEN_PATHS", (preferred, fallback))
+
+    assert op_secrets._find_token_path() == preferred
+
+
+def test_find_token_path_falls_back_to_the_legacy_name(monkeypatch, tmp_path: Path) -> None:
+    preferred = tmp_path / "homelab.token"
+    fallback = tmp_path / "service-account-token"
+    fallback.write_text("ops_fallback\n", encoding="utf-8")
+    monkeypatch.setattr(op_secrets, "TOKEN_PATHS", (preferred, fallback))
+
+    assert op_secrets._find_token_path() == fallback
+
+
+def test_find_token_path_names_every_candidate_when_none_exist(
+    monkeypatch, tmp_path: Path
+) -> None:
+    candidates = (tmp_path / "homelab.token", tmp_path / "service-account-token")
+    monkeypatch.setattr(op_secrets, "TOKEN_PATHS", candidates)
+
+    with pytest.raises(op_secrets.OpSecretsError) as excinfo:
+        op_secrets._find_token_path()
+
+    message = str(excinfo.value)
+    for candidate in candidates:
+        assert str(candidate) in message
+
+
+def test_ensure_secure_token_path_returns_stripped_token(tmp_path: Path) -> None:
+    token_file = tmp_path / "homelab.token"
+    token_file.write_text("  ops_abc123\n\n", encoding="utf-8")
+    token_file.chmod(0o600)
+
+    assert op_secrets._ensure_secure_token_path(token_file) == "ops_abc123"
+
+
+def test_ensure_secure_token_path_rejects_missing_file(tmp_path: Path) -> None:
+    with pytest.raises(op_secrets.OpSecretsError, match="token not found"):
+        op_secrets._ensure_secure_token_path(tmp_path / "absent.token")
+
+
+@pytest.mark.parametrize("mode", [0o640, 0o604, 0o666, 0o700 | 0o044])
+def test_ensure_secure_token_path_rejects_group_or_world_access(
+    tmp_path: Path, mode: int
+) -> None:
+    token_file = tmp_path / "homelab.token"
+    token_file.write_text("ops_abc123\n", encoding="utf-8")
+    token_file.chmod(mode)
+
+    with pytest.raises(op_secrets.OpSecretsError, match="permissions are too open"):
+        op_secrets._ensure_secure_token_path(token_file)
+
+
+def test_ensure_secure_token_path_rejects_file_owned_by_another_uid(
+    monkeypatch, tmp_path: Path
+) -> None:
+    token_file = tmp_path / "homelab.token"
+    token_file.write_text("ops_abc123\n", encoding="utf-8")
+    token_file.chmod(0o600)
+    monkeypatch.setattr(op_secrets.os, "getuid", lambda: 999999)
+
+    with pytest.raises(op_secrets.OpSecretsError, match="must be owned by the current user"):
+        op_secrets._ensure_secure_token_path(token_file)
+
+
+def test_ensure_secure_token_path_rejects_empty_file(tmp_path: Path) -> None:
+    token_file = tmp_path / "homelab.token"
+    token_file.write_text("   \n", encoding="utf-8")
+    token_file.chmod(0o600)
+
+    with pytest.raises(op_secrets.OpSecretsError, match="is empty"):
+        op_secrets._ensure_secure_token_path(token_file)
+
+
+def test_ensure_op_session_exports_token_and_then_short_circuits(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.delenv("HOMELAB_OFFLINE", raising=False)
+    monkeypatch.delenv("OP_SERVICE_ACCOUNT_TOKEN", raising=False)
+    token_file = tmp_path / "homelab.token"
+    token_file.write_text("ops_abc123\n", encoding="utf-8")
+    token_file.chmod(0o600)
+    monkeypatch.setattr(op_secrets, "TOKEN_PATHS", (token_file,))
+    monkeypatch.setattr(op_secrets.shutil, "which", lambda _name: "/usr/bin/op")
+
+    op_secrets.ensure_op_session()
+
+    assert os.environ["OP_SERVICE_ACCOUNT_TOKEN"] == "ops_abc123"
+    assert op_secrets._session_initialized is True
+
+    # Second call must not re-read the file: proving the guard, not the read.
+    token_file.unlink()
+    op_secrets.ensure_op_session()
+
+
+def test_ensure_op_session_keeps_a_preexisting_token_env(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.delenv("HOMELAB_OFFLINE", raising=False)
+    monkeypatch.setenv("OP_SERVICE_ACCOUNT_TOKEN", "ops_from_the_environment")
+    monkeypatch.setattr(op_secrets.shutil, "which", lambda _name: "/usr/bin/op")
+
+    def boom() -> Path:
+        raise AssertionError("token file must not be read when the env var is already set")
+
+    monkeypatch.setattr(op_secrets, "_find_token_path", boom)
+
+    op_secrets.ensure_op_session()
+
+    assert os.environ["OP_SERVICE_ACCOUNT_TOKEN"] == "ops_from_the_environment"
+
+
+def test_ensure_op_session_offline_skips_op_entirely(monkeypatch) -> None:
+    monkeypatch.setenv("HOMELAB_OFFLINE", "1")
+
+    def boom(_name: str) -> str:
+        raise AssertionError("offline mode must not look for the op binary")
+
+    monkeypatch.setattr(op_secrets.shutil, "which", boom)
+
+    op_secrets.ensure_op_session()
+
+    assert op_secrets._session_initialized is True
+
+
+def test_ensure_op_session_requires_the_op_binary(monkeypatch) -> None:
+    monkeypatch.delenv("HOMELAB_OFFLINE", raising=False)
+    monkeypatch.setattr(op_secrets.shutil, "which", lambda _name: None)
+
+    with pytest.raises(op_secrets.OpSecretsError, match="`op` not found in PATH"):
+        op_secrets.ensure_op_session()
+
+    assert op_secrets._session_initialized is False
+
+
+# ---------------------------------------------------------------------------
+# _ensure_session_dir / _install_signal_handlers
+# ---------------------------------------------------------------------------
+
+
+def test_ensure_session_dir_creates_a_private_tmpfs_dir_and_arms_cleanup(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(op_secrets, "TMPFS_BASE", tmp_path)
+    registered: list[object] = []
+    monkeypatch.setattr(op_secrets.atexit, "register", registered.append)
+    handlers_installed: list[bool] = []
+    monkeypatch.setattr(
+        op_secrets, "_install_signal_handlers", lambda: handlers_installed.append(True)
+    )
+
+    session = op_secrets._ensure_session_dir()
+
+    assert session.is_dir()
+    assert session.parent == tmp_path
+    assert session.name.startswith(op_secrets.TMPFS_PREFIX)
+    assert (session.stat().st_mode & 0o777) == 0o700
+    assert registered == [op_secrets.cleanup]
+    assert handlers_installed == [True]
+
+
+def test_ensure_session_dir_is_idempotent_within_a_process(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(op_secrets, "TMPFS_BASE", tmp_path)
+    monkeypatch.setattr(op_secrets.atexit, "register", lambda _fn: None)
+    monkeypatch.setattr(op_secrets, "_install_signal_handlers", lambda: None)
+
+    first = op_secrets._ensure_session_dir()
+    second = op_secrets._ensure_session_dir()
+
+    assert first == second
+    assert len(list(tmp_path.iterdir())) == 1  # no second mkdtemp
+
+
+def test_ensure_session_dir_refuses_when_tmpfs_is_unavailable(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(op_secrets, "TMPFS_BASE", tmp_path / "no-dev-shm")
+
+    with pytest.raises(op_secrets.OpSecretsError, match="cannot render secrets to tmpfs"):
+        op_secrets._ensure_session_dir()
+
+
+def test_install_signal_handlers_covers_int_term_and_hup(monkeypatch) -> None:
+    installed: dict[int, object] = {}
+    monkeypatch.setattr(
+        op_secrets.signal, "signal", lambda sig, handler: installed.setdefault(sig, handler)
+    )
+
+    op_secrets._install_signal_handlers()
+
+    assert set(installed) == {signal.SIGINT, signal.SIGTERM, signal.SIGHUP}
+
+
+def test_install_signal_handlers_tolerates_a_non_main_thread(monkeypatch) -> None:
+    def refuse(_sig, _handler):
+        raise ValueError("signal only works in main thread")
+
+    monkeypatch.setattr(op_secrets.signal, "signal", refuse)
+
+    op_secrets._install_signal_handlers()  # must not propagate
+
+
+def test_signal_handler_shreds_then_re_raises_the_default_disposition(monkeypatch) -> None:
+    installed: dict[int, object] = {}
+
+    def record(sig, handler):
+        installed[sig] = handler
+
+    monkeypatch.setattr(op_secrets.signal, "signal", record)
+    op_secrets._install_signal_handlers()
+    handler = installed[signal.SIGTERM]
+
+    cleanup_calls: list[bool] = []
+    monkeypatch.setattr(op_secrets, "cleanup", lambda: cleanup_calls.append(True))
+    kills: list[tuple[int, int]] = []
+    monkeypatch.setattr(op_secrets.os, "kill", lambda pid, sig: kills.append((pid, sig)))
+
+    handler(signal.SIGTERM, None)
+
+    assert cleanup_calls == [True]  # secrets shredded before the process dies
+    assert installed[signal.SIGTERM] is signal.SIG_DFL  # disposition restored
+    assert kills == [(os.getpid(), signal.SIGTERM)]
+
+
+# ---------------------------------------------------------------------------
+# cache_info
+# ---------------------------------------------------------------------------
+
+
+def test_cache_info_reports_an_absent_cache_as_empty(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(op_secrets, "TMPFS_BASE", tmp_path)
+    monkeypatch.delenv("HOMELAB_SECRET_CACHE_TTL", raising=False)
+
+    info = op_secrets.cache_info()
+
+    assert info["path"] == str(tmp_path / f"{op_secrets.CACHE_PREFIX}-{os.getuid()}")
+    assert info["ttl_seconds"] == op_secrets.DEFAULT_CACHE_TTL_SECONDS
+    assert info["files"] == []
+
+
+def test_cache_info_lists_env_files_with_age_and_size(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(op_secrets, "TMPFS_BASE", tmp_path)
+    monkeypatch.setenv("HOMELAB_SECRET_CACHE_TTL", "60")
+    cache_dir = tmp_path / f"{op_secrets.CACHE_PREFIX}-{os.getuid()}"
+    cache_dir.mkdir(mode=0o700)
+    (cache_dir / "svc.abc.env").write_text("VALUE=x\n", encoding="utf-8")
+    (cache_dir / "not-a-secret.txt").write_text("ignored\n", encoding="utf-8")
+    os.utime(cache_dir / "svc.abc.env", (0, __import__("time").time() - 120))
+
+    info = op_secrets.cache_info()
+
+    assert info["ttl_seconds"] == 60
+    assert [entry["name"] for entry in info["files"]] == ["svc.abc.env"]  # *.env only
+    assert info["files"][0]["size"] == len("VALUE=x\n")
+    assert info["files"][0]["age_seconds"] >= 119
+
+
+def test_cache_ttl_seconds_rejects_a_non_integer(monkeypatch) -> None:
+    monkeypatch.setenv("HOMELAB_SECRET_CACHE_TTL", "twelve")
+
+    with pytest.raises(op_secrets.OpSecretsError, match="must be an integer"):
+        op_secrets.cache_ttl_seconds()
+
+
+def test_cache_ttl_seconds_floors_a_negative_value_at_zero(monkeypatch) -> None:
+    monkeypatch.setenv("HOMELAB_SECRET_CACHE_TTL", "-5")
+
+    assert op_secrets.cache_ttl_seconds() == 0
+
+
+# ---------------------------------------------------------------------------
+# render_all
+# ---------------------------------------------------------------------------
+
+
+def test_render_all_offline_points_at_the_templates_dir(monkeypatch, tmp_path: Path) -> None:
+    _write_catalog(tmp_path, "svc")
+    monkeypatch.setenv("HOMELAB_OFFLINE", "1")
+
+    assert op_secrets.render_all(tmp_path) == tmp_path / op_secrets.TEMPLATES_DIR
+
+
+def test_render_all_renders_every_entry_into_the_shared_cache(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.delenv("HOMELAB_OFFLINE", raising=False)
+    monkeypatch.setattr(op_secrets, "TMPFS_BASE", tmp_path)
+    monkeypatch.setattr(op_secrets, "ensure_op_session", lambda: None)
+    _write_catalog(tmp_path, "alpha")
+    _write_catalog(tmp_path, "zulu")
+
+    rendered: list[str] = []
+
+    def fake_render(template: Path, destination: Path) -> None:
+        rendered.append(template.name)
+        destination.write_text("VALUE=x\n", encoding="utf-8")
+
+    monkeypatch.setattr(op_secrets, "_render_with_op", fake_render)
+
+    result = op_secrets.render_all(tmp_path)
+
+    assert result == op_secrets._cache_dir()
+    assert sorted(rendered) == ["alpha.env.tpl", "zulu.env.tpl"]
+    assert sorted(op_secrets._rendered) == ["alpha", "zulu"]
+
+
+def test_render_all_with_cache_disabled_returns_the_session_dir(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.delenv("HOMELAB_OFFLINE", raising=False)
+    monkeypatch.setenv("HOMELAB_SECRET_CACHE_TTL", "0")
+    monkeypatch.setattr(op_secrets, "TMPFS_BASE", tmp_path)
+    monkeypatch.setattr(op_secrets, "ensure_op_session", lambda: None)
+    monkeypatch.setattr(op_secrets.atexit, "register", lambda _fn: None)
+    monkeypatch.setattr(op_secrets, "_install_signal_handlers", lambda: None)
+    _write_catalog(tmp_path, "svc")
+
+    monkeypatch.setattr(
+        op_secrets,
+        "_render_with_op",
+        lambda _template, destination: destination.write_text("VALUE=x\n", encoding="utf-8"),
+    )
+
+    result = op_secrets.render_all(tmp_path)
+
+    assert result == op_secrets._session_dir
+    assert (result / "svc.env").read_text(encoding="utf-8") == "VALUE=x\n"
