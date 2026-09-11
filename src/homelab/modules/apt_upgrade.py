@@ -69,6 +69,49 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
     )
 
     build_dir = root / "apt-upgrade" / "build" / host
+    build_unit_files(
+        build_dir,
+        autoupgrade=autoupgrade,
+        schedule=schedule,
+        paused=paused,
+        auto_reboot=auto_reboot,
+        auto_reboot_time=auto_reboot_time,
+    )
+
+    ssh_hostname = str(registry.get(host, "config.hostname", host))
+    ssh_user = str(registry.get(host, "config.user"))
+    connection = HostConnection(host, user=ssh_user, hostname=ssh_hostname)
+    print_sub("Comparing with remote configs...")
+    diff_remote_units(connection, build_dir, autoupgrade=autoupgrade, auto_reboot=auto_reboot)
+
+    if dry_run:
+        report_dry_run(
+            host,
+            paused=paused,
+            autoupgrade=autoupgrade,
+            schedule=schedule,
+            auto_reboot=auto_reboot,
+            auto_reboot_time=auto_reboot_time,
+        )
+        return
+
+    stage_and_install(root, build_dir, connection, force=force)
+
+
+def build_unit_files(
+    build_dir: Path,
+    *,
+    autoupgrade: str,
+    schedule: str,
+    paused: bool,
+    auto_reboot: bool,
+    auto_reboot_time: str,
+) -> None:
+    """Render the service, and conditionally the timer and auto-reboot drop-in.
+
+    The timer is only written when autoupgrade is on; the drop-in only when the
+    host opts into rebooting itself. `stage_and_install` uploads whatever exists.
+    """
     prepare_build_dir(build_dir)
     write_service(build_dir, cleanup=False)
     if autoupgrade == "true":
@@ -83,47 +126,52 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
         auto_reboot=auto_reboot,
     )
 
-    ssh_hostname = str(registry.get(host, "config.hostname", host))
-    ssh_user = str(registry.get(host, "config.user"))
-    connection = HostConnection(host, user=ssh_user, hostname=ssh_hostname)
-    print_sub("Comparing with remote configs...")
-    _, message = connection.remote_diff(
-        build_dir / "service",
-        f"/etc/systemd/system/{SERVICE_NAME}",
-    )
-    print_sub(message)
+
+def diff_remote_units(
+    connection, build_dir: Path, *, autoupgrade: str, auto_reboot: bool
+) -> None:
+    """Report the remote diff for each unit file this host actually gets."""
+    pairs = [(build_dir / "service", f"/etc/systemd/system/{SERVICE_NAME}")]
     if autoupgrade == "true":
-        _, message = connection.remote_diff(
-            build_dir / "timer",
-            f"/etc/systemd/system/{TIMER_NAME}",
-        )
-        print_sub(message)
+        pairs.append((build_dir / "timer", f"/etc/systemd/system/{TIMER_NAME}"))
     if auto_reboot:
-        _, message = connection.remote_diff(build_dir / "auto-reboot.conf", AUTO_REBOOT_PATH)
+        pairs.append((build_dir / "auto-reboot.conf", AUTO_REBOOT_PATH))
+    for local, remote in pairs:
+        _, message = connection.remote_diff(local, remote)
         print_sub(message)
 
-    if dry_run:
-        if paused:
-            print_sub(
-                f"[DRY-RUN] Would pause apt-upgrade on {host} "
-                "(stop and disable the timer, skip on-demand run)"
-            )
-        elif autoupgrade == "true":
-            print_sub(
-                f"[DRY-RUN] Would install apt dist-upgrade timer on {host} at {schedule}"
-            )
-        else:
-            print_sub(f"[DRY-RUN] Would run apt dist-upgrade on {host} (on-demand only)")
-        if auto_reboot:
-            print_sub(
-                f"[DRY-RUN] Would let unattended-upgrades reboot {host} "
-                f"when a run leaves /var/run/reboot-required (at {auto_reboot_time})"
-            )
-        else:
-            print_sub(f"[DRY-RUN] Would ensure {host} never reboots itself")
-        return
 
-    stage_and_install(root, build_dir, connection, force=force)
+def report_dry_run(
+    host: str,
+    *,
+    paused: bool,
+    autoupgrade: str,
+    schedule: str,
+    auto_reboot: bool,
+    auto_reboot_time: str,
+) -> None:
+    """Describe both switches: pause/schedule, and whether the host may reboot itself.
+
+    Auto-reboot is always reported, including when off, because "this host never
+    reboots itself" is the load-bearing state for the HA and singleton hosts.
+    """
+    if paused:
+        print_sub(
+            f"[DRY-RUN] Would pause apt-upgrade on {host} "
+            "(stop and disable the timer, skip on-demand run)"
+        )
+    elif autoupgrade == "true":
+        print_sub(f"[DRY-RUN] Would install apt dist-upgrade timer on {host} at {schedule}")
+    else:
+        print_sub(f"[DRY-RUN] Would run apt dist-upgrade on {host} (on-demand only)")
+
+    if auto_reboot:
+        print_sub(
+            f"[DRY-RUN] Would let unattended-upgrades reboot {host} "
+            f"when a run leaves /var/run/reboot-required (at {auto_reboot_time})"
+        )
+    else:
+        print_sub(f"[DRY-RUN] Would ensure {host} never reboots itself")
 
 
 def normalize_autoupgrade(registry, host: str) -> bool:

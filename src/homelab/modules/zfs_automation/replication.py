@@ -112,15 +112,111 @@ def expand_replication_jobs(registry, host: str, jobs: dict) -> list[tuple[str, 
     return expanded_jobs
 
 
-def normalize_replication_config(
-    registry, host: str, *, include_disabled: bool = False
-) -> list[ReplicationJob]:
-    for legacy_key in ("replication_plans", "replication"):
+LEGACY_REPLICATION_KEYS = ("replication_plans", "replication")
+
+
+def reject_legacy_replication_keys(registry, host: str) -> None:
+    """Fail loudly on the pre-`replication_jobs` spellings.
+
+    Silently ignoring them would deploy a host with no replication at all, which
+    looks identical to success until a restore is needed.
+    """
+    for legacy_key in LEGACY_REPLICATION_KEYS:
         if registry.get(host, f"zfs-automation.{legacy_key}", None) is not None:
             raise ValueError(
                 f"zfs-automation.{legacy_key} is no longer supported for {host}; "
                 "use replication_jobs"
             )
+
+
+def normalize_explicit_plan(plan: object, index: int, host: str, job_name: str) -> ReplicationPlan:
+    """One hand-written `plans:` entry. Both source and target are required."""
+    if not isinstance(plan, dict):
+        raise ValueError(f"invalid plan at index {index} in job '{job_name}' for {host}")
+    source = str(plan.get("source", "")).strip()
+    if not source:
+        raise ValueError(
+            f"plan at index {index} in job '{job_name}' for {host} must specify source"
+        )
+    return ReplicationPlan(
+        target=require_string(
+            plan.get("target", ""),
+            f"plan target required at index {index} in job '{job_name}' for {host}",
+        ),
+        source=source,
+    )
+
+
+def normalize_job_plans(
+    registry, job_config: dict, host: str, job_name: str
+) -> list[ReplicationPlan]:
+    """A job's plans, either expanded from a migratable-LXC group or written out."""
+    explicit_plans = job_config.get("plans", [])
+    if not isinstance(explicit_plans, list):
+        raise ValueError(f"plans for replication job '{job_name}' must be a list for {host}")
+    if "migratable_lxc_group" in job_config:
+        return expand_migratable_lxc_replication_plans(
+            registry,
+            job_config,
+            explicit_plans,
+            host,
+            job_name,
+        )
+    return [
+        normalize_explicit_plan(plan, index, host, job_name)
+        for index, plan in enumerate(explicit_plans)
+    ]
+
+
+def build_replication_job(
+    registry, host: str, job_name: str, job_config: dict, *, include_disabled: bool
+) -> ReplicationJob | None:
+    """One fully normalized job, or None when it is retired and not being included."""
+    enabled = normalize_bool(
+        job_config.get("enabled"),
+        True,
+        f"enabled for replication job '{job_name}' must be true or false for {host}",
+    )
+    if not enabled and not include_disabled:
+        return None
+
+    # `paused: true` keeps the job fully deployed (unit files stay installed)
+    # but stops and disables its timer so it does not run. This differs from
+    # `enabled: false`, which retires the job entirely (units removed). A
+    # paused job stays in the returned list so its units are still managed.
+    paused = normalize_bool(
+        job_config.get("paused"),
+        False,
+        f"paused for replication job '{job_name}' must be true or false for {host}",
+    )
+    # Order matters: plans are validated before the option lists so that a config
+    # broken in two places reports the same error it did before this was split out.
+    schedule = str(job_config.get("schedule", "*-*-* 02:30:00"))
+    plans = normalize_job_plans(registry, job_config, host, job_name)
+    syncoid_options = normalize_string_list(
+        job_config.get("syncoid_options", []),
+        f"syncoid_options for job '{job_name}' must be a list for {host}",
+    )
+    delete_target_snapshots = normalize_bool(
+        job_config.get("delete_target_snapshots"),
+        True,
+        "delete_target_snapshots for replication job "
+        f"'{job_name}' must be true or false for {host}",
+    )
+    return ReplicationJob(
+        name=job_name,
+        schedule=schedule,
+        plans=tuple(plans),
+        syncoid_options=tuple(syncoid_options),
+        delete_target_snapshots=delete_target_snapshots,
+        paused=paused,
+    )
+
+
+def normalize_replication_config(
+    registry, host: str, *, include_disabled: bool = False
+) -> list[ReplicationJob]:
+    reject_legacy_replication_keys(registry, host)
 
     jobs = registry.get(host, "zfs-automation.replication_jobs", None)
     if jobs is None:
@@ -137,80 +233,13 @@ def normalize_replication_config(
             raise ValueError(f"duplicate replication job name '{normalized_job_name}' for {host}")
         seen_job_names.add(normalized_job_name)
 
-        enabled = normalize_bool(
-            job_config.get("enabled"),
-            True,
-            f"enabled for replication job '{normalized_job_name}' must be true or false for {host}",
+        job = build_replication_job(
+            registry,
+            host,
+            normalized_job_name,
+            job_config,
+            include_disabled=include_disabled,
         )
-        if not enabled and not include_disabled:
-            continue
-
-        # `paused: true` keeps the job fully deployed (unit files stay installed)
-        # but stops and disables its timer so it does not run. This differs from
-        # `enabled: false`, which retires the job entirely (units removed). A
-        # paused job stays in the returned list so its units are still managed.
-        paused = normalize_bool(
-            job_config.get("paused"),
-            False,
-            f"paused for replication job '{normalized_job_name}' must be true or false for {host}",
-        )
-
-        schedule = str(job_config.get("schedule", "*-*-* 02:30:00"))
-        explicit_plans = job_config.get("plans", [])
-        if not isinstance(explicit_plans, list):
-            raise ValueError(
-                f"plans for replication job '{normalized_job_name}' must be a list for {host}"
-            )
-        if "migratable_lxc_group" in job_config:
-            plans = expand_migratable_lxc_replication_plans(
-                registry,
-                job_config,
-                explicit_plans,
-                host,
-                normalized_job_name,
-            )
-        else:
-            plans = []
-            for index, plan in enumerate(explicit_plans):
-                if not isinstance(plan, dict):
-                    raise ValueError(
-                        f"invalid plan at index {index} in job '{normalized_job_name}' for {host}"
-                    )
-                source = str(plan.get("source", "")).strip()
-                if not source:
-                    raise ValueError(
-                        f"plan at index {index} in job '{normalized_job_name}' for {host} "
-                        "must specify source"
-                    )
-                plans.append(
-                    ReplicationPlan(
-                        target=require_string(
-                            plan.get("target", ""),
-                            f"plan target required at index {index} in job"
-                            f" '{normalized_job_name}' for {host}",
-                        ),
-                        source=source,
-                    )
-                )
-
-        syncoid_options = normalize_string_list(
-            job_config.get("syncoid_options", []),
-            f"syncoid_options for job '{normalized_job_name}' must be a list for {host}",
-        )
-        delete_target_snapshots = normalize_bool(
-            job_config.get("delete_target_snapshots"),
-            True,
-            "delete_target_snapshots for replication job "
-            f"'{normalized_job_name}' must be true or false for {host}",
-        )
-        parsed_jobs.append(
-            ReplicationJob(
-                name=normalized_job_name,
-                schedule=schedule,
-                plans=tuple(plans),
-                syncoid_options=tuple(syncoid_options),
-                delete_target_snapshots=delete_target_snapshots,
-                paused=paused,
-            )
-        )
+        if job is not None:
+            parsed_jobs.append(job)
     return parsed_jobs

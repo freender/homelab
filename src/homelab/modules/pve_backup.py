@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from pathlib import Path
 
 from .. import backup_excludes, op_secrets
@@ -54,6 +55,51 @@ def validate(root: Path, hosts: list[str]) -> None:
             validate_secret_reference(root, _ENCRYPTION_KEY_SECRET)
 
 
+def collect_storage_names(storages: list, existing_storages: list[str], host: str) -> set[str]:
+    """Every storage ID this host will have, declared plus pre-existing.
+
+    Duplicates are rejected because PVE keys storage by ID: a repeat would silently
+    overwrite the earlier definition rather than add a second target.
+    """
+    storage_names: set[str] = set(existing_storages)
+    for index, storage in enumerate(storages):
+        if not isinstance(storage, dict):
+            raise ValueError(f"pve-backup.pbs_setup.storages[{index}] must be a mapping for {host}")
+        name = str(storage.get("name", "")).strip()
+        if not name:
+            raise ValueError(f"pve-backup.pbs_setup.storages[{index}].name required for {host}")
+        if name in storage_names:
+            raise ValueError(f"duplicate PVE backup storage {name!r} for {host}")
+        storage_names.add(name)
+    return storage_names
+
+
+def validate_backup_jobs(jobs: list, storage_names: set[str], host: str) -> None:
+    """Every job must target a storage that exists and must not duplicate another.
+
+    Two identical jobs would run the same backup twice on the same schedule,
+    doubling load and datastore usage without any visible error.
+    """
+    seen_jobs: set[tuple[str, str, str, str]] = set()
+    for index, job in enumerate(jobs):
+        if not isinstance(job, dict):
+            raise ValueError(f"pve-backup.pbs_setup.jobs[{index}] must be a mapping for {host}")
+        storage = str(job.get("storage", "")).strip()
+        if storage not in storage_names:
+            raise ValueError(f"{host}: backup job {index} references unknown storage {storage!r}")
+        key = (
+            storage,
+            str(job.get("schedule", "")).strip(),
+            str(job.get("vmid", "")).strip(),
+            str(job.get("exclude", "")).strip(),
+        )
+        if key in seen_jobs:
+            raise ValueError(
+                f"{host}: duplicate PVE backup job for storage/schedule/vmid/exclude {key}"
+            )
+        seen_jobs.add(key)
+
+
 def validate_standalone_backup_config(root: Path, host: str) -> None:
     registry = default_registry(root)
     storages = registry.get(host, "pve-backup.pbs_setup.storages", [])
@@ -69,34 +115,7 @@ def validate_standalone_backup_config(root: Path, host: str) -> None:
     if not isinstance(jobs, list):
         raise ValueError(f"pve-backup.pbs_setup.jobs must be a list for {host}")
 
-    storage_names: set[str] = set(existing_storages)
-    for index, storage in enumerate(storages):
-        if not isinstance(storage, dict):
-            raise ValueError(f"pve-backup.pbs_setup.storages[{index}] must be a mapping for {host}")
-        name = str(storage.get("name", "")).strip()
-        if not name:
-            raise ValueError(f"pve-backup.pbs_setup.storages[{index}].name required for {host}")
-        if name in storage_names:
-            raise ValueError(f"duplicate PVE backup storage {name!r} for {host}")
-        storage_names.add(name)
-    seen_jobs: set[tuple[str, str, str, str]] = set()
-    for index, job in enumerate(jobs):
-        if not isinstance(job, dict):
-            raise ValueError(f"pve-backup.pbs_setup.jobs[{index}] must be a mapping for {host}")
-        storage = str(job.get("storage", "")).strip()
-        schedule = str(job.get("schedule", "")).strip()
-        vmid = str(job.get("vmid", "")).strip()
-        exclude = str(job.get("exclude", "")).strip()
-        if storage not in storage_names:
-            raise ValueError(
-                f"{host}: backup job {index} references unknown storage {storage!r}"
-            )
-        key = (storage, schedule, vmid, exclude)
-        if key in seen_jobs:
-            raise ValueError(
-                f"{host}: duplicate PVE backup job for storage/schedule/vmid/exclude {key}"
-            )
-        seen_jobs.add(key)
+    validate_backup_jobs(jobs, collect_storage_names(storages, existing_storages, host), host)
 
 
 def report_dry_run(build_dir: Path, host: str) -> None:
@@ -203,41 +222,151 @@ def shell_quote(value: object) -> str:
     return str(value).replace("'", "'\"'\"'")
 
 
+REQUIRED_STORAGE_KEYS = ["name", "server", "datastore", "username"]
+
+JOB_DEFAULTS = {
+    "vmid": "",
+    "exclude": "",
+    "compress": "zstd",
+    "mode": "snapshot",
+    "notes_template": "{{guestname}}",
+    "notification_mode": "notification-system",
+    "prune_backups": "keep-all=1",
+    "enabled": "1",
+    "fleecing": "0",
+}
+
+JOB_PLAN_KEYS = [
+    "schedule",
+    "storage",
+    "vmid",
+    "exclude",
+    "compress",
+    "mode",
+    "notes_template",
+    "notification_mode",
+    "prune_backups",
+    "enabled",
+    "fleecing",
+]
+
+
+def storage_plan_lines(root: Path, storage: dict, index: int, host: str) -> list[str]:
+    """The `STORAGE_<i>_*` block for one PBS storage.
+
+    `fingerprint` and `password_var` fall back to the rendered `pbs-<name>` secret
+    and the derived variable name respectively, so inventory only has to carry them
+    when they differ from the convention.
+    """
+    for required in REQUIRED_STORAGE_KEYS:
+        if not storage.get(required):
+            raise ValueError(f"Invalid standalone storage entry at index {index} for {host}")
+    fingerprint = storage.get("fingerprint") or read_pbs_fingerprint(root, str(storage["name"]))
+    password_var = storage.get("password_var") or (
+        f"PBS_{normalize_storage_name(storage['name'])}_PASSWORD"
+    )
+    encryption = normalize_bool(
+        storage.get("encryption", False),
+        False,
+        f"pve-backup.pbs_setup.storages[{index}].encryption must be boolean for {host}",
+    )
+    return [
+        f"STORAGE_{index}_NAME='{shell_quote(storage['name'])}'",
+        f"STORAGE_{index}_SERVER='{shell_quote(storage['server'])}'",
+        f"STORAGE_{index}_DATASTORE='{shell_quote(storage['datastore'])}'",
+        f"STORAGE_{index}_NAMESPACE='{shell_quote(storage.get('namespace', ''))}'",
+        f"STORAGE_{index}_USERNAME='{shell_quote(storage['username'])}'",
+        f"STORAGE_{index}_FINGERPRINT='{shell_quote(fingerprint)}'",
+        f"STORAGE_{index}_PASSWORD_VAR='{shell_quote(password_var)}'",
+        f"STORAGE_{index}_ENCRYPTION='{str(encryption).lower()}'",
+    ]
+
+
+def mount_prefixed_excludes(root: Path, merged: dict, index: int, host: str) -> list[str]:
+    """Exclude entries from `mount_exclude_profiles`, each rewritten under its mountpoint.
+
+    A profile listed here is relative to the mountpoint rather than to /, which is
+    what `join_mount_prefix` applies.
+    """
+    mount_profiles = merged.get("mount_exclude_profiles", {})
+    if mount_profiles in (None, ""):
+        mount_profiles = {}
+    if not isinstance(mount_profiles, dict):
+        raise ValueError(
+            "mount_exclude_profiles for standalone backup job at index "
+            f"{index} for {host} must be a mapping"
+        )
+
+    paths: list[str] = []
+    for mountpoint, profiles_value in mount_profiles.items():
+        mountpoint_text = str(mountpoint).strip()
+        if not mountpoint_text:
+            continue
+        profiles = backup_excludes.normalize_profile_names(
+            profiles_value,
+            "mount_exclude_profiles entries for standalone backup job at index "
+            f"{index} for {host} must be lists",
+        )
+        paths.extend(
+            backup_excludes.join_mount_prefix(mountpoint_text, entry)
+            for entry in backup_excludes.load_profiles(root, profiles)
+        )
+    return paths
+
+
+def job_exclude_paths(root: Path, merged: dict, index: int, host: str) -> list[str]:
+    """Every exclude path for one job: named profiles, then literals, then mount-scoped.
+
+    Order is load-bearing only in that it is what the installer writes out; the
+    final dedupe keeps the first occurrence of each path.
+    """
+    explicit = normalize_string_list(
+        merged.get("exclude_path", []),
+        f"exclude_path for standalone backup job at index {index} for {host} must be a list",
+    )
+    exclude_profiles = backup_excludes.normalize_profile_names(
+        merged.get("exclude_profiles", []),
+        f"exclude_profiles for standalone backup job at index {index} for {host} must be a list",
+    )
+    return backup_excludes.dedupe_preserve_order(
+        [
+            *backup_excludes.load_profiles(root, exclude_profiles),
+            *explicit,
+            *mount_prefixed_excludes(root, merged, index, host),
+        ]
+    )
+
+
+def job_plan_lines(root: Path, job: dict, index: int, host: str) -> list[str]:
+    """The `JOB_<i>_*` block for one backup job."""
+    if not job.get("schedule") or not job.get("storage"):
+        raise ValueError(f"Invalid standalone backup job at index {index} for {host}")
+    if job.get("vmid") and job.get("exclude"):
+        raise ValueError(
+            "Standalone backup job at index "
+            f"{index} for {host} cannot set both vmid and exclude"
+        )
+    merged = {**JOB_DEFAULTS, **job}
+    exclude_paths = job_exclude_paths(root, merged, index, host)
+    lines = [f"JOB_{index}_{key.upper()}='{shell_quote(merged[key])}'" for key in JOB_PLAN_KEYS]
+    lines.append(f"JOB_{index}_EXCLUDE_PATH_COUNT='{len(exclude_paths)}'")
+    lines.extend(
+        f"JOB_{index}_EXCLUDE_PATH_{path_index}='{shell_quote(exclude_path)}'"
+        for path_index, exclude_path in enumerate(exclude_paths)
+    )
+    return lines
+
+
 def build_standalone_backup_plans(root: Path, host: str, build_dir: Path) -> None:
     registry = default_registry(root)
     storages = registry.get(host, "pve-backup.pbs_setup.storages", [])
     jobs = registry.get(host, "pve-backup.pbs_setup.jobs", [])
     if not storages and not jobs:
         return
+
     storage_lines = [f"STORAGE_COUNT='{len(storages)}'"]
     for index, storage in enumerate(storages):
-        for required in ["name", "server", "datastore", "username"]:
-            if not storage.get(required):
-                raise ValueError(
-                    f"Invalid standalone storage entry at index {index} for {host}"
-                )
-        fingerprint = storage.get("fingerprint") or read_pbs_fingerprint(
-            root,
-            str(storage["name"]),
-        )
-        password_var = storage.get("password_var") or (
-            f"PBS_{normalize_storage_name(storage['name'])}_PASSWORD"
-        )
-        encryption = normalize_bool(
-            storage.get("encryption", False),
-            False,
-            f"pve-backup.pbs_setup.storages[{index}].encryption must be boolean for {host}",
-        )
-        storage_lines.extend([
-            f"STORAGE_{index}_NAME='{shell_quote(storage['name'])}'",
-            f"STORAGE_{index}_SERVER='{shell_quote(storage['server'])}'",
-            f"STORAGE_{index}_DATASTORE='{shell_quote(storage['datastore'])}'",
-            f"STORAGE_{index}_NAMESPACE='{shell_quote(storage.get('namespace', ''))}'",
-            f"STORAGE_{index}_USERNAME='{shell_quote(storage['username'])}'",
-            f"STORAGE_{index}_FINGERPRINT='{shell_quote(fingerprint)}'",
-            f"STORAGE_{index}_PASSWORD_VAR='{shell_quote(password_var)}'",
-            f"STORAGE_{index}_ENCRYPTION='{str(encryption).lower()}'",
-        ])
+        storage_lines.extend(storage_plan_lines(root, storage, index, host))
     (build_dir / "storage-plan.conf").write_text(
         "\n".join(storage_lines) + "\n",
         encoding="utf-8",
@@ -245,82 +374,7 @@ def build_standalone_backup_plans(root: Path, host: str, build_dir: Path) -> Non
 
     job_lines = [f"JOB_COUNT='{len(jobs)}'"]
     for index, job in enumerate(jobs):
-        if not job.get("schedule") or not job.get("storage"):
-            raise ValueError(
-                f"Invalid standalone backup job at index {index} for {host}"
-            )
-        has_vmid = bool(job.get("vmid"))
-        has_exclude = bool(job.get("exclude"))
-        if has_vmid and has_exclude:
-            raise ValueError(
-                "Standalone backup job at index "
-                f"{index} for {host} cannot set both vmid and exclude"
-            )
-        defaults = {
-            "vmid": "",
-            "exclude": "",
-            "exclude_path": [],
-            "compress": "zstd",
-            "mode": "snapshot",
-            "notes_template": "{{guestname}}",
-            "notification_mode": "notification-system",
-            "prune_backups": "keep-all=1",
-            "enabled": "1",
-            "fleecing": "0",
-        }
-        merged = {**defaults, **job}
-        exclude_paths = normalize_string_list(
-            merged.get("exclude_path", []),
-            f"exclude_path for standalone backup job at index {index} for {host} must be a list",
-        )
-        exclude_profiles = backup_excludes.normalize_profile_names(
-            merged.get("exclude_profiles", []),
-            "exclude_profiles for standalone backup job at index "
-            f"{index} for {host} must be a list",
-        )
-        exclude_paths = [
-            *backup_excludes.load_profiles(root, exclude_profiles),
-            *exclude_paths,
-        ]
-        mount_profiles = merged.get("mount_exclude_profiles", {})
-        if mount_profiles in (None, ""):
-            mount_profiles = {}
-        if not isinstance(mount_profiles, dict):
-            raise ValueError(
-                "mount_exclude_profiles for standalone backup job at index "
-                f"{index} for {host} must be a mapping"
-            )
-        for mountpoint, profiles_value in mount_profiles.items():
-            mountpoint_text = str(mountpoint).strip()
-            if not mountpoint_text:
-                continue
-            profiles = backup_excludes.normalize_profile_names(
-                profiles_value,
-                "mount_exclude_profiles entries for standalone backup job at index "
-                f"{index} for {host} must be lists",
-            )
-            for entry in backup_excludes.load_profiles(root, profiles):
-                exclude_paths.append(backup_excludes.join_mount_prefix(mountpoint_text, entry))
-        exclude_paths = backup_excludes.dedupe_preserve_order(exclude_paths)
-        for key in [
-            "schedule",
-            "storage",
-            "vmid",
-            "exclude",
-            "compress",
-            "mode",
-            "notes_template",
-            "notification_mode",
-            "prune_backups",
-            "enabled",
-            "fleecing",
-        ]:
-            job_lines.append(f"JOB_{index}_{key.upper()}='{shell_quote(merged[key])}'")
-        job_lines.append(f"JOB_{index}_EXCLUDE_PATH_COUNT='{len(exclude_paths)}'")
-        for path_index, exclude_path in enumerate(exclude_paths):
-            job_lines.append(
-                f"JOB_{index}_EXCLUDE_PATH_{path_index}='{shell_quote(exclude_path)}'"
-            )
+        job_lines.extend(job_plan_lines(root, job, index, host))
     (build_dir / "jobs-plan.conf").write_text(
         "\n".join(job_lines) + "\n",
         encoding="utf-8",
@@ -389,6 +443,76 @@ def write_pbs_tokens_file(root: Path, host: str, destination: Path) -> None:
     destination.chmod(0o600)
 
 
+@dataclass(frozen=True)
+class RestoreLxcConfigs:
+    """The `restore_lxc_configs` block, validated."""
+
+    enabled: bool
+    autostart: bool
+    vmids: list[str]
+
+
+def normalize_restore_lxc_configs(registry, host: str) -> RestoreLxcConfigs:
+    """Read and validate `pve-backup.restore_lxc_configs`.
+
+    VMIDs are pattern-checked because they are interpolated into the restore
+    script; anything but a plain positive integer is rejected outright.
+    """
+    restore_lxc_configs = registry.get(host, "pve-backup.restore_lxc_configs", {})
+    if restore_lxc_configs in (None, ""):
+        restore_lxc_configs = {}
+    if not isinstance(restore_lxc_configs, dict):
+        raise ValueError(f"pve-backup.restore_lxc_configs must be a mapping for {host}")
+
+    vmids = normalize_string_list(
+        restore_lxc_configs.get("vmids", []),
+        f"pve-backup.restore_lxc_configs.vmids must be a list for {host}",
+    )
+    for vmid in vmids:
+        if not re.fullmatch(r"[1-9][0-9]{0,8}", vmid):
+            raise ValueError(
+                f"Invalid LXC VMID in pve-backup.restore_lxc_configs.vmids for {host}: {vmid}"
+            )
+    return RestoreLxcConfigs(
+        enabled=normalize_bool(
+            restore_lxc_configs.get("enabled", False),
+            False,
+            f"pve-backup.restore_lxc_configs.enabled must be boolean for {host}",
+        ),
+        autostart=normalize_bool(
+            restore_lxc_configs.get("autostart", False),
+            False,
+            f"pve-backup.restore_lxc_configs.autostart must be boolean for {host}",
+        ),
+        vmids=vmids,
+    )
+
+
+def restore_plan_lines(plan, pve_archive, restore_lxc: RestoreLxcConfigs) -> list[str]:
+    """The rendered `restore-plan.conf` body."""
+    destinations = pbs_client_backup.destinations_for(plan)
+    return [
+        f"NAMESPACE='{shell_quote(plan.namespace)}'",
+        f"BACKUP_ID='{shell_quote(plan.backup_id)}'",
+        f"ARCHIVE_NAME='{shell_quote(pve_archive.name)}'",
+        f"ENCRYPT='{str(plan.encrypt).lower()}'",
+        f"KEYFILE='{shell_quote(pbs_client_backup.KEYFILE_REMOTE_PATH)}'",
+        f"RESTORE_LXC_CONFIGS_ENABLED='{str(restore_lxc.enabled).lower()}'",
+        f"RESTORE_LXC_AUTOSTART='{str(restore_lxc.autostart).lower()}'",
+        f"RESTORE_LXC_CONFIG_COUNT='{len(restore_lxc.vmids)}'",
+        f"DESTINATION_COUNT='{len(destinations)}'",
+        *[
+            f"DESTINATION_{index}_REPOSITORY='{shell_quote(destination.repository)}'"
+            for index, destination in enumerate(destinations)
+        ],
+        *[
+            f"RESTORE_LXC_CONFIG_{index}_VMID='{shell_quote(vmid)}'"
+            for index, vmid in enumerate(restore_lxc.vmids)
+        ],
+        "",
+    ]
+
+
 def build_config_restore_plan(root: Path, host: str, build_dir: Path) -> None:
     registry = default_registry(root)
     if not registry.has(host, "pbs-client-backup"):
@@ -402,54 +526,11 @@ def build_config_restore_plan(root: Path, host: str, build_dir: Path) -> None:
     )
     if pve_archive is None:
         return
-    restore_lxc_configs = registry.get(host, "pve-backup.restore_lxc_configs", {})
-    if restore_lxc_configs in (None, ""):
-        restore_lxc_configs = {}
-    if not isinstance(restore_lxc_configs, dict):
-        raise ValueError(f"pve-backup.restore_lxc_configs must be a mapping for {host}")
-    restore_lxc_enabled = normalize_bool(
-        restore_lxc_configs.get("enabled", False),
-        False,
-        f"pve-backup.restore_lxc_configs.enabled must be boolean for {host}",
-    )
-    restore_lxc_autostart = normalize_bool(
-        restore_lxc_configs.get("autostart", False),
-        False,
-        f"pve-backup.restore_lxc_configs.autostart must be boolean for {host}",
-    )
-    restore_lxc_vmids = normalize_string_list(
-        restore_lxc_configs.get("vmids", []),
-        f"pve-backup.restore_lxc_configs.vmids must be a list for {host}",
-    )
-    for vmid in restore_lxc_vmids:
-        if not re.fullmatch(r"[1-9][0-9]{0,8}", vmid):
-            raise ValueError(
-                f"Invalid LXC VMID in pve-backup.restore_lxc_configs.vmids for {host}: {vmid}"
-            )
     # pbs.env holds a live PBS password and is NOT written into build/; it is staged
     # from the tmpfs secret cache at upload time (see deploy_host).
     (build_dir / "restore-plan.conf").write_text(
         "\n".join(
-            [
-                f"NAMESPACE='{shell_quote(plan.namespace)}'",
-                f"BACKUP_ID='{shell_quote(plan.backup_id)}'",
-                f"ARCHIVE_NAME='{shell_quote(pve_archive.name)}'",
-                f"ENCRYPT='{str(plan.encrypt).lower()}'",
-                f"KEYFILE='{shell_quote(pbs_client_backup.KEYFILE_REMOTE_PATH)}'",
-                f"RESTORE_LXC_CONFIGS_ENABLED='{str(restore_lxc_enabled).lower()}'",
-                f"RESTORE_LXC_AUTOSTART='{str(restore_lxc_autostart).lower()}'",
-                f"RESTORE_LXC_CONFIG_COUNT='{len(restore_lxc_vmids)}'",
-                f"DESTINATION_COUNT='{len(pbs_client_backup.destinations_for(plan))}'",
-                *[
-                    f"DESTINATION_{index}_REPOSITORY='{shell_quote(destination.repository)}'"
-                    for index, destination in enumerate(pbs_client_backup.destinations_for(plan))
-                ],
-                *[
-                    f"RESTORE_LXC_CONFIG_{index}_VMID='{shell_quote(vmid)}'"
-                    for index, vmid in enumerate(restore_lxc_vmids)
-                ],
-                "",
-            ]
+            restore_plan_lines(plan, pve_archive, normalize_restore_lxc_configs(registry, host))
         ),
         encoding="utf-8",
     )

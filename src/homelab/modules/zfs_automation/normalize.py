@@ -76,6 +76,44 @@ def normalize_source_private_keys(registry, host: str) -> tuple[SourcePrivateKey
     return tuple(keys)
 
 
+def known_host_refresh_port(item: dict, index: int, host: str) -> int:
+    """The entry's SSH port, defaulting to 22 and bounded to the valid range."""
+    message = f"zfs-automation.known_host_refresh[{index}].port is invalid for {host}"
+    try:
+        port = int(item.get("port", 22))
+    except (TypeError, ValueError) as exc:
+        raise ValueError(message) from exc
+    if port < 1 or port > 65535:
+        raise ValueError(message)
+    return port
+
+
+def normalize_known_host_refresh_entry(item: object, index: int, host: str) -> KnownHostRefresh:
+    """One `known_host_refresh` entry.
+
+    `known_hosts` is confined to /root/.ssh/ because the installer rewrites the
+    named file; an unconfined path would let inventory target any file on the host.
+    """
+    if not isinstance(item, dict):
+        raise ValueError(f"zfs-automation.known_host_refresh[{index}] must be a mapping for {host}")
+    hostname = require_string(
+        item.get("host", ""),
+        f"zfs-automation.known_host_refresh[{index}].host required for {host}",
+    )
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+", hostname):
+        raise ValueError(f"zfs-automation.known_host_refresh[{index}].host is invalid for {host}")
+    known_hosts = str(item.get("known_hosts", "/root/.ssh/known_hosts")).strip()
+    if not known_hosts.startswith("/root/.ssh/") or known_hosts.endswith("/"):
+        raise ValueError(
+            f"zfs-automation.known_host_refresh known_hosts must be a root .ssh file for {host}"
+        )
+    return KnownHostRefresh(
+        host=hostname,
+        known_hosts=known_hosts,
+        port=known_host_refresh_port(item, index, host),
+    )
+
+
 def normalize_known_host_refresh(registry, host: str) -> tuple[KnownHostRefresh, ...]:
     raw = registry.get(host, "zfs-automation.known_host_refresh", [])
     if raw in (None, ""):
@@ -86,40 +124,12 @@ def normalize_known_host_refresh(registry, host: str) -> tuple[KnownHostRefresh,
     entries: list[KnownHostRefresh] = []
     seen: set[tuple[str, str, int]] = set()
     for index, item in enumerate(raw):
-        if not isinstance(item, dict):
-            raise ValueError(
-                f"zfs-automation.known_host_refresh[{index}] must be a mapping for {host}"
-            )
-        hostname = require_string(
-            item.get("host", ""),
-            f"zfs-automation.known_host_refresh[{index}].host required for {host}",
-        )
-        if not re.fullmatch(r"[A-Za-z0-9_.-]+", hostname):
-            raise ValueError(
-                f"zfs-automation.known_host_refresh[{index}].host is invalid for {host}"
-            )
-        known_hosts = str(item.get("known_hosts", "/root/.ssh/known_hosts")).strip()
-        if not known_hosts.startswith("/root/.ssh/") or known_hosts.endswith("/"):
-            raise ValueError(
-                "zfs-automation.known_host_refresh known_hosts must be a root .ssh file "
-                f"for {host}"
-            )
-        port_raw = item.get("port", 22)
-        try:
-            port = int(port_raw)
-        except (TypeError, ValueError) as exc:
-            raise ValueError(
-                f"zfs-automation.known_host_refresh[{index}].port is invalid for {host}"
-            ) from exc
-        if port < 1 or port > 65535:
-            raise ValueError(
-                f"zfs-automation.known_host_refresh[{index}].port is invalid for {host}"
-            )
-        key = (hostname, known_hosts, port)
+        entry = normalize_known_host_refresh_entry(item, index, host)
+        key = (entry.host, entry.known_hosts, entry.port)
         if key in seen:
             raise ValueError(f"duplicate known_host_refresh entry {key} for {host}")
         seen.add(key)
-        entries.append(KnownHostRefresh(host=hostname, known_hosts=known_hosts, port=port))
+        entries.append(entry)
     return tuple(entries)
 
 
@@ -309,55 +319,71 @@ def normalize_migratable_lxc_groups(
             raise ValueError(
                 f"duplicate migratable LXC group '{normalized_group_name}' for {host}"
             )
-        explicit_plans = group_config.get("plans", [])
-        if not isinstance(explicit_plans, list) or not explicit_plans:
-            raise ValueError(
-                "migratable LXC group "
-                f"'{normalized_group_name}' plans must be a non-empty list for {host}"
-            )
-        plans: list[MigratableLxcPlan] = []
-        seen_names: set[str] = set()
-        seen_datasets: set[str] = set()
-        for index, plan in enumerate(explicit_plans):
-            if not isinstance(plan, dict):
-                raise ValueError(
-                    "invalid migratable LXC plan at index "
-                    f"{index} in group '{normalized_group_name}' for {host}"
-                )
-            name = require_safe_authorized_key_option(
-                plan.get("name", f"plan-{index}"),
-                "name must be safe for migratable LXC plan "
-                f"{index} in group '{normalized_group_name}' for {host}",
-            )
-            if name in seen_names:
-                raise ValueError(
-                    f"duplicate plan name {name} in migratable LXC group "
-                    f"'{normalized_group_name}' for {host}"
-                )
-            seen_names.add(name)
-            vmid = normalize_positive_int(
-                plan.get("vmid"),
-                "vmid must be a positive integer for migratable LXC plan "
-                f"{index} in group '{normalized_group_name}' for {host}",
-            )
-            dataset = require_string(
-                plan.get("dataset", ""),
-                "dataset required for migratable LXC plan "
-                f"{index} in group '{normalized_group_name}' for {host}",
-            )
-            if dataset in seen_datasets:
-                raise ValueError(
-                    f"duplicate dataset {dataset} in migratable LXC group "
-                    f"'{normalized_group_name}' for {host}"
-                )
-            seen_datasets.add(dataset)
-            plans.append(MigratableLxcPlan(name=name, vmid=vmid, dataset=dataset))
-
         groups[normalized_group_name] = MigratableLxcGroup(
             name=normalized_group_name,
-            plans=tuple(plans),
+            plans=tuple(
+                normalize_migratable_lxc_plans(group_config, normalized_group_name, host)
+            ),
         )
     return groups
+
+
+def normalize_migratable_lxc_plan(
+    plan: object, index: int, group_name: str, host: str
+) -> MigratableLxcPlan:
+    """One plan in a migratable-LXC group: a container name, its VMID, and its dataset."""
+    where = f"{index} in group '{group_name}' for {host}"
+    if not isinstance(plan, dict):
+        raise ValueError(f"invalid migratable LXC plan at index {where}")
+    return MigratableLxcPlan(
+        name=require_safe_authorized_key_option(
+            plan.get("name", f"plan-{index}"),
+            f"name must be safe for migratable LXC plan {where}",
+        ),
+        vmid=normalize_positive_int(
+            plan.get("vmid"),
+            f"vmid must be a positive integer for migratable LXC plan {where}",
+        ),
+        dataset=require_string(
+            plan.get("dataset", ""),
+            f"dataset required for migratable LXC plan {where}",
+        ),
+    )
+
+
+def normalize_migratable_lxc_plans(
+    group_config: dict, group_name: str, host: str
+) -> list[MigratableLxcPlan]:
+    """A group's plans, rejecting a repeated name or dataset.
+
+    Both must be unique: the name keys the rendered unit and the dataset decides
+    what gets replicated, so a duplicate of either silently drops one container.
+    """
+    explicit_plans = group_config.get("plans", [])
+    if not isinstance(explicit_plans, list) or not explicit_plans:
+        raise ValueError(
+            f"migratable LXC group '{group_name}' plans must be a non-empty list for {host}"
+        )
+
+    plans: list[MigratableLxcPlan] = []
+    seen_names: set[str] = set()
+    seen_datasets: set[str] = set()
+    for index, raw_plan in enumerate(explicit_plans):
+        plan = normalize_migratable_lxc_plan(raw_plan, index, group_name, host)
+        if plan.name in seen_names:
+            raise ValueError(
+                f"duplicate plan name {plan.name} in migratable LXC group "
+                f"'{group_name}' for {host}"
+            )
+        seen_names.add(plan.name)
+        if plan.dataset in seen_datasets:
+            raise ValueError(
+                f"duplicate dataset {plan.dataset} in migratable LXC group "
+                f"'{group_name}' for {host}"
+            )
+        seen_datasets.add(plan.dataset)
+        plans.append(plan)
+    return plans
 
 
 def parse_migratable_lxc_group_ref(value: object, host: str, key: str) -> tuple[str, str]:
@@ -404,73 +430,83 @@ def expand_migratable_lxc_snapshot_group(
     ]
 
 
-def normalize_snapshot_plans(registry, host: str) -> list[SnapshotPlan]:
+def resolve_snapshot_source(registry, host: str) -> tuple[object, object]:
+    """The `(defaults, explicit_plans)` pair, from a snapshot_template or the host itself.
+
+    A `snapshot_template` reference replaces both halves wholesale rather than
+    merging, so a host either templates its snapshots or writes them out.
+    """
     snapshot_template = registry.get(host, "zfs-automation.snapshot_template", None)
-    if snapshot_template is not None:
-        source_host, template_name = parse_migratable_lxc_group_ref(
-            snapshot_template,
-            host,
-            "snapshot_template",
+    if snapshot_template is None:
+        return (
+            registry.get(host, "zfs-automation.snapshot_defaults", {}),
+            registry.get(host, "zfs-automation.snapshot_plans", None),
         )
-        templates = registry.get(source_host, "zfs-automation.snapshot_templates", None)
-        if not isinstance(templates, dict):
-            raise ValueError(f"zfs-automation.snapshot_templates must be a dict for {source_host}")
-        template = templates.get(template_name)
-        if not isinstance(template, dict):
-            raise ValueError(
-                f"snapshot_template {source_host}:{template_name} not found for {host}"
-            )
-        defaults = template.get("snapshot_defaults", {})
-        explicit = template.get("snapshot_plans", None)
-    else:
-        defaults = registry.get(host, "zfs-automation.snapshot_defaults", {})
-        explicit = registry.get(host, "zfs-automation.snapshot_plans", None)
+
+    source_host, template_name = parse_migratable_lxc_group_ref(
+        snapshot_template,
+        host,
+        "snapshot_template",
+    )
+    templates = registry.get(source_host, "zfs-automation.snapshot_templates", None)
+    if not isinstance(templates, dict):
+        raise ValueError(f"zfs-automation.snapshot_templates must be a dict for {source_host}")
+    template = templates.get(template_name)
+    if not isinstance(template, dict):
+        raise ValueError(f"snapshot_template {source_host}:{template_name} not found for {host}")
+    return template.get("snapshot_defaults", {}), template.get("snapshot_plans", None)
+
+
+def expand_snapshot_plan_entry(registry, plan: object, index: int, defaults: dict, host: str):
+    """One `snapshot_plans` entry, which may fan out into a whole LXC group."""
+    if not isinstance(plan, dict):
+        raise ValueError(f"invalid snapshot plan at index {index} for {host}")
+    if "migratable_lxc_group" in plan:
+        return expand_migratable_lxc_snapshot_group(
+            registry,
+            plan.get("migratable_lxc_group"),
+            defaults,
+            host,
+        )
+    return [
+        snapshot_plan_from_config(
+            plan,
+            defaults,
+            require_string(
+                plan.get("dataset", ""),
+                f"snapshot plan dataset required for {host}",
+            ),
+            host,
+        )
+    ]
+
+
+def normalize_snapshot_plans(registry, host: str) -> list[SnapshotPlan]:
+    defaults, explicit = resolve_snapshot_source(registry, host)
 
     if defaults is None:
         defaults = {}
     if not isinstance(defaults, dict):
         raise ValueError(f"zfs-automation.snapshot_defaults must be a mapping for {host}")
 
-    if explicit is not None:
-        if not isinstance(explicit, list):
-            raise ValueError(f"zfs-automation.snapshot_plans must be a list for {host}")
-        plans: list[SnapshotPlan] = []
-        seen: set[str] = set()
-        for index, plan in enumerate(explicit):
-            if not isinstance(plan, dict):
-                raise ValueError(f"invalid snapshot plan at index {index} for {host}")
-            expanded_plans = (
-                expand_migratable_lxc_snapshot_group(
-                    registry,
-                    plan.get("migratable_lxc_group"),
-                    defaults,
-                    host,
-                )
-                if "migratable_lxc_group" in plan
-                else [
-                    snapshot_plan_from_config(
-                        plan,
-                        defaults,
-                        require_string(
-                            plan.get("dataset", ""),
-                            f"snapshot plan dataset required for {host}",
-                        ),
-                        host,
-                    )
-                ]
+    if explicit is None:
+        if registry.get(host, "zfs-automation.sanoid", None) is not None:
+            raise ValueError(
+                f"zfs-automation.sanoid is no longer supported for {host}; use snapshot_plans"
             )
-            for expanded_plan in expanded_plans:
-                if expanded_plan.dataset in seen:
-                    raise ValueError(
-                        f"duplicate snapshot plan dataset {expanded_plan.dataset} for {host}"
-                    )
-                seen.add(expanded_plan.dataset)
-                plans.append(expanded_plan)
-        return plans
+        return []
 
-    if registry.get(host, "zfs-automation.sanoid", None) is not None:
-        raise ValueError(
-            f"zfs-automation.sanoid is no longer supported for {host}; use snapshot_plans"
-        )
+    if not isinstance(explicit, list):
+        raise ValueError(f"zfs-automation.snapshot_plans must be a list for {host}")
 
-    return []
+    plans: list[SnapshotPlan] = []
+    seen: set[str] = set()
+    for index, plan in enumerate(explicit):
+        for expanded_plan in expand_snapshot_plan_entry(registry, plan, index, defaults, host):
+            if expanded_plan.dataset in seen:
+                raise ValueError(
+                    f"duplicate snapshot plan dataset {expanded_plan.dataset} for {host}"
+                )
+            seen.add(expanded_plan.dataset)
+            plans.append(expanded_plan)
+    return plans

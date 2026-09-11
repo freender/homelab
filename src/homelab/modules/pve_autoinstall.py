@@ -40,6 +40,69 @@ REMOTE_ROOT = "/tmp/homelab-pve-autoinstall"
 # Module entry points
 # ---------------------------------------------------------------------------
 
+def _pdm_hosts(registry: Any) -> list[str]:
+    """Every pve-autoinstall host that is the PDM answer server rather than a target."""
+    return [
+        h for h in registry.list_hosts(feature="pve-autoinstall") if _is_pdm_host(registry, h)
+    ]
+
+
+def _pve_node_hosts(registry: Any) -> list[str]:
+    """Every pve-autoinstall host that is an install *target*.
+
+    The PDM host serves answers and is never itself reinstalled, so it is excluded.
+    """
+    return [
+        h for h in registry.list_hosts(feature="pve-autoinstall") if not _is_pdm_host(registry, h)
+    ]
+
+
+def _build_answer_entries(root: Path, registry: Any, pve_hosts: list[str], pdm_cfg: dict) -> list:
+    """One answer entry per node, printing each as it is built.
+
+    Raises ValueError naming the offending host so the caller can report and stop
+    rather than uploading a partial answer plan.
+    """
+    answer_entries = []
+    for host in pve_hosts:
+        try:
+            entry = _build_answer_entry(root, registry, host, pdm_cfg)
+        except (ValueError, HostLookupError) as exc:
+            raise ValueError(f"Failed to build answer for {host}: {exc}") from exc
+        answer_entries.append(entry)
+        print_sub(f"  {entry['id']}: {entry['fqdn']} {entry['cidr']}")
+    return answer_entries
+
+
+def _prepare_answer_plan(
+    root: Path, registry: Any, pdm_host_name: str, pve_hosts: list[str]
+) -> tuple[dict, list]:
+    """Validate, load the PDM config, and build every answer entry.
+
+    All four steps report the same way on failure -- print the message and stop
+    without touching the PDM host -- so they share one ValueError path.
+    """
+    validate(root, registry, pdm_host_name, pve_hosts)
+    pdm_cfg = _load_pdm_config(root, registry, pdm_host_name)
+
+    print_action("PVE Automated Install (PDM Answers)")
+    print_sub(f"PDM host: {pdm_host_name} ({pdm_cfg['pdm_host']}:{pdm_cfg['pdm_port']})")
+    print_sub(f"PVE nodes: {' '.join(pve_hosts)}")
+    print()
+
+    return pdm_cfg, _build_answer_entries(root, registry, pve_hosts, pdm_cfg)
+
+
+def _report_dry_run(pdm_host_name: str, answer_entries: list) -> None:
+    print_sub(f"[DRY-RUN] Would stage answer plan and run sync-answers.py on {pdm_host_name}")
+    for entry in answer_entries:
+        print_sub(
+            f"  {entry['id']}: fqdn={entry['fqdn']} cidr={entry['cidr']}"
+            f" disk={entry['disk-filter']['ID_SERIAL']}"
+            f" uuid={entry['target-filter']['/dmi/system/uuid']}"
+        )
+
+
 def deploy(
     root: Path,
     requested_host: str,
@@ -49,10 +112,7 @@ def deploy(
 ) -> int:
     registry = default_registry(root)
 
-    pdm_hosts = [
-        h for h in registry.list_hosts(feature="pve-autoinstall")
-        if _is_pdm_host(registry, h)
-    ]
+    pdm_hosts = _pdm_hosts(registry)
     if not pdm_hosts:
         print_action("Skipping pve-autoinstall (no PDM host with pdm_host configured)")
         return 0
@@ -62,43 +122,16 @@ def deploy(
 
     pdm_host_name = pdm_hosts[0]
 
-    # Collect PVE node hosts to sync.
-    pve_hosts = [
-        h for h in registry.list_hosts(feature="pve-autoinstall")
-        if not _is_pdm_host(registry, h)
-    ]
-    pve_hosts = registry.filter_hosts(requested_host, pve_hosts)
+    pve_hosts = registry.filter_hosts(requested_host, _pve_node_hosts(registry))
     if not pve_hosts:
         print_action(f"Skipping pve-autoinstall (not applicable to {requested_host})")
         return 0
 
     try:
-        validate(root, registry, pdm_host_name, pve_hosts)
+        pdm_cfg, answer_entries = _prepare_answer_plan(root, registry, pdm_host_name, pve_hosts)
     except ValueError as exc:
         print_error(str(exc))
         return 1
-
-    try:
-        pdm_cfg = _load_pdm_config(root, registry, pdm_host_name)
-    except ValueError as exc:
-        print_error(str(exc))
-        return 1
-
-    print_action("PVE Automated Install (PDM Answers)")
-    print_sub(f"PDM host: {pdm_host_name} ({pdm_cfg['pdm_host']}:{pdm_cfg['pdm_port']})")
-    print_sub(f"PVE nodes: {' '.join(pve_hosts)}")
-    print()
-
-    # Build the answer plan (sans secrets).
-    answer_entries = []
-    for host in pve_hosts:
-        try:
-            entry = _build_answer_entry(root, registry, host, pdm_cfg)
-            answer_entries.append(entry)
-            print_sub(f"  {entry['id']}: {entry['fqdn']} {entry['cidr']}")
-        except (ValueError, HostLookupError) as exc:
-            print_error(f"Failed to build answer for {host}: {exc}")
-            return 1
 
     plan = {
         "pdm": {
@@ -111,13 +144,7 @@ def deploy(
     }
 
     if dry_run:
-        print_sub(f"[DRY-RUN] Would stage answer plan and run sync-answers.py on {pdm_host_name}")
-        for entry in answer_entries:
-            print_sub(
-                f"  {entry['id']}: fqdn={entry['fqdn']} cidr={entry['cidr']}"
-                f" disk={entry['disk-filter']['ID_SERIAL']}"
-                f" uuid={entry['target-filter']['/dmi/system/uuid']}"
-            )
+        _report_dry_run(pdm_host_name, answer_entries)
         return 0
 
     if offline_mode():
@@ -143,6 +170,14 @@ def deploy(
     return 0 if session.finish() else 1
 
 
+def _validate_pdm_secret(root: Path) -> None:
+    """The PDM deploy token must resolve; a missing one fails the whole module."""
+    try:
+        validate_secret_reference(root, PDM_SECRET_NAME)
+    except op_secrets.OpSecretsError as exc:
+        raise ValueError(str(exc)) from exc
+
+
 def validate(
     root: Path,
     registry: Any = None,
@@ -153,10 +188,7 @@ def validate(
         registry = default_registry(root)
 
     if pdm_host is None:
-        pdm_hosts = [
-            h for h in registry.list_hosts(feature="pve-autoinstall")
-            if _is_pdm_host(registry, h)
-        ]
+        pdm_hosts = _pdm_hosts(registry)
         if not pdm_hosts:
             return  # nothing to validate
         pdm_host = pdm_hosts[0]
@@ -164,19 +196,12 @@ def validate(
     _load_pdm_config(root, registry, pdm_host)
 
     if pve_hosts is None:
-        pve_hosts = [
-            h for h in registry.list_hosts(feature="pve-autoinstall")
-            if not _is_pdm_host(registry, h)
-        ]
+        pve_hosts = _pve_node_hosts(registry)
 
     for host in pve_hosts:
         _validate_pve_host(registry, host)
 
-    for secret_name in (PDM_SECRET_NAME,):
-        try:
-            validate_secret_reference(root, secret_name)
-        except op_secrets.OpSecretsError as exc:
-            raise ValueError(str(exc)) from exc
+    _validate_pdm_secret(root)
 
 
 # ---------------------------------------------------------------------------

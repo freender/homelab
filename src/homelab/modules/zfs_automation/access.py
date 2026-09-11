@@ -15,6 +15,74 @@ from .normalize import (
 from .replication import normalize_replication_config
 from .types import ZfsPusher, ZfsPushTargetAccess
 
+TEMPLATE_KEYS = {"template", "push_target_access_template"}
+PUSHER_KEY_PREFIXES = ("ssh-ed25519 ", "sk-ssh-ed25519@openssh.com ")
+
+
+def expand_access_template(registry, host: str, config: dict) -> dict:
+    """Merge a `template:` reference's defaults under the host's own overrides.
+
+    The reference names another host's `push_target_access_templates` entry, so the
+    lookup is against that host's config, not `host`'s.
+    """
+    template_ref = config.get("template", config.get("push_target_access_template"))
+    if template_ref is None:
+        return config
+
+    source_host, template_name = parse_migratable_lxc_group_ref(
+        template_ref,
+        host,
+        "push_target_access template",
+    )
+    templates = registry.get(source_host, "zfs-automation.push_target_access_templates", None)
+    if not isinstance(templates, dict):
+        raise ValueError(
+            f"zfs-automation.push_target_access_templates must be a dict for {source_host}"
+        )
+    template = templates.get(template_name)
+    if not isinstance(template, dict):
+        raise ValueError(
+            f"push_target_access template {source_host}:{template_name} not found for {host}"
+        )
+
+    expanded = dict(template)
+    expanded.update((key, value) for key, value in config.items() if key not in TEMPLATE_KEYS)
+    return expanded
+
+
+def normalize_pusher(pusher_config, index: int, host: str) -> ZfsPusher:
+    """One entry of `allowed_pushers`, validated for authorized_keys safety."""
+    if not isinstance(pusher_config, dict):
+        raise ValueError(f"invalid push target allowed_pusher at index {index} for {host}")
+    name = require_safe_authorized_key_option(
+        pusher_config.get("name", ""),
+        f"pusher name required at index {index} for {host}",
+    )
+    from_address = require_safe_authorized_key_option(
+        pusher_config.get("from", ""),
+        f"pusher from address required at index {index} for {host}",
+    )
+    public_key = require_string(
+        pusher_config.get("public_key", ""),
+        f"pusher public_key required at index {index} for {host}",
+    )
+    if not public_key.startswith(PUSHER_KEY_PREFIXES):
+        raise ValueError(f"pusher public_key at index {index} for {host} must be ed25519")
+    return ZfsPusher(name=name, from_address=from_address, public_key=public_key)
+
+
+def normalize_pushers(config: dict, host: str) -> list[ZfsPusher]:
+    """Every `allowed_pushers` entry; the list is required and may not be empty."""
+    pusher_configs = config.get("allowed_pushers", [])
+    if not isinstance(pusher_configs, list) or not pusher_configs:
+        raise ValueError(
+            f"zfs-automation.push_target_access.allowed_pushers must be a non-empty list for {host}"
+        )
+    return [
+        normalize_pusher(pusher_config, index, host)
+        for index, pusher_config in enumerate(pusher_configs)
+    ]
+
 
 def normalize_push_target_access(
     registry,
@@ -27,30 +95,7 @@ def normalize_push_target_access(
         return None
     if not isinstance(config, dict):
         raise ValueError(f"zfs-automation.push_target_access must be a mapping for {host}")
-    template_ref = config.get("template", config.get("push_target_access_template"))
-    if template_ref is not None:
-        source_host, template_name = parse_migratable_lxc_group_ref(
-            template_ref,
-            host,
-            "push_target_access template",
-        )
-        templates = registry.get(source_host, "zfs-automation.push_target_access_templates", None)
-        if not isinstance(templates, dict):
-            raise ValueError(
-                f"zfs-automation.push_target_access_templates must be a dict for {source_host}"
-            )
-        template = templates.get(template_name)
-        if not isinstance(template, dict):
-            raise ValueError(
-                f"push_target_access template {source_host}:{template_name} not found for {host}"
-            )
-        expanded_config = dict(template)
-        expanded_config.update(
-            (key, value)
-            for key, value in config.items()
-            if key not in {"template", "push_target_access_template"}
-        )
-        config = expanded_config
+    config = expand_access_template(registry, host, config)
 
     enabled = normalize_bool(
         config.get("enabled"),
@@ -71,38 +116,37 @@ def normalize_push_target_access(
     if not datasets:
         raise ValueError(f"zfs-automation.push_target_access.datasets is required for {host}")
 
-    pusher_configs = config.get("allowed_pushers", [])
-    if not isinstance(pusher_configs, list) or not pusher_configs:
-        raise ValueError(
-            f"zfs-automation.push_target_access.allowed_pushers must be a non-empty list"
-            f" for {host}"
-        )
-    pushers: list[ZfsPusher] = []
-    for index, pusher_config in enumerate(pusher_configs):
-        if not isinstance(pusher_config, dict):
-            raise ValueError(f"invalid push target allowed_pusher at index {index} for {host}")
-        name = require_safe_authorized_key_option(
-            pusher_config.get("name", ""),
-            f"pusher name required at index {index} for {host}",
-        )
-        from_address = require_safe_authorized_key_option(
-            pusher_config.get("from", ""),
-            f"pusher from address required at index {index} for {host}",
-        )
-        public_key = require_string(
-            pusher_config.get("public_key", ""),
-            f"pusher public_key required at index {index} for {host}",
-        )
-        if not public_key.startswith(("ssh-ed25519 ", "sk-ssh-ed25519@openssh.com ")):
-            raise ValueError(f"pusher public_key at index {index} for {host} must be ed25519")
-        pushers.append(ZfsPusher(name=name, from_address=from_address, public_key=public_key))
-
     return ZfsPushTargetAccess(
         enabled=enabled,
         user=user,
         datasets=tuple(datasets),
-        pushers=tuple(pushers),
+        pushers=tuple(normalize_pushers(config, host)),
     )
+
+
+def local_replication_datasets(replication_jobs) -> list[str]:
+    """Every local dataset a replication job reads from or writes to.
+
+    A plan's `source` is optional (an inherited source is resolved elsewhere), and
+    a remote endpoint lives on another host's pools, so neither contributes a pool
+    to manage here.
+    """
+    datasets: list[str] = []
+    for job in replication_jobs:
+        for plan in job.plans:
+            candidates = [plan.source, plan.target] if plan.source else [plan.target]
+            datasets.extend(dataset for dataset in candidates if not is_remote_dataset(dataset))
+    return datasets
+
+
+def unique_pools(datasets) -> list[str]:
+    """The pool of each dataset, first-seen order preserved and duplicates dropped."""
+    pools: list[str] = []
+    for dataset in datasets:
+        pool = dataset_pool(dataset)
+        if pool not in pools:
+            pools.append(pool)
+    return pools
 
 
 def resolve_pools(registry, host: str) -> list[str]:
@@ -112,22 +156,10 @@ def resolve_pools(registry, host: str) -> list[str]:
 
     snapshot_plans = normalize_snapshot_plans(registry, host)
     replication_jobs = normalize_replication_config(registry, host)
-    pools: list[str] = []
-    local_replication_datasets = [
-        dataset
-        for job in replication_jobs
-        for plan in job.plans
-        for dataset in (
-            *([plan.source] if plan.source else []),
-            plan.target,
-        )
-        if not is_remote_dataset(dataset)
-    ]
-    for dataset in [*(plan.dataset for plan in snapshot_plans), *local_replication_datasets]:
-        pool = dataset_pool(dataset)
-        if pool not in pools:
-            pools.append(pool)
-    if pools:
-        return pools
-    return ["cache"]
-
+    pools = unique_pools(
+        [
+            *(plan.dataset for plan in snapshot_plans),
+            *local_replication_datasets(replication_jobs),
+        ]
+    )
+    return pools or ["cache"]

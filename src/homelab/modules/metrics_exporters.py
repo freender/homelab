@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 
 from ..build import copy_files, render_file
@@ -494,40 +495,165 @@ def build_file_specs(
     )
 
 
+BARE_METAL_COMMON_FILES = [
+    "zfs-pool-textfile-exporter",
+    "zfs-pool-textfile-exporter.service",
+    "zfs-pool-textfile-exporter.timer",
+    "reboot-textfile-exporter",
+    "reboot-textfile-exporter.service",
+    "reboot-textfile-exporter.timer",
+    "disk-label-textfile-exporter.py",
+    "disk-label-textfile-exporter.service",
+    "disk-label-textfile-exporter.timer",
+    "smartctl-exporter-wait-devices",
+]
+
+HBA_EXPORTER_FILES = [
+    "hba-textfile-exporter.py",
+    "hba-textfile-exporter.service",
+    "hba-textfile-exporter.timer",
+]
+
+APCACCESS_SERIAL_CMD = (
+    "apcaccess status 2>/dev/null | sed -n "
+    "'s/^SERIALNO[[:space:]]*:[[:space:]]*//p' | xargs"
+)
+
+
+@dataclass(frozen=True)
+class ExporterFlags:
+    """Which optional exporters this host gets."""
+
+    lxc_guest: bool
+    has_wrapper: bool
+    has_apcupsd: bool
+    has_igpu: bool
+    has_hba: bool
+
+
+def exporter_flags(root: Path, host: str) -> ExporterFlags:
+    """Resolve every per-host exporter switch.
+
+    The smartctl wrapper and the HBA exporter both read real disks, so neither is
+    ever enabled inside an LXC guest regardless of what inventory says.
+    """
+    lxc_guest = is_lxc_guest(root, host)
+    return ExporterFlags(
+        lxc_guest=lxc_guest,
+        has_wrapper=has_smartctl_wrapper(root, host) and not lxc_guest,
+        has_apcupsd=has_apcupsd_exporter(root, host),
+        has_igpu=has_igpu_exporter(root, host),
+        has_hba=has_hba_exporter(root, host) and not lxc_guest,
+    )
+
+
+@dataclass(frozen=True)
+class BareMetalData:
+    """Host facts that only exist outside an LXC guest."""
+
+    expected_pools: list
+    label_overrides: list
+    patch_statuses: list
+
+
+def bare_metal_data(root: Path, host: str, lxc_guest: bool) -> BareMetalData:
+    """ZFS pools, disk-label overrides and PVE patch statuses, all empty in a guest."""
+    if lxc_guest:
+        return BareMetalData([], [], [])
+    return BareMetalData(
+        expected_pools=zfs_expected_pools(root, host),
+        label_overrides=disk_label_overrides(root, host),
+        patch_statuses=pve_patch_statuses(root, host),
+    )
+
+
+def build_bare_metal_exporters(
+    root: Path, common_dir: Path, build_dir: Path, flags: ExporterFlags
+) -> None:
+    """The textfile exporters and smartctl override every bare-metal host gets."""
+    if flags.lxc_guest:
+        return
+    copy_files(common_dir, build_dir, BARE_METAL_COMMON_FILES)
+    if flags.has_wrapper:
+        copy_files(common_dir, build_dir, ["smartctl-wrapper.sh"])
+    render_file(
+        smartctl_override_template(root),
+        build_dir / "smartctl-exporter-override.conf",
+        SMARTCTL_PATH=SMARTCTL_WRAPPER_BIN if flags.has_wrapper else SMARTCTL_BIN,
+    )
+
+
+def read_ups_serial(connection, dry_run: bool) -> str:
+    """The UPS serial from apcaccess, or empty on a dry run with no host to ask."""
+    if dry_run:
+        return ""
+    result = connection.connection.run(APCACCESS_SERIAL_CMD, warn=True, hide=True)
+    return result.stdout.strip()
+
+
+def build_apcupsd_exporter(
+    root: Path,
+    registry,
+    connection,
+    common_dir: Path,
+    build_dir: Path,
+    host: str,
+    dry_run: bool,
+) -> None:
+    """Render the apcupsd exporter, labelled with the UPS name and serial."""
+    try:
+        upsname = str(registry.get(host, "apcupsd.name"))
+    except HostLookupError as exc:
+        raise ValueError(str(exc)) from exc
+    serial = read_ups_serial(connection, dry_run)
+    copy_files(common_dir, build_dir, ["apcupsd-exporter.py", "apcupsd-exporter.service"])
+    render_file(
+        apcupsd_exporter_env_template(root),
+        build_dir / "apcupsd-exporter.env",
+        UPS_NAME=upsname,
+        UPS_HOST=host,
+        UPS_SERIAL=serial,
+    )
+
+
+def build_igpu_exporter(registry, common_dir: Path, build_dir: Path, host: str) -> None:
+    """Render the Intel GPU exporter defaults and copy its unit."""
+    prefix = "metrics-exporters.intel_gpu_exporter"
+    render_file(
+        common_dir / "igpu-exporter.defaults",
+        build_dir / "igpu-exporter.defaults",
+        IGPU_EXPORTER_PORT=str(int(registry.get(host, f"{prefix}.port", 9400))),
+        IGPU_EXPORTER_REFRESH_PERIOD_MS=str(
+            int(registry.get(host, f"{prefix}.refresh_period_ms", 1000))
+        ),
+        IGPU_EXPORTER_DEVICE=str(registry.get(host, f"{prefix}.device", "")).strip(),
+    )
+    copy_files(common_dir, build_dir, ["igpu-exporter.py", "igpu-exporter.service"])
+
+
+def render_if_any(values: list, template: Path, destination: Path, key: str) -> None:
+    """Render `destination` only when `values` is non-empty.
+
+    An empty conf would be indistinguishable from "this host has none", and the
+    file map keys off the file's existence.
+    """
+    if values:
+        render_file(template, destination, **{key: values})
+
+
 def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
     registry = default_registry(root)
     common_dir = root / "metrics-exporters" / "configs" / "common"
     build_dir = root / "metrics-exporters" / "build" / host
     prepare_build_dir(build_dir)
 
-    lxc_guest = is_lxc_guest(root, host)
+    flags = exporter_flags(root, host)
     render_file(
         node_exporter_defaults_template(root),
         build_dir / "node-exporter.defaults",
-        NODE_EXPORTER_ARGS=node_exporter_args(lxc_guest=lxc_guest),
+        NODE_EXPORTER_ARGS=node_exporter_args(lxc_guest=flags.lxc_guest),
     )
-
-    has_wrapper = has_smartctl_wrapper(root, host) and not lxc_guest
-    if not lxc_guest:
-        copy_files(common_dir, build_dir, [
-            "zfs-pool-textfile-exporter",
-            "zfs-pool-textfile-exporter.service",
-            "zfs-pool-textfile-exporter.timer",
-            "reboot-textfile-exporter",
-            "reboot-textfile-exporter.service",
-            "reboot-textfile-exporter.timer",
-            "disk-label-textfile-exporter.py",
-            "disk-label-textfile-exporter.service",
-            "disk-label-textfile-exporter.timer",
-            "smartctl-exporter-wait-devices",
-        ])
-        if has_wrapper:
-            copy_files(common_dir, build_dir, ["smartctl-wrapper.sh"])
-        render_file(
-            smartctl_override_template(root),
-            build_dir / "smartctl-exporter-override.conf",
-            SMARTCTL_PATH=SMARTCTL_WRAPPER_BIN if has_wrapper else SMARTCTL_BIN,
-        )
+    build_bare_metal_exporters(root, common_dir, build_dir, flags)
 
     connection = HostConnection(
         host,
@@ -535,89 +661,42 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
         hostname=str(registry.get(host, "config.hostname")),
     )
 
-    has_apcupsd = has_apcupsd_exporter(root, host)
-    if has_apcupsd:
-        try:
-            upsname = str(registry.get(host, "apcupsd.name"))
-        except HostLookupError as exc:
-            raise ValueError(str(exc)) from exc
-        serial = ""
-        if not dry_run:
-            result = connection.connection.run(
-                (
-                    "apcaccess status 2>/dev/null | sed -n "
-                    "'s/^SERIALNO[[:space:]]*:[[:space:]]*//p' | xargs"
-                ),
-                warn=True,
-                hide=True,
-            )
-            serial = result.stdout.strip()
-        copy_files(common_dir, build_dir, ["apcupsd-exporter.py", "apcupsd-exporter.service"])
-        render_file(
-            apcupsd_exporter_env_template(root),
-            build_dir / "apcupsd-exporter.env",
-            UPS_NAME=upsname,
-            UPS_HOST=host,
-            UPS_SERIAL=serial,
-        )
+    if flags.has_apcupsd:
+        build_apcupsd_exporter(root, registry, connection, common_dir, build_dir, host, dry_run)
+    if flags.has_igpu:
+        build_igpu_exporter(registry, common_dir, build_dir, host)
+    if flags.has_hba:
+        copy_files(common_dir, build_dir, HBA_EXPORTER_FILES)
 
-    has_igpu = has_igpu_exporter(root, host)
-    if has_igpu:
-        port = int(registry.get(host, "metrics-exporters.intel_gpu_exporter.port", 9400))
-        refresh_period_ms = int(
-            registry.get(host, "metrics-exporters.intel_gpu_exporter.refresh_period_ms", 1000)
-        )
-        device = str(registry.get(host, "metrics-exporters.intel_gpu_exporter.device", "")).strip()
-        render_file(
-            common_dir / "igpu-exporter.defaults",
-            build_dir / "igpu-exporter.defaults",
-            IGPU_EXPORTER_PORT=str(port),
-            IGPU_EXPORTER_REFRESH_PERIOD_MS=str(refresh_period_ms),
-            IGPU_EXPORTER_DEVICE=device,
-        )
-        copy_files(common_dir, build_dir, ["igpu-exporter.py", "igpu-exporter.service"])
-
-    has_hba = has_hba_exporter(root, host) and not lxc_guest
-    if has_hba:
-        copy_files(common_dir, build_dir, [
-            "hba-textfile-exporter.py",
-            "hba-textfile-exporter.service",
-            "hba-textfile-exporter.timer",
-        ])
-
-    expected_pools = [] if lxc_guest else zfs_expected_pools(root, host)
-    if expected_pools:
-        render_file(
-            zfs_expected_pools_template(root),
-            build_dir / "zfs-expected-pools.conf",
-            ZFS_EXPECTED_POOLS=expected_pools,
-        )
-
-    label_overrides = [] if lxc_guest else disk_label_overrides(root, host)
-    if label_overrides:
-        render_file(
-            disk_labels_template(root),
-            build_dir / "disk-labels.conf",
-            DISK_LABEL_OVERRIDES=label_overrides,
-        )
-
-    patch_statuses = [] if lxc_guest else pve_patch_statuses(root, host)
-    if patch_statuses:
-        render_file(
-            pve_patch_statuses_template(root),
-            build_dir / "pve-patch-statuses.conf",
-            PVE_PATCH_STATUSES=patch_statuses,
-        )
+    data = bare_metal_data(root, host, flags.lxc_guest)
+    render_if_any(
+        data.expected_pools,
+        zfs_expected_pools_template(root),
+        build_dir / "zfs-expected-pools.conf",
+        "ZFS_EXPECTED_POOLS",
+    )
+    render_if_any(
+        data.label_overrides,
+        disk_labels_template(root),
+        build_dir / "disk-labels.conf",
+        "DISK_LABEL_OVERRIDES",
+    )
+    render_if_any(
+        data.patch_statuses,
+        pve_patch_statuses_template(root),
+        build_dir / "pve-patch-statuses.conf",
+        "PVE_PATCH_STATUSES",
+    )
 
     file_specs = build_file_specs(
-        has_apcupsd=has_apcupsd,
-        has_igpu=has_igpu,
-        has_hba=has_hba,
-        has_expected_pools=bool(expected_pools),
-        has_disk_label_overrides=bool(label_overrides),
-        has_pve_patch_statuses=bool(patch_statuses),
-        has_wrapper=has_wrapper,
-        lxc_guest=lxc_guest,
+        has_apcupsd=flags.has_apcupsd,
+        has_igpu=flags.has_igpu,
+        has_hba=flags.has_hba,
+        has_expected_pools=bool(data.expected_pools),
+        has_disk_label_overrides=bool(data.label_overrides),
+        has_pve_patch_statuses=bool(data.patch_statuses),
+        has_wrapper=flags.has_wrapper,
+        lxc_guest=flags.lxc_guest,
     )
     write_file_map(build_dir, file_specs)
 

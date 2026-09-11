@@ -77,6 +77,65 @@ def validate(root: Path, hosts: list[str]) -> None:
         normalize_config(root, registry, host)
 
 
+def normalize_healthcheck(root: Path, registry, host: str) -> tuple[str, str]:
+    """The `(host, url)` the VIP healthcheck probes.
+
+    Inventory names the *env keys*, not the values: the values live in the
+    1Password-backed keepalived env file because the URL is an external route.
+    """
+    healthcheck_values = load_keepalived_env(root)
+    healthcheck_host_env = require_text(
+        registry.get(host, "keepalived.healthcheck_host_env", ""),
+        f"keepalived.healthcheck_host_env is required for {host}",
+    )
+    healthcheck_url_env = require_text(
+        registry.get(host, "keepalived.healthcheck_url_env", ""),
+        f"keepalived.healthcheck_url_env is required for {host}",
+    )
+    return (
+        require_text(
+            healthcheck_values.get(healthcheck_host_env, ""),
+            f"{healthcheck_host_env} is required in {keepalived_env_path(root)} for {host}",
+        ),
+        require_text(
+            healthcheck_values.get(healthcheck_url_env, ""),
+            f"{healthcheck_url_env} is required in {keepalived_env_path(root)} for {host}",
+        ),
+    )
+
+
+def normalize_vrrp_numbers(registry, host: str) -> tuple[int, int, int, int]:
+    """`(virtual_router_id, priority, advert_interval, preempt_delay)`, range-checked.
+
+    These four decide the VIP election. A zero VRID or priority would be accepted
+    by keepalived and produce a silently broken instance, so they are rejected here.
+    """
+    virtual_router_id = int(registry.get(host, "keepalived.virtual_router_id", 0))
+    priority = int(registry.get(host, "keepalived.priority", 0))
+    advert_interval = int(registry.get(host, "keepalived.advert_interval", 1))
+    preempt_delay = int(registry.get(host, "keepalived.preempt_delay", 0))
+    if virtual_router_id < 1:
+        raise ValueError(f"keepalived.virtual_router_id must be >= 1 for {host}")
+    if priority < 1:
+        raise ValueError(f"keepalived.priority must be >= 1 for {host}")
+    if advert_interval < 1:
+        raise ValueError(f"keepalived.advert_interval must be >= 1 for {host}")
+    if preempt_delay < 0 or preempt_delay > 1000:
+        raise ValueError(f"keepalived.preempt_delay must be between 0 and 1000 for {host}")
+    return virtual_router_id, priority, advert_interval, preempt_delay
+
+
+def require_non_empty_list(registry, host: str, key: str) -> tuple[str, ...]:
+    """A required non-empty list of non-empty strings under `keepalived.<key>`."""
+    raw = registry.get(host, f"keepalived.{key}", [])
+    if not isinstance(raw, list) or not raw:
+        raise ValueError(f"keepalived.{key} must be a non-empty list for {host}")
+    return tuple(
+        require_text(item, f"keepalived.{key} entries must be non-empty for {host}")
+        for item in raw
+    )
+
+
 def normalize_config(root: Path, registry, host: str) -> KeepalivedConfig:
     try:
         host_type = str(registry.get(host, "config.type"))
@@ -94,55 +153,13 @@ def normalize_config(root: Path, registry, host: str) -> KeepalivedConfig:
         registry.get(host, "keepalived.instance_name", host),
         f"keepalived.instance_name must be non-empty for {host}",
     )
-    healthcheck_values = load_keepalived_env(root)
-    healthcheck_host_env = require_text(
-        registry.get(host, "keepalived.healthcheck_host_env", ""),
-        f"keepalived.healthcheck_host_env is required for {host}",
-    )
-    healthcheck_url_env = require_text(
-        registry.get(host, "keepalived.healthcheck_url_env", ""),
-        f"keepalived.healthcheck_url_env is required for {host}",
-    )
-    healthcheck_host = require_text(
-        healthcheck_values.get(healthcheck_host_env, ""),
-        f"{healthcheck_host_env} is required in {keepalived_env_path(root)} for {host}",
-    )
-    healthcheck_url = require_text(
-        healthcheck_values.get(healthcheck_url_env, ""),
-        f"{healthcheck_url_env} is required in {keepalived_env_path(root)} for {host}",
-    )
+    healthcheck_host, healthcheck_url = normalize_healthcheck(root, registry, host)
     unicast_src_ip = require_text(
         registry.get(host, "keepalived.unicast_src_ip", ""),
         f"keepalived.unicast_src_ip is required for {host}",
     )
-
-    virtual_router_id = int(registry.get(host, "keepalived.virtual_router_id", 0))
-    priority = int(registry.get(host, "keepalived.priority", 0))
-    advert_interval = int(registry.get(host, "keepalived.advert_interval", 1))
-    preempt_delay = int(registry.get(host, "keepalived.preempt_delay", 0))
-    if virtual_router_id < 1:
-        raise ValueError(f"keepalived.virtual_router_id must be >= 1 for {host}")
-    if priority < 1:
-        raise ValueError(f"keepalived.priority must be >= 1 for {host}")
-    if advert_interval < 1:
-        raise ValueError(f"keepalived.advert_interval must be >= 1 for {host}")
-    if preempt_delay < 0 or preempt_delay > 1000:
-        raise ValueError(f"keepalived.preempt_delay must be between 0 and 1000 for {host}")
-
-    peers_raw = registry.get(host, "keepalived.unicast_peers", [])
-    if not isinstance(peers_raw, list) or not peers_raw:
-        raise ValueError(f"keepalived.unicast_peers must be a non-empty list for {host}")
-    unicast_peers = tuple(
-        require_text(peer, f"keepalived.unicast_peers entries must be non-empty for {host}")
-        for peer in peers_raw
-    )
-
-    virtual_ips_raw = registry.get(host, "keepalived.virtual_ips", [])
-    if not isinstance(virtual_ips_raw, list) or not virtual_ips_raw:
-        raise ValueError(f"keepalived.virtual_ips must be a non-empty list for {host}")
-    virtual_ips = tuple(
-        require_text(item, f"keepalived.virtual_ips entries must be non-empty for {host}")
-        for item in virtual_ips_raw
+    virtual_router_id, priority, advert_interval, preempt_delay = normalize_vrrp_numbers(
+        registry, host
     )
 
     return KeepalivedConfig(
@@ -155,8 +172,8 @@ def normalize_config(root: Path, registry, host: str) -> KeepalivedConfig:
         advert_interval=advert_interval,
         preempt_delay=preempt_delay,
         unicast_src_ip=unicast_src_ip,
-        unicast_peers=unicast_peers,
-        virtual_ips=virtual_ips,
+        unicast_peers=require_non_empty_list(registry, host, "unicast_peers"),
+        virtual_ips=require_non_empty_list(registry, host, "virtual_ips"),
     )
 
 

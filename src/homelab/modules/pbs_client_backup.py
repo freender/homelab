@@ -136,7 +136,50 @@ def validate(root: Path, hosts: list[str]) -> None:
                 raise ValueError(f"{host}: {exc}") from exc
 
 
-def normalize_backup_plan(root: Path, registry, host: str) -> BackupPlan:
+def normalize_archive(root: Path, archive: object, index: int, host: str) -> ArchivePlan:
+    """One `archives` entry.
+
+    Exactly one of `dataset` or `path` must be set: the first takes a ZFS snapshot
+    and backs that up, the second reads the live filesystem. Accepting both would
+    leave which one wins up to the installer.
+    """
+    prefix = MODULE_DIR
+    if not isinstance(archive, dict):
+        raise ValueError(f"invalid {prefix}.archives entry at index {index} for {host}")
+    name = require_text(archive.get("name", ""), f"archive name required for {host}")
+    if not VALID_ARCHIVE_NAME.fullmatch(name):
+        raise ValueError(
+            f"archive name {name!r} for {host} must use letters, numbers, "
+            "dot, dash, or underscore"
+        )
+    dataset = str(archive.get("dataset", "")).strip()
+    path = str(archive.get("path", "")).strip()
+    if bool(dataset) == bool(path):
+        raise ValueError(
+            f"archive {name!r} for {host} must specify exactly one of dataset or path"
+        )
+    exclude_profiles = backup_excludes.normalize_profile_names(
+        archive.get("exclude_profiles", []),
+        f"archive exclude_profiles for {host} must be a list",
+    )
+    excludes = normalize_string_list(
+        archive.get("exclude", []),
+        f"archive excludes for {host} must be a list",
+    )
+    return ArchivePlan(
+        name=name,
+        dataset=dataset,
+        path=path,
+        excludes=tuple(
+            backup_excludes.dedupe_preserve_order(
+                [*backup_excludes.load_profiles(root, exclude_profiles), *excludes]
+            )
+        ),
+    )
+
+
+def normalize_archives(root: Path, registry, host: str) -> list[ArchivePlan]:
+    """Every archive for the host; the list is required and names must be unique."""
     prefix = MODULE_DIR
     archives_config = registry.get(host, f"{prefix}.archives", [])
     if not isinstance(archives_config, list) or not archives_config:
@@ -145,55 +188,28 @@ def normalize_backup_plan(root: Path, registry, host: str) -> BackupPlan:
     archives: list[ArchivePlan] = []
     seen: set[str] = set()
     for index, archive in enumerate(archives_config):
-        if not isinstance(archive, dict):
-            raise ValueError(f"invalid {prefix}.archives entry at index {index} for {host}")
-        name = require_text(archive.get("name", ""), f"archive name required for {host}")
-        if not VALID_ARCHIVE_NAME.fullmatch(name):
-            raise ValueError(
-                f"archive name {name!r} for {host} must use letters, numbers, "
-                "dot, dash, or underscore"
-            )
-        if name in seen:
-            raise ValueError(f"duplicate archive name {name!r} for {host}")
-        seen.add(name)
-        dataset = str(archive.get("dataset", "")).strip()
-        path = str(archive.get("path", "")).strip()
-        if bool(dataset) == bool(path):
-            raise ValueError(
-                f"archive {name!r} for {host} must specify exactly one of dataset or path"
-            )
-        exclude_profiles = backup_excludes.normalize_profile_names(
-            archive.get("exclude_profiles", []),
-            f"archive exclude_profiles for {host} must be a list",
-        )
-        excludes = normalize_string_list(
-            archive.get("exclude", []),
-            f"archive excludes for {host} must be a list",
-        )
-        excludes = backup_excludes.dedupe_preserve_order([
-            *backup_excludes.load_profiles(root, exclude_profiles),
-            *excludes,
-        ])
-        archives.append(
-            ArchivePlan(name=name, dataset=dataset, path=path, excludes=tuple(excludes))
-        )
+        plan = normalize_archive(root, archive, index, host)
+        if plan.name in seen:
+            raise ValueError(f"duplicate archive name {plan.name!r} for {host}")
+        seen.add(plan.name)
+        archives.append(plan)
+    return archives
 
-    host_type = str(registry.get(host, "config.type", "")).strip().lower()
-    if host_type not in {"ubuntu", "pve"}:
-        raise ValueError(
-            f"{prefix} for {host} requires config.type of 'ubuntu' or 'pve'"
-        )
 
+def normalize_fallback_destinations(registry, host: str) -> list[BackupDestination]:
+    """The extra repositories a backup is also written to when the primary fails."""
+    prefix = MODULE_DIR
     fallback_config = registry.get(host, f"{prefix}.fallback_destinations", [])
     if not isinstance(fallback_config, list):
         raise ValueError(f"{prefix}.fallback_destinations must be a list for {host}")
-    fallback_destinations: list[BackupDestination] = []
+
+    destinations: list[BackupDestination] = []
     for index, destination in enumerate(fallback_config):
         if not isinstance(destination, dict):
             raise ValueError(
                 f"invalid {prefix}.fallback_destinations entry at index {index} for {host}"
             )
-        fallback_destinations.append(
+        destinations.append(
             BackupDestination(
                 repository=require_text(
                     destination.get("repository", ""),
@@ -205,7 +221,18 @@ def normalize_backup_plan(root: Path, registry, host: str) -> BackupPlan:
                 ),
             )
         )
+    return destinations
 
+
+def normalize_backup_plan(root: Path, registry, host: str) -> BackupPlan:
+    prefix = MODULE_DIR
+    archives = normalize_archives(root, registry, host)
+
+    host_type = str(registry.get(host, "config.type", "")).strip().lower()
+    if host_type not in {"ubuntu", "pve"}:
+        raise ValueError(f"{prefix} for {host} requires config.type of 'ubuntu' or 'pve'")
+
+    fallback_destinations = normalize_fallback_destinations(registry, host)
     repository = require_text(
         registry.get(host, f"{prefix}.repository", ""),
         f"{prefix}.repository required for {host}",

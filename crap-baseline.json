@@ -3,32 +3,14 @@
   "threshold": 10.0,
   "functions": {
     "src/homelab/hosts.py::validate_host_config": 12.0,
-    "src/homelab/modules/apt_upgrade.py::deploy_host": 13.3,
-    "src/homelab/modules/docker.py::deploy_host": 12.0,
     "src/homelab/modules/keepalived.py::load_keepalived_env": 13.4,
-    "src/homelab/modules/keepalived.py::normalize_config": 18.6,
-    "src/homelab/modules/metrics_exporters.py::deploy_host": 20.3,
     "src/homelab/modules/metrics_exporters.py::validate": 12.6,
     "src/homelab/modules/pbs_client_backup.py::deploy_host": 17.3,
-    "src/homelab/modules/pbs_client_backup.py::normalize_backup_plan": 20.5,
     "src/homelab/modules/pbs_client_backup.py::validate": 12.3,
     "src/homelab/modules/pve_autoinstall.py::_get_mgmt_mac": 12.3,
-    "src/homelab/modules/pve_autoinstall.py::deploy": 17.0,
-    "src/homelab/modules/pve_autoinstall.py::validate": 25.0,
-    "src/homelab/modules/pve_backup.py::build_config_restore_plan": 17.8,
-    "src/homelab/modules/pve_backup.py::build_standalone_backup_plans": 22.6,
-    "src/homelab/modules/pve_backup.py::validate_standalone_backup_config": 18.6,
-    "src/homelab/modules/pve_gpu_passthrough.py::deploy_host": 12.8,
     "src/homelab/modules/pve_http_boot.py::deploy_host": 12.2,
     "src/homelab/modules/pve_notifications.py::validate": 16.9,
-    "src/homelab/modules/pve_postinstall.py::deploy_host": 12.4,
     "src/homelab/modules/ubuntu_setup.py::load_network_mac": 13.3,
-    "src/homelab/modules/zfs_automation/access.py::normalize_push_target_access": 21.8,
-    "src/homelab/modules/zfs_automation/access.py::resolve_pools": 11.1,
-    "src/homelab/modules/zfs_automation/normalize.py::normalize_known_host_refresh": 12.3,
-    "src/homelab/modules/zfs_automation/normalize.py::normalize_migratable_lxc_groups": 12.5,
-    "src/homelab/modules/zfs_automation/normalize.py::normalize_snapshot_plans": 15.0,
-    "src/homelab/modules/zfs_automation/normalize.py::normalize_source_private_keys": 11.2,
-    "src/homelab/modules/zfs_automation/replication.py::normalize_replication_config": 15.4
+    "src/homelab/modules/zfs_automation/normalize.py::normalize_source_private_keys": 11.2
   }
 }

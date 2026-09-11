@@ -164,6 +164,35 @@ def _host_settings(registry: _Registry, host: str) -> HostSettings:
     )
 
 
+def copy_static_pve_configs(config_dir: Path, build_dir: Path) -> None:
+    """Copy every non-generated PVE config into the build dir, failing on a missing one.
+
+    Absence is checked up front rather than at copy time so the error names the
+    file instead of surfacing as a partial build.
+    """
+    static_files = [file_name for file_name in PVE_FILES if file_name not in GENERATED_FILES]
+    for file_name in static_files:
+        source_path = config_dir / file_name
+        if not source_path.is_file():
+            raise ValueError(f"Missing config file: {source_path}")
+    copy_files(config_dir, build_dir, static_files)
+
+
+def report_dry_run(host: str, build_dir: Path, interfaces_path: Path) -> None:
+    """Print the build contents and whether the network-interfaces subfeature rendered.
+
+    The interfaces line is reported either way: "no pinned interfaces here" is a
+    deliberate inventory state, and silence would not distinguish it from a render
+    that failed.
+    """
+    print_sub(f"[DRY-RUN] Would deploy to {host}:{REMOTE_ROOT}/")
+    print_sub("Build files:")
+    for file_name in build_files(build_dir):
+        print_sub(f"    {file_name}")
+    state = "enabled" if interfaces_path.is_file() else "disabled"
+    print_sub(f"Network interfaces subfeature: {state}")
+
+
 def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
     registry = default_registry(root)
     settings = _host_settings(registry, host)
@@ -173,21 +202,7 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
     build_dir = module_dir / "build" / host
     prepare_build_dir(build_dir)
 
-    for file_name in PVE_FILES:
-        if file_name in GENERATED_FILES:
-            continue
-        source_path = config_dir / file_name
-        if not source_path.is_file():
-            raise ValueError(f"Missing config file: {source_path}")
-    copy_files(
-        config_dir,
-        build_dir,
-        [
-            file_name
-            for file_name in PVE_FILES
-            if file_name not in GENERATED_FILES
-        ],
-    )
+    copy_static_pve_configs(config_dir, build_dir)
     build_cluster_rejoin_helper(root, build_dir)
 
     write_file_map(build_dir, FILE_SPECS)
@@ -207,14 +222,7 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
         print_sub(message)
 
     if dry_run:
-        print_sub(f"[DRY-RUN] Would deploy to {host}:{REMOTE_ROOT}/")
-        print_sub("Build files:")
-        for file_name in build_files(build_dir):
-            print_sub(f"    {file_name}")
-        if interfaces_path.is_file():
-            print_sub("Network interfaces subfeature: enabled")
-        else:
-            print_sub("Network interfaces subfeature: disabled")
+        report_dry_run(host, build_dir, interfaces_path)
         return
 
     stage_and_install(

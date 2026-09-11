@@ -59,6 +59,34 @@ def validate(root: Path) -> None:
         )
 
 
+def require_root_dataset(connection, host: str, root_dataset: str, dry_run: bool) -> None:
+    """The root ZFS dataset must exist before the kernel cmdline is rewritten.
+
+    A cmdline whose `root=` does not resolve makes the node unbootable, and this
+    module is only ever run on a host that must come back. Offline validation is
+    the sole exemption: there is no host to ask.
+    """
+    if dry_run and offline_mode():
+        print_sub(f"[?] zfs dataset check skipped for {root_dataset} (offline validation)")
+        return
+    if not dataset_exists(connection, root_dataset):
+        raise ValueError(f"Required ZFS dataset not found on {host}: {root_dataset}")
+
+
+def build_gpu_configs(
+    configs_dir: Path, build_dir: Path, isolate_host_gpu: bool, pci_ids: str
+) -> None:
+    """Render cmdline plus, conditionally, the blacklist and vfio binding configs."""
+    prepare_build_dir(build_dir)
+    cmdline_value = build_cmdline(configs_dir / "cmdline", isolate_host_gpu)
+    (build_dir / "cmdline").write_text(f"{cmdline_value}\n", encoding="utf-8")
+    if isolate_host_gpu:
+        copy_files(configs_dir, build_dir, ["blacklist.conf"])
+    if pci_ids:
+        copy_files(configs_dir, build_dir, ["modules"])
+        render_file(configs_dir / "vfio.conf.tpl", build_dir / "vfio.conf", PCI_IDS=pci_ids)
+
+
 def deploy_host(root: Path, host: str, dry_run: bool) -> None:
     registry = default_registry(root)
     module_dir = root / "pve-gpu-passthrough"
@@ -69,21 +97,8 @@ def deploy_host(root: Path, host: str, dry_run: bool) -> None:
     pci_ids = str(registry.get(host, "pve-gpu-passthrough.pci_ids", "")).strip()
 
     connection = HostConnection(host)
-    if not dry_run and not dataset_exists(connection, root_dataset):
-        raise ValueError(f"Required ZFS dataset not found on {host}: {root_dataset}")
-    if dry_run and offline_mode():
-        print_sub(f"[?] zfs dataset check skipped for {root_dataset} (offline validation)")
-    elif dry_run and not dataset_exists(connection, root_dataset):
-        raise ValueError(f"Required ZFS dataset not found on {host}: {root_dataset}")
-
-    prepare_build_dir(build_dir)
-    cmdline_value = build_cmdline(configs_dir / "cmdline", isolate_host_gpu)
-    (build_dir / "cmdline").write_text(f"{cmdline_value}\n", encoding="utf-8")
-    if isolate_host_gpu:
-        copy_files(configs_dir, build_dir, ["blacklist.conf"])
-    if pci_ids:
-        copy_files(configs_dir, build_dir, ["modules"])
-        render_file(configs_dir / "vfio.conf.tpl", build_dir / "vfio.conf", PCI_IDS=pci_ids)
+    require_root_dataset(connection, host, root_dataset, dry_run)
+    build_gpu_configs(configs_dir, build_dir, isolate_host_gpu, pci_ids)
 
     print_sub("Comparing with remote configs...")
     diff_remote_files(
