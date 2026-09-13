@@ -143,8 +143,9 @@ of mutants that were not hanging at all, so they were recorded as caught without
 being judged. One such sweep scored `hosts.py` at **16** undetected against its true 38.
 The tell is in the exit codes: `crap.py` and `leakcheck.py` took zero timeouts and were
 the only files that never moved, while `op_secrets.py` took 112. At 60.0 the whole sweep
-records zero timeouts and every verdict is a real test outcome. Any baseline or figure
-from before 2026-09-12 predates this and is inflated; do not compare against it.
+records zero timeouts and every verdict is a real test outcome. Any figure older than
+`1839313` predates this; anything older than `4f1048b` is inflated by the parallelism
+artifact below as well. Do not compare against either.
 
 **Run it serially. `--max-children` defaults to 1, and `--update-baseline` refuses
 anything else.** Every child shares the *same* `mutants/` working tree, so a mutant that
@@ -157,8 +158,15 @@ Use `--max-children 8` to explore quickly, never to judge.
 **The tell is which files hold still.** `crap.py` 46, `hosts.py` 38 and `leakcheck.py` 44
 score identically parallel or serial, because their tests only read. The three that
 moved — `module_support.py` 31–37, `normalize.py` 163–165, `op_secrets.py` 124–126 — are
-exactly the three whose code writes. Serially all six reproduce exactly on back-to-back
-fresh sweeps, so `mutation-baseline.json` is now exact and carries no drift tolerance.
+exactly the three whose code writes.
+
+**How well each baseline entry is evidenced differs, so don't read them as equally firm.**
+`module_support.py` 38 and `leakcheck.py` 44 were each reproduced on two back-to-back
+fresh serial sweeps. `crap.py` 46 and `hosts.py` 38 were measured serially once, and are
+corroborated by every parallel run agreeing. `normalize.py` 184 and `op_secrets.py` 134 —
+the two largest corrections — rest on a **single serial sample each** and are the weakest
+entries here. The asymmetry is safe in one direction only: if one is too high, a later
+sweep reports "improved" rather than failing the gate.
 
 **Four hypotheses for that drift are dead — don't re-propose them.** It is not I/O in the
 naive sense (`leakcheck.py` shells out to `git ls-files` and is exact); not
