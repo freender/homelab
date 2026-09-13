@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from src.homelab.modules import pve_http_boot
+from homelab.modules import pve_http_boot
 
 ROOT = Path(__file__).resolve().parents[1]
 HTTP_BOOT_CONFIGS = ROOT / "pve-http-boot" / "configs"

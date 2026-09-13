@@ -18,6 +18,11 @@ dev = [
     "pytest-cov>=6.0,<7",
     "ruff>=0.11,<0.12",
 ]
+# Deliberately not in `dev`: a full sweep takes ~30 minutes, so it is an
+# out-of-band check run by hand (`homelab mutants`), never part of `./validate`.
+mutation = [
+    "mutmut>=3.8,<4",
+]
 
 [project.scripts]
 homelab = "homelab.cli:main"
@@ -55,3 +60,62 @@ branch = true
 [tool.coverage.report]
 show_missing = true
 skip_empty = true
+
+[tool.mutmut]
+# mutmut runs the suite from a copied `mutants/` tree, so the whole package has
+# to be walked or `homelab.modules.*` stops being importable. Files outside
+# `only_mutate` are copied verbatim instead of mutated, which is what makes a
+# narrow, honest scope possible without breaking the copy.
+source_paths = ["src/homelab"]
+
+# Scope, and the single owner of that fact — `homelab mutants` adds no default
+# of its own. These are the pure-logic paths where a wrong answer is *silent*:
+# inventory parsing, staging plans, and the quality gate itself return a value
+# rather than touching a host, so a subtly wrong result propagates into a deploy
+# instead of raising. The Fabric and subprocess surfaces fail loudly and are
+# better served by the tests that already exist.
+only_mutate = [
+    "src/homelab/crap.py",
+    "src/homelab/hosts.py",
+    "src/homelab/module_support.py",
+    "src/homelab/modules/zfs_automation/normalize.py",
+]
+
+# Tests resolve ROOT as `tests/..`, which under mutmut is `mutants/`, so every
+# payload directory a test reads has to be copied in beside them. Enforced by
+# tests/test_mutants.py::test_also_copy_covers_every_payload_directory — without
+# that check a newly added module would silently break the sweep.
+also_copy = [
+    "hosts.conf",
+    "crap-baseline.json",
+    "mutation-baseline.json",
+    "lib",
+    "backup-excludes",
+    "apcupsd",
+    "apt-upgrade",
+    "base-packages",
+    "docker",
+    "docker-stacks",
+    "keepalived",
+    "metrics-exporters",
+    "monitoring-config",
+    "pbs-client-backup",
+    "pve-autoinstall",
+    "pve-backup",
+    "pve-gpu-passthrough",
+    "pve-http-boot",
+    "pve-interface-pinning",
+    "pve-lxc-pre-replication-patch",
+    "pve-notifications",
+    "pve-postinstall",
+    "pve-postinstall-webhook",
+    "pve-upgrade",
+    "pve-zfs-large-block-patch",
+    "pve-zfs-migration-sync-patch",
+    "secrets",
+    "ssh-config",
+    "ubuntu-setup",
+    "vmalert-rules",
+    "wsl-conf",
+    "zfs-automation",
+]

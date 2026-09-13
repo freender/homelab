@@ -68,6 +68,7 @@ judgment calls above are still yours.
 .venv/bin/python -m pytest tests/                     # unit tests
 .venv/bin/python -m ruff check src/homelab/cli.py     # targeted lint
 PYTHONPATH=src .venv/bin/python -m homelab.cli crap   # CRAP scores from the last pytest run
+PYTHONPATH=src .venv/bin/python -m homelab.cli mutants   # mutation sweep (slow; out of band)
 shellcheck -S warning pve-postinstall/scripts/install.sh
 find . -name '*.sh' -not -path './.bin/*' -exec shellcheck -S warning {} +   # repo root only
 yq eval '.' hosts.conf >/dev/null
@@ -101,6 +102,46 @@ functions that were already over 10, and it may only shrink.
   `homelab crap --update-baseline` only to lock in an improvement.
 - Clearing an entry means splitting the function or adding tests that **assert**, not
   tests that merely execute it. Coverage-gaming is this metric's known hole.
+
+### Mutation Testing (`homelab mutants`)
+
+The check for the hole the CRAP gate names above. mutmut rewrites one expression at a
+time — `continue` to `break`, `>` to `>=` — and reruns the tests that touch it. A mutant
+the suite still passes is a behaviour **nothing asserts**, which coverage cannot see.
+
+```bash
+.venv/bin/python -m pip install '.[mutation]'   # separate extra, deliberately not in dev
+homelab mutants                                 # sweep the scoped core, then gate
+homelab mutants --no-run                        # re-score the last sweep without redoing it
+homelab mutants 'homelab.hosts.*'               # narrow further than the configured scope
+mutmut show <mutant-name>                       # the exact surviving diff
+```
+
+**Not a `./validate` step and not in CI:** a sweep is tens of minutes. Run it when you
+change a scoped file, then fix or re-baseline. `mutants/` is a gitignored working copy of
+the repo; results accumulate there across runs.
+
+**Stale results are the trap here, and `homelab mutants` handles it — mutmut does not.**
+mutmut caches a verdict per mutant and invalidates only on the *mutated source*, its own
+config, and tracked non-Python files. A test-only edit matches none of those, so plain
+`mutmut run` reprints the previous sweep's numbers after nine minutes of looking busy —
+and a test-only edit is what this loop consists of. `homelab mutants` fingerprints
+`tests/**/*.py` into `mutants/homelab-test-fingerprint` and discards the tree when it
+moves. Two consequences: narrowing with TARGETS only warns (wiping would drop the
+untargeted files from the report), and a tree with no fingerprint is treated as fresh, so
+delete `mutants/` by hand once after pulling this change.
+
+Scope is `[tool.mutmut].only_mutate` in `pyproject.toml` and is stated nowhere else — the
+pure-logic paths where a wrong answer is *silent* rather than an exception. Widening it is
+a deliberate act; the Fabric and subprocess surfaces fail loudly and are not worth the
+runtime. Nothing here touches Bash, so `lib/utils.sh` and every `scripts/install.sh` stay
+covered only by their own subprocess tests.
+
+`mutation-baseline.json` is the same ratchet as `crap-baseline.json`: per-file undetected
+counts that may only shrink, never hand-raised, regenerated with
+`homelab mutants --update-baseline` only to lock in an improvement. "Undetected" counts
+mutants with **no test at all** alongside survivors — a mutant no test exercises is one no
+test would have failed on.
 
 ## Layout
 

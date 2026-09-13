@@ -1,0 +1,9 @@
+{
+  "_comment": "Ratchet for `homelab mutants`: undetected (survived + untested) mutants per file. Counts may be lowered or removed, never added or raised by hand. Regenerate with `homelab mutants --update-baseline` after an improvement. Scope lives in [tool.mutmut].only_mutate in pyproject.toml.",
+  "files": {
+    "src/homelab/crap.py": 46,
+    "src/homelab/hosts.py": 38,
+    "src/homelab/module_support.py": 33,
+    "src/homelab/modules/zfs_automation/normalize.py": 164
+  }
+}

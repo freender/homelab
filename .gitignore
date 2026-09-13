@@ -44,3 +44,6 @@ Thumbs.db
 *.egg-info/
 .coverage
 .pytest_cache/
+
+# Mutation testing: mutmut's copied+mutated working tree and its stats cache
+mutants/

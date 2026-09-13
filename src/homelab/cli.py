@@ -13,7 +13,7 @@ from pathlib import Path
 import click
 import yaml
 
-from . import crap, op_secrets
+from . import crap, mutants, op_secrets
 from .deploy import DeploySession
 from .hosts import HostLookupError, HostRegistry, default_registry, validate_hosts_data
 from .modules import MODULES, ordered_modules
@@ -678,6 +678,146 @@ def run_crap_report(root: Path, update_baseline: bool, top: int, threshold: floa
     return 0
 
 
+MUTANT_TOP_N = 20
+
+
+def mutmut_env() -> dict[str, str]:
+    """Environment for a sweep.
+
+    `--no-cov` matters for more than speed: the repo's pytest addopts turn on
+    coverage unconditionally, and instrumenting thousands of child runs would
+    both dominate the runtime and leave a `.coverage` file that is not the one
+    the CRAP gate expects. `HOMELAB_OFFLINE` keeps a mutated deploy path from
+    reaching a real host.
+
+    PYTHONPATH is dropped, and that is the load-bearing one: the `./validate` and
+    `./deploy` launchers set it to the real `src`, and a sweep that imported the
+    unmutated package from there would report every mutant as surviving while
+    looking like a clean run.
+    """
+    env = dict(os.environ)
+    env.pop("PYTHONPATH", None)
+    env["HOMELAB_OFFLINE"] = "1"
+    addopts = f"{env.get('PYTEST_ADDOPTS', '')} --no-cov -p no:cacheprovider"
+    env["PYTEST_ADDOPTS"] = addopts.strip()
+    return env
+
+
+def test_suite_paths(root: Path) -> list[Path]:
+    """Every Python file whose content decides a mutant's verdict.
+
+    `conftest.py` is included by the glob and matters as much as any test file:
+    the offline fixtures there are what several mutated deploy paths run under.
+    """
+    return sorted(root.glob("tests/**/*.py"))
+
+
+def drop_stale_results(root: Path, targets: tuple[str, ...]) -> str:
+    """Discard cached mutant verdicts when the test suite has changed.
+
+    See `mutants.suite_changed` for why mutmut cannot do this itself. Returns the
+    fingerprint to record once the sweep succeeds.
+    """
+    mutants_dir = root / mutants.MUTANTS_DIRNAME
+    fingerprint = mutants.suite_fingerprint(test_suite_paths(root))
+    if not mutants.suite_changed(mutants_dir, fingerprint):
+        return fingerprint
+
+    if targets:
+        # A narrowed run would rebuild only the targeted files, so wiping the tree
+        # would silently drop every other file's results from the report. Warn and
+        # keep them; the operator asked for a subset.
+        print_warn(
+            "tests changed since the last sweep, but TARGETS narrows this run; "
+            "cached results for other files are stale. Re-run without TARGETS."
+        )
+        return fingerprint
+
+    print_sub("tests changed since the last sweep; discarding cached mutant results")
+    mutants.discard_results(mutants_dir)
+    return fingerprint
+
+
+def run_mutmut(root: Path, targets: tuple[str, ...], max_children: int) -> None:
+    """Run the sweep, leaving its results in `mutants/` for scoring."""
+    command = [
+        sys.executable,
+        "-m",
+        "mutmut",
+        "run",
+        "--max-children",
+        str(max_children),
+        *targets,
+    ]
+    result = subprocess.run(command, cwd=root, env=mutmut_env(), check=False)
+    if result.returncode != 0:
+        # mutmut exits 0 even when mutants survive, so a non-zero code here is a
+        # tooling fault rather than a verdict, and must not read as a clean gate.
+        raise click.ClickException(f"mutmut run failed (exit {result.returncode})")
+
+
+def mutation_failure(verdict: mutants.BaselineVerdict) -> str:
+    """Render the gate failure with the exact repair target for each file."""
+    lines = [f"  NEW    {score.format()}" for score in verdict.new]
+    lines += [
+        f"  WORSE  {score.format()}  (baseline {recorded})" for score, recorded in verdict.regressed
+    ]
+    return (
+        "Mutation gate failed:\n"
+        + "\n".join(lines)
+        + "\n\nEach undetected mutant is a behaviour no test asserts. Inspect one with "
+        "`mutmut show <name>`, then add the missing assertion. "
+        f"{mutants.BASELINE_FILENAME} may only shrink: regenerate it with "
+        "`homelab mutants --update-baseline` after an improvement, never to admit a "
+        "new entry."
+    )
+
+
+def run_mutation_report(
+    root: Path,
+    targets: tuple[str, ...],
+    update_baseline: bool,
+    top: int,
+    max_children: int,
+    sweep: bool,
+) -> int:
+    """Body of the `mutants` command, kept out of the click wrapper so it is testable."""
+    if sweep:
+        fingerprint = drop_stale_results(root, targets)
+        run_mutmut(root, targets, max_children)
+        mutants.write_suite_fingerprint(root / mutants.MUTANTS_DIRNAME, fingerprint)
+
+    scores = mutants.read_results(root / mutants.MUTANTS_DIRNAME)
+    if not scores:
+        print_warn(f"no mutation results under {mutants.MUTANTS_DIRNAME}/; nothing scored")
+        return 1
+
+    for score in scores[:top]:
+        print_sub(score.format())
+    print_sub(mutants.summarize(scores).format())
+
+    path = root / mutants.BASELINE_FILENAME
+    if update_baseline:
+        mutants.write_baseline(path, scores)
+        print_ok(f"{len(mutants.load_baseline(path))} entry(ies) in {mutants.BASELINE_FILENAME}")
+        return 0
+
+    verdict = mutants.check_baseline(scores, mutants.load_baseline(path))
+    if verdict.failed:
+        print_error(mutation_failure(verdict))
+        return 1
+
+    for filename, was, now in verdict.cleared[:top]:
+        print_sub(f"cleared: {filename} {was} -> {now} undetected")
+    if verdict.cleared:
+        print_warn(
+            f"{len(verdict.cleared)} file(s) improved on the baseline; run "
+            "`homelab mutants --update-baseline` to lock that in"
+        )
+    print_ok(f"{len(scores)} file(s) scored, 0 new undetected mutants")
+    return 0
+
+
 @main.command()
 def validate() -> None:
     # Validation is intentionally offline: no SSH, no op CLI calls.
@@ -780,6 +920,47 @@ def crap_report(update_baseline: bool, top: int, threshold: float) -> None:
     """Score functions by CRAP using the coverage data from the last pytest run."""
     print_header("Code Risk (CRAP)")
     raise SystemExit(run_crap_report(repo_root(), update_baseline, top, threshold))
+
+
+@main.command("mutants")
+@click.argument("targets", nargs=-1)
+@click.option("--update-baseline", is_flag=True, help="Rewrite the baseline from this sweep.")
+@click.option("--top", default=MUTANT_TOP_N, show_default=True, help="Rows to print.")
+@click.option("--max-children", default=8, show_default=True, help="Parallel mutant runs.")
+@click.option(
+    "--no-run",
+    is_flag=True,
+    help="Score the existing mutants/ tree instead of sweeping again.",
+)
+def mutation_report(
+    targets: tuple[str, ...],
+    update_baseline: bool,
+    top: int,
+    max_children: int,
+    no_run: bool,
+) -> None:
+    """Mutation-test the pure-logic core: does a test fail when meaning changes?
+
+    Scope is [tool.mutmut].only_mutate in pyproject.toml. Optional TARGETS are
+    mutmut mutant-name globs (e.g. `homelab.hosts.*`) that narrow a run further.
+    A full sweep takes tens of minutes, which is why this is a deliberate
+    out-of-band check and not a `./validate` step.
+
+    Requires the `mutation` extra: `pip install '.[mutation]'`.
+    """
+    print_header("Mutation Testing")
+    if not _module_available("mutmut") and not no_run:
+        raise click.ClickException("mutmut not installed; run `pip install '.[mutation]'`")
+    raise SystemExit(
+        run_mutation_report(
+            repo_root(),
+            targets,
+            update_baseline,
+            top,
+            max_children,
+            not no_run,
+        )
+    )
 
 
 @main.group()
