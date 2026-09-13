@@ -229,7 +229,9 @@ def expand_migratable_lxc_replication_plans(
             f"plan target required at index {index} in job '{job_name}' for {host}",
         )
         if ":" not in target and not target.startswith("/"):
-            target = f"{target_root}/{target.lstrip('/')}"
+            # No lstrip("/") here: this branch is only reached when target does not
+            # start with "/", so there is never a leading separator to strip.
+            target = f"{target_root}/{target}"
         if target in seen_targets:
             raise ValueError(f"duplicate target {target} in job '{job_name}' for {host}")
         seen_targets.add(target)

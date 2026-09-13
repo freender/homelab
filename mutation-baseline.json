@@ -7,7 +7,7 @@
     "src/homelab/hosts.py": 38,
     "src/homelab/leakcheck.py": 44,
     "src/homelab/module_support.py": 38,
-    "src/homelab/modules/zfs_automation/normalize.py": 184,
+    "src/homelab/modules/zfs_automation/normalize.py": 70,
     "src/homelab/op_secrets.py": 134
   }
 }

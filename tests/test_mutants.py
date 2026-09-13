@@ -174,6 +174,35 @@ class TestBaselineFile:
 
         assert mutants.load_baseline(path) == {"a.py": 3}
 
+    def test_hand_written_notes_survive_a_rewrite(self, tmp_path: Path) -> None:
+        """`_`-prefixed keys record how the figures were measured. Dropping them on
+        every --update-baseline left a "restore it afterwards" step nobody remembers."""
+        path = tmp_path / mutants.BASELINE_FILENAME
+        path.write_text(
+            json.dumps({"_measured": "serial only", "files": {"a.py": 9}}),
+            encoding="utf-8",
+        )
+
+        mutants.write_baseline(path, [score(killed=1, survived=2)])
+
+        written = json.loads(path.read_text(encoding="utf-8"))
+        assert written["_measured"] == "serial only"
+        assert written["files"] == {"a.py": 2}
+        assert list(written) == ["_comment", "_measured", "files"]
+
+    def test_the_generated_comment_is_not_treated_as_a_hand_written_note(
+        self, tmp_path: Path
+    ) -> None:
+        """Otherwise a stale _comment would be preserved forever instead of refreshed."""
+        path = tmp_path / mutants.BASELINE_FILENAME
+        path.write_text(
+            json.dumps({"_comment": "outdated wording", "files": {}}), encoding="utf-8"
+        )
+
+        mutants.write_baseline(path, [score(killed=1, survived=1)])
+
+        assert "outdated wording" not in path.read_text(encoding="utf-8")
+
     def test_clean_files_are_not_recorded(self, tmp_path: Path) -> None:
         path = tmp_path / mutants.BASELINE_FILENAME
         mutants.write_baseline(path, [score(killed=5)])

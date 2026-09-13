@@ -10,7 +10,6 @@
     "src/homelab/modules/pve_autoinstall.py::_get_mgmt_mac": 12.3,
     "src/homelab/modules/pve_http_boot.py::deploy_host": 12.2,
     "src/homelab/modules/pve_notifications.py::validate": 16.9,
-    "src/homelab/modules/ubuntu_setup.py::load_network_mac": 13.3,
-    "src/homelab/modules/zfs_automation/normalize.py::normalize_source_private_keys": 11.2
+    "src/homelab/modules/ubuntu_setup.py::load_network_mac": 13.3
   }
 }

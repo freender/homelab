@@ -215,11 +215,30 @@ def load_baseline(path: Path) -> dict[str, int]:
     return {str(key): int(value) for key, value in (data.get("files") or {}).items()}
 
 
+def annotations(path: Path) -> dict[str, object]:
+    """Underscore-prefixed notes already in the baseline, other than `_comment`.
+
+    These record *how* the figures were measured -- serial-only, which artifacts
+    inflated older numbers -- which is exactly the context a later reader needs and
+    cannot reconstruct. Rewriting the file used to drop them, leaving a documented
+    "restore it by hand afterwards" step that is trivially forgotten.
+    """
+    if not path.is_file():
+        return {}
+    data = json.loads(path.read_text(encoding="utf-8"))
+    return {
+        key: value
+        for key, value in data.items()
+        if key.startswith("_") and key != "_comment"
+    }
+
+
 def write_baseline(path: Path, scores: list[FileScore]) -> None:
     """Rewrite the baseline from a sweep, recording only files with undetected mutants.
 
     Only files this sweep actually measured are rewritten; entries for files it
     did not touch are preserved, so a scoped run cannot quietly amnesty the rest.
+    Hand-written `_`-prefixed notes are carried over for the same reason.
     """
     files = {key: value for key, value in load_baseline(path).items()}
     for score in scores:
@@ -233,6 +252,7 @@ def write_baseline(path: Path, scores: list[FileScore]) -> None:
             "Regenerate with `homelab mutants --update-baseline` after an improvement. "
             "Scope lives in [tool.mutmut].only_mutate in pyproject.toml."
         ),
+        **annotations(path),
         "files": dict(sorted(files.items())),
     }
     path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
