@@ -160,13 +160,14 @@ score identically parallel or serial, because their tests only read. The three t
 moved — `module_support.py` 31–37, `normalize.py` 163–165, `op_secrets.py` 124–126 — are
 exactly the three whose code writes.
 
-**How well each baseline entry is evidenced differs, so don't read them as equally firm.**
-`module_support.py` 38 and `leakcheck.py` 44 were each reproduced on two back-to-back
-fresh serial sweeps. `crap.py` 46 and `hosts.py` 38 were measured serially once, and are
-corroborated by every parallel run agreeing. `normalize.py` 184 and `op_secrets.py` 134 —
-the two largest corrections — rest on a **single serial sample each** and are the weakest
-entries here. The asymmetry is safe in one direction only: if one is too high, a later
-sweep reports "improved" rather than failing the gate.
+**Every entry is reproduced, which is what makes the ratchet enforceable at all.** All
+six scored identically on two independent fresh serial sweeps — `crap.py` 46, `hosts.py`
+38, `leakcheck.py` 44, `module_support.py` 38, `normalize.py` 184, `op_secrets.py` 134,
+484 undetected of 2,378. So `mutation-baseline.json` is exact and carries no drift
+tolerance, and a sweep that disagrees is reporting a real change or a parallel run, not
+noise. Keep it that way: measure a file twice before ratcheting it, since the error is
+only safe in one direction — an entry that is too high reports as "improved", one that is
+too low fails the gate.
 
 **Four hypotheses for that drift are dead — don't re-propose them.** It is not I/O in the
 naive sense (`leakcheck.py` shells out to `git ls-files` and is exact); not
