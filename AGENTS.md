@@ -134,13 +134,19 @@ ratchets the *suite*. Run it by hand when you change a scoped file, then fix or
 re-baseline. `mutants/` is a gitignored working copy of the repo; results accumulate
 there across runs.
 
-**It does run nightly in CI** (`.github/workflows/mutation.yml`, 06:37 UTC, plus
-`workflow_dispatch`). Being scheduled, a red run cannot block anything — the commit
-already landed — so treat it as a notification, not a gate. The run uploads a
-`mutation-report` artifact with the per-file numbers; investigating an individual mutant
-still needs `mutmut show` against a local tree, since the runner's is discarded. A fresh
-runner has no `mutants/` tree, so CI always sweeps from scratch and the stale-results
-problem below cannot arise there.
+**And not a nightly CI job either — this was measured, not assumed.** A scheduled
+workflow was built and reverted on 2026-09-12, because the score is not reproducible.
+Out of the same 1,484 mutants: `hosts.py` and `crap.py` score 38 and 46 on every machine
+and every run, but `module_support.py` and `normalize.py` — the two whose tests touch the
+filesystem, subprocess, and the dry-run path — flap by ±3 between *identical* CI runs and
+land ~18 higher on a GitHub runner than on riven (281 local against 296–300 in CI). mutmut
+picks which tests to run per mutant from a stats/coverage phase, so nondeterminism there
+changes verdicts. A "may only shrink" ratchet cannot be enforced against a number that
+moves on its own, and a baseline generated on one machine is not reachable on another.
+
+**Treat `mutation-baseline.json` as riven-relative.** The ratchet is only meaningful where
+it is reproducible, which so far means riven. Before trusting any re-baseline, confirm the
+files you changed score the same twice in a row.
 
 **Stale results are the trap here, and `homelab mutants` handles it — mutmut does not.**
 mutmut caches a verdict per mutant and invalidates only on the *mutated source*, its own
