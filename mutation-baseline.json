@@ -1,12 +1,13 @@
 {
   "_comment": "Ratchet for `homelab mutants`: undetected (survived + untested) mutants per file. Counts may be lowered or removed, never added or raised by hand -- with one measured exception, below. Regenerate with `homelab mutants --update-baseline` after an improvement. Scope lives in [tool.mutmut].only_mutate in pyproject.toml. Baseline is riven-relative; see AGENTS.md.",
-  "_drift": "module_support.py and normalize.py are NOT reproducible: repeated fresh sweeps on riven give 34-35 and 161-166 from an unchanged tree, and a GitHub runner gives 36-37 and 176-179. Their entries are therefore pinned to riven's observed ceiling rather than to the last sweep, so a re-sweep does not fail the gate on noise alone. A drop below the floor is a real improvement; a rise above the ceiling is a real regression. The other four files are exact on every run and every machine, so they carry no allowance. Re-running --update-baseline will overwrite these two with that sweep's figure -- restore the ceiling by hand.",
+  "_drift": "crap.py 46, hosts.py 38 and leakcheck.py 44 are exact on every run. module_support.py, normalize.py and op_secrets.py still vary by about 2 between fresh sweeps on riven (observed 31/33, 163/165, 124/126), so those three are pinned to the observed ceiling rather than the last sweep and a re-run warns 'improved' instead of failing on noise. That is the one sanctioned exception to 'never raise by hand'; --update-baseline will overwrite it with that sweep's figure, so restore the ceiling afterwards.",
+  "_timeouts": "These figures are only comparable to sweeps run with [tool.mutmut].timeout_multiplier set. At mutmut's default the per-mutant CPU cap fired constantly (SIGXCPU, exit -24) and mutmut scores a timeout as killed, so hundreds of mutants were counted as caught without being tested -- hosts.py read 16 undetected in one such sweep against a true 38. Any baseline generated before 2026-09-12 is inflated by that artifact and is not a valid comparison.",
   "files": {
     "src/homelab/crap.py": 46,
     "src/homelab/hosts.py": 38,
-    "src/homelab/leakcheck.py": 89,
-    "src/homelab/module_support.py": 35,
-    "src/homelab/modules/zfs_automation/normalize.py": 166,
-    "src/homelab/op_secrets.py": 121
+    "src/homelab/leakcheck.py": 44,
+    "src/homelab/module_support.py": 33,
+    "src/homelab/modules/zfs_automation/normalize.py": 165,
+    "src/homelab/op_secrets.py": 126
   }
 }

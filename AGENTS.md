@@ -134,23 +134,36 @@ ratchets the *suite*. Run it by hand when you change a scoped file, then fix or
 re-baseline. `mutants/` is a gitignored working copy of the repo; results accumulate
 there across runs.
 
-**And not a nightly CI job either — this was measured, not assumed.** A scheduled
-workflow was built and reverted on 2026-09-12, because the score is not reproducible. Four
-of the six scoped files are exact — `crap.py` 46, `hosts.py` 38, `leakcheck.py` 89,
-`op_secrets.py` 121 — on every run and every machine. `module_support.py` and
-`normalize.py` are not: repeated **fresh sweeps on riven, from an unchanged tree**, give
-34–35 and 161–166, and a GitHub runner gives 36–37 and 176–179. mutmut picks which tests
-to run per mutant from a stats/coverage phase, so nondeterminism there changes verdicts. A
-"may only shrink" ratchet cannot be enforced against a number that moves on its own.
+**`timeout_multiplier = 60.0` in `[tool.mutmut]` is load-bearing — do not drop it to save
+time.** mutmut puts a CPU-seconds cap on each mutant, `(estimated_test_time +
+timeout_constant) * timeout_multiplier * 2`, and **scores a mutant that hits it as
+killed** (SIGXCPU, exit `-24`; `DETECTED_EXIT_CODES` mirrors mutmut here deliberately, on
+the theory that a hang is a detection). At the stock multiplier that cap fired on hundreds
+of mutants that were not hanging at all, so they were recorded as caught without ever
+being judged. One such sweep scored `hosts.py` at **16** undetected against its true 38.
+The tell is in the exit codes: `crap.py` and `leakcheck.py` took zero timeouts and were
+the only files that never moved, while `op_secrets.py` took 112. At 60.0 the whole sweep
+records zero timeouts and every verdict is a real test outcome. Any baseline or figure
+from before 2026-09-12 predates this and is inflated; do not compare against it.
 
-**The split is not about I/O — that was the first guess and it is wrong.** `op_secrets.py`
-is the most subprocess- and filesystem-heavy file in scope (`op inject`, tmpfs staging,
-signal handlers, chmod) and it is *perfectly* stable at 121. The two that drift are
-exactly the two reached through `tests/test_dry_run_all_modules.py`, the broad
-31-module walk. Suspect that test's breadth, not the nature of the code under it.
+**And still not a nightly CI job — fixing the timeouts narrowed the drift without closing
+it.** A scheduled workflow was built and reverted on 2026-09-12. With timeouts gone,
+`crap.py` 46, `hosts.py` 38 and `leakcheck.py` 44 are exact on every run; the three
+largest files still move by about 2 between **fresh sweeps on riven from an unchanged
+tree** — `module_support.py` 31/33, `normalize.py` 163/165, `op_secrets.py` 124/126. A
+"may only shrink" ratchet cannot be enforced against a number that moves on its own, so
+the gate stays local and advisory.
+
+**Two hypotheses for that residue are already dead**, so don't re-propose them: it is not
+I/O (`op_secrets.py` is the most subprocess- and filesystem-heavy file in scope, and
+`leakcheck.py` shells out to `git ls-files` and is exact), and it is not
+`tests/test_dry_run_all_modules.py` breadth (that correlation held only while
+`op_secrets.py` looked stable, which was the timeout artifact). What is left is size: the
+three that drift are the three largest. The live suspect is mutmut's stats/coverage phase,
+which picks which tests run per mutant.
 
 **Treat `mutation-baseline.json` as riven-relative**, and read its `_drift` key before
-touching the two unstable entries: they are pinned to riven's observed *ceiling* rather
+touching the three unstable entries: they are pinned to riven's observed *ceiling* rather
 than to the last sweep, so re-running does not fail the gate on noise. That is the one
 sanctioned exception to "never raise an entry by hand", and `--update-baseline` will
 overwrite it with that sweep's figure — restore the ceiling afterwards. Before trusting

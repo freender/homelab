@@ -88,3 +88,90 @@ def test_ignores_comments_and_blank_lines(tmp_path: Path) -> None:
         {"stack/.env.example": "# a real-looking-secret in a comment=yes\n\nTOKEN=<X>\n"},
     )
     check_env_example_placeholders(repo)
+
+
+def test_finding_names_the_key_and_its_line(tmp_path: Path) -> None:
+    """The finding must point at the offending assignment, not just the file.
+
+    Both halves were unasserted: the key could be replaced by the value, and the
+    line number could be off by one, with every other test still passing.
+    """
+    body = "# header\nPORT=9162\nAPI_KEY=sk-thisIsNotAPlaceholder1234567890\n"
+    repo = _git_repo(tmp_path, {"stack/.env.example": body})
+
+    with pytest.raises(click.ClickException) as excinfo:
+        check_env_example_placeholders(repo)
+
+    assert "stack/.env.example:3: API_KEY is not a placeholder value" in str(excinfo.value)
+
+
+def test_a_skipped_line_does_not_abandon_the_file(tmp_path: Path) -> None:
+    """Comments and non-assignment lines are skipped individually, not terminally.
+
+    The offending assignment is last, after one of each kind of skipped line, so
+    any `continue` that became a `break` would lose it.
+    """
+    body = "\n".join(
+        [
+            "# a comment",
+            "",
+            "not an assignment at all",
+            "PORT=9162",
+            "PASSWORD=hunter2",
+        ]
+    )
+    repo = _git_repo(tmp_path, {"stack/.env.example": body})
+
+    with pytest.raises(click.ClickException) as excinfo:
+        check_env_example_placeholders(repo)
+
+    assert "PASSWORD is not a placeholder value" in str(excinfo.value)
+
+
+def test_an_unreadable_env_example_does_not_abandon_the_scan(tmp_path: Path) -> None:
+    """Sorts first in `git ls-files`, so a terminal skip would hide the later leak."""
+    repo = tmp_path / "repo"
+    (repo / "a").mkdir(parents=True)
+    (repo / "z").mkdir()
+    (repo / "a" / ".env.example").write_bytes(b"KEY=\xff\xfe\x00\x80\xc3\x28\n")
+    (repo / "z" / ".env.example").write_text("PASSWORD=hunter2\n", encoding="utf-8")
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+
+    with pytest.raises(click.ClickException) as excinfo:
+        check_env_example_placeholders(repo)
+
+    assert "z/.env.example" in str(excinfo.value)
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        'CONTACT="admin@example.com"',
+        'DOCS="https://example.org/setup"',
+        'UPPER="ADMIN@EXAMPLE.COM"',
+    ],
+)
+def test_allows_every_reserved_example_domain(tmp_path: Path, line: str) -> None:
+    """RFC 2606 reserves .com/.net/.org; only .net was covered, in one case."""
+    repo = _git_repo(tmp_path, {"stack/.env.example": line + "\n"})
+    check_env_example_placeholders(repo)
+
+
+@pytest.mark.parametrize("line", ["TOKEN=<unterminated", "TOKEN=unopened>"])
+def test_half_a_placeholder_is_not_a_placeholder(tmp_path: Path, line: str) -> None:
+    """`<FOO>` needs both delimiters -- either one alone must still be flagged."""
+    repo = _git_repo(tmp_path, {"stack/.env.example": line + "\n"})
+    with pytest.raises(click.ClickException):
+        check_env_example_placeholders(repo)
+
+
+def test_success_summary_reports_how_many_examples_were_checked(tmp_path: Path, capsys) -> None:
+    """The count is the operator's only evidence the check had any scope."""
+    repo = _git_repo(
+        tmp_path,
+        {"a/.env.example": "TOKEN=<X>\n", "b/.env.example": "PORT=80\n", "c/notes.md": "hi\n"},
+    )
+    check_env_example_placeholders(repo)
+
+    assert "2 .env.example file(s)" in capsys.readouterr().out

@@ -83,6 +83,8 @@ only_mutate = [
     "src/homelab/op_secrets.py",
 ]
 
+timeout_multiplier = 60.0
+
 # Tests resolve ROOT as `tests/..`, which under mutmut is `mutants/`, so every
 # payload directory a test reads has to be copied in beside them. Enforced by
 # tests/test_mutants.py::test_also_copy_covers_every_payload_directory — without

@@ -126,12 +126,18 @@ def _external_url_hosts(text: str) -> list[str]:
     """URL hosts in `text` that are genuinely externally routable.
 
     Everything skipped here is unroutable or deliberately public per AGENTS.md:
-    internal TLDs, bare IP literals, localhost, and the vendor allow-list.
+    internal TLDs, bare IP literals, single-label names, and the vendor
+    allow-list. `localhost` needs no case of its own -- it has no dot, so the
+    single-label rule already covers it.
+
+    Deduplicated with `dict.fromkeys` rather than `set` to keep the result in
+    first-seen order: a set here made the return order depend on string hash
+    randomisation, which differs per interpreter run.
     """
     external: list[str] = []
-    for raw_host in set(_URL_HOST.findall(text)):
+    for raw_host in dict.fromkeys(_URL_HOST.findall(text)):
         host = raw_host.lower().strip(".")
-        if "." not in host or host == "localhost":
+        if "." not in host:
             continue
         if re.fullmatch(r"[\d.]+", host):
             continue  # bare IP literal
