@@ -337,10 +337,38 @@ class TestCliReport:
     def test_update_baseline_writes_and_skips_the_gate(self, tmp_path: Path) -> None:
         write_meta(tmp_path / mutants.MUTANTS_DIRNAME, "a.py", {"x": SURVIVED})
 
-        exit_code = cli.run_mutation_report(tmp_path, (), True, 20, 8, sweep=False)
+        exit_code = cli.run_mutation_report(tmp_path, (), True, 20, 1, sweep=False)
 
         assert exit_code == 0
         assert mutants.load_baseline(tmp_path / mutants.BASELINE_FILENAME) == {"a.py": 1}
+
+    def test_update_baseline_refuses_parallel_results(self, tmp_path: Path, capsys) -> None:
+        """Children share one tree, so parallel figures are biased low by false kills."""
+        write_meta(tmp_path / mutants.MUTANTS_DIRNAME, "a.py", {"x": SURVIVED})
+
+        exit_code = cli.run_mutation_report(tmp_path, (), True, 20, 8, sweep=False)
+
+        assert exit_code == 1
+        assert "--update-baseline needs --max-children 1" in capsys.readouterr().out
+        assert not (tmp_path / mutants.BASELINE_FILENAME).exists()
+
+    def test_parallel_sweep_warns_that_results_are_optimistic(
+        self, monkeypatch, tmp_path: Path, capsys
+    ) -> None:
+        monkeypatch.setattr(cli, "run_mutmut", lambda *args: None)
+        write_meta(tmp_path / mutants.MUTANTS_DIRNAME, "a.py", {"x": KILLED})
+
+        cli.run_mutation_report(tmp_path, (), False, 20, 8, sweep=True)
+
+        assert "exploration-only" in capsys.readouterr().out
+
+    def test_serial_sweep_does_not_warn(self, monkeypatch, tmp_path: Path, capsys) -> None:
+        monkeypatch.setattr(cli, "run_mutmut", lambda *args: None)
+        write_meta(tmp_path / mutants.MUTANTS_DIRNAME, "a.py", {"x": KILLED})
+
+        cli.run_mutation_report(tmp_path, (), False, 20, 1, sweep=True)
+
+        assert "exploration-only" not in capsys.readouterr().out
 
     def test_sweep_invokes_mutmut_with_the_requested_targets(
         self, monkeypatch, tmp_path: Path

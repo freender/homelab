@@ -503,6 +503,33 @@ def mutation_failure(verdict: mutants.BaselineVerdict) -> str:
     )
 
 
+def serial_enough(update_baseline: bool, max_children: int, sweep: bool) -> bool:
+    """Reject a parallel re-baseline, and flag parallel sweeps as exploration-only.
+
+    Concurrent children share one `mutants/` tree, so a mutant that writes under it
+    fails a *different* child's test and is recorded as killed. Parallel figures are
+    therefore biased low -- `normalize.py` reads 163-165 against a true 184.
+    """
+    if max_children == 1:
+        return True
+
+    if update_baseline:
+        print_warn(
+            f"--update-baseline needs --max-children 1; got {max_children}. Concurrent "
+            "children share one mutants/ tree, so a mutant that writes under it fails "
+            "another child's test and is scored as killed. Parallel figures are biased "
+            "low and must not be ratcheted in."
+        )
+        return False
+
+    if sweep:
+        print_warn(
+            f"--max-children {max_children}: results are optimistic (false kills from "
+            "cross-child interference) and are exploration-only."
+        )
+    return True
+
+
 def run_mutation_report(
     root: Path,
     targets: tuple[str, ...],
@@ -512,6 +539,9 @@ def run_mutation_report(
     sweep: bool,
 ) -> int:
     """Body of the `mutants` command, kept out of the click wrapper so it is testable."""
+    if not serial_enough(update_baseline, max_children, sweep):
+        return 1
+
     if sweep:
         fingerprint = drop_stale_results(root, targets)
         run_mutmut(root, targets, max_children)
@@ -656,7 +686,12 @@ def crap_report(update_baseline: bool, top: int, threshold: float) -> None:
 @click.argument("targets", nargs=-1)
 @click.option("--update-baseline", is_flag=True, help="Rewrite the baseline from this sweep.")
 @click.option("--top", default=MUTANT_TOP_N, show_default=True, help="Rows to print.")
-@click.option("--max-children", default=8, show_default=True, help="Parallel mutant runs.")
+@click.option(
+    "--max-children",
+    default=1,
+    show_default=True,
+    help="Parallel mutant runs. Above 1 the figures are optimistic and cannot be baselined.",
+)
 @click.option(
     "--no-run",
     is_flag=True,

@@ -146,28 +146,33 @@ the only files that never moved, while `op_secrets.py` took 112. At 60.0 the who
 records zero timeouts and every verdict is a real test outcome. Any baseline or figure
 from before 2026-09-12 predates this and is inflated; do not compare against it.
 
-**And still not a nightly CI job — fixing the timeouts narrowed the drift without closing
-it.** A scheduled workflow was built and reverted on 2026-09-12. With timeouts gone,
-`crap.py` 46, `hosts.py` 38 and `leakcheck.py` 44 are exact on every run; the three
-largest files still move by about 2 between **fresh sweeps on riven from an unchanged
-tree** — `module_support.py` 31/33, `normalize.py` 163/165, `op_secrets.py` 124/126. A
-"may only shrink" ratchet cannot be enforced against a number that moves on its own, so
-the gate stays local and advisory.
+**Run it serially. `--max-children` defaults to 1, and `--update-baseline` refuses
+anything else.** Every child shares the *same* `mutants/` working tree, so a mutant that
+writes under it — a staging helper redirected into a repo `build/` dir, a secret written
+somewhere other than tmpfs — makes a **different** child's test fail, and that unrelated
+mutant is recorded as killed. Parallel sweeps are therefore biased *low*, and the bias is
+not small: `normalize.py` reads 163–165 across parallel sweeps against a true **184**.
+Use `--max-children 8` to explore quickly, never to judge.
 
-**Two hypotheses for that residue are already dead**, so don't re-propose them: it is not
-I/O (`op_secrets.py` is the most subprocess- and filesystem-heavy file in scope, and
-`leakcheck.py` shells out to `git ls-files` and is exact), and it is not
+**The tell is which files hold still.** `crap.py` 46, `hosts.py` 38 and `leakcheck.py` 44
+score identically parallel or serial, because their tests only read. The three that
+moved — `module_support.py` 31–37, `normalize.py` 163–165, `op_secrets.py` 124–126 — are
+exactly the three whose code writes. Serially all six reproduce exactly on back-to-back
+fresh sweeps, so `mutation-baseline.json` is now exact and carries no drift tolerance.
+
+**Four hypotheses for that drift are dead — don't re-propose them.** It is not I/O in the
+naive sense (`leakcheck.py` shells out to `git ls-files` and is exact); not
 `tests/test_dry_run_all_modules.py` breadth (that correlation held only while
-`op_secrets.py` looked stable, which was the timeout artifact). What is left is size: the
-three that drift are the three largest. The live suspect is mutmut's stats/coverage phase,
-which picks which tests run per mutant.
+`op_secrets.py` looked stable, which was the timeout artifact); not file size; and not
+hash randomisation or test ordering — `PYTHONHASHSEED=0` still gave 37/35/33, and neither
+`pytest-randomly` nor `xdist` is installed. mutmut's stats phase was the last suspect and
+is innocent: two fresh collections produce byte-identical test-selection maps.
 
-**Treat `mutation-baseline.json` as riven-relative**, and read its `_drift` key before
-touching the three unstable entries: they are pinned to riven's observed *ceiling* rather
-than to the last sweep, so re-running does not fail the gate on noise. That is the one
-sanctioned exception to "never raise an entry by hand", and `--update-baseline` will
-overwrite it with that sweep's figure — restore the ceiling afterwards. Before trusting
-any re-baseline, confirm the files you changed score the same twice in a row.
+**Still not a nightly CI job**, and now for a duller reason than irreproducibility: an
+honest serial sweep of all six files takes hours, against the under-a-minute `./validate`
+it would have to sit beside. The scheduled workflow built and reverted on 2026-09-12 stays
+reverted. Whether serial figures hold across *machines* is untested — the old CI numbers
+(36–37, 176–179) came from parallel runs with timeouts and prove nothing either way.
 
 **Stale results are the trap here, and `homelab mutants` handles it — mutmut does not.**
 mutmut caches a verdict per mutant and invalidates only on the *mutated source*, its own
