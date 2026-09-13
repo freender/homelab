@@ -182,12 +182,14 @@ go through a command:
   the observed state.
 - **Stage only files belonging to the requested change.** Unrelated dirty files never
   block shipping and are never staged.
-- **Reboots are human-authorized per node.** Upgrades are already automated (`apt-upgrade`
-  dist-upgrades every PVE node daily, kernel included), so a reboot request installs
-  nothing. Never reboot a PVE node without explicit confirmation of that specific node, and
-  never take two *cluster* nodes (`ace`/`bray`/`clovis`) down at once. Refuse inside the
-  02:00 and 08:00 maintenance windows. `bray` hosts `riven`, so rebooting it ends the
-  session and empties the shared SSH agent — it goes last.
+- **Reboots are human-authorized, once, against a named plan.** Upgrades are already
+  automated (`apt-upgrade` dist-upgrades every PVE node daily, kernel included), so a
+  reboot request installs nothing. Never reboot a PVE node that was not named in an
+  approved plan — but survey first and ask for that approval once, covering the whole
+  roll, rather than re-confirming each node. Never take two *cluster* nodes
+  (`ace`/`bray`/`clovis`) down at once. Refuse inside the 02:00 and 08:00 maintenance
+  windows. `bray` hosts `riven`, so rebooting it ends the session and empties the shared
+  SSH agent — it goes last.
 
 ## Coding Style
 

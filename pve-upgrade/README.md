@@ -60,6 +60,13 @@ Driven by `/pve-reboot`. Written to be delegable. Every step has an explicit
 command and an explicit stop condition. **If a check fails, stop and report — do
 not continue to the next node.**
 
+**The human is asked once.** `/pve-reboot` pre-flights every in-scope node first,
+then presents one plan covering the whole roll; approving it authorizes every
+reboot in it. The steps below are therefore surveyed for all nodes before any
+reboot happens, and re-run per wave only as the verification in step 4. Further
+prompting is reserved for a plan that has stopped matching reality — not for
+each wave in turn.
+
 This runbook no longer upgrades anything. `apt-upgrade` has already installed
 the packages by the time you get here; what remains is deciding whether a node
 owes a reboot, and taking it in an order that never leaves the cluster short of
@@ -204,13 +211,17 @@ ssh helm "curl -s --get localhost:8428/api/v1/query \
   --data-urlencode 'query=homelab_reboot_required{host=\"<node>\"}'"
 ```
 
-If `homelab_reboot_required` is `0`, **skip the rest of this step entirely** and
-go to step 4. Most months there is no kernel change and no reboot, and in that
-case the node's guests must not be touched at all.
+If `homelab_reboot_required` is `0`, the node **drops out of the plan entirely**
+— no reboot, and its guests are not touched. Most months that is every node, and
+the whole run ends here with "nothing pending".
 
-If it is `1`, `/pve-reboot` may reboot the node **only after it asks the human
-to confirm the current wave through the `question` tool.** The prompt must name
-answer is. No persistent auto-reboot setting exists.
+If it is `1`, the node joins the plan. `/pve-reboot` may reboot it **only after
+the human has approved the plan through the `question` tool** — a single approval
+covering the full roll, raised once after every node has been surveyed, not one
+per wave. The prompt must name each node needing a reboot in wave order, the
+guests it moves or stops, running vs installed kernels, and that the run ends on
+`bray`, which kills the session. Approval is the authorization for every reboot
+listed; a green pre-flight is not, and no persistent auto-reboot setting exists.
 
 **Do not enter HA maintenance.** Cluster nodes have
 `ha: shutdown_policy=migrate`, so a direct reboot hands HA services off on its
@@ -224,13 +235,14 @@ live-migrate, so it restarts every one during the drain and, with
 ssh <node> 'systemctl reboot'
 ```
 
-For wave 1, issue the confirmed reboots for `osiris` and the selected non-tower
-node; osiris is standalone, so only one of the three cluster votes is down. Do
-not send the tower node or bray reboot until this wave is fully recovered. If
-clovis is either selected node, accept the monitoring blind window and wait for
-helm to return before continuing. For bray, the confirmed reboot terminates the
-OpenCode session running this workflow; stop after issuing it and have the human
-open a new session for verification.
+For wave 1, issue the reboots for `osiris` and the selected non-tower node;
+osiris is standalone, so only one of the three cluster votes is down. Do not send
+the tower node or bray reboot until this wave is fully recovered — the sequencing
+is enforced by step 4's verification, not by asking again. If clovis is either
+selected node, accept the monitoring blind window and wait for helm to return
+before continuing. For bray, the reboot terminates the OpenCode session running
+this workflow; stop after issuing it and have the human open a new session for
+verification.
 
 ### 4. Verify before touching the next node
 
@@ -263,14 +275,19 @@ ssh helm "curl -s --get localhost:8428/api/v1/query \
 being scraped.
 
 Only when all of the above pass for every node in the wave, move to the next
-wave.
+wave — directly, on the approval already given. Re-prompt the human only if the
+roll must deviate from the approved plan: a node that has newly become pending,
+tower having moved such that the wave order is now wrong, or a recovered-but-
+degraded state where continuing is a judgement call. A clean wave is not a
+decision point.
 
 ## Never
 
-- **Never reboot without an explicit confirmation for that wave through the
-  `question` tool.** A green pre-flight is not authorization. The confirmation
-  is the human decision to take the outage; without it, stop and leave every
-  node up.
+- **Never reboot without an explicit approval of the plan through the `question`
+  tool.** A green pre-flight is not authorization. The approval is the human
+  decision to take the outage; without it, stop and leave every node up. It is
+  asked once for the whole roll — never reboot a node that was not named in the
+  plan that was approved.
 - **Never enter HA maintenance.** `ha: shutdown_policy=migrate` handles HA
   services during the direct reboot. Maintenance would restart every LXC twice.
 - Never reboot two cluster nodes at once — 3 nodes means quorum is lost at two.
