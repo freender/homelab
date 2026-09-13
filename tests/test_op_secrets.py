@@ -10,6 +10,7 @@ the real /dev/shm.
 from __future__ import annotations
 
 import os
+import re
 import signal
 import subprocess
 from collections.abc import Iterator
@@ -52,6 +53,51 @@ def reset_op_secrets_globals() -> Iterator[None]:
         os.environ.pop("OP_SERVICE_ACCOUNT_TOKEN", None)
         if token_env is not None:
             os.environ["OP_SERVICE_ACCOUNT_TOKEN"] = token_env
+
+
+class ShredRecorder:
+    """Stand-in for `shutil.which` + `subprocess.run` that records how shred was called.
+
+    Deliberately dispatches on the *name* passed to `which`: a stub written as
+    `lambda _name: "/usr/bin/shred"` answers any name at all, so it cannot tell
+    `which("shred")` from `which("SHRED")` -- and on a host where the lookup
+    misses, the code silently downgrades from shredding to a plain unlink.
+
+    The kwargs matter as much as the argv. `check=False` is what keeps a failing
+    shred from raising CalledProcessError, which is *not* an OSError and so would
+    escape the `except OSError` around it and abandon the remaining secrets
+    unshredded. The DEVNULL pair is what keeps shred's own output -- which names
+    every file it touches -- out of the deploy log.
+    """
+
+    def __init__(self, path: str | None = "/usr/bin/shred") -> None:
+        self.path = path
+        self.names: list[str | None] = []
+        self.calls: list[list[str]] = []
+        self.kwargs: list[dict[str, object]] = []
+
+    def which(self, name: str | None) -> str | None:
+        self.names.append(name)
+        return self.path if name == "shred" else None
+
+    def run(self, cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess:
+        self.calls.append(cmd)
+        self.kwargs.append(kwargs)
+        Path(cmd[-1]).unlink(missing_ok=True)  # shred -u removes the file
+        return subprocess.CompletedProcess(cmd, 0)
+
+    def install(self, monkeypatch: pytest.MonkeyPatch) -> ShredRecorder:
+        monkeypatch.setattr(op_secrets.shutil, "which", self.which)
+        monkeypatch.setattr(op_secrets.subprocess, "run", self.run)
+        return self
+
+    def assert_shredded(self, *paths: Path) -> None:
+        expected = [["/usr/bin/shred", "-u", "-n", "1", str(path)] for path in paths]
+        assert self.calls == expected
+        for kwargs in self.kwargs:
+            assert kwargs["check"] is False
+            assert kwargs["stdout"] is subprocess.DEVNULL
+            assert kwargs["stderr"] is subprocess.DEVNULL
 
 
 def _write_catalog(
@@ -177,20 +223,95 @@ def test_clear_cache_refuses_directory_owned_by_another_uid(
 
 
 def test_clear_cache_shreds_and_removes_files(monkeypatch, tmp_path: Path) -> None:
-    import os
-
     monkeypatch.setattr(op_secrets, "TMPFS_BASE", tmp_path)
-    monkeypatch.setattr(op_secrets.shutil, "which", lambda _name: None)  # unlink fallback
+    recorder = ShredRecorder().install(monkeypatch)
     path = tmp_path / f"{op_secrets.CACHE_PREFIX}-{os.getuid()}"
     path.mkdir(mode=0o700)
-    (path / "a.env").write_text("secret-a\n", encoding="utf-8")
-    (path / "b.env").write_text("secret-b\n", encoding="utf-8")
-    op_secrets._rendered["a"] = path / "a.env"
+    first = path / "a.env"
+    second = path / "b.env"
+    first.write_text("secret-a\n", encoding="utf-8")
+    second.write_text("secret-b\n", encoding="utf-8")
+    op_secrets._rendered["a"] = first
 
     op_secrets.clear_cache()
 
+    # reverse=True: b.env before a.env. Every cached secret gets shredded, not
+    # merely unlinked, and the rendered-path memo is dropped with them.
+    recorder.assert_shredded(second, first)
     assert not path.exists()
     assert op_secrets._rendered == {}
+
+
+def test_clear_cache_falls_back_to_unlink_when_shred_is_absent(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(op_secrets, "TMPFS_BASE", tmp_path)
+    recorder = ShredRecorder(path=None).install(monkeypatch)
+    path = tmp_path / f"{op_secrets.CACHE_PREFIX}-{os.getuid()}"
+    path.mkdir(mode=0o700)
+    (path / "a.env").write_text("secret-a\n", encoding="utf-8")
+
+    op_secrets.clear_cache()
+
+    assert recorder.calls == []
+    assert not path.exists()
+
+
+# ---------------------------------------------------------------------------
+# _remove_secret_file
+# ---------------------------------------------------------------------------
+
+
+def test_remove_secret_file_shreds_in_place(monkeypatch, tmp_path: Path) -> None:
+    """The single-file counterpart of cleanup's loop, used to retire a stale cache
+    entry and to drop a half-rendered temp file."""
+    recorder = ShredRecorder().install(monkeypatch)
+    target = tmp_path / "stale.env"
+    target.write_text("secret\n", encoding="utf-8")
+
+    op_secrets._remove_secret_file(target)
+
+    recorder.assert_shredded(target)
+    assert recorder.names == ["shred"]
+    assert not target.exists()
+
+
+def test_remove_secret_file_falls_back_to_unlink(monkeypatch, tmp_path: Path) -> None:
+    recorder = ShredRecorder(path=None).install(monkeypatch)
+    target = tmp_path / "stale.env"
+    target.write_text("secret\n", encoding="utf-8")
+
+    op_secrets._remove_secret_file(target)
+
+    assert recorder.calls == []
+    assert not target.exists()
+
+
+def test_remove_secret_file_tolerates_an_already_absent_file(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """`missing_ok=True`: callers reach here from a `finally`, where the file they
+    are cleaning up may already be gone."""
+    ShredRecorder(path=None).install(monkeypatch)
+
+    op_secrets._remove_secret_file(tmp_path / "never-existed.env")  # must not raise
+
+
+def test_remove_secret_file_swallows_an_oserror_from_shred(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """Same reason as cleanup: callers are in `finally` blocks and a raise here
+    would replace the original failure with this one."""
+    monkeypatch.setattr(op_secrets.shutil, "which", lambda name: "/usr/bin/shred")
+
+    def raising_run(*_args: object, **_kwargs: object) -> None:
+        raise OSError("shred vanished mid-run")
+
+    monkeypatch.setattr(op_secrets.subprocess, "run", raising_run)
+    target = tmp_path / "stale.env"
+    target.write_text("secret\n", encoding="utf-8")
+
+    op_secrets._remove_secret_file(target)  # must not raise
 
 
 # ---------------------------------------------------------------------------
@@ -228,20 +349,88 @@ def test_cleanup_shreds_files_when_shred_available(monkeypatch, tmp_path: Path) 
     target.write_text("secret\n", encoding="utf-8")
     op_secrets._session_dir = session
 
-    monkeypatch.setattr(op_secrets.shutil, "which", lambda _name: "/usr/bin/shred")
-    calls: list[list[str]] = []
-
-    def fake_run(cmd: list[str], **_kwargs) -> subprocess.CompletedProcess:
-        calls.append(cmd)
-        Path(cmd[-1]).unlink(missing_ok=True)  # simulate shred -u actually removing it
-        return subprocess.CompletedProcess(cmd, 0)
-
-    monkeypatch.setattr(op_secrets.subprocess, "run", fake_run)
+    recorder = ShredRecorder().install(monkeypatch)
 
     op_secrets.cleanup()
 
-    assert calls == [["/usr/bin/shred", "-u", "-n", "1", str(target)]]
+    recorder.assert_shredded(target)
+    assert recorder.names == ["shred"]  # not "SHRED", not None
     assert not session.exists()
+
+
+def test_cleanup_shreds_nested_files_before_their_directories(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """`sorted(..., reverse=True)` is what makes the walk deepest-first.
+
+    Forward order would hand the directory to the shred branch before its
+    contents -- harmless only because `is_file()` skips it, which is exactly the
+    pairing a single-flat-file test cannot distinguish.
+    """
+    session = tmp_path / "session"
+    (session / "nested").mkdir(parents=True)
+    outer = session / "a.env"
+    inner = session / "nested" / "b.env"
+    outer.write_text("secret-a\n", encoding="utf-8")
+    inner.write_text("secret-b\n", encoding="utf-8")
+    op_secrets._session_dir = session
+
+    recorder = ShredRecorder().install(monkeypatch)
+
+    op_secrets.cleanup()
+
+    # reverse=True sorts "nested/b.env" and "nested" above "a.env".
+    recorder.assert_shredded(inner, outer)
+    assert not session.exists()
+
+
+def test_cleanup_falls_back_to_unlink_when_shred_is_absent(
+    monkeypatch, tmp_path: Path
+) -> None:
+    session = tmp_path / "session"
+    session.mkdir()
+    (session / "a.env").write_text("secret\n", encoding="utf-8")
+    op_secrets._session_dir = session
+
+    recorder = ShredRecorder(path=None).install(monkeypatch)
+
+    op_secrets.cleanup()
+
+    assert recorder.calls == []  # no shred to run
+    assert not session.exists()
+
+
+def test_cleanup_is_idempotent(monkeypatch, tmp_path: Path) -> None:
+    """Documented as idempotent, and armed twice: atexit plus a signal handler."""
+    session = tmp_path / "session"
+    session.mkdir()
+    (session / "a.env").write_text("secret\n", encoding="utf-8")
+    op_secrets._session_dir = session
+    recorder = ShredRecorder().install(monkeypatch)
+
+    op_secrets.cleanup()
+    op_secrets.cleanup()
+
+    assert len(recorder.calls) == 1  # the second pass has nothing left to shred
+
+
+def test_cleanup_never_raises_out_of_rmtree(monkeypatch, tmp_path: Path) -> None:
+    """`ignore_errors=True` is load-bearing: cleanup runs from atexit and from a
+    signal handler, where an exception is either swallowed or masks the signal."""
+    session = tmp_path / "session"
+    session.mkdir()
+    op_secrets._session_dir = session
+    ShredRecorder().install(monkeypatch)
+    seen: list[dict[str, object]] = []
+
+    def fake_rmtree(path: Path, **kwargs: object) -> None:
+        seen.append(kwargs)
+
+    monkeypatch.setattr(op_secrets.shutil, "rmtree", fake_rmtree)
+
+    op_secrets.cleanup()
+
+    assert seen == [{"ignore_errors": True}]
 
 
 def test_cleanup_swallows_oserror_from_shred_and_still_removes_dir(
@@ -850,7 +1039,9 @@ def test_ensure_op_session_exports_token_and_then_short_circuits(
     token_file.write_text("ops_abc123\n", encoding="utf-8")
     token_file.chmod(0o600)
     monkeypatch.setattr(op_secrets, "TOKEN_PATHS", (token_file,))
-    monkeypatch.setattr(op_secrets.shutil, "which", lambda _name: "/usr/bin/op")
+    monkeypatch.setattr(
+        op_secrets.shutil, "which", lambda name: "/usr/bin/op" if name == "op" else None
+    )
 
     op_secrets.ensure_op_session()
 
@@ -865,7 +1056,9 @@ def test_ensure_op_session_exports_token_and_then_short_circuits(
 def test_ensure_op_session_keeps_a_preexisting_token_env(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.delenv("HOMELAB_OFFLINE", raising=False)
     monkeypatch.setenv("OP_SERVICE_ACCOUNT_TOKEN", "ops_from_the_environment")
-    monkeypatch.setattr(op_secrets.shutil, "which", lambda _name: "/usr/bin/op")
+    monkeypatch.setattr(
+        op_secrets.shutil, "which", lambda name: "/usr/bin/op" if name == "op" else None
+    )
 
     def boom() -> Path:
         raise AssertionError("token file must not be read when the env var is already set")
@@ -1094,3 +1287,492 @@ def test_render_all_with_cache_disabled_returns_the_session_dir(
 
     assert result == op_secrets._session_dir
     assert (result / "svc.env").read_text(encoding="utf-8") == "VALUE=x\n"
+
+
+# ---------------------------------------------------------------------------
+# _strip_env_value / parse_env_file
+#
+# Six modules read a rendered secret back in through parse_env_file
+# (keepalived, pve-autoinstall, pve-backup, pve-http-boot, pve-notifications,
+# pve-postinstall-webhook), so a parse that silently returns the wrong string
+# hands a bogus password or token to a deploy rather than failing.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("plain", "plain"),
+        ("  padded  ", "padded"),
+        ('"double"', "double"),
+        ("'single'", "single"),
+        # Quotes are stripped only when both ends match, so a value that merely
+        # contains one survives intact -- passwords legitimately contain quotes.
+        ('"unbalanced', '"unbalanced'),
+        ("unbalanced'", "unbalanced'"),
+        ('"mixed\'', '"mixed\''),
+        # A one-character value cannot be a matched pair; len >= 2 guards the
+        # slice that would otherwise turn it into "".
+        ('"', '"'),
+        ("'", "'"),
+        ("", ""),
+        # Inline comments: stripped for unquoted values...
+        ("value # trailing note", "value"),
+        ("value\t# tab-separated note", "value"),
+        ("value   # padded note", "value"),
+        # ...but only when whitespace precedes the '#', so a '#' inside a
+        # password is not a comment marker.
+        ("pa#ssword", "pa#ssword"),
+        ("value#note", "value#note"),
+        # ...and never inside quotes, where '#' is part of the secret.
+        ('"value # kept"', "value # kept"),
+        ("'value # kept'", "value # kept"),
+    ],
+)
+def test_strip_env_value(raw: str, expected: str) -> None:
+    assert op_secrets._strip_env_value(raw) == expected
+
+
+def test_strip_env_value_strips_quotes_after_dropping_a_comment() -> None:
+    """Order matters: the comment scan runs first and is skipped for quoted
+    values, so the two rules never both apply to one value."""
+    assert op_secrets._strip_env_value('  "quoted"  ') == "quoted"
+
+
+def _env(tmp_path: Path, body: str) -> Path:
+    path = tmp_path / "secret.env"
+    path.write_text(body, encoding="utf-8")
+    return path
+
+
+def test_parse_env_file_reads_keys_values_and_export_prefix(tmp_path: Path) -> None:
+    path = _env(
+        tmp_path,
+        "TOKEN=abc123\n"
+        "export EXPORTED=yes\n"
+        'QUOTED="with spaces"\n'
+        "EMPTY=\n"
+        "WITH_EQUALS=a=b=c\n"
+        "_LEADING_UNDERSCORE=ok\n"
+        "N1=digits-allowed-after-first-char\n",
+    )
+
+    assert op_secrets.parse_env_file(path) == {
+        "TOKEN": "abc123",
+        "EXPORTED": "yes",
+        "QUOTED": "with spaces",
+        "EMPTY": "",
+        "WITH_EQUALS": "a=b=c",
+        "_LEADING_UNDERSCORE": "ok",
+        "N1": "digits-allowed-after-first-char",
+    }
+
+
+def test_parse_env_file_ignores_blank_lines_and_comments(tmp_path: Path) -> None:
+    """The docstring promises both. Neither was exercised, and the guard is an
+    `or`: as an `and` every blank line and every comment would instead fall
+    through to the regex and raise "cannot parse env line"."""
+    path = _env(
+        tmp_path,
+        "# leading comment\n"
+        "\n"
+        "TOKEN=abc123\n"
+        "   \n"
+        "   # indented comment\n"
+        "\t\n"
+        "OTHER=def456\n",
+    )
+
+    assert op_secrets.parse_env_file(path) == {"TOKEN": "abc123", "OTHER": "def456"}
+
+
+def test_parse_env_file_reports_the_line_number_of_a_bad_line(tmp_path: Path) -> None:
+    """Counting from 1, and counting lines the parser *skipped* too -- the number
+    has to point at the line as a human's editor numbers it, or it is worse than
+    no number at all."""
+    path = _env(tmp_path, "# comment\n\nGOOD=1\nthis is not an env line\nLATER=2\n")
+
+    with pytest.raises(op_secrets.OpSecretsError, match=f"{path}:4: cannot parse env line"):
+        op_secrets.parse_env_file(path)
+
+
+def test_parse_env_file_rejects_a_key_that_starts_with_a_digit(tmp_path: Path) -> None:
+    path = _env(tmp_path, "1BAD=value\n")
+
+    with pytest.raises(op_secrets.OpSecretsError, match=f"{path}:1: cannot parse env line"):
+        op_secrets.parse_env_file(path)
+
+
+def test_parse_env_file_names_the_missing_file(tmp_path: Path) -> None:
+    missing = tmp_path / "absent.env"
+
+    with pytest.raises(op_secrets.OpSecretsError, match=f"env file not found: {missing}"):
+        op_secrets.parse_env_file(missing)
+
+
+def test_parse_env_file_rejects_a_directory(tmp_path: Path) -> None:
+    """`is_file()` rather than `exists()`: a directory would otherwise reach
+    read_text and raise IsADirectoryError instead of OpSecretsError."""
+    with pytest.raises(op_secrets.OpSecretsError, match="env file not found"):
+        op_secrets.parse_env_file(tmp_path)
+
+
+def test_parse_env_file_keeps_the_last_duplicate_key(tmp_path: Path) -> None:
+    """Same precedence as `source`-ing the file in shell."""
+    path = _env(tmp_path, "TOKEN=first\nTOKEN=second\n")
+
+    assert op_secrets.parse_env_file(path) == {"TOKEN": "second"}
+
+
+# ---------------------------------------------------------------------------
+# doctor: every target is checked, and every verdict is reported
+# ---------------------------------------------------------------------------
+
+
+def test_doctor_offline_checks_every_target_after_the_first_failure(
+    monkeypatch, tmp_path: Path, capsys
+) -> None:
+    """The per-entry `continue` must not become a `break`.
+
+    Doctor exists to give the operator the whole list in one pass; stopping at
+    the first broken secret turns a single run into one round trip per secret.
+    """
+    _write_catalog(tmp_path, "broken", example_content=None)
+    _write_catalog(tmp_path, "fine")
+    monkeypatch.setenv("HOMELAB_OFFLINE", "1")
+
+    assert op_secrets.doctor(tmp_path, names=["broken", "missing", "fine"]) == 1
+
+    captured = capsys.readouterr()
+    assert "FAIL  broken: missing offline example" in captured.out
+    assert "FAIL  missing: not in catalog" in captured.out
+    assert "[offline] fine: example OK" in captured.out  # reached despite two failures
+    assert "2 secret(s) failed the offline check." in captured.err
+
+
+def test_doctor_offline_reports_nothing_to_stderr_when_every_entry_passes(
+    monkeypatch, tmp_path: Path, capsys
+) -> None:
+    _write_catalog(tmp_path, "svc")
+    monkeypatch.setenv("HOMELAB_OFFLINE", "1")
+
+    assert op_secrets.doctor(tmp_path) == 0
+
+    assert capsys.readouterr().err == ""
+
+
+def test_doctor_online_checks_every_target_after_the_first_failure(
+    monkeypatch, tmp_path: Path, capsys
+) -> None:
+    _write_catalog(tmp_path, "broken")
+    _write_catalog(tmp_path, "fine")
+    monkeypatch.delenv("HOMELAB_OFFLINE", raising=False)
+    monkeypatch.setattr(op_secrets, "TMPFS_BASE", tmp_path)
+    monkeypatch.setattr(op_secrets, "ensure_op_session", lambda: None)
+
+    def fake_render(template: Path, destination: Path) -> None:
+        if "broken" in template.name:
+            raise op_secrets.OpSecretsError("op inject failed for template broken: nope")
+        destination.write_text("VALUE=x\n", encoding="utf-8")
+
+    monkeypatch.setattr(op_secrets, "_render_with_op", fake_render)
+
+    assert op_secrets.doctor(tmp_path, names=["broken", "missing", "fine"]) == 1
+
+    captured = capsys.readouterr()
+    assert "FAIL  broken: op inject failed for template broken: nope" in captured.out
+    assert "FAIL  missing: not in catalog" in captured.out
+    assert "OK    fine" in captured.out
+    assert "2 secret(s) failed to resolve." in captured.err
+
+
+def test_doctor_online_authentication_failure_goes_to_stderr(
+    monkeypatch, tmp_path: Path, capsys
+) -> None:
+    """Progress goes to stdout, diagnostics to stderr, so a caller redirecting one
+    does not lose the other."""
+    _write_catalog(tmp_path, "svc")
+    monkeypatch.delenv("HOMELAB_OFFLINE", raising=False)
+
+    def refuse() -> None:
+        raise op_secrets.OpSecretsError("no service-account token")
+
+    monkeypatch.setattr(op_secrets, "ensure_op_session", refuse)
+
+    assert op_secrets.doctor(tmp_path) == 1
+
+    captured = capsys.readouterr()
+    assert "authentication failed: no service-account token" in captured.err
+    assert captured.out == ""
+
+
+def test_doctor_online_success_is_silent_on_stderr(
+    monkeypatch, tmp_path: Path, capsys
+) -> None:
+    _write_catalog(tmp_path, "svc")
+    monkeypatch.delenv("HOMELAB_OFFLINE", raising=False)
+    monkeypatch.setattr(op_secrets, "TMPFS_BASE", tmp_path)
+    monkeypatch.setattr(op_secrets, "ensure_op_session", lambda: None)
+    monkeypatch.setattr(
+        op_secrets,
+        "_render_with_op",
+        lambda _template, destination: destination.write_text("V=x\n", encoding="utf-8"),
+    )
+
+    assert op_secrets.doctor(tmp_path) == 0
+
+    captured = capsys.readouterr()
+    assert "OK    svc" in captured.out
+    assert captured.err == ""
+
+
+# ---------------------------------------------------------------------------
+# _secret_cache_key -- the cache-invalidation mechanism
+# ---------------------------------------------------------------------------
+
+
+def test_secret_cache_key_shape(tmp_path: Path) -> None:
+    entry = _write_catalog(tmp_path, "pbs-backup-main")
+
+    key = op_secrets._secret_cache_key(entry)
+
+    name, digest, suffix = key.rsplit(".", 2)
+    assert name == "pbs-backup-main"
+    assert suffix == "env"
+    assert len(digest) == 24  # a truncated sha256, not the full 64
+    assert re.fullmatch(r"[0-9a-f]{24}", digest)
+
+
+def test_secret_cache_key_changes_when_the_template_changes(tmp_path: Path) -> None:
+    """This is the whole invalidation story: the key is keyed on the template
+    *contents*, so editing a template cannot serve a cached render of the old one."""
+    entry = _write_catalog(tmp_path, "svc")
+    before = op_secrets._secret_cache_key(entry)
+
+    entry.template.write_text("VALUE={{ op://Homelab/y/password }}\n", encoding="utf-8")
+
+    assert op_secrets._secret_cache_key(entry) != before
+
+
+def test_secret_cache_key_sanitizes_the_name_into_a_single_path_segment(
+    tmp_path: Path,
+) -> None:
+    """The key is joined onto the cache dir, so a name containing a separator or
+    traversal must not be able to place the file outside it."""
+    entry = _write_catalog(tmp_path, "svc")
+    hostile = op_secrets.SecretEntry(
+        name="../../etc/evil name",
+        template=entry.template,
+        example=None,
+        description="",
+    )
+
+    key = op_secrets._secret_cache_key(hostile)
+
+    assert "/" not in key
+    assert key.startswith(".._.._etc_evil_name.")
+    assert Path(key).name == key
+
+
+def test_secret_cache_key_keeps_characters_that_are_already_safe(tmp_path: Path) -> None:
+    entry = _write_catalog(tmp_path, "svc")
+    safe = op_secrets.SecretEntry(
+        name="a-b_c.d0", template=entry.template, example=None, description=""
+    )
+
+    assert op_secrets._secret_cache_key(safe).startswith("a-b_c.d0.")
+
+
+# ---------------------------------------------------------------------------
+# _is_cache_fresh
+# ---------------------------------------------------------------------------
+
+
+def test_is_cache_fresh_treats_a_zero_or_negative_ttl_as_disabled(tmp_path: Path) -> None:
+    path = tmp_path / "c.env"
+    path.write_text("x\n", encoding="utf-8")
+
+    assert op_secrets._is_cache_fresh(path, 0) is False
+    assert op_secrets._is_cache_fresh(path, -1) is False
+
+
+def test_is_cache_fresh_accepts_a_ttl_of_one_second(tmp_path: Path) -> None:
+    """The `<= 0` guard disables the cache; a TTL of 1 is the smallest enabled
+    value and is what separates that guard from `<= 1`."""
+    path = tmp_path / "c.env"
+    path.write_text("x\n", encoding="utf-8")
+
+    assert op_secrets._is_cache_fresh(path, 1) is True
+
+
+def test_is_cache_fresh_is_false_for_a_missing_file(tmp_path: Path) -> None:
+    assert op_secrets._is_cache_fresh(tmp_path / "absent.env", 3600) is False
+
+
+def test_is_cache_fresh_compares_age_against_the_ttl(monkeypatch, tmp_path: Path) -> None:
+    """Age exactly equal to the TTL still counts as fresh (`<=`), one second past
+    it does not."""
+    path = tmp_path / "c.env"
+    path.write_text("x\n", encoding="utf-8")
+    mtime = path.stat().st_mtime
+
+    monkeypatch.setattr(op_secrets.time, "time", lambda: mtime + 60)
+    assert op_secrets._is_cache_fresh(path, 60) is True
+    assert op_secrets._is_cache_fresh(path, 59) is False
+
+
+# ---------------------------------------------------------------------------
+# offline_mode
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("value", ["1", "true", "yes", "TRUE", "Yes", "  "])
+def test_offline_mode_accepts_documented_spellings(monkeypatch, value: str) -> None:
+    monkeypatch.setenv("HOMELAB_OFFLINE", value)
+
+    assert op_secrets.offline_mode() is (value.strip() != "")
+
+
+@pytest.mark.parametrize("value", ["0", "false", "no", "", "off"])
+def test_offline_mode_rejects_everything_else(monkeypatch, value: str) -> None:
+    monkeypatch.setenv("HOMELAB_OFFLINE", value)
+
+    assert op_secrets.offline_mode() is False
+
+
+def test_offline_mode_defaults_to_online_when_unset(monkeypatch) -> None:
+    """The "" default is load-bearing: `None.lower()` would raise instead."""
+    monkeypatch.delenv("HOMELAB_OFFLINE", raising=False)
+
+    assert op_secrets.offline_mode() is False
+
+
+def test_ensure_op_session_looks_up_the_op_binary_by_name(monkeypatch, tmp_path: Path) -> None:
+    """A stub that answers any name cannot tell `which("op")` from `which("OP")`,
+    and on a host where the lookup misses this is the error the operator gets."""
+    monkeypatch.delenv("HOMELAB_OFFLINE", raising=False)
+    monkeypatch.delenv("OP_SERVICE_ACCOUNT_TOKEN", raising=False)
+    names: list[str] = []
+
+    def recording_which(name: str) -> str | None:
+        names.append(name)
+        return None
+
+    monkeypatch.setattr(op_secrets.shutil, "which", recording_which)
+
+    with pytest.raises(op_secrets.OpSecretsError, match="`op` not found in PATH"):
+        op_secrets.ensure_op_session()
+
+    assert names == ["op"]
+    assert op_secrets._session_initialized is False  # a failed session is not cached
+
+
+def test_render_with_op_creates_missing_parent_directories(monkeypatch, tmp_path: Path) -> None:
+    """`parents=True`: the session dir exists, but the cache temp path and any
+    nested destination may not."""
+    template = tmp_path / "svc.env.tpl"
+    template.write_text("VALUE={{ op://Homelab/x/password }}\n", encoding="utf-8")
+    destination = tmp_path / "deep" / "nested" / "svc.env"
+
+    def fake_run(cmd: list[str], **_kwargs: object) -> subprocess.CompletedProcess:
+        Path(cmd[-1]).write_text("VALUE=rendered\n", encoding="utf-8")
+        return subprocess.CompletedProcess(cmd, 0)
+
+    monkeypatch.setattr(op_secrets.subprocess, "run", fake_run)
+
+    op_secrets._render_with_op(template, destination)
+
+    assert destination.read_text(encoding="utf-8") == "VALUE=rendered\n"
+    assert destination.stat().st_mode & 0o777 == 0o600
+
+
+def test_render_with_op_pre_creates_the_destination_unreadable_to_others(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """The mode passed to os.open is the security property, and it is only
+    observable *during* the render.
+
+    `op inject` writes into a file this function creates first; between the
+    create and op's write there is a window in which the path exists. The final
+    chmod(0o600) makes the end state right either way, so asserting the mode
+    afterwards cannot tell 0o600 from 0o666 -- the stat has to happen while op
+    is notionally running.
+    """
+    template = tmp_path / "svc.env.tpl"
+    template.write_text("VALUE={{ op://Homelab/x/password }}\n", encoding="utf-8")
+    destination = tmp_path / "svc.env"
+    modes: list[int] = []
+
+    def fake_run(cmd: list[str], **_kwargs: object) -> subprocess.CompletedProcess:
+        modes.append(Path(cmd[-1]).stat().st_mode & 0o777)
+        Path(cmd[-1]).write_text("VALUE=rendered\n", encoding="utf-8")
+        return subprocess.CompletedProcess(cmd, 0)
+
+    monkeypatch.setattr(op_secrets.subprocess, "run", fake_run)
+
+    op_secrets._render_with_op(template, destination)
+
+    assert modes == [0o600]
+    assert destination.stat().st_mode & 0o777 == 0o600
+
+
+def test_render_with_op_invokes_op_inject_with_the_expected_argv(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """`--force` is required because the destination was just pre-created, and
+    `--out-file` is what keeps the rendered secret off stdout."""
+    template = tmp_path / "svc.env.tpl"
+    template.write_text("VALUE={{ op://Homelab/x/password }}\n", encoding="utf-8")
+    destination = tmp_path / "svc.env"
+    calls: list[list[str]] = []
+    kwargs_seen: list[dict[str, object]] = []
+
+    def fake_run(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess:
+        calls.append(cmd)
+        kwargs_seen.append(kwargs)
+        return subprocess.CompletedProcess(cmd, 0)
+
+    monkeypatch.setattr(op_secrets.subprocess, "run", fake_run)
+
+    op_secrets._render_with_op(template, destination)
+
+    assert calls == [
+        [
+            "op",
+            "inject",
+            "--force",
+            "--in-file",
+            str(template),
+            "--out-file",
+            str(destination),
+        ]
+    ]
+    # capture_output keeps op's diagnostics out of the deploy log until we choose
+    # to surface them; check=False is what lets this function raise its own error
+    # instead of a CalledProcessError that would carry the command line.
+    assert kwargs_seen[0]["check"] is False
+    assert kwargs_seen[0]["capture_output"] is True
+    assert kwargs_seen[0]["text"] is True
+
+
+def test_prune_secret_cache_keeps_the_entry_it_is_about_to_use(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """Pruning runs immediately before a render, so deleting the current key
+    would be self-defeating -- and invisible, since the render recreates it."""
+    monkeypatch.setattr(op_secrets, "TMPFS_BASE", tmp_path)
+    ShredRecorder(path=None).install(monkeypatch)
+    entry = _write_catalog(tmp_path, "svc")
+    cache_dir = op_secrets._cache_dir()
+    current = cache_dir / op_secrets._secret_cache_key(entry)
+    current.write_text("VALUE=current\n", encoding="utf-8")
+    stale = cache_dir / "svc.0123456789abcdef01234567.env"
+    stale.write_text("VALUE=stale\n", encoding="utf-8")
+    unrelated = cache_dir / "other.0123456789abcdef01234567.env"
+    unrelated.write_text("VALUE=other\n", encoding="utf-8")
+
+    op_secrets._prune_secret_cache(entry)
+
+    assert current.is_file()  # the key for this template's current contents
+    assert not stale.exists()  # a render of an older version of the template
+    assert unrelated.is_file()  # a different secret entirely

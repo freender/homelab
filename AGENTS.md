@@ -152,18 +152,18 @@ anything else.** Every child shares the *same* `mutants/` working tree, so a mut
 writes under it — a staging helper redirected into a repo `build/` dir, a secret written
 somewhere other than tmpfs — makes a **different** child's test fail, and that unrelated
 mutant is recorded as killed. Parallel sweeps are therefore biased *low*, and the bias is
-not small: `normalize.py` reads 163–165 across parallel sweeps against a true **184**.
-Use `--max-children 8` to explore quickly, never to judge.
+not small: `normalize.py` read 163–165 across parallel sweeps against a true 184 (its
+figure at the time; now 70). Use `--max-children 8` to explore quickly, never to judge.
 
 **The tell is which files hold still.** `crap.py` 46, `hosts.py` 38 and `leakcheck.py` 44
 score identically parallel or serial, because their tests only read. The three that
 moved — `module_support.py` 31–37, `normalize.py` 163–165, `op_secrets.py` 124–126 — are
-exactly the three whose code writes.
+exactly the three whose code writes. (Those are the pre-ratchet figures for the last two.)
 
-**Every entry is reproduced, which is what makes the ratchet enforceable at all.** All
-six scored identically on two independent fresh serial sweeps — `crap.py` 46, `hosts.py`
-38, `leakcheck.py` 44, `module_support.py` 38, `normalize.py` 184, `op_secrets.py` 134,
-484 undetected of 2,378. So `mutation-baseline.json` is exact and carries no drift
+**Every entry is reproduced, which is what makes the ratchet enforceable at all.** Each
+was scored identically on two independent fresh serial sweeps — `crap.py` 46, `hosts.py`
+38, `leakcheck.py` 44, `module_support.py` 38, `normalize.py` 70, `op_secrets.py` 51,
+287 undetected of 2,346. So `mutation-baseline.json` is exact and carries no drift
 tolerance, and a sweep that disagrees is reporting a real change or a parallel run, not
 noise. Keep it that way: measure a file twice before ratcheting it, since the error is
 only safe in one direction — an entry that is too high reports as "improved", one that is

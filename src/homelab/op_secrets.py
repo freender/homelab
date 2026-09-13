@@ -441,18 +441,28 @@ def secret_file(root: Path, name: str) -> Path:
 
 
 def _doctor_offline(catalog: dict[str, SecretEntry], targets: list[str]) -> int:
-    """Check the offline example fallbacks only; `op` is never invoked."""
-    failures: list[tuple[str, str]] = []
+    """Check the offline example fallbacks only; `op` is never invoked.
+
+    Every target is checked before returning, and each failure names itself: the
+    caller only ever sees the exit code, so a reason collected and not printed
+    would leave `homelab secrets doctor` exiting 1 in silence.
+    """
+    failures: list[str] = []
     for name in targets:
         entry = catalog.get(name)
         if entry is None:
-            failures.append((name, "not in catalog"))
+            failures.append(name)
+            print(f"  FAIL  {name}: not in catalog")
             continue
         if entry.example is None:
-            failures.append((name, "missing offline example"))
+            failures.append(name)
+            print(f"  FAIL  {name}: missing offline example")
             continue
         print(f"  [offline] {name}: example OK ({entry.example.name})")
-    return 0 if not failures else 1
+    if failures:
+        print(f"\n{len(failures)} secret(s) failed the offline check.", file=sys.stderr)
+        return 1
+    return 0
 
 
 def _doctor_online(catalog: dict[str, SecretEntry], targets: list[str]) -> int:
@@ -468,19 +478,21 @@ def _doctor_online(catalog: dict[str, SecretEntry], targets: list[str]) -> int:
         return 1
 
     session = _ensure_session_dir()
-    failures: list[tuple[str, str]] = []
+    # Names only: each reason is printed as it happens, so carrying it here too
+    # would be a second copy that nothing reads.
+    failures: list[str] = []
     try:
         for name in targets:
             entry = catalog.get(name)
             if entry is None:
-                failures.append((name, "not in catalog"))
+                failures.append(name)
                 print(f"  FAIL  {name}: not in catalog")
                 continue
             try:
                 _render_with_op(entry.template, session / entry.filename)
                 print(f"  OK    {name}")
             except OpSecretsError as exc:
-                failures.append((name, str(exc)))
+                failures.append(name)
                 print(f"  FAIL  {name}: {exc}")
     finally:
         cleanup()
