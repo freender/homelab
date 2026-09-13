@@ -728,6 +728,48 @@ def mutation_report(
     )
 
 
+def run_survivors(root: Path, target: str, function: str, top: int) -> int:
+    """Body of the `survivors` command, kept out of the click wrapper so it is testable."""
+    try:
+        found = mutants.read_survivors(root / mutants.MUTANTS_DIRNAME, target, function)
+    except LookupError as exc:
+        print_error(str(exc))
+        return 1
+
+    if not found:
+        scope = f"{target} ({function})" if function else target
+        print_ok(f"no surviving mutants in {scope}")
+        return 0
+
+    for survivor in found[:top]:
+        print_sub(survivor.format())
+    counts = mutants.survivors_by_function(found)
+    print_sub("by function: " + ", ".join(f"{name} {n}" for name, n in counts.items()))
+    shown = min(len(found), top)
+    suffix = "" if shown == len(found) else f" ({shown} shown; --top for more)"
+    print_warn(f"{len(found)} surviving mutant(s){suffix}")
+    return 0
+
+
+@main.command("survivors")
+@click.argument("target")
+@click.argument("function", default="")
+@click.option("--top", default=MUTANT_TOP_N, show_default=True, help="Survivors to print.")
+def mutation_survivors(target: str, function: str, top: int) -> None:
+    """Show what each surviving mutant in TARGET actually changed.
+
+    TARGET is any unique fragment of a scored path (`op_secrets`). FUNCTION
+    narrows to functions whose name contains it. Reads the existing `mutants/`
+    tree, so it needs a sweep first and never runs one itself.
+
+    A count tells you a file is under-tested; this tells you what to assert.
+    Work the biggest function cluster first -- survivors bunch by cause, so one
+    test shape usually clears several.
+    """
+    print_header("Surviving Mutants")
+    raise SystemExit(run_survivors(repo_root(), target, function, top))
+
+
 @main.group()
 def secrets() -> None:
     """1Password-backed secret management."""

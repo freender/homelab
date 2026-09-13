@@ -19,9 +19,12 @@ that may only shrink.
 
 from __future__ import annotations
 
+import difflib
 import hashlib
 import json
+import re
 import shutil
+from collections import Counter
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
@@ -291,3 +294,132 @@ def summarize(scores: list[FileScore]) -> FileScore:
         survived=sum(score.survived for score in scores),
         no_tests=sum(score.no_tests for score in scores),
     )
+
+
+# --- Survivor inspection -----------------------------------------------------
+#
+# `mutmut show` cannot resolve a mutant in this tree (it re-derives paths from
+# its own config and comes up empty), and a survivor count alone does not tell
+# you what to write a test for. The mutated source mutmut leaves behind is
+# enough on its own: every scoped function is rewritten as a family of
+# `x_<name>__mutmut_<n>` variants beside an unmutated `x_<name>__mutmut_orig`,
+# so the exact change is a diff between two function bodies in one file.
+
+MUTANT_DEF_RE = re.compile(r"^\s*def (?P<name>x_\w+__mutmut_(?:orig|\d+))\s*\(")
+# What ends a mutant body: any other definition, or the trailing dispatch table
+# mutmut appends (`x_foo__mutmut_mutants = {...}`).
+BODY_END_RE = re.compile(r"^\s*(?:async\s+)?def\s|^\s*class\s|^x_\w+\s*=")
+
+ORIG_SUFFIX = "__mutmut_orig"
+
+
+@dataclass(frozen=True)
+class Survivor:
+    """One surviving mutant, reduced to the lines that actually changed."""
+
+    key: str
+    function: str
+    diff: tuple[str, ...]
+
+    def format(self) -> str:
+        body = "\n".join(f"      {line}" for line in self.diff) or "      <no diff found>"
+        return f"{self.key.rsplit('.', 1)[-1]}  ({self.function})\n{body}"
+
+
+def function_of(mutant_name: str) -> str:
+    """`x__is_cache_fresh__mutmut_7` -> `_is_cache_fresh`."""
+    return re.sub(r"__mutmut_(?:orig|\d+)$", "", mutant_name).removeprefix("x_")
+
+
+def mutant_bodies(source: str) -> dict[str, list[str]]:
+    """Index every `x_*__mutmut_*` function body in a mutated source file."""
+    bodies: dict[str, list[str]] = {}
+    current: str | None = None
+    for line in source.splitlines():
+        match = MUTANT_DEF_RE.match(line)
+        if match:
+            current = match.group("name")
+            bodies[current] = []
+            continue
+        if BODY_END_RE.match(line):
+            current = None
+        if current is not None and line.strip():
+            bodies[current].append(line.rstrip())
+    return bodies
+
+
+def body_diff(original: list[str], mutated: list[str]) -> tuple[str, ...]:
+    """The changed lines only.
+
+    Zero context and no file header: the function name is already the location,
+    and a mutant is a single expression, so anything more is noise to scroll
+    past. Triage is a judgement about one line.
+    """
+    lines = difflib.unified_diff(original, mutated, n=0, lineterm="")
+    return tuple(
+        line for line in lines if line[:1] in {"-", "+"} and not line.startswith(("---", "+++"))
+    )
+
+
+def survivors(meta: dict, source: str, needle: str = "") -> list[Survivor]:
+    """Surviving mutants for one scored file, optionally filtered by function name.
+
+    A mutant whose body cannot be located still gets an entry with an empty
+    diff: dropping it would silently under-report the very thing being counted.
+    """
+    bodies = mutant_bodies(source)
+    found: list[Survivor] = []
+    for key, code in (meta.get("exit_code_by_key") or {}).items():
+        if code != SURVIVED_EXIT_CODE:
+            continue
+        name = key.rsplit(".", 1)[-1]
+        function = function_of(name)
+        if needle and needle not in function:
+            continue
+        original = bodies.get(name.split("__mutmut_")[0] + ORIG_SUFFIX, [])
+        found.append(
+            Survivor(key=key, function=function, diff=body_diff(original, bodies.get(name, [])))
+        )
+    return found
+
+
+def survivors_by_function(found: Iterable[Survivor]) -> dict[str, int]:
+    """Survivor counts per function, worst first — the triage running order."""
+    counts = Counter(item.function for item in found)
+    return dict(counts.most_common())
+
+
+def find_meta(mutants_dir: Path, target: str) -> Path:
+    """Resolve a file argument to one `.py.meta`, accepting any unique substring.
+
+    `op_secrets`, `op_secrets.py` and the full path all work; an ambiguous or
+    unknown fragment raises rather than guessing, since silently inspecting the
+    wrong file would read as "no survivors left".
+    """
+    metas = sorted(mutants_dir.rglob(f"*{META_SUFFIX}"))
+    if not metas:
+        raise LookupError(f"no mutation results under {mutants_dir}/; run a sweep first")
+    matches = [path for path in metas if target in str(path.relative_to(mutants_dir))]
+    if len(matches) == 1:
+        return matches[0]
+    known = ", ".join(str(path.relative_to(mutants_dir))[: -len(".meta")] for path in metas)
+    if not matches:
+        raise LookupError(f"no scored file matches {target!r}; scored: {known}")
+    raise LookupError(f"{target!r} matches {len(matches)} scored files; scored: {known}")
+
+
+def read_survivors(mutants_dir: Path, target: str, needle: str = "") -> list[Survivor]:
+    """Load and diff the surviving mutants of one scored file.
+
+    A file left unmeasured by a narrowed sweep still has a `.meta` sidecar, but
+    with no outcomes in it. Refusing is the same call `read_results` makes by
+    omitting such a file: an empty survivor list would otherwise read as "clean"
+    for a file that was never actually judged.
+    """
+    meta_path = find_meta(mutants_dir, target)
+    filename = str(meta_path.relative_to(mutants_dir))[: -len(".meta")]
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    if not score_meta(filename, meta).total:
+        raise LookupError(f"{filename} has no results in this sweep; sweep it before triaging")
+    source = meta_path.with_suffix("").read_text(encoding="utf-8")
+    return survivors(meta, source, needle)

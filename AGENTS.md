@@ -115,8 +115,12 @@ M=".venv/bin/python -m homelab.cli mutants"     # see the PYTHONPATH note below
 PYTHONPATH=src $M                               # sweep the scoped core, then gate
 PYTHONPATH=src $M --no-run                      # re-score the last sweep without redoing it
 PYTHONPATH=src $M 'homelab.hosts.*'             # narrow further than the configured scope
-mutmut show <mutant-name>                       # the exact surviving diff
+PYTHONPATH=src .venv/bin/python -m homelab.cli survivors op_secrets [function]  # what changed
 ```
+
+Working the backlog — reading survivors, telling a real gap from an equivalent mutant, the
+test shapes that kill them — is the `mutation-triage` skill. `mutmut show` cannot resolve a
+mutant in this tree; `homelab survivors` is the replacement.
 
 **`PYTHONPATH=src` and `-m homelab.cli` are both load-bearing; the bare `homelab`
 console script does not work here.** `repo_root()` is `Path(__file__).parents[2]`, and
@@ -135,53 +139,25 @@ re-baseline. `mutants/` is a gitignored working copy of the repo; results accumu
 there across runs.
 
 **`timeout_multiplier = 60.0` in `[tool.mutmut]` is load-bearing — do not drop it to save
-time.** mutmut puts a CPU-seconds cap on each mutant, `(estimated_test_time +
-timeout_constant) * timeout_multiplier * 2`, and **scores a mutant that hits it as
+time.** mutmut puts a CPU-seconds cap on each mutant and **scores a mutant that hits it as
 killed** (SIGXCPU, exit `-24`; `DETECTED_EXIT_CODES` mirrors mutmut here deliberately, on
 the theory that a hang is a detection). At the stock multiplier that cap fired on hundreds
-of mutants that were not hanging at all, so they were recorded as caught without ever
-being judged. One such sweep scored `hosts.py` at **16** undetected against its true 38.
-The tell is in the exit codes: `crap.py` and `leakcheck.py` took zero timeouts and were
-the only files that never moved, while `op_secrets.py` took 112. At 60.0 the whole sweep
-records zero timeouts and every verdict is a real test outcome. Any figure older than
-`1839313` predates this; anything older than `4f1048b` is inflated by the parallelism
-artifact below as well. Do not compare against either.
+of mutants that were not hanging, inflating every score.
 
 **Run it serially. `--max-children` defaults to 1, and `--update-baseline` refuses
 anything else.** Every child shares the *same* `mutants/` working tree, so a mutant that
-writes under it — a staging helper redirected into a repo `build/` dir, a secret written
-somewhere other than tmpfs — makes a **different** child's test fail, and that unrelated
-mutant is recorded as killed. Parallel sweeps are therefore biased *low*, and the bias is
-not small: `normalize.py` read 163–165 across parallel sweeps against a true 184 (its
-figure at the time; now 70). Use `--max-children 8` to explore quickly, never to judge.
+writes under it makes a **different** child's test fail, and that unrelated mutant is
+recorded as killed. Parallel sweeps are therefore biased *low*. Use `--max-children 8` to
+explore quickly, never to judge.
 
-**The tell is which files hold still.** `crap.py` 46, `hosts.py` 38 and `leakcheck.py` 44
-score identically parallel or serial, because their tests only read. The three that
-moved — `module_support.py` 31–37, `normalize.py` 163–165, `op_secrets.py` 124–126 — are
-exactly the three whose code writes. (Those are the pre-ratchet figures for the last two.)
-
-**Every entry is reproduced, which is what makes the ratchet enforceable at all.** Each
-was scored identically on two independent fresh serial sweeps — `crap.py` 46, `hosts.py`
-38, `leakcheck.py` 44, `module_support.py` 38, `normalize.py` 70, `op_secrets.py` 51,
-287 undetected of 2,346. So `mutation-baseline.json` is exact and carries no drift
-tolerance, and a sweep that disagrees is reporting a real change or a parallel run, not
-noise. Keep it that way: measure a file twice before ratcheting it, since the error is
-only safe in one direction — an entry that is too high reports as "improved", one that is
-too low fails the gate.
-
-**Four hypotheses for that drift are dead — don't re-propose them.** It is not I/O in the
-naive sense (`leakcheck.py` shells out to `git ls-files` and is exact); not
-`tests/test_dry_run_all_modules.py` breadth (that correlation held only while
-`op_secrets.py` looked stable, which was the timeout artifact); not file size; and not
-hash randomisation or test ordering — `PYTHONHASHSEED=0` still gave 37/35/33, and neither
-`pytest-randomly` nor `xdist` is installed. mutmut's stats phase was the last suspect and
-is innocent: two fresh collections produce byte-identical test-selection maps.
-
-**Still not a nightly CI job**, and now for a duller reason than irreproducibility: an
-honest serial sweep of all six files takes hours, against the under-a-minute `./validate`
-it would have to sit beside. The scheduled workflow built and reverted on 2026-09-12 stays
-reverted. Whether serial figures hold across *machines* is untested — the old CI numbers
-(36–37, 176–179) came from parallel runs with timeouts and prove nothing either way.
+**Measure a file twice before ratcheting it.** Every baseline entry was reproduced on two
+independent fresh serial sweeps, so `mutation-baseline.json` is exact and carries no drift
+tolerance — a sweep that disagrees is reporting a real change or a parallel run, not noise.
+The error is only safe in one direction: an entry that is too high reports as "improved",
+one that is too low fails the gate for everyone afterwards. Both artifacts that once
+inflated these figures, the five dead hypotheses for the drift, and why this is still not a
+nightly CI job: `.opencode/skill/mutation-triage/reference/measurement-history.md`. Do not
+compare against any figure older than `4f1048b`.
 
 **Stale results are the trap here, and `homelab mutants` handles it — mutmut does not.**
 mutmut caches a verdict per mutant and invalidates only on the *mutated source*, its own

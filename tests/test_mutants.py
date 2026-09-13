@@ -658,3 +658,281 @@ class TestStaleResultHandling:
         cli.run_mutation_report(tmp_path, (), False, 20, 4, sweep=False)
 
         assert mutants.read_suite_fingerprint(tmp_path / mutants.MUTANTS_DIRNAME) is None
+
+
+# A mutated source file in mutmut's own shape: an unmutated `__mutmut_orig`
+# beside numbered variants, closed by the dispatch table it appends.
+MUTATED_SOURCE = '''
+def x_is_fresh__mutmut_orig(ttl):
+    if ttl <= 0:
+        return False
+    return True
+
+def x_is_fresh__mutmut_1(ttl):
+    if ttl < 0:
+        return False
+    return True
+
+def x_is_fresh__mutmut_2(ttl):
+    if ttl <= 1:
+        return False
+    return True
+
+x_is_fresh__mutmut_mutants = {"x_is_fresh__mutmut_1": x_is_fresh__mutmut_1}
+
+def x_other__mutmut_orig(name):
+    return name.strip()
+
+def x_other__mutmut_1(name):
+    return name.rstrip()
+'''
+
+
+def write_scored_file(mutants_dir: Path, filename: str, source: str, codes: dict[str, int]) -> None:
+    """Write both halves of a scored file: the mutated source and its sidecar."""
+    write_meta(mutants_dir, filename, codes)
+    (mutants_dir / filename).write_text(source, encoding="utf-8")
+
+
+class TestFunctionOf:
+    @pytest.mark.parametrize(
+        ("mutant", "expected"),
+        [
+            ("x__is_cache_fresh__mutmut_7", "_is_cache_fresh"),
+            ("x_load_catalog__mutmut_orig", "load_catalog"),
+            ("x_load_catalog__mutmut_120", "load_catalog"),
+        ],
+    )
+    def test_strips_the_wrapper_naming(self, mutant: str, expected: str) -> None:
+        """Both affixes have to go, and the leading `x_` must not eat a real
+        underscore-prefixed private name."""
+        assert mutants.function_of(mutant) == expected
+
+
+class TestMutantBodies:
+    def test_indexes_every_variant_including_the_original(self) -> None:
+        bodies = mutants.mutant_bodies(MUTATED_SOURCE)
+
+        assert set(bodies) == {
+            "x_is_fresh__mutmut_orig",
+            "x_is_fresh__mutmut_1",
+            "x_is_fresh__mutmut_2",
+            "x_other__mutmut_orig",
+            "x_other__mutmut_1",
+        }
+
+    def test_a_body_stops_at_the_next_definition(self) -> None:
+        """Bodies are compared line-for-line, so bleeding into the next function
+        would diff two unrelated blocks and report a mutant that changed nothing."""
+        assert mutants.mutant_bodies(MUTATED_SOURCE)["x_other__mutmut_orig"] == [
+            "    return name.strip()"
+        ]
+
+    def test_the_dispatch_table_is_not_swallowed_into_a_body(self) -> None:
+        """mutmut appends `x_<fn>__mutmut_mutants = {...}` after the last variant;
+        it is not code under test and must not appear in a diff."""
+        body = mutants.mutant_bodies(MUTATED_SOURCE)["x_is_fresh__mutmut_2"]
+
+        assert body == ["    if ttl <= 1:", "        return False", "    return True"]
+
+    def test_a_file_with_no_mutants_indexes_empty(self) -> None:
+        assert mutants.mutant_bodies("def plain(x):\n    return x\n") == {}
+
+
+class TestBodyDiff:
+    def test_reports_only_the_changed_lines(self) -> None:
+        diff = mutants.body_diff(["    a = 1", "    b = 2"], ["    a = 1", "    b = 3"])
+
+        assert diff == ("-    b = 2", "+    b = 3")
+
+    def test_drops_the_file_header_but_keeps_removed_lines(self) -> None:
+        """`--- `/`+++ ` headers start with the same characters as real diff
+        lines, and a `-` line is the half that says what the code used to do."""
+        diff = mutants.body_diff(["    return True"], [])
+
+        assert diff == ("-    return True",)
+
+    def test_identical_bodies_diff_to_nothing(self) -> None:
+        assert mutants.body_diff(["    a = 1"], ["    a = 1"]) == ()
+
+
+class TestSurvivors:
+    @staticmethod
+    def _meta(codes: dict[str, int]) -> dict:
+        return {"exit_code_by_key": codes}
+
+    def test_only_survivors_are_reported(self) -> None:
+        found = mutants.survivors(
+            self._meta({"m.x_is_fresh__mutmut_1": SURVIVED, "m.x_is_fresh__mutmut_2": KILLED}),
+            MUTATED_SOURCE,
+        )
+
+        assert [item.key for item in found] == ["m.x_is_fresh__mutmut_1"]
+
+    def test_no_tests_is_not_a_survivor_here(self) -> None:
+        """The baseline counts "no test at all" alongside survivors, but there is
+        no diff to triage for a mutant nothing ran -- the fix is a test for the
+        whole function, not for that line."""
+        found = mutants.survivors(self._meta({"m.x_is_fresh__mutmut_1": NO_TESTS}), MUTATED_SOURCE)
+
+        assert found == []
+
+    def test_the_diff_is_against_the_unmutated_original(self) -> None:
+        found = mutants.survivors(self._meta({"m.x_is_fresh__mutmut_1": SURVIVED}), MUTATED_SOURCE)
+
+        assert found[0].diff == ("-    if ttl <= 0:", "+    if ttl < 0:")
+        assert found[0].function == "is_fresh"
+
+    def test_filters_by_function_name_fragment(self) -> None:
+        found = mutants.survivors(
+            self._meta({"m.x_is_fresh__mutmut_1": SURVIVED, "m.x_other__mutmut_1": SURVIVED}),
+            MUTATED_SOURCE,
+            needle="other",
+        )
+
+        assert [item.function for item in found] == ["other"]
+
+    def test_a_mutant_with_no_locatable_body_is_still_reported(self) -> None:
+        """Silently dropping it would under-report the count this command exists
+        to explain, which reads as progress."""
+        found = mutants.survivors(self._meta({"m.x_gone__mutmut_1": SURVIVED}), MUTATED_SOURCE)
+
+        assert len(found) == 1
+        assert found[0].diff == ()
+        assert "<no diff found>" in found[0].format()
+
+    def test_missing_metadata_is_not_an_error(self) -> None:
+        assert mutants.survivors({}, MUTATED_SOURCE) == []
+
+
+class TestSurvivorsByFunction:
+    def test_counts_worst_function_first(self) -> None:
+        """This ordering is the triage running order, so it is load-bearing."""
+        found = [
+            mutants.Survivor(key="m.x_a__mutmut_1", function="a", diff=()),
+            mutants.Survivor(key="m.x_b__mutmut_1", function="b", diff=()),
+            mutants.Survivor(key="m.x_b__mutmut_2", function="b", diff=()),
+        ]
+
+        assert list(mutants.survivors_by_function(found)) == ["b", "a"]
+        assert mutants.survivors_by_function(found) == {"b": 2, "a": 1}
+
+
+class TestFindMeta:
+    def test_resolves_a_bare_stem(self, tmp_path: Path) -> None:
+        write_meta(tmp_path, "src/homelab/op_secrets.py", {"x": SURVIVED})
+
+        assert mutants.find_meta(tmp_path, "op_secrets").name == "op_secrets.py.meta"
+
+    def test_an_ambiguous_fragment_raises_rather_than_guessing(self, tmp_path: Path) -> None:
+        """Inspecting the wrong file would show no survivors, which reads as done."""
+        write_meta(tmp_path, "src/homelab/crap.py", {"x": SURVIVED})
+        write_meta(tmp_path, "src/homelab/hosts.py", {"x": SURVIVED})
+
+        with pytest.raises(LookupError, match="matches 2 scored files"):
+            mutants.find_meta(tmp_path, ".py")
+
+    def test_an_unknown_fragment_lists_what_was_scored(self, tmp_path: Path) -> None:
+        write_meta(tmp_path, "src/homelab/crap.py", {"x": SURVIVED})
+
+        with pytest.raises(LookupError, match="crap.py"):
+            mutants.find_meta(tmp_path, "nope")
+
+    def test_an_unswept_tree_says_so(self, tmp_path: Path) -> None:
+        with pytest.raises(LookupError, match="run a sweep first"):
+            mutants.find_meta(tmp_path, "anything")
+
+
+class TestReadSurvivors:
+    def test_pairs_the_sidecar_with_its_mutated_source(self, tmp_path: Path) -> None:
+        write_scored_file(
+            tmp_path, "src/homelab/f.py", MUTATED_SOURCE, {"m.x_is_fresh__mutmut_1": SURVIVED}
+        )
+
+        found = mutants.read_survivors(tmp_path, "f.py")
+
+        assert [item.diff for item in found] == [("-    if ttl <= 0:", "+    if ttl < 0:")]
+
+    def test_a_file_the_sweep_never_measured_is_refused(self, tmp_path: Path) -> None:
+        """A narrowed sweep still leaves a sidecar for the files it skipped, with
+        no outcomes in it. Returning "no survivors" there would report an
+        unjudged file as clean -- the same lie `read_results` avoids by omitting
+        it from the report entirely."""
+        write_scored_file(tmp_path, "src/homelab/f.py", MUTATED_SOURCE, {})
+
+        with pytest.raises(LookupError, match="no results in this sweep"):
+            mutants.read_survivors(tmp_path, "f.py")
+
+    def test_a_file_whose_mutants_were_all_killed_is_not_refused(self, tmp_path: Path) -> None:
+        """Measured and clean is a real state, and must stay distinguishable from
+        never measured."""
+        write_scored_file(
+            tmp_path, "src/homelab/f.py", MUTATED_SOURCE, {"m.x_is_fresh__mutmut_1": KILLED}
+        )
+
+        assert mutants.read_survivors(tmp_path, "f.py") == []
+
+
+class TestCliSurvivors:
+    def test_prints_the_diff_and_the_per_function_tally(self, tmp_path: Path, capsys) -> None:
+        write_scored_file(
+            tmp_path / mutants.MUTANTS_DIRNAME,
+            "src/homelab/f.py",
+            MUTATED_SOURCE,
+            {"m.x_is_fresh__mutmut_1": SURVIVED},
+        )
+
+        assert cli.run_survivors(tmp_path, "f.py", "", 10) == 0
+        out = capsys.readouterr().out
+        assert "+    if ttl < 0:" in out
+        assert "by function: is_fresh 1" in out
+
+    def test_a_clean_file_reports_success(self, tmp_path: Path, capsys) -> None:
+        write_scored_file(
+            tmp_path / mutants.MUTANTS_DIRNAME,
+            "src/homelab/f.py",
+            MUTATED_SOURCE,
+            {"m.x_is_fresh__mutmut_1": KILLED},
+        )
+
+        assert cli.run_survivors(tmp_path, "f.py", "", 10) == 0
+        assert "no surviving mutants" in capsys.readouterr().out
+
+    def test_an_unresolvable_target_exits_nonzero(self, tmp_path: Path, capsys) -> None:
+        """The diagnostic goes to stderr, so piping the survivor list somewhere
+        does not swallow the reason it is empty."""
+        (tmp_path / mutants.MUTANTS_DIRNAME).mkdir()
+
+        assert cli.run_survivors(tmp_path, "f.py", "", 10) == 1
+        captured = capsys.readouterr()
+        assert "no mutation results" in captured.err
+        assert captured.out == ""
+
+    def test_top_truncates_and_says_it_did(self, tmp_path: Path, capsys) -> None:
+        """A truncated list that did not admit it would look like the whole
+        backlog, and the tally below it would disagree."""
+        write_scored_file(
+            tmp_path / mutants.MUTANTS_DIRNAME,
+            "src/homelab/f.py",
+            MUTATED_SOURCE,
+            {"m.x_is_fresh__mutmut_1": SURVIVED, "m.x_other__mutmut_1": SURVIVED},
+        )
+
+        assert cli.run_survivors(tmp_path, "f.py", "", 1) == 1 - 1
+        out = capsys.readouterr().out
+        assert "1 shown; --top for more" in out
+        assert "2 surviving mutant(s)" in out
+
+    def test_the_command_is_wired_up(self, tmp_path: Path, monkeypatch) -> None:
+        write_scored_file(
+            tmp_path / mutants.MUTANTS_DIRNAME,
+            "src/homelab/f.py",
+            MUTATED_SOURCE,
+            {"m.x_is_fresh__mutmut_1": SURVIVED},
+        )
+        monkeypatch.setattr(cli, "repo_root", lambda: tmp_path)
+
+        result = CliRunner().invoke(cli.main, ["survivors", "f.py", "is_fresh"])
+
+        assert result.exit_code == 0
+        assert "+    if ttl < 0:" in result.output
