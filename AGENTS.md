@@ -111,15 +111,36 @@ the suite still passes is a behaviour **nothing asserts**, which coverage cannot
 
 ```bash
 .venv/bin/python -m pip install '.[mutation]'   # separate extra, deliberately not in dev
-homelab mutants                                 # sweep the scoped core, then gate
-homelab mutants --no-run                        # re-score the last sweep without redoing it
-homelab mutants 'homelab.hosts.*'               # narrow further than the configured scope
+M=".venv/bin/python -m homelab.cli mutants"     # see the PYTHONPATH note below
+PYTHONPATH=src $M                               # sweep the scoped core, then gate
+PYTHONPATH=src $M --no-run                      # re-score the last sweep without redoing it
+PYTHONPATH=src $M 'homelab.hosts.*'             # narrow further than the configured scope
 mutmut show <mutant-name>                       # the exact surviving diff
 ```
 
-**Not a `./validate` step and not in CI:** a sweep is tens of minutes. Run it when you
-change a scoped file, then fix or re-baseline. `mutants/` is a gitignored working copy of
-the repo; results accumulate there across runs.
+**`PYTHONPATH=src` and `-m homelab.cli` are both load-bearing; the bare `homelab`
+console script does not work here.** `repo_root()` is `Path(__file__).parents[2]`, and
+the repo `.venv` is a *non-editable* install, so the installed script resolves the "repo"
+to `.venv/lib/python3.13` — `--no-run` then reports "nothing scored" and a full sweep
+would run mutmut with that as its cwd. Same workaround the dry-run job in
+`validate.yml` already uses. Setting it for the parent is safe precisely because
+`mutmut_env()` pops `PYTHONPATH` back off for the mutmut children, which must not see the
+real `src/`.
+
+**Not a `./validate` step and not a PR gate:** a sweep is tens of minutes against a suite
+`./validate` clears in under one, so gating on it would make the fast check something you
+route around. It is also a different question — `./validate` gates a *change*, this
+ratchets the *suite*. Run it by hand when you change a scoped file, then fix or
+re-baseline. `mutants/` is a gitignored working copy of the repo; results accumulate
+there across runs.
+
+**It does run nightly in CI** (`.github/workflows/mutation.yml`, 06:37 UTC, plus
+`workflow_dispatch`). Being scheduled, a red run cannot block anything — the commit
+already landed — so treat it as a notification, not a gate. The run uploads a
+`mutation-report` artifact with the per-file numbers; investigating an individual mutant
+still needs `mutmut show` against a local tree, since the runner's is discarded. A fresh
+runner has no `mutants/` tree, so CI always sweeps from scratch and the stale-results
+problem below cannot arise there.
 
 **Stale results are the trap here, and `homelab mutants` handles it — mutmut does not.**
 mutmut caches a verdict per mutant and invalidates only on the *mutated source*, its own
