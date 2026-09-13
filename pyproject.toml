@@ -77,8 +77,10 @@ source_paths = ["src/homelab"]
 only_mutate = [
     "src/homelab/crap.py",
     "src/homelab/hosts.py",
+    "src/homelab/leakcheck.py",
     "src/homelab/module_support.py",
     "src/homelab/modules/zfs_automation/normalize.py",
+    "src/homelab/op_secrets.py",
 ]
 
 # Tests resolve ROOT as `tests/..`, which under mutmut is `mutants/`, so every

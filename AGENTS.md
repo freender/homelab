@@ -135,18 +135,26 @@ re-baseline. `mutants/` is a gitignored working copy of the repo; results accumu
 there across runs.
 
 **And not a nightly CI job either — this was measured, not assumed.** A scheduled
-workflow was built and reverted on 2026-09-12, because the score is not reproducible.
-Out of the same 1,484 mutants: `hosts.py` and `crap.py` score 38 and 46 on every machine
-and every run, but `module_support.py` and `normalize.py` — the two whose tests touch the
-filesystem, subprocess, and the dry-run path — flap by ±3 between *identical* CI runs and
-land ~18 higher on a GitHub runner than on riven (281 local against 296–300 in CI). mutmut
-picks which tests to run per mutant from a stats/coverage phase, so nondeterminism there
-changes verdicts. A "may only shrink" ratchet cannot be enforced against a number that
-moves on its own, and a baseline generated on one machine is not reachable on another.
+workflow was built and reverted on 2026-09-12, because the score is not reproducible. Four
+of the six scoped files are exact — `crap.py` 46, `hosts.py` 38, `leakcheck.py` 89,
+`op_secrets.py` 121 — on every run and every machine. `module_support.py` and
+`normalize.py` are not: repeated **fresh sweeps on riven, from an unchanged tree**, give
+34–35 and 161–166, and a GitHub runner gives 36–37 and 176–179. mutmut picks which tests
+to run per mutant from a stats/coverage phase, so nondeterminism there changes verdicts. A
+"may only shrink" ratchet cannot be enforced against a number that moves on its own.
 
-**Treat `mutation-baseline.json` as riven-relative.** The ratchet is only meaningful where
-it is reproducible, which so far means riven. Before trusting any re-baseline, confirm the
-files you changed score the same twice in a row.
+**The split is not about I/O — that was the first guess and it is wrong.** `op_secrets.py`
+is the most subprocess- and filesystem-heavy file in scope (`op inject`, tmpfs staging,
+signal handlers, chmod) and it is *perfectly* stable at 121. The two that drift are
+exactly the two reached through `tests/test_dry_run_all_modules.py`, the broad
+31-module walk. Suspect that test's breadth, not the nature of the code under it.
+
+**Treat `mutation-baseline.json` as riven-relative**, and read its `_drift` key before
+touching the two unstable entries: they are pinned to riven's observed *ceiling* rather
+than to the last sweep, so re-running does not fail the gate on noise. That is the one
+sanctioned exception to "never raise an entry by hand", and `--update-baseline` will
+overwrite it with that sweep's figure — restore the ceiling afterwards. Before trusting
+any re-baseline, confirm the files you changed score the same twice in a row.
 
 **Stale results are the trap here, and `homelab mutants` handles it — mutmut does not.**
 mutmut caches a verdict per mutant and invalidates only on the *mutated source*, its own
@@ -159,10 +167,17 @@ untargeted files from the report), and a tree with no fingerprint is treated as 
 delete `mutants/` by hand once after pulling this change.
 
 Scope is `[tool.mutmut].only_mutate` in `pyproject.toml` and is stated nowhere else — the
-pure-logic paths where a wrong answer is *silent* rather than an exception. Widening it is
-a deliberate act; the Fabric and subprocess surfaces fail loudly and are not worth the
-runtime. Nothing here touches Bash, so `lib/utils.sh` and every `scripts/install.sh` stay
-covered only by their own subprocess tests.
+paths where a wrong answer is *silent* rather than an exception. Widening it is a
+deliberate act; the Fabric surface fails loudly and is not worth the runtime. Nothing here
+touches Bash, so `lib/utils.sh` and every `scripts/install.sh` stay covered only by their
+own subprocess tests.
+
+**`only_mutate` globs whole files — there is no function-level granularity** (patterns
+must end in `*` or `.py`, and `do_not_mutate_patterns` is parsed but unused in mutmut
+3.8). That is why the public-repo leak check lives in `src/homelab/leakcheck.py` rather
+than in `cli.py`: scoping it in place would have meant mutating all 1,000+ lines of
+`cli.py`, click wrappers included. Keep that in mind before adding anything to scope — the
+unit is the file, so the file has to be worth it.
 
 `mutation-baseline.json` is the same ratchet as `crap-baseline.json`: per-file undetected
 counts that may only shrink, never hand-raised, regenerated with
