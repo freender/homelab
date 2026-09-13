@@ -55,7 +55,13 @@ jobs:
       # sweeps nothing. Same workaround as the dry-run job in validate.yml. Setting it
       # here is safe precisely because mutmut_env() pops PYTHONPATH back off for the
       # mutmut children, which must not see the real src/.
+      #
+      # `shell: bash` is not cosmetic: it is what adds `-o pipefail`. The default `run:`
+      # shell is `bash -e` without it, so the `| tee` below would return *tee's* status
+      # and a failed gate would report as a green run. That is not hypothetical -- this
+      # workflow's first dispatch did exactly that.
       - name: Sweep and gate
+        shell: bash
         run: |
           PYTHONPATH=src python -m homelab.cli mutants \
             --max-children 4 2>&1 | tee mutation-report.txt
