@@ -5,13 +5,15 @@ from pathlib import Path
 from invoke.exceptions import UnexpectedExit
 
 from ..build import copy_files, render_file
-from ..deploy import DeploySession, prepare_build_dir, stage_and_run_remote_installer
+from ..deploy import DeploySession, force_env, prepare_build_dir, stage_and_run_remote_installer
 from ..hosts import default_registry
 from ..module_support import normalize_bool, run_module_deploy
 from ..output import print_sub
 from ..ssh import HostConnection, build_files, offline_mode
 
 REMOTE_ROOT = "/tmp/homelab-pve-gpu-passthrough"
+INSTALLER = "scripts/install.py"
+INTERPRETER = "python3"
 REQUIRED_ROOT_TOKEN = "root=ZFS=rpool/ROOT/pve-1"
 GPU_BLACKLIST_REMOTE_PATH = "/etc/modprobe.d/homelab-gpu-blacklist.conf"
 VFIO_REMOTE_PATH = "/etc/modprobe.d/vfio.conf"
@@ -22,7 +24,7 @@ def deploy(
     root: Path,
     requested_host: str,
     dry_run: bool,
-    _force: bool,
+    force: bool,
     session: DeploySession,
 ) -> int:
     def validate_and_warn(_supported_hosts: list[str], _hosts: list[str]) -> None:
@@ -34,7 +36,7 @@ def deploy(
         requested_host,
         "pve-gpu-passthrough",
         session,
-        lambda host: deploy_host(root, host, dry_run=dry_run),
+        lambda host: deploy_host(root, host, dry_run=dry_run, force=force),
         validate=validate_and_warn,
     )
 
@@ -57,6 +59,10 @@ def validate(root: Path) -> None:
             "Unsafe cmdline in pve-gpu-passthrough/configs/cmdline; "
             f"missing required token: {REQUIRED_ROOT_TOKEN}"
         )
+
+    installer = root / "pve-gpu-passthrough" / INSTALLER
+    if not installer.is_file():
+        raise ValueError(f"missing installer: {installer}")
 
 
 def require_root_dataset(connection, host: str, root_dataset: str, dry_run: bool) -> None:
@@ -87,7 +93,7 @@ def build_gpu_configs(
         render_file(configs_dir / "vfio.conf.tpl", build_dir / "vfio.conf", PCI_IDS=pci_ids)
 
 
-def deploy_host(root: Path, host: str, dry_run: bool) -> None:
+def deploy_host(root: Path, host: str, dry_run: bool, force: bool = False) -> None:
     registry = default_registry(root)
     module_dir = root / "pve-gpu-passthrough"
     configs_dir = module_dir / "configs"
@@ -115,7 +121,7 @@ def deploy_host(root: Path, host: str, dry_run: bool) -> None:
             print_sub(f"    {file_name}")
         return
 
-    stage_and_install(root, host, build_dir, connection)
+    stage_and_install(root, host, build_dir, connection, force=force)
 
 
 def normalize_isolate_host_gpu(registry, host: str) -> bool:
@@ -168,7 +174,9 @@ def diff_remote_files(
         print_sub(message)
 
 
-def stage_and_install(root: Path, host: str, build_dir: Path, connection: HostConnection) -> None:
+def stage_and_install(
+    root: Path, host: str, build_dir: Path, connection: HostConnection, force: bool = False
+) -> None:
     stage_and_run_remote_installer(
         root,
         connection,
@@ -178,8 +186,10 @@ def stage_and_install(root: Path, host: str, build_dir: Path, connection: HostCo
             (root / "pve-gpu-passthrough" / "scripts", f"{REMOTE_ROOT}/scripts"),
             (root / "pve-gpu-passthrough" / "remove.sh", f"{REMOTE_ROOT}/remove.sh"),
         ],
-        "scripts/install.sh",
+        INSTALLER,
         host,
+        env=force_env(force),
         require_root=True,
+        interpreter=INTERPRETER,
         remote_subdirs=("build", "lib"),
     )

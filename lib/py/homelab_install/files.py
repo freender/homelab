@@ -4,7 +4,7 @@ and the `backup_and_*` pair.
 Grown demand-driven (freender/homelab-ops#31 decision 3, never a helper with no
 caller): `install`/`install_all` with keepalived, `remove` with apt-upgrade,
 `install_to`/`ensure_dir`/`backup=` with ssh-config and wsl-conf,
-`install_from` with vmalert-rules.
+`install_from` with vmalert-rules, `back_up` with pve-gpu-passthrough.
 
 The three install entry points are one primitive with two lookups stacked in
 front, narrowest last:
@@ -58,6 +58,14 @@ def _backup(dest: Path) -> None:
     stale = sorted(dest.parent.glob(f"{dest.name}.bak.*"), reverse=True)[BACKUP_KEEP_COUNT:]
     for path in stale:
         path.unlink()
+
+
+def back_up(dest: str) -> None:
+    """Keep a timestamped sibling copy of a file edited in place rather than
+    installed from a source -- `pve-gpu-passthrough` filters `vfio` lines out of
+    `/etc/modules`, which no build file describes. Same scheme and include-dir
+    caveat as `install_from(backup=True)`."""
+    _backup(Path(dest))
 
 
 def ensure_dir(ctx: InstallContext, path: str, mode: str) -> None:
