@@ -71,7 +71,7 @@ PYTHONPATH=src .venv/bin/python -m homelab.cli crap   # CRAP scores from the las
 PYTHONPATH=src .venv/bin/python -m homelab.cli mutants   # mutation sweep (slow; out of band)
 shellcheck -S warning pve-postinstall/scripts/install.sh
 find . -name '*.sh' -not -path './.bin/*' -exec shellcheck -S warning {} +   # repo root only
-yq eval '.' hosts.conf >/dev/null
+yq '.' hosts.conf >/dev/null                          # apt's yq (kislyuk/yq, jq syntax) — no `eval`, no mikefarah-style paths
 ```
 
 `./validate` runs Python compile, Ruff, Pytest, the CRAP gate, `hosts.conf` parse
