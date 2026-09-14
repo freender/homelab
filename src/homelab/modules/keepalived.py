@@ -43,6 +43,14 @@ FILE_SPECS = (
     FileSpec("keepalived.conf", "/etc/keepalived/keepalived.conf"),
 )
 
+# One owner for the installer's name, read by both `validate` and the staging call.
+# Split across two call sites they can disagree, and the shape of that disagreement is
+# a validate step that greenlights a deploy of a file the bundle does not contain.
+# The `.py` suffix is also what makes `stage_and_run_remote_installer` upload
+# `lib/py/homelab_install/` and set `PYTHONPATH` (freender/homelab-ops#34).
+INSTALLER = "scripts/install.py"
+INTERPRETER = "python3"
+
 
 def deploy(
     root: Path,
@@ -63,7 +71,7 @@ def deploy(
 
 def validate(root: Path, hosts: list[str]) -> None:
     templates_dir = root / "keepalived" / "templates"
-    installer = root / "keepalived" / "scripts" / "install.sh"
+    installer = root / "keepalived" / INSTALLER
     if not installer.is_file():
         raise ValueError(f"missing installer: {installer}")
 
@@ -270,9 +278,10 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
                 (artifacts.build_dir, f"{REMOTE_ROOT}/build/{host}"),
                 (root / "keepalived" / "scripts", f"{REMOTE_ROOT}/scripts"),
             ],
-            "scripts/install.sh",
+            INSTALLER,
             host,
             env=force_env(force),
             require_root=False,
+            interpreter=INTERPRETER,
             remote_subdirs=("build", "lib"),
         )

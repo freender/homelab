@@ -530,3 +530,61 @@ def test_keepalived_build_uses_caller_supplied_tmpfs_path(
     assert artifacts.build_dir == build_dir
     assert "route.example.net" in (build_dir / "healthcheck.sh").read_text(encoding="utf-8")
     assert not (ROOT / "keepalived" / "build" / "safety-test").exists()
+
+
+def test_keepalived_stages_the_python_installer_under_python3(
+    offline: None,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """keepalived is the first module ported off bash (freender/homelab-ops#36), and
+    it reaches the target through `stage_and_run_remote_installer` directly rather
+    than `simple_root_installer_deploy`.
+
+    Two things have to hold together or the deploy fails as root on the host: the
+    installer name must be the `.py` one that exists in the bundle, and `interpreter`
+    must be `python3`. The suffix is also what makes the staging step upload
+    `lib/py/` and set `PYTHONPATH`, so a name reverted to `install.sh` would take the
+    library with it silently.
+
+    Asserted here rather than in a keepalived-specific file because this is the
+    live-deploy branch of a network-critical module — `test_dry_run_all_modules.py`
+    returns before it, so nothing else in the suite reaches it.
+    """
+    staged: dict[str, object] = {}
+
+    def record(*args: object, **kwargs: object) -> None:
+        staged["args"] = args
+        staged["kwargs"] = kwargs
+
+    monkeypatch.setattr(keepalived, "stage_and_run_remote_installer", record)
+    monkeypatch.setattr(keepalived, "HostConnection", lambda *a, **kw: object())
+    monkeypatch.setattr(keepalived, "diff_many", lambda *a, **kw: [])
+    monkeypatch.setattr(keepalived, "build_host_artifacts", lambda root, host, build_dir: (
+        keepalived.HostArtifacts(build_dir=build_dir, file_specs=[])
+    ))
+
+    class Registry:
+        def get(self, _host: str, key: str, default: object = None) -> object:
+            return {"config.user": "root", "config.hostname": "neo.internal"}.get(key, default)
+
+    monkeypatch.setattr(keepalived, "default_registry", lambda _root: Registry())
+
+    keepalived.deploy_host(ROOT, "neo", dry_run=False, force=False)
+
+    assert staged["args"][4] == "scripts/install.py"
+    assert staged["kwargs"]["interpreter"] == "python3"
+    # The installer asserts geteuid() == 0 itself; the bash `sudo -n` re-exec it
+    # replaced was dead code on all three root-user targets (#31).
+    assert staged["kwargs"]["require_root"] is False
+
+
+def test_keepalived_ships_exactly_one_installer() -> None:
+    """The migration rule: `install.py` added and `install.sh` deleted in the same
+    commit, never both present. Both present would leave which one runs decided by
+    `keepalived.py` alone, with a stale copy of the logic beside it."""
+    scripts = ROOT / "keepalived" / "scripts"
+
+    assert (scripts / "install.py").is_file()
+    assert not (scripts / "install.sh").exists()
+    assert sorted(path.name for path in scripts.glob("install*")) == ["install.py"]
