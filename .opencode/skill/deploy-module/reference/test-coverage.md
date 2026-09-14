@@ -50,7 +50,8 @@ commit, and this paragraph has been stale before.
 | `tests/test_docker.py` | The `docker` module's file map and ported installer: helper-script modes, update-timer on/off, failed-run recovery on redeploy. |
 | `tests/test_monitoring_config.py`, `tests/test_vmalert_rules.py` | Monitoring config rendering and vmalert rule validity. |
 | `tests/test_disk_label_exporter.py`, `tests/test_hba_exporter.py`, `tests/test_reboot_exporter.py` | The three `metrics-exporters` textfile collectors (naming, label identity, behavior). |
-| `tests/test_pbs_client_backup.py`, `tests/test_pve_backup.py`, `tests/test_pve_http_boot.py`, `tests/test_pve_notifications.py`, `tests/test_base_packages.py` | Module-specific behavior. |
+| `tests/test_pbs_client_backup.py`, `tests/test_pve_backup.py`, `tests/test_pve_http_boot.py`, `tests/test_base_packages.py` | Module-specific behavior. |
+| `tests/test_pve_notifications.py`, `tests/test_pve_notifications_installer.py` | Plan normalization and the env it renders; the ported installer against an in-memory model of `/cluster/notifications` — converged config writes nothing, `set` removes properties the module no longer sets, stale routes go only after the new one exists, the Telegram token is shredded on every exit and never echoed in an error. |
 | `tests/test_apt_upgrade.py` | `apt-upgrade`, the single apt mechanism for the fleet since `apt-security-updates` was archived. Pins `auto_reboot` against live inventory (only the offsite hosts opt in) and `SUPPORTED_TYPES` against every host declaring the feature. |
 
 If a new module can take a host off the network or off SSH — or can desynchronize
@@ -61,7 +62,7 @@ a cross-host quorum, VIP, or failover group — it belongs in the golden-render 
 Modules with no dedicated test, carried only by the dry-run smoke test:
 `ubuntu_setup`, `disk_spindown`, and the three `pve_*_patch` wrappers.
 (`apt_upgrade`, `ssh_config`, `vmalert_rules`, `pve_upgrade`, `monitoring_config`,
-`pve_postinstall_webhook`, `apcupsd`, `docker` and `pve_interface_pinning` have left this list as they were ported — porting is currently the
+`pve_postinstall_webhook`, `apcupsd`, `docker`, `pve_interface_pinning` and `pve_notifications` have left this list as they were ported — porting is currently the
 main way coverage arrives. `wsl_conf` has installer tests in
 `test_homelab_install.py` but still no dedicated file.)
 `zfs_automation/{access,render,staging}.py` are likewise largely unasserted (7% /

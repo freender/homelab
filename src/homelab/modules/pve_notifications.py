@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from .. import op_secrets
+from ..build import write_env_file
 from ..deploy import DeploySession, force_env, prepare_build_dir, stage_and_run_remote_installer
 from ..hosts import default_registry
 from ..module_support import (
@@ -54,7 +55,7 @@ def deploy(
 
 
 def validate(root: Path, hosts: list[str]) -> None:
-    install_script = root / MODULE_DIR / "scripts" / "install.sh"
+    install_script = root / MODULE_DIR / "scripts" / "install.py"
     if not install_script.is_file():
         raise ValueError(f"missing install script: {install_script}")
 
@@ -83,7 +84,7 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
     plan = normalize_plan(root, host)
     build_dir = root / MODULE_DIR / "build" / host
     prepare_build_dir(build_dir)
-    write_plan(build_dir / "notification-plan.conf", plan)
+    write_env_file(build_dir / "env", plan_env(plan))
 
     if dry_run:
         print_sub(f"[DRY-RUN] Would deploy PVE notifications to {host}:{REMOTE_ROOT}/")
@@ -106,10 +107,11 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
             HostConnection(host),
             REMOTE_ROOT,
             uploads,
-            "scripts/install.sh",
+            "scripts/install.py",
             host,
             env=force_env(force),
             require_root=True,
+            interpreter="python3",
             remote_subdirs=("build", "lib", "scripts"),
         )
         return
@@ -125,10 +127,11 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
             HostConnection(host),
             REMOTE_ROOT,
             [*uploads, (secret_stage, f"{REMOTE_ROOT}/build/{host}/telegram.env")],
-            "scripts/install.sh",
+            "scripts/install.py",
             host,
             env=force_env(force),
             require_root=True,
+            interpreter="python3",
             remote_subdirs=("build", "lib", "scripts"),
         )
 
@@ -171,9 +174,10 @@ def normalize_plan(root: Path, host: str) -> dict[str, object]:
         "matcher_comment": text_value(
             registry.get(host, f"{prefix}.matcher_comment", defaults["matcher_comment"])
         ),
-        "match_severity": normalize_string_list(
+        "match_severity": name_list(
             registry.get(host, f"{prefix}.match_severity", ["error"]),
-            f"{prefix}.match_severity must be a list for {host}",
+            f"{prefix}.match_severity",
+            host,
         ),
         "disable_mail_to_root": normalize_bool(
             registry.get(host, f"{prefix}.disable_mail_to_root", True),
@@ -185,13 +189,15 @@ def normalize_plan(root: Path, host: str) -> dict[str, object]:
             True,
             f"{prefix}.disable_default_matcher must be boolean for {host}",
         ),
-        "remove_matchers": normalize_string_list(
+        "remove_matchers": name_list(
             registry.get(host, f"{prefix}.remove_matchers", ["backup-errors"]),
-            f"{prefix}.remove_matchers must be a list for {host}",
+            f"{prefix}.remove_matchers",
+            host,
         ),
-        "remove_webhook_targets": normalize_string_list(
+        "remove_webhook_targets": name_list(
             registry.get(host, f"{prefix}.remove_webhook_targets", ["telegram"]),
-            f"{prefix}.remove_webhook_targets must be a list for {host}",
+            f"{prefix}.remove_webhook_targets",
+            host,
         ),
     }
 
@@ -203,32 +209,29 @@ def text_value(value: object) -> str:
     return text
 
 
-def shell_quote(value: object) -> str:
-    return str(value).replace("'", "'\"'\"'")
+def name_list(values: object, key: str, host: str) -> list[str]:
+    """A list that travels to the installer space-separated. PVE object names and
+    severities cannot contain whitespace, so one that does is a typo in
+    `hosts.conf` -- refused here rather than split into two names on the host."""
+    items = normalize_string_list(values, f"{key} must be a list for {host}")
+    for item in items:
+        if any(char.isspace() for char in item):
+            raise ValueError(f"{key} entries must not contain whitespace for {host}: {item!r}")
+    return items
 
 
-def write_plan(path: Path, plan: dict[str, object]) -> None:
-    match_severity = tuple(str(value) for value in plan["match_severity"])
-    remove_matchers = tuple(str(value) for value in plan["remove_matchers"])
-    remove_webhook_targets = tuple(str(value) for value in plan["remove_webhook_targets"])
-    lines = [
-        f"NOTIFY_TARGET='{shell_quote(plan['notify_target'])}'",
-        f"ALERTMANAGER_URL='{shell_quote(plan['alertmanager_url'])}'",
-        f"ALERTMANAGER_SEVERITY='{shell_quote(plan['alertmanager_severity'])}'",
-        f"ALERTMANAGER_ALERTNAME='{shell_quote(plan['alertmanager_alertname'])}'",
-        f"TARGET_NAME='{shell_quote(plan['target_name'])}'",
-        f"MATCHER_NAME='{shell_quote(plan['matcher_name'])}'",
-        f"MATCHER_COMMENT='{shell_quote(plan['matcher_comment'])}'",
-        f"DISABLE_MAIL_TO_ROOT='{str(plan['disable_mail_to_root']).lower()}'",
-        f"DISABLE_DEFAULT_MATCHER='{str(plan['disable_default_matcher']).lower()}'",
-        f"MATCH_SEVERITY_COUNT='{len(match_severity)}'",
-    ]
-    for index, severity in enumerate(match_severity):
-        lines.append(f"MATCH_SEVERITY_{index}='{shell_quote(severity)}'")
-    lines.append(f"REMOVE_MATCHER_COUNT='{len(remove_matchers)}'")
-    for index, matcher in enumerate(remove_matchers):
-        lines.append(f"REMOVE_MATCHER_{index}='{shell_quote(matcher)}'")
-    lines.append(f"REMOVE_WEBHOOK_TARGET_COUNT='{len(remove_webhook_targets)}'")
-    for index, target in enumerate(remove_webhook_targets):
-        lines.append(f"REMOVE_WEBHOOK_TARGET_{index}='{shell_quote(target)}'")
-    path.write_text("\n".join([*lines, ""]), encoding="utf-8")
+def plan_env(plan: dict[str, object]) -> dict[str, object]:
+    return {
+        "NOTIFY_TARGET": plan["notify_target"],
+        "ALERTMANAGER_URL": plan["alertmanager_url"],
+        "ALERTMANAGER_SEVERITY": plan["alertmanager_severity"],
+        "ALERTMANAGER_ALERTNAME": plan["alertmanager_alertname"],
+        "TARGET_NAME": plan["target_name"],
+        "MATCHER_NAME": plan["matcher_name"],
+        "MATCHER_COMMENT": plan["matcher_comment"],
+        "DISABLE_MAIL_TO_ROOT": str(plan["disable_mail_to_root"]).lower(),
+        "DISABLE_DEFAULT_MATCHER": str(plan["disable_default_matcher"]).lower(),
+        "MATCH_SEVERITY": " ".join(plan["match_severity"]),
+        "REMOVE_MATCHERS": " ".join(plan["remove_matchers"]),
+        "REMOVE_WEBHOOK_TARGETS": " ".join(plan["remove_webhook_targets"]),
+    }

@@ -71,23 +71,45 @@ def test_unknown_target_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
         plan_for(monkeypatch, {"pve-notifications.target": "gotify"})
 
 
-def test_write_plan_emits_the_target_variables(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
+def test_plan_env_renders_every_installer_variable(monkeypatch: pytest.MonkeyPatch) -> None:
     plan = plan_for(
         monkeypatch,
         {
             "pve-notifications.target": "alertmanager",
             "pve-notifications.alertmanager_url": "http://helm.freender.internal:9093",
+            "pve-notifications.remove_matchers": ["backup-errors", "telegram-matcher"],
         },
     )
-    destination = tmp_path / "notification-plan.conf"
 
-    pve_notifications.write_plan(destination, plan)
-    content = destination.read_text(encoding="utf-8")
+    assert pve_notifications.plan_env(plan) == {
+        "NOTIFY_TARGET": "alertmanager",
+        "ALERTMANAGER_URL": "http://helm.freender.internal:9093",
+        "ALERTMANAGER_SEVERITY": "critical",
+        "ALERTMANAGER_ALERTNAME": "ProxmoxNotification",
+        "TARGET_NAME": "Alertmanager",
+        "MATCHER_NAME": "alertmanager-matcher",
+        "MATCHER_COMMENT": "Route notifications to Alertmanager",
+        "DISABLE_MAIL_TO_ROOT": "true",
+        "DISABLE_DEFAULT_MATCHER": "true",
+        "MATCH_SEVERITY": "error",
+        "REMOVE_MATCHERS": "backup-errors telegram-matcher",
+        "REMOVE_WEBHOOK_TARGETS": "telegram",
+    }
 
-    assert "NOTIFY_TARGET='alertmanager'" in content
-    assert "ALERTMANAGER_URL='http://helm.freender.internal:9093'" in content
-    assert "ALERTMANAGER_SEVERITY='critical'" in content
-    assert "ALERTMANAGER_ALERTNAME='ProxmoxNotification'" in content
+
+def test_an_empty_severity_list_renders_empty_rather_than_the_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    plan = plan_for(monkeypatch, {"pve-notifications.match_severity": []})
+
+    assert pve_notifications.plan_env(plan)["MATCH_SEVERITY"] == ""
+
+
+@pytest.mark.parametrize("key", ["match_severity", "remove_matchers", "remove_webhook_targets"])
+def test_a_list_entry_with_whitespace_is_refused(
+    monkeypatch: pytest.MonkeyPatch, key: str
+) -> None:
+    # The installer splits these on whitespace, so "backup errors" would become
+    # two names on the host -- and a stale-matcher delete against the wrong one.
+    with pytest.raises(ValueError, match="must not contain whitespace"):
+        plan_for(monkeypatch, {f"pve-notifications.{key}": ["backup errors"]})
