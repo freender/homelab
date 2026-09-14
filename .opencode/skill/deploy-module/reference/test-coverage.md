@@ -70,7 +70,7 @@ main way coverage arrives. `wsl_conf` has installer tests in
 11% / 37% assertion-backed). `op_secrets.py` and `ssh.py` are no longer thin —
 commit `6273be2` took them to 71% / 72%. Prefer adding to these over re-covering
 well-tested areas.
-The ~2,410 lines of still-unported `scripts/install.sh` have no execution
+The ~2,170 lines of still-unported `scripts/install.sh` have no execution
 coverage at all — ShellCheck only. A port moves a module's installer into
 in-process tests that assert behaviour rather than grepping the script for a
 string. **It does not move it into the coverage report or the CRAP gate:** tests
