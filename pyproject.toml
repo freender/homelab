@@ -40,6 +40,10 @@ where = ["src"]
 [tool.ruff]
 target-version = "py313"
 line-length = 100
+# Ruff's default is [".", "src"], which makes `homelab` first-party but leaves
+# `homelab_install` looking like a third-party package — isort would then sort it in
+# beside pytest. Both are ours; both sort together.
+src = [".", "src", "lib/py"]
 
 [tool.ruff.lint]
 select = [
@@ -51,10 +55,15 @@ select = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "--cov=homelab --cov-report=term-missing"
+addopts = "--cov=homelab --cov=homelab_install --cov-report=term-missing"
 
 [tool.coverage.run]
-source = ["homelab"]
+# `homelab_install` (lib/py/) is measured from day one, not from whenever the port
+# finishes. It is not in `only_mutate` yet — that is a #35 decision — but leaving it
+# out of coverage too would mean the CRAP gate silently scored none of it, and a
+# green `./validate` would cover less of the tree than it did before the library
+# existed. `tests/conftest.py` is what puts `lib/py` on `sys.path` for this.
+source = ["homelab", "homelab_install"]
 branch = true
 
 [tool.coverage.report]

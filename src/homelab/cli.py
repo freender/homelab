@@ -31,6 +31,28 @@ def _module_available(name: str) -> bool:
     return importlib.util.find_spec(name) is not None
 
 
+def python_lint_targets(root: Path) -> list[str]:
+    """Every Python path `validate` compiles and lints, beyond `src` and `tests`.
+
+    `lib/py` is the shared installer library; `*/scripts/install.py` are the remote
+    installers that import it. Both live outside `src/` and were invisible to
+    `compileall` and Ruff, which are scoped to `src`/`tests` — a syntax error in an
+    installer would have been found by the target host, mid-deploy, as root.
+
+    Returned relative to `root` because both tools run with `cwd=root`, and only if
+    present: the list is empty in a tree with no ported module yet, and passing a
+    nonexistent path to `compileall` is a hard error.
+    """
+    targets: list[str] = []
+    library = root / "lib" / "py"
+    if library.is_dir():
+        targets.append("lib/py")
+    targets.extend(
+        str(path.relative_to(root)) for path in sorted(root.glob("*/scripts/install.py"))
+    )
+    return targets
+
+
 def check_feature_registry(root: Path) -> None:
     """Cross-check hosts.conf feature names against the module registry, both ways.
 
@@ -588,7 +610,8 @@ def validate() -> None:
     print_header("Homelab Validation")
 
     print_action("Python")
-    _run_command([sys.executable, "-m", "compileall", "src"], cwd=root)
+    extra_python = python_lint_targets(root)
+    _run_command([sys.executable, "-m", "compileall", "src", *extra_python], cwd=root)
     print_ok("Python sources compile")
 
     # Ruff and pytest both gate CI. Running them here is what makes `./validate` an
@@ -596,7 +619,9 @@ def validate() -> None:
     # green validate, push, and still land a red build.
     if _module_available("ruff"):
         print_action("Ruff")
-        _run_command([sys.executable, "-m", "ruff", "check", "src", "tests"], cwd=root)
+        _run_command(
+            [sys.executable, "-m", "ruff", "check", "src", "tests", *extra_python], cwd=root
+        )
         print_ok("Ruff passed")
     else:
         print_warn("ruff not installed; skipping Python lint (CI will still run it)")

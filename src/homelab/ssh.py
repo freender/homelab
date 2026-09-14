@@ -74,6 +74,12 @@ class HostConnection:
         remote_root = remote_dir.rstrip("/")
         self.connection.run(f"mkdir -p {shlex.quote(remote_root)}", hide=True)
         for path in sorted(local_dir.rglob("*")):
+            # Bytecode caches are local build residue, not part of the bundle. They
+            # matter now that `lib/py/` and `scripts/install.py` are staged: a
+            # `__pycache__` written by riven's interpreter has no business on a
+            # target that may run a different Python minor version.
+            if "__pycache__" in path.parts:
+                continue
             relative_path = path.relative_to(local_dir)
             target_path = f"{remote_root}/{relative_path.as_posix()}"
             if path.is_dir():
@@ -83,9 +89,25 @@ class HostConnection:
                 self.connection.run(f"mkdir -p {shlex.quote(parent)}", hide=True)
                 self.connection.put(str(path), remote=target_path)
 
-    def upload_shared_libs(self, root: Path, remote_root: str) -> None:
+    def upload_shared_libs(
+        self, root: Path, remote_root: str, *, include_python: bool = False
+    ) -> None:
+        """Stage the shared remote libraries under `{remote_root}/lib/`.
+
+        `include_python` adds `lib/py/homelab_install/`, the stdlib-only installer
+        library a `scripts/install.py` imports. It is off by default so a bash
+        installer's bundle stays exactly what it is today; the caller that knows
+        which installer is about to run (`stage_and_run_remote_installer`) turns it
+        on. Both bash libs keep uploading either way — a half-ported tree runs both
+        kinds of installer, and `lib/utils.sh` is cheap.
+        """
         self.upload(root / "lib" / "print.sh", f"{remote_root}/lib/print.sh")
         self.upload(root / "lib" / "utils.sh", f"{remote_root}/lib/utils.sh")
+        if include_python:
+            self.upload(
+                root / "lib" / "py" / "homelab_install",
+                f"{remote_root}/lib/py/homelab_install",
+            )
 
     def upload_paths(self, paths: list[tuple[Path, str]]) -> None:
         for local_path, remote_path in paths:

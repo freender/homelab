@@ -412,12 +412,41 @@ def test_upload_dir_on_an_empty_directory_only_creates_the_root(
     assert dummy.put_calls == []
 
 
+def test_upload_dir_skips_bytecode_caches(monkeypatch, tmp_path: Path) -> None:
+    """`__pycache__` is local build residue and must never reach a target.
+
+    Now that `lib/py/` and `scripts/install.py` are staged, `./validate`'s own
+    `compileall` run leaves caches next to the sources it just linted.
+    """
+    dummy = DummyConnection("test-host")
+    connection = _connection(monkeypatch, dummy)
+    local_dir = tmp_path / "py"
+    (local_dir / "homelab_install" / "__pycache__").mkdir(parents=True)
+    (local_dir / "homelab_install" / "files.py").write_text("x\n", encoding="utf-8")
+    (local_dir / "homelab_install" / "__pycache__" / "files.cpython-313.pyc").write_bytes(b"\x00")
+
+    connection.upload_dir(local_dir, "/tmp/build/lib/py")
+
+    assert [remote for _local, remote in dummy.put_calls] == [
+        "/tmp/build/lib/py/homelab_install/files.py"
+    ]
+    assert all("__pycache__" not in command for command, _kwargs in dummy.run_calls)
+
+
+def _lib_tree(root: Path) -> None:
+    (root / "lib").mkdir()
+    (root / "lib" / "print.sh").write_text("print\n", encoding="utf-8")
+    (root / "lib" / "utils.sh").write_text("utils\n", encoding="utf-8")
+    package = root / "lib" / "py" / "homelab_install"
+    package.mkdir(parents=True)
+    (package / "__init__.py").write_text("x\n", encoding="utf-8")
+    (package / "files.py").write_text("x\n", encoding="utf-8")
+
+
 def test_upload_shared_libs_sends_both_lib_files(monkeypatch, tmp_path: Path) -> None:
     dummy = DummyConnection("test-host")
     connection = _connection(monkeypatch, dummy)
-    (tmp_path / "lib").mkdir()
-    (tmp_path / "lib" / "print.sh").write_text("print\n", encoding="utf-8")
-    (tmp_path / "lib" / "utils.sh").write_text("utils\n", encoding="utf-8")
+    _lib_tree(tmp_path)
 
     connection.upload_shared_libs(tmp_path, "/tmp/build")
 
@@ -425,6 +454,39 @@ def test_upload_shared_libs_sends_both_lib_files(monkeypatch, tmp_path: Path) ->
         "/tmp/build/lib/print.sh",
         "/tmp/build/lib/utils.sh",
     ]
+
+
+def test_upload_shared_libs_adds_the_python_library_on_request(
+    monkeypatch, tmp_path: Path
+) -> None:
+    dummy = DummyConnection("test-host")
+    connection = _connection(monkeypatch, dummy)
+    _lib_tree(tmp_path)
+
+    connection.upload_shared_libs(tmp_path, "/tmp/build", include_python=True)
+
+    assert [remote for _local, remote in dummy.put_calls] == [
+        "/tmp/build/lib/print.sh",
+        "/tmp/build/lib/utils.sh",
+        "/tmp/build/lib/py/homelab_install/__init__.py",
+        "/tmp/build/lib/py/homelab_install/files.py",
+    ]
+
+
+def test_upload_shared_libs_still_sends_the_bash_libs_alongside_python(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """A half-ported tree runs both kinds of installer; dropping `utils.sh` from a
+    Python module's bundle would break any sub-installer it still shells out to."""
+    dummy = DummyConnection("test-host")
+    connection = _connection(monkeypatch, dummy)
+    _lib_tree(tmp_path)
+
+    connection.upload_shared_libs(tmp_path, "/tmp/build", include_python=True)
+
+    remotes = [remote for _local, remote in dummy.put_calls]
+    assert "/tmp/build/lib/utils.sh" in remotes
+    assert "/tmp/build/lib/print.sh" in remotes
 
 
 def test_upload_paths_preserves_the_given_order(monkeypatch, tmp_path: Path) -> None:

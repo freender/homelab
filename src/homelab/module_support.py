@@ -265,17 +265,28 @@ def simple_root_installer_deploy(
     *,
     feature: str,
     remote_root: str,
+    installer: str = "scripts/install.sh",
+    interpreter: str | None = None,
     env_for_host: Callable[[str], dict[str, str]] | None = None,
     dry_run_details: Callable[[str], list[str]] | None = None,
 ) -> int:
+    """Stage `<feature>/scripts/` and run its installer as root.
+
+    `installer` is the bundle-relative path the target executes, and `interpreter`
+    the command it runs under — `("scripts/install.py", "python3")` for a ported
+    module. They default to the bash pair so no existing caller changes. Note the
+    two must agree: the `.py` suffix is what makes `stage_and_run_remote_installer`
+    upload `lib/py/` and set `PYTHONPATH`, so a Python installer named without it
+    would be staged without its library.
+    """
     from .deploy import stage_and_run_remote_installer
     from .output import print_action, print_sub
 
-    installer = root / feature / "scripts" / "install.sh"
+    installer_path = root / feature / installer
 
     def validate(_supported_hosts: list[str], _hosts: list[str]) -> None:
-        if not installer.is_file():
-            raise ValueError(f"Missing installer: {installer}")
+        if not installer_path.is_file():
+            raise ValueError(f"Missing installer: {installer_path}")
 
     def deploy_host(host: str) -> None:
         connection = connection_for_host(root, host)
@@ -291,10 +302,11 @@ def simple_root_installer_deploy(
             connection,
             remote_root,
             [(root / feature / "scripts", f"{remote_root}/scripts")],
-            "scripts/install.sh",
+            installer,
             host,
             env=env,
             require_root=True,
+            interpreter=interpreter,
             remote_subdirs=("lib",),
         )
 

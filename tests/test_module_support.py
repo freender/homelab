@@ -286,8 +286,80 @@ def test_simple_root_installer_deploy_stages_the_expected_bundle(
     assert kwargs == {
         "env": {"TARGET": "beta"},
         "require_root": True,
+        "interpreter": None,
         "remote_subdirs": ("lib",),
     }
+
+
+def test_simple_root_installer_deploy_defaults_to_the_bash_installer_pair(
+    root: Path, staged: list[dict[str, Any]]
+) -> None:
+    """The Python arguments must be opt-in.
+
+    Every caller today omits them, so a default that changed either one would
+    silently re-point 20-odd modules at an installer that does not exist.
+    """
+    module_support.simple_root_installer_deploy(
+        root,
+        "beta",
+        False,
+        False,
+        DeploySession(FEATURE),
+        feature=FEATURE,
+        remote_root="/tmp/homelab-demo",
+    )
+
+    assert staged[0]["args"][4] == "scripts/install.sh"
+    assert staged[0]["kwargs"]["interpreter"] is None
+
+
+def test_simple_root_installer_deploy_accepts_a_python_installer(
+    root: Path, staged: list[dict[str, Any]]
+) -> None:
+    installer = root / FEATURE / "scripts" / "install.py"
+    installer.write_text("#!/usr/bin/env python3\n", encoding="utf-8")
+
+    exit_code = module_support.simple_root_installer_deploy(
+        root,
+        "beta",
+        False,
+        False,
+        DeploySession(FEATURE),
+        feature=FEATURE,
+        remote_root="/tmp/homelab-demo",
+        installer="scripts/install.py",
+        interpreter="python3",
+    )
+
+    assert exit_code == 0
+    assert staged[0]["args"][4] == "scripts/install.py"
+    assert staged[0]["kwargs"]["interpreter"] == "python3"
+
+
+def test_simple_root_installer_deploy_validates_the_declared_installer_not_the_bash_one(
+    root: Path, staged: list[dict[str, Any]]
+) -> None:
+    """`install.sh` exists in this fixture; `install.py` does not.
+
+    A validate step still checking the hardcoded bash path would let this deploy
+    proceed and fail on the target instead.
+    """
+    session = DeploySession(FEATURE)
+
+    with pytest.raises(ValueError, match=r"Missing installer: .*scripts/install\.py"):
+        module_support.simple_root_installer_deploy(
+            root,
+            "beta",
+            False,
+            False,
+            session,
+            feature=FEATURE,
+            remote_root="/tmp/homelab-demo",
+            installer="scripts/install.py",
+            interpreter="python3",
+        )
+
+    assert staged == []
 
 
 def test_simple_root_installer_deploy_without_env_passes_none(

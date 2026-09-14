@@ -57,6 +57,62 @@ def test_validate_runs_ruff_and_pytest_when_available(monkeypatch, tmp_path: Pat
     assert any("pytest" in command for command in commands)
 
 
+def test_python_lint_targets_finds_the_library_and_every_ported_installer(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "lib" / "py" / "homelab_install").mkdir(parents=True)
+    for feature in ("zeta", "alpha"):
+        scripts = tmp_path / feature / "scripts"
+        scripts.mkdir(parents=True)
+        (scripts / "install.py").touch()
+    # A bash installer and a non-installer script must not be swept in: Ruff over an
+    # arbitrary repo script is a different, noisier decision than linting the ones
+    # that run as root on a target.
+    (tmp_path / "alpha" / "scripts" / "install.sh").touch()
+    (tmp_path / "alpha" / "scripts" / "helper.py").touch()
+
+    assert cli.python_lint_targets(tmp_path) == [
+        "lib/py",
+        "alpha/scripts/install.py",
+        "zeta/scripts/install.py",
+    ]
+
+
+def test_python_lint_targets_omits_paths_that_do_not_exist(tmp_path: Path) -> None:
+    """`compileall` hard-fails on a missing path, so an unconditional 'lib/py' would
+    break `validate` in any tree without the library."""
+    assert cli.python_lint_targets(tmp_path) == []
+
+
+def test_python_lint_targets_covers_the_live_repo_library() -> None:
+    assert "lib/py" in cli.python_lint_targets(ROOT)
+
+
+def test_validate_compiles_and_lints_the_installer_library(monkeypatch, tmp_path: Path) -> None:
+    """A syntax error in `lib/py/` or a `scripts/install.py` was previously invisible
+    to both gates — the target host would have found it, mid-deploy, as root."""
+    commands: list[list[str]] = []
+
+    monkeypatch.setattr(cli, "repo_root", lambda: tmp_path)
+    monkeypatch.setattr(cli, "_run_command", lambda command, cwd: commands.append(command))
+    monkeypatch.setattr(cli.shutil, "which", lambda name: None)
+
+    (tmp_path / "hosts.conf").write_text("{}\n", encoding="utf-8")
+    (tmp_path / "lib" / "py" / "homelab_install").mkdir(parents=True)
+    scripts = tmp_path / "demo" / "scripts"
+    scripts.mkdir(parents=True)
+    (scripts / "install.py").touch()
+
+    assert CliRunner().invoke(cli.main, ["validate"]).exit_code == 0
+
+    compileall = next(command for command in commands if "compileall" in command)
+    ruff = next(command for command in commands if "ruff" in command)
+    for command in (compileall, ruff):
+        assert "lib/py" in command
+        assert "demo/scripts/install.py" in command
+    assert ruff[-3:] == ["tests", "lib/py", "demo/scripts/install.py"]
+
+
 def test_validate_warns_when_pytest_missing(monkeypatch, tmp_path: Path) -> None:
     messages: list[str] = []
 

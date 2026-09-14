@@ -9,9 +9,15 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
+# The shared remote-installer library. On a target it is imported off PYTHONPATH,
+# set by `stage_and_run_remote_installer`; here it is imported in-process, which
+# freender/homelab-ops#31 decision 4 permits in this direction only (`src/homelab/`
+# and `tests/` may import `homelab_install`, never the reverse).
+PY_LIB = ROOT / "lib" / "py"
 
-if str(SRC) not in sys.path:
-    sys.path.insert(0, str(SRC))
+for path in (SRC, PY_LIB):
+    if str(path) not in sys.path:
+        sys.path.insert(0, str(path))
 
 
 @pytest.fixture(autouse=True)

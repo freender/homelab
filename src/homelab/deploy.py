@@ -22,6 +22,37 @@ def force_env(force: bool) -> dict[str, str]:
     return {"FORCE_UPDATE": "true" if force else "false"}
 
 
+# Where `upload_shared_libs(include_python=True)` puts `homelab_install`, relative
+# to a module's remote staging root. Stated once here; `ssh.py` builds the same
+# path from its own two components and nothing else may hardcode it.
+PYTHON_LIB_SUBDIR = "lib/py"
+
+
+def is_python_installer(installer: str) -> bool:
+    """Whether a staged installer path runs under `python3` rather than bash.
+
+    The suffix is the whole signal, and it is deliberately the only one: a module
+    declares `scripts/install.py` and everything downstream — uploading
+    `lib/py/`, setting `PYTHONPATH` — follows from that, with no second flag for
+    a module to set inconsistently.
+    """
+    return installer.endswith(".py")
+
+
+def python_lib_env(remote_root: str, env: dict[str, str] | None) -> dict[str, str]:
+    """Add the staged `lib/py` to `PYTHONPATH` without dropping a caller's own.
+
+    Prepending rather than overwriting keeps `homelab_install` winning against a
+    same-named module elsewhere on the path, which is the failure that would be
+    hardest to diagnose from a deploy log.
+    """
+    lib_path = f"{remote_root}/{PYTHON_LIB_SUBDIR}"
+    merged = dict(env or {})
+    existing = merged.get("PYTHONPATH")
+    merged["PYTHONPATH"] = f"{lib_path}:{existing}" if existing else lib_path
+    return merged
+
+
 @dataclass
 class DeploySession:
     module: str
@@ -64,10 +95,14 @@ def stage_and_run_remote_installer(
     interpreter: str | None = None,
     remote_subdirs: tuple[str, ...] = ("build", "lib"),
 ) -> None:
+    python_installer = is_python_installer(installer)
+
     print_sub("Staging bundle...")
     connection.prepare_remote_dir(remote_root, *remote_subdirs)
     connection.upload_paths(upload_paths)
-    connection.upload_shared_libs(root, remote_root)
+    connection.upload_shared_libs(root, remote_root, include_python=python_installer)
+    if python_installer:
+        env = python_lib_env(remote_root, env)
 
     print_sub("Running installer...")
     connection.run_remote_installer(

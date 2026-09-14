@@ -89,8 +89,10 @@ From `src/homelab/module_support.py` and `src/homelab/deploy.py`:
   validate, session.run/finish). Every module's `deploy()` should be a one-line
   call to this.
 - `simple_root_installer_deploy(...)` — for a module with no per-host build dir:
-  just stages `scripts/` and runs `install.sh` as root. Built on top of
+  just stages `scripts/` and runs the installer as root. Built on top of
   `run_module_deploy`; prefer it over hand-rolling when there's nothing to render.
+  Defaults to `installer="scripts/install.sh"`, `interpreter=None`; a ported
+  module passes `installer="scripts/install.py", interpreter="python3"`.
 
 ## Module boundary
 
@@ -108,14 +110,31 @@ then re-derives it in Bash will drift. Render once, pass it down.
 
 - `prepare_remote_dir(...)` — create/clean the staging dir
 - `upload_paths(...)` — push the module bundle
-- `upload_shared_libs(...)` — push `lib/utils.sh` + `lib/print.sh`
-- `run_remote_installer(...)` — execute `scripts/install.sh` on the host
+- `upload_shared_libs(...)` — push `lib/utils.sh` + `lib/print.sh`, plus
+  `lib/py/homelab_install/` when `include_python=True`
+- `run_remote_installer(...)` — execute the installer on the host
 
 Rules:
 - Stage module bundles in `/tmp/homelab-<module>/`
 - Remote `scripts/install.sh` should source staged `lib/utils.sh` when present
 - Preserve root-user checks where needed
 - Never hardcode host lists — derive from `hosts list --feature ...`
+
+### Bash or Python installer
+
+A module declares one installer and **the `.py` suffix is the entire switch.**
+`stage_and_run_remote_installer` reads it (`is_python_installer`) and from that alone
+uploads `lib/py/homelab_install/` and prepends `{remote_root}/lib/py` to `PYTHONPATH`.
+There is no second flag; a Python installer named without the suffix is staged without
+its library. The module must also pass `interpreter="python3"`.
+
+`lib/py/homelab_install/` is the stdlib-only shared library that replaces
+`lib/utils.sh` for ported modules (`homelab-ops#30`/`#31`). Hermetic in one direction:
+it must never import from `src/homelab/`, while `src/homelab/` and `tests/` may import
+it. `./validate` compiles and Ruff-lints `lib/py` and every `*/scripts/install.py`
+(`python_lint_targets` in `cli.py`), and coverage/CRAP score it like any other
+package. Porting rule: `install.py` added and `install.sh` deleted in the **same
+commit** — never both present.
 
 ## Implementing `paused`
 
