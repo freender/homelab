@@ -53,6 +53,7 @@ commit, and this paragraph has been stale before.
 | `tests/test_pbs_client_backup.py`, `tests/test_pve_backup.py`, `tests/test_pve_http_boot.py`, `tests/test_base_packages.py` | Module-specific behavior. |
 | `tests/test_pve_notifications.py`, `tests/test_pve_notifications_installer.py` | Plan normalization and the env it renders; the ported installer against an in-memory model of `/cluster/notifications` — converged config writes nothing, `set` removes properties the module no longer sets, stale routes go only after the new one exists, the Telegram token is shredded on every exit and never echoed in an error. |
 | `tests/test_ubuntu_setup_installer.py` | The ported `ubuntu-setup` installer: every refusal (staged sudoers, env, timezone, deploy user) before any write, a converged host touched not at all, the NIC-rule fallback MAC, sshd drop-in rollback, and the *effective* `sshd -T` config checked against the drop-in, since an earlier `sshd_config.d` file wins. |
+| `tests/test_pbs_client_backup_installer.py` | The ported `pbs-client-backup` installer: every refusal (env keys, flag typos, host type, staged credentials and keyfile, Ubuntu suite and vendored keyring, PVE client, `zfs`) before any write, a converged host touched not at all, the keyfile install/purge/leave-alone split, and a changed definition clearing the failed record without starting a backup. |
 | `tests/test_apt_upgrade.py` | `apt-upgrade`, the single apt mechanism for the fleet since `apt-security-updates` was archived. Pins `auto_reboot` against live inventory (only the offsite hosts opt in) and `SUPPORTED_TYPES` against every host declaring the feature. |
 
 If a new module can take a host off the network or off SSH — or can desynchronize
@@ -70,7 +71,7 @@ main way coverage arrives. `wsl_conf` has installer tests in
 11% / 37% assertion-backed). `op_secrets.py` and `ssh.py` are no longer thin —
 commit `6273be2` took them to 71% / 72%. Prefer adding to these over re-covering
 well-tested areas.
-The ~2,170 lines of still-unported `scripts/install.sh` have no execution
+The ~1,940 lines of still-unported `scripts/install.sh` have no execution
 coverage at all — ShellCheck only. A port moves a module's installer into
 in-process tests that assert behaviour rather than grepping the script for a
 string. **It does not move it into the coverage report or the CRAP gate:** tests

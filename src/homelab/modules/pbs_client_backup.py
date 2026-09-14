@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .. import backup_excludes, op_secrets
+from ..build import write_env_file
 from ..deploy import DeploySession, force_env, prepare_build_dir, stage_and_run_remote_installer
 from ..hosts import default_registry
 from ..module_support import (
@@ -28,6 +29,7 @@ from ..templates import render_template
 
 REMOTE_ROOT = "/tmp/homelab-pbs-client-backup"
 MODULE_DIR = "pbs-client-backup"
+INSTALLER = "scripts/install.py"
 SERVICE_NAME = "homelab-pbs-client-backup.service"
 TIMER_NAME = "homelab-pbs-client-backup.timer"
 # On-host location of the shared PBS client-side encryption keyfile. The same
@@ -105,7 +107,7 @@ def deploy(
 def validate(root: Path, hosts: list[str]) -> None:
     module_dir = root / MODULE_DIR
     for path in [
-        module_dir / "scripts" / "install.sh",
+        module_dir / INSTALLER,
         module_dir / "templates" / "homelab-pbs-client-backup.sh",
         module_dir / "templates" / SERVICE_NAME,
         module_dir / "templates" / TIMER_NAME,
@@ -358,10 +360,11 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
             connection,
             REMOTE_ROOT,
             upload_paths,
-            "scripts/install.sh",
+            INSTALLER,
             host,
             env=force_env(force),
             require_root=True,
+            interpreter="python3",
             remote_subdirs=("build", "configs", "lib", "scripts"),
         )
 
@@ -385,7 +388,29 @@ def build_host_bundle(root: Path, host: str, plan: BackupPlan, build_dir: Path) 
         build_dir / "homelab-pbs-client-backup.conf",
         plan,
     )
+    write_installer_env(build_dir / "env", plan)
     write_file_map(build_dir, FILE_SPECS)
+
+
+def write_installer_env(path: Path, plan: BackupPlan) -> None:
+    """What `scripts/install.py` acts on, kept apart from the runtime conf.
+
+    The conf is `source`d by the backup script; this is parsed by the installer,
+    which requires every key, so a truncated render fails the deploy instead of
+    reading as encryption off and not paused.
+    """
+    write_env_file(
+        path,
+        {
+            "HOST_TYPE": plan.host_type,
+            "DESTINATION_COUNT": len(destinations_for(plan)),
+            "NEEDS_ZFS": str(any(archive.dataset for archive in plan.archives)).lower(),
+            "ENCRYPT": str(plan.encrypt).lower(),
+            "PURGE_KEYFILE": str(plan.purge_keyfile).lower(),
+            "KEYFILE": KEYFILE_REMOTE_PATH,
+            "PAUSED": str(plan.paused).lower(),
+        },
+    )
 
 
 def write_config(path: Path, plan: BackupPlan) -> None:

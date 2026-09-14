@@ -6,7 +6,7 @@ most two units in play per module so far.
 `pause()`, `retire_unit()` and `run_once()` arrived with `apt-upgrade`
 (freender/homelab-ops#30), which is the first module to need any of them;
 `ensure_stopped()` and `recover_failed()` with `docker`; `mask()` with
-`ubuntu-setup`.
+`ubuntu-setup`; `reset_failed()` with `pbs-client-backup`.
 
 **`pause()` deliberately does not reproduce `homelab_apply_pause`'s return
 convention.** That helper returns 0 when paused and 1 when not, so every caller
@@ -82,6 +82,17 @@ def daemon_reload(ctx: InstallContext) -> None:
     rewritten unit without this runs the definition systemd still has cached.
     """
     _run(["systemctl", "daemon-reload"], check=True)
+
+
+def reset_failed(ctx: InstallContext, unit: str) -> None:
+    """Clear a unit's failed record, ignoring a unit that has none.
+
+    The second half of `homelab_reload_and_clear_failed`, arriving with
+    `pbs-client-backup`: after a changed definition is installed, the old failure
+    belongs to the old definition. Deliberately never starts the unit -- that is
+    `recover_failed`, and for a backup job it would start a backup from a deploy.
+    """
+    _run(["systemctl", "reset-failed", unit], check=False, capture_output=True)
 
 
 def ensure_stopped(ctx: InstallContext, unit: str) -> bool:
