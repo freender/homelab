@@ -473,13 +473,23 @@ def _run_ssh_config_installer(scripts_dir: Path, module_dir: Path, home: Path):
         "HOME": str(home),
         "PYTHONPATH": str(ROOT / "lib" / "py"),
     }
-    # Do not instrument the installer. site-packages ships a .pth that starts
-    # coverage in any child when COVERAGE_PROCESS_START is set, which pytest-cov
-    # sets under `./validate` and CI. The child would then write a statement-only
-    # data file next to the parent's branch-mode one, and the combine step at the
-    # end of the run fails outright with "Can't combine statement coverage data
-    # with branch data" -- after every test has already passed. The older
-    # subprocess tests in this file never hit it because they spawn `bash`.
+    # Do not instrument the installer subprocess.
+    #
+    # pytest-cov ships a `pytest-cov.pth` that starts coverage in any Python
+    # child when COV_CORE_SOURCE is set, which it sets for the whole session.
+    # The child reads branch mode from COV_CORE_BRANCH and enables it only for
+    # the literal string "enabled" (`pytest_cov/embed.py`), so the child writes a
+    # *statement-only* data file beside the parent's branch-mode one. pytest-cov
+    # runs with `data_suffix=True` and combines every `.coverage.*` at the end of
+    # the session, and that combine then fails outright with "Can't combine
+    # statement coverage data with branch data" -- after every test has passed.
+    #
+    # The older subprocess tests in this file never hit it because they spawn
+    # `bash`. Stripping the whole COV_CORE_* family is deliberate: the exact
+    # variables have changed across pytest-cov majors, and this repo's pinned
+    # version differs from the one CI resolves.
+    for name in [key for key in child_env if key.startswith("COV_CORE")]:
+        child_env.pop(name, None)
     for name in ("COVERAGE_PROCESS_START", "COVERAGE_PROCESS_CONFIG"):
         child_env.pop(name, None)
 
