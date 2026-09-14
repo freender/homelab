@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import os
 import shutil
-import subprocess
 from pathlib import Path
 
 import pytest
@@ -277,81 +275,6 @@ def test_crowdsec_is_reachable_as_plain_crowdsec_on_every_host(tmp_path: Path) -
             f"{host}: crowdsec needs the 'crowdsec' alias on net.internal; the "
             "shared fileConfig.yml hardcodes that name"
         )
-
-
-# --- installer guards (run the real install.sh against a fake docker) ---------
-
-
-def _installer_sandbox(tmp_path: Path, stacks: dict[str, bool]) -> tuple[Path, Path]:
-    """Stage install.sh with `stacks` mapping stack name -> appdata dir exists."""
-    sandbox = tmp_path / "sbx"
-    for sub in ("lib", "scripts", "bin", "appdata", "build/testhost/stacks"):
-        (sandbox / sub).mkdir(parents=True, exist_ok=True)
-    for lib in ("utils.sh", "print.sh"):
-        shutil.copy(ROOT / "lib" / lib, sandbox / "lib" / lib)
-    shutil.copy(ROOT / "docker-stacks" / "scripts" / "install.sh", sandbox / "scripts")
-
-    (sandbox / "build" / "testhost" / "env").write_text(
-        f"APPDATA_ROOT={sandbox}/appdata\nAPPLY_CHANGED=true\nMANAGED_STACK_COUNT={len(stacks)}\n"
-    )
-    for stack, dir_exists in stacks.items():
-        _write(
-            sandbox / "build" / "testhost" / "stacks" / stack / "compose.yml",
-            f"services:\n  {stack}:\n    image: busybox\n",
-        )
-        if dir_exists:
-            (sandbox / "appdata" / stack).mkdir(parents=True, exist_ok=True)
-
-    docker = sandbox / "bin" / "docker"
-    docker.write_text(
-        "#!/bin/bash\n"
-        '[[ "$1" == "compose" && "$*" == *"config --services"* ]] && { echo "$3"; exit 0; }\n'
-        '[[ "$1" == "ps" ]] && exit 0\n'
-        '[[ "$1" == "compose" && "$*" == *"up -d"* ]] && { echo up >> "$0.log"; exit 0; }\n'
-        "exit 0\n"
-    )
-    docker.chmod(0o755)
-    return sandbox, docker
-
-
-def _run_installer(sandbox: Path) -> subprocess.CompletedProcess[str]:
-    env = dict(os.environ, PATH=f"{sandbox / 'bin'}:{os.environ['PATH']}")
-    return subprocess.run(
-        ["bash", str(sandbox / "scripts" / "install.sh"), "testhost"],
-        capture_output=True,
-        text=True,
-        env=env,
-    )
-
-
-def test_installer_refuses_stack_with_no_appdata_directory(tmp_path: Path) -> None:
-    """A declared stack with no appdata dir means its config/.env/data are not on
-    this host -- almost always a placement moved without the data. Creating the
-    directory would start containers against no config."""
-    sandbox, _ = _installer_sandbox(tmp_path, {"ghost": False})
-    result = _run_installer(sandbox)
-
-    assert "does not exist on this host" in result.stdout
-    assert not (sandbox / "appdata" / "ghost").exists(), "installer created the directory"
-    assert "skipped=1" in result.stdout
-    assert result.returncode != 0
-
-
-def test_installer_still_applies_healthy_stacks_alongside_a_refused_one(tmp_path: Path) -> None:
-    sandbox, docker = _installer_sandbox(tmp_path, {"ghost": False, "real": True})
-    result = _run_installer(sandbox)
-
-    assert "applied=1" in result.stdout and "skipped=1" in result.stdout
-    assert (sandbox / "appdata" / "real" / "compose.yml").is_file()
-    assert not (sandbox / "appdata" / "ghost").exists()
-
-
-def test_installer_is_idempotent_when_nothing_changed(tmp_path: Path) -> None:
-    sandbox, docker = _installer_sandbox(tmp_path, {"real": True})
-    assert _run_installer(sandbox).returncode == 0
-    second = _run_installer(sandbox)
-    assert "changed=0" in second.stdout and "applied=0" in second.stdout
-    assert second.returncode == 0
 
 
 def test_real_repo_placement_is_consistent() -> None:

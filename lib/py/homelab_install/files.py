@@ -5,7 +5,7 @@ Grown demand-driven (freender/homelab-ops#31 decision 3, never a helper with no
 caller): `install`/`install_all` with keepalived, `remove` with apt-upgrade,
 `install_to`/`ensure_dir`/`backup=` with ssh-config and wsl-conf,
 `install_from` with vmalert-rules, `back_up` with pve-gpu-passthrough,
-`install_validated` with ubuntu-setup.
+`install_validated` with ubuntu-setup, `install_from(mode=None)` with docker-stacks.
 
 The three install entry points are one primitive with two lookups stacked in
 front, narrowest last:
@@ -86,7 +86,7 @@ def install_from(
     ctx: InstallContext,
     src: Path,
     dest: str,
-    mode: str,
+    mode: str | None,
     backup: bool = False,
     record: str | None = None,
 ) -> bool:
@@ -104,12 +104,20 @@ def install_from(
     `install_to` passes the file-map *name* instead, because that is what callers
     like `apt-upgrade` query with (`ctx.changes.touched("service", "timer")`) --
     recording the destination path there would silently break those checks.
+
+    `mode=None` leaves the mode alone: an existing file keeps its own, and a new
+    one gets the umask default. Added for `docker-stacks`, whose `compose.yml`
+    files are the one destination this library writes that a person also edits
+    on the host. They sit at 644, 664 and 775 across helm/neo/tower, and the bash
+    `cp` never touched any of them. Pinning a mode there would rewrite dozens of
+    files' permissions on a deploy that changed no content. The file is written
+    in place, so the owner is kept as well.
     """
     if not src.is_file():
         raise InstallError(f"missing source file: {src}")
 
     dest_path = Path(dest)
-    mode_bits = int(mode, 8)
+    mode_bits = int(mode, 8) if mode is not None else None
     unchanged = (
         not ctx.force_update
         and dest_path.is_file()
@@ -117,7 +125,8 @@ def install_from(
     )
 
     if unchanged:
-        dest_path.chmod(mode_bits)
+        if mode_bits is not None:
+            dest_path.chmod(mode_bits)
         log.sub(f"{dest} unchanged; skipping update")
         return False
 
@@ -125,7 +134,8 @@ def install_from(
     if backup:
         _backup(dest_path)
     dest_path.write_bytes(src.read_bytes())
-    dest_path.chmod(mode_bits)
+    if mode_bits is not None:
+        dest_path.chmod(mode_bits)
     log.sub(f"Updated {dest}")
     ctx.changes.record(record or dest)
     return True

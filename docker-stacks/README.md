@@ -34,7 +34,7 @@ docker-stacks/
   stacks/<stack>/compose.yml.j2       # uniform: rendered once per declaring host
   stacks/<stack>/<host>.yml           # host-specific: copied verbatim
   env-examples/<stack>.env.example    # doc-only: keys the host-local .env needs
-  scripts/install.sh                  # remote installer
+  scripts/install.py                  # remote installer
   build/<host>/env                    # generated (gitignored)
   build/<host>/stacks/<stack>/        # generated: assembled staging tree
 ```

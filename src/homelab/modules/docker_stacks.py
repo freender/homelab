@@ -12,6 +12,8 @@ from ..ssh import HostConnection, diff_many
 from ..templates import render_template
 
 REMOTE_ROOT = "/tmp/homelab-docker-stacks"
+INSTALLER = "scripts/install.py"
+INTERPRETER = "python3"
 DEFAULT_APPDATA_ROOT = "/mnt/cache/appdata"
 COMPOSE_NAME = "compose.yml"
 TEMPLATE_NAME = "compose.yml.j2"
@@ -96,7 +98,7 @@ def assemble_stacks(root: Path, host: str, stacks: list[str], out_dir: Path) -> 
     """Materialize every declared stack for a host into one staging tree.
 
     Shared templates are rendered with HOST; per-host files are copied verbatim.
-    Downstream (diff, staging, install.sh) sees a single uniform directory and
+    Downstream (diff, staging, install.py) sees a single uniform directory and
     does not care which source a stack came from.
     """
     origins: dict[str, str] = {}
@@ -298,10 +300,10 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
             (build_dir, f"{REMOTE_ROOT}/build/{host}"),
             (root / "docker-stacks" / "scripts", f"{REMOTE_ROOT}/scripts"),
         ],
-        "scripts/install.sh",
+        INSTALLER,
         host,
         env=force_env(force),
         require_root=True,
-        interpreter="bash",
+        interpreter=INTERPRETER,
         remote_subdirs=("build", "lib"),
     )

@@ -9,6 +9,6 @@ class InstallError(Exception):
     Callable by any module. The library itself never calls ``sys.exit`` -- only
     the ``run()`` harness does that, on the module's behalf, after catching this.
     A module may also catch ``InstallError`` itself and continue past one failed
-    item (`docker-stacks/scripts/install.sh:185` does exactly that in bash, one
+    item (`docker-stacks/scripts/install.py`'s `sync_stack` does exactly that: one
     stack failing does not abort the others).
     """

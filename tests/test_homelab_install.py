@@ -411,7 +411,7 @@ def test_ensure_raises_install_error_when_apt_fails(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """`InstallError`, not `CalledProcessError` — #31 requires a module to be able
-    to catch a single failed item and continue, as docker-stacks does in bash."""
+    to catch a single failed item and continue, as docker-stacks does."""
     _apt(monkeypatch, FakeApt(install_code=100))
 
     with pytest.raises(InstallError, match="failed to install packages: keepalived"):
@@ -1343,6 +1343,26 @@ def test_install_from_is_idempotent_on_matching_content(tmp_path: Path) -> None:
 
     assert files.install_from(ctx, src, str(dest), "644") is False
     assert ctx.changes.names() == ()
+
+
+def test_install_from_without_a_mode_keeps_the_destination_mode(tmp_path: Path) -> None:
+    """docker-stacks' `compose.yml` files are hand-edited on the host at 644, 664
+    and 775. `mode=None` must leave that alone on both the changed and the
+    unchanged path, where every other caller pins it."""
+    ctx = _ctx(tmp_path)
+    src = tmp_path / "compose.yml"
+    src.write_text("new\n", encoding="utf-8")
+    dest = tmp_path / "live.yml"
+    dest.write_text("old\n", encoding="utf-8")
+    dest.chmod(0o775)
+
+    assert files.install_from(ctx, src, str(dest), None) is True
+    assert dest.read_text(encoding="utf-8") == "new\n"
+    assert dest.stat().st_mode & 0o777 == 0o775
+
+    dest.chmod(0o664)
+    assert files.install_from(ctx, src, str(dest), None) is False
+    assert dest.stat().st_mode & 0o777 == 0o664
 
 
 def test_install_from_raises_on_a_missing_source(tmp_path: Path) -> None:
