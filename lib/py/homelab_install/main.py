@@ -48,7 +48,13 @@ def _parse_env_file(path: Path) -> dict[str, str]:
             continue
         key, sep, raw_value = raw_line.partition("=")
         if not sep or not key.strip():
-            raise InstallError(f"malformed env line in {path}:{line_number}: {raw_line!r}")
+            # The offending line is deliberately not echoed. Both failures here --
+            # no `=` at all, or an empty key -- leave no name worth reporting, so
+            # the line's *content* would be the only thing added, and env files
+            # can be secrets: `pve-postinstall-webhook` stages a live PDM API
+            # token through this path. A position is enough to find the line in a
+            # file the orchestrator just rendered.
+            raise InstallError(f"malformed env line in {path}:{line_number} (expected KEY=value)")
         tokens = shlex.split(raw_value)
         env[key.strip()] = tokens[0] if tokens else ""
     return env

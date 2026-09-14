@@ -32,7 +32,7 @@ REQUIRED_SCRIPTS = [
     "homelab-ssh-agent.service",
     "homelab-op-ssh-load.service",
     "homelab-op-ssh-load.timer",
-    "install.sh",
+    "install.py",
 ]
 
 
@@ -163,10 +163,11 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
                 (build_dir, f"{REMOTE_ROOT}/build/{host}"),
                 (env_path, f"{REMOTE_ROOT}/build/{host}/env"),
             ],
-            "scripts/install.sh",
+            "scripts/install.py",
             host,
             env=force_env(force),
             require_root=True,
+            interpreter="python3",
             remote_subdirs=("build", "lib", "scripts"),
         )
 

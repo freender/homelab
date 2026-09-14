@@ -42,7 +42,7 @@ def validate(root: Path) -> None:
             f"found {', '.join(actual_files) or 'none'}"
         )
 
-    installer = root / MODULE_DIR / "scripts" / "install.sh"
+    installer = root / MODULE_DIR / "scripts" / "install.py"
     if not installer.is_file():
         raise ValueError(f"missing installer: {installer}")
 
@@ -75,11 +75,18 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
     prepare_build_dir(build_dir)
 
     manages_alertmanager = alertmanager_enabled(root, host)
+    # The destinations go down the wire rather than being repeated in the
+    # installer: this module diffs against them before staging, so a second copy
+    # on the host could report a diff for one file and install another.
+    # ALERTMANAGER_DEST is sent even where Alertmanager is not managed, so the
+    # env file has one shape and `env.require` can check it unconditionally.
     write_env_file(
         build_dir / "env",
         {
             "ALERTMANAGER_ENABLED": "true" if manages_alertmanager else "false",
+            "ALERTMANAGER_DEST": REMOTE_ALERTMANAGER_CONFIG,
             "VMAGENT_CONTAINER": f"vmagent-{host}",
+            "VMAGENT_DEST": REMOTE_SCRAPE_CONFIG,
         },
     )
 
@@ -108,10 +115,10 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
             (configs_dir, f"{REMOTE_ROOT}/configs"),
             (root / MODULE_DIR / "scripts", f"{REMOTE_ROOT}/scripts"),
         ],
-        "scripts/install.sh",
+        "scripts/install.py",
         host,
         env=force_env(force),
         require_root=True,
-        interpreter="bash",
+        interpreter="python3",
         remote_subdirs=("build", "configs", "scripts", "lib"),
     )
