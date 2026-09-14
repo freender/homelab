@@ -24,6 +24,7 @@ left implicit, because a looser assertion passes the mutant that matters:
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -1438,3 +1439,53 @@ def test_dist_upgrade_raises_when_the_update_fails(tmp_path: Path, monkeypatch) 
 
     assert not any("dist-upgrade" in call for call in fake.apt_calls)
 
+
+# ---------------------------------------------------------------------------
+# Output ordering (found canarying pve-upgrade)
+# ---------------------------------------------------------------------------
+
+
+def test_run_line_buffers_stdout_so_child_output_stays_in_order(tmp_path: Path) -> None:
+    """An installer's stdout is an SSH pipe, which Python block-buffers.
+
+    A child process inherits the fd and writes straight to it, so without
+    line buffering every `log.*` line is held back while the child's output goes
+    out immediately -- apt's progress printing *above* the line announcing it.
+    Asserted end-to-end through a real subprocess, because the bug only exists
+    when stdout is a genuine pipe; capsys replaces it with an in-memory object
+    that cannot reproduce it.
+    """
+    script = tmp_path / "scripts" / "install.py"
+    script.parent.mkdir(parents=True)
+    script.write_text(
+        "import subprocess, sys\n"
+        f"sys.path.insert(0, {str(REPO_ROOT / 'lib' / 'py')!r})\n"
+        "from homelab_install import log, run\n"
+        "def install(ctx):\n"
+        "    log.action('before child')\n"
+        "    subprocess.run(['echo', 'child output'], check=False)\n"
+        "    log.action('after child')\n"
+        # require_root=False: this asserts buffering, and running the suite as
+        # root purely to satisfy an unrelated guard would be the wrong trade.
+        "run(install, 'Demo', require_root=False)\n",
+        encoding="utf-8",
+    )
+
+    # Same reasoning as test_safety_regressions.py: pytest-cov's .pth would start
+    # un-branched coverage in this child and break the end-of-session combine.
+    child_env = {key: value for key, value in os.environ.items() if "COV_CORE" not in key}
+    for name in ("COVERAGE_PROCESS_START", "COVERAGE_PROCESS_CONFIG"):
+        child_env.pop(name, None)
+
+    result = subprocess.run(
+        [sys.executable, str(script), "testhost"],
+        capture_output=True,
+        text=True,
+        check=True,
+        cwd=tmp_path,
+        env=child_env,
+    )
+    lines = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+
+    assert lines.index("==> before child") < lines.index("child output")
+    assert lines.index("child output") < lines.index("==> after child")

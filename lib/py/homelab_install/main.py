@@ -88,6 +88,18 @@ def run(
     "PVE Postinstall Webhook"), and the footer needs the same string `install_fn`
     already passes to `log.header()` at the top of its own run.
     """
+    # Python block-buffers stdout when it is not a tty, and an installer's stdout
+    # is always an SSH pipe. Child processes inherit the fd and write to it
+    # directly, so without this every `log.*` line is held in the buffer while
+    # the child's output goes out immediately -- `apt-get`'s progress appears
+    # *above* the "Running apt-get dist-upgrade" line that announced it.
+    #
+    # Found canarying pve-upgrade, the first ported module to run a child that
+    # writes to stdout at all. Bash never had it: `echo` writes immediately. It
+    # matters most exactly where it is worst -- a long dist-upgrade on a PVE node,
+    # where the operator is reading the log to know what is happening *now*.
+    sys.stdout.reconfigure(line_buffering=True)
+
     parser = argparse.ArgumentParser()
     parser.add_argument("host", nargs="?", default=socket.gethostname())
     parser.add_argument("--force", action="store_true")
