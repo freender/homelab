@@ -1604,3 +1604,131 @@ def test_recover_failed_reports_each_outcome_and_never_raises(
 def test_recover_failed_defaults_to_the_bash_timeout() -> None:
     utils = (Path(__file__).resolve().parents[1] / "lib" / "utils.sh").read_text(encoding="utf-8")
     assert f"HOMELAB_RECOVER_TIMEOUT:-{systemd.RECOVER_TIMEOUT_S}}}" in utils
+
+
+# ---------------------------------------------------------------------------
+# files.install_validated / systemd.mask
+# ---------------------------------------------------------------------------
+
+
+def _validated(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, code: int, current: str | None):
+    dest = tmp_path / "sshd_config.d" / "99-hardening.conf"
+    ctx = _ctx(tmp_path, **{"hardening.conf": (str(dest), "644")})
+    (ctx.build_dir / "hardening.conf").write_text("PasswordAuthentication no\n", encoding="utf-8")
+    if current is not None:
+        dest.parent.mkdir(parents=True)
+        dest.write_text(current, encoding="utf-8")
+        dest.chmod(0o600)
+    fake = FakeRun({("sshd", "-t"): code})
+    monkeypatch.setattr(files, "_run", fake)
+    return ctx, dest, fake
+
+
+def test_install_validated_skips_validation_for_an_unchanged_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An unchanged file was accepted by the run that wrote it."""
+    ctx, _dest, fake = _validated(tmp_path, monkeypatch, 0, "PasswordAuthentication no\n")
+
+    assert files.install_validated(ctx, "hardening.conf", ["sshd", "-t"]) is False
+    assert fake.calls == []
+
+
+def test_install_validated_keeps_a_change_the_validator_accepts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ctx, dest, fake = _validated(tmp_path, monkeypatch, 0, "PasswordAuthentication yes\n")
+
+    assert files.install_validated(ctx, "hardening.conf", ["sshd", "-t"]) is True
+    assert fake.calls == [["sshd", "-t"]]
+    assert dest.read_text(encoding="utf-8") == "PasswordAuthentication no\n"
+    assert dest.stat().st_mode & 0o777 == 0o644
+
+
+def test_install_validated_restores_the_previous_bytes_and_mode_on_rejection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ctx, dest, _fake = _validated(tmp_path, monkeypatch, 255, "PasswordAuthentication yes\n")
+
+    with pytest.raises(InstallError, match=r"sshd -t rejected .* \(exit 255\); rolled back"):
+        files.install_validated(ctx, "hardening.conf", ["sshd", "-t"])
+
+    assert dest.read_text(encoding="utf-8") == "PasswordAuthentication yes\n"
+    assert dest.stat().st_mode & 0o777 == 0o600
+
+
+def test_install_validated_removes_a_new_file_the_validator_rejects(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ctx, dest, _fake = _validated(tmp_path, monkeypatch, 1, None)
+
+    with pytest.raises(InstallError, match="rolled back"):
+        files.install_validated(ctx, "hardening.conf", ["sshd", "-t"])
+
+    assert not dest.exists()
+
+
+def test_install_validated_raises_on_an_unknown_file_map_entry(tmp_path: Path) -> None:
+    with pytest.raises(InstallError, match="missing file-map entry: nope"):
+        files.install_validated(_ctx(tmp_path), "nope", ["true"])
+
+
+class _UnitState(FakeRun):
+    """`systemctl is-enabled` prints its state on stdout, which `mask` reads."""
+
+    def __init__(self, codes: dict[tuple[str, ...], int], state: str) -> None:
+        super().__init__(codes)
+        self.state = state
+
+    def __call__(self, command: list[str], **kwargs) -> subprocess.CompletedProcess:
+        result = super().__call__(command, **kwargs)
+        if command[:2] == ["systemctl", "is-enabled"]:
+            result.stdout = f"{self.state}\n"
+        return result
+
+
+def test_mask_is_a_reported_no_op_for_a_unit_that_is_not_installed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake = _UnitState({("systemctl", "list-unit-files", "openipmi.service"): 1}, "not-found")
+    monkeypatch.setattr(systemd, "_run", fake)
+
+    assert systemd.mask(_ctx(tmp_path), "openipmi.service") is False
+    assert fake.calls == [["systemctl", "list-unit-files", "openipmi.service"]]
+
+
+def test_mask_leaves_a_masked_unit_alone_but_clears_its_failed_record(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake = _UnitState({}, "masked")
+    monkeypatch.setattr(systemd, "_run", fake)
+
+    assert systemd.mask(_ctx(tmp_path), "openipmi.service") is False
+    assert ["systemctl", "reset-failed", "openipmi.service"] in fake.calls
+    assert not any(call[1] in ("mask", "disable") for call in fake.calls)
+
+
+def test_mask_stops_masks_and_clears_an_enabled_unit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    fake = _UnitState({("systemctl", "disable", "--now", "openipmi.service"): 1}, "enabled")
+    monkeypatch.setattr(systemd, "_run", fake)
+
+    assert systemd.mask(_ctx(tmp_path), "openipmi.service", "no BMC") is True
+    tail = fake.calls[-3:]
+    assert tail == [
+        ["systemctl", "disable", "--now", "openipmi.service"],
+        ["systemctl", "mask", "openipmi.service"],
+        ["systemctl", "reset-failed", "openipmi.service"],
+    ]
+    assert "openipmi.service masked (no BMC)" in capsys.readouterr().out
+
+
+def test_mask_fails_when_masking_itself_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake = _UnitState({("systemctl", "mask", "openipmi.service"): 1}, "enabled")
+    monkeypatch.setattr(systemd, "_run", fake)
+
+    with pytest.raises(subprocess.CalledProcessError):
+        systemd.mask(_ctx(tmp_path), "openipmi.service")

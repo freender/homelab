@@ -12,6 +12,8 @@ from ..output import print_sub
 from ..ssh import HostConnection, build_files, diff_many
 
 REMOTE_ROOT = "/tmp/homelab-ubuntu-setup"
+INSTALLER = "scripts/install.py"
+INTERPRETER = "python3"
 NETWORK_MACS_SECRET = "network-macs"
 
 STATIC_CONFIG_FILES = ["99-inotify.conf", "sshd-hardening.conf"]
@@ -59,9 +61,7 @@ def validate(root: Path) -> None:
     scripts_dir = module_dir / "scripts"
 
     required_files = [
-        scripts_dir / "install.sh",
-        scripts_dir / "docker-install.sh",
-        scripts_dir / "pin-primary-nic.sh",
+        scripts_dir / "install.py",
         templates_dir / "10-network-names.rules",
         templates_dir / "sudoers",
         templates_dir / "zfs.conf",
@@ -153,10 +153,11 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
         connection,
         REMOTE_ROOT,
         upload_paths,
-        "scripts/install.sh",
+        INSTALLER,
         host,
         env=force_env(force),
         require_root=True,
+        interpreter=INTERPRETER,
         remote_subdirs=("build", "lib"),
     )
 

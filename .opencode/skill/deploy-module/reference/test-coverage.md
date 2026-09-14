@@ -52,6 +52,7 @@ commit, and this paragraph has been stale before.
 | `tests/test_disk_label_exporter.py`, `tests/test_hba_exporter.py`, `tests/test_reboot_exporter.py` | The three `metrics-exporters` textfile collectors (naming, label identity, behavior). |
 | `tests/test_pbs_client_backup.py`, `tests/test_pve_backup.py`, `tests/test_pve_http_boot.py`, `tests/test_base_packages.py` | Module-specific behavior. |
 | `tests/test_pve_notifications.py`, `tests/test_pve_notifications_installer.py` | Plan normalization and the env it renders; the ported installer against an in-memory model of `/cluster/notifications` — converged config writes nothing, `set` removes properties the module no longer sets, stale routes go only after the new one exists, the Telegram token is shredded on every exit and never echoed in an error. |
+| `tests/test_ubuntu_setup_installer.py` | The ported `ubuntu-setup` installer: every refusal (staged sudoers, env, timezone, deploy user) before any write, a converged host touched not at all, the NIC-rule fallback MAC, sshd drop-in rollback, and the *effective* `sshd -T` config checked against the drop-in, since an earlier `sshd_config.d` file wins. |
 | `tests/test_apt_upgrade.py` | `apt-upgrade`, the single apt mechanism for the fleet since `apt-security-updates` was archived. Pins `auto_reboot` against live inventory (only the offsite hosts opt in) and `SUPPORTED_TYPES` against every host declaring the feature. |
 
 If a new module can take a host off the network or off SSH — or can desynchronize
@@ -60,16 +61,16 @@ a cross-host quorum, VIP, or failover group — it belongs in the golden-render 
 ## Known thin spots
 
 Modules with no dedicated test, carried only by the dry-run smoke test:
-`ubuntu_setup`, `disk_spindown`, and the three `pve_*_patch` wrappers.
+`disk_spindown` and the three `pve_*_patch` wrappers.
 (`apt_upgrade`, `ssh_config`, `vmalert_rules`, `pve_upgrade`, `monitoring_config`,
-`pve_postinstall_webhook`, `apcupsd`, `docker`, `pve_interface_pinning` and `pve_notifications` have left this list as they were ported — porting is currently the
+`pve_postinstall_webhook`, `apcupsd`, `docker`, `pve_interface_pinning`, `pve_notifications` and `ubuntu_setup` have left this list as they were ported — porting is currently the
 main way coverage arrives. `wsl_conf` has installer tests in
 `test_homelab_install.py` but still no dedicated file.)
 `zfs_automation/{access,render,staging}.py` are likewise largely unasserted (7% /
 11% / 37% assertion-backed). `op_secrets.py` and `ssh.py` are no longer thin —
 commit `6273be2` took them to 71% / 72%. Prefer adding to these over re-covering
 well-tested areas.
-The ~3,120 lines of still-unported `scripts/install.sh` have no execution
+The ~2,640 lines of still-unported `scripts/install.sh` have no execution
 coverage at all — ShellCheck only. A port moves a module's installer into
 in-process tests that assert behaviour rather than grepping the script for a
 string. **It does not move it into the coverage report or the CRAP gate:** tests

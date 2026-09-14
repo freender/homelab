@@ -4,7 +4,8 @@ and the `backup_and_*` pair.
 Grown demand-driven (freender/homelab-ops#31 decision 3, never a helper with no
 caller): `install`/`install_all` with keepalived, `remove` with apt-upgrade,
 `install_to`/`ensure_dir`/`backup=` with ssh-config and wsl-conf,
-`install_from` with vmalert-rules, `back_up` with pve-gpu-passthrough.
+`install_from` with vmalert-rules, `back_up` with pve-gpu-passthrough,
+`install_validated` with ubuntu-setup.
 
 The three install entry points are one primitive with two lookups stacked in
 front, narrowest last:
@@ -23,6 +24,7 @@ looked up in either.
 from __future__ import annotations
 
 import filecmp
+import subprocess
 import time
 from pathlib import Path
 
@@ -34,6 +36,9 @@ from .errors import InstallError
 # a half-ported tree pruned to two different depths depending on which installer
 # last touched the file.
 BACKUP_KEEP_COUNT = 3
+
+# Indirection point for tests, same pattern as `homelab_install.systemd._run`.
+_run = subprocess.run
 
 
 def _backup(dest: Path) -> None:
@@ -151,6 +156,49 @@ def install(ctx: InstallContext, name: str, backup: bool = False) -> bool:
     except KeyError as exc:
         raise InstallError(f"missing file-map entry: {name}") from exc
     return install_to(ctx, name, dest, mode, backup=backup)
+
+
+def install_validated(ctx: InstallContext, name: str, validate: list[str]) -> bool:
+    """Install one file-map entry, then run `validate`; restore what was there if it fails.
+
+    The port of `install_build_file_validated`, for a config that cannot be
+    checked on its own. An `sshd_config.d` drop-in is only meaningful merged into
+    the whole config, so it has to be on disk before `sshd -t` can judge it --
+    and a rejected drop-in left in place locks the host out at the next sshd
+    restart, which for an offsite host means Pi-KVM.
+
+    Validates only when the install changed something, as the bash did: an
+    unchanged file was already accepted by the run that wrote it. A failure
+    restores the previous bytes and mode, or removes a file that did not exist,
+    then raises. The rolled-back change stays recorded, which is harmless because
+    the raise ends the run.
+    """
+    try:
+        dest, _mode = ctx.file_map[name]
+    except KeyError as exc:
+        raise InstallError(f"missing file-map entry: {name}") from exc
+
+    dest_path = Path(dest)
+    previous = dest_path.read_bytes() if dest_path.is_file() else None
+    previous_mode = dest_path.stat().st_mode & 0o7777 if previous is not None else 0
+
+    if not install(ctx, name):
+        return False
+
+    result = _run(validate, check=False)
+    if result.returncode == 0:
+        log.ok(f"{name} validated")
+        return True
+
+    if previous is None:
+        dest_path.unlink()
+    else:
+        dest_path.write_bytes(previous)
+        dest_path.chmod(previous_mode)
+    raise InstallError(
+        f"{' '.join(validate)} rejected {dest} (exit {result.returncode}); "
+        "rolled back to the previous file"
+    )
 
 
 def remove(ctx: InstallContext, dest: str, reason: str = "") -> bool:

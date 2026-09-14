@@ -5,7 +5,8 @@ most two units in play per module so far.
 
 `pause()`, `retire_unit()` and `run_once()` arrived with `apt-upgrade`
 (freender/homelab-ops#30), which is the first module to need any of them;
-`ensure_stopped()` and `recover_failed()` with `docker`.
+`ensure_stopped()` and `recover_failed()` with `docker`; `mask()` with
+`ubuntu-setup`.
 
 **`pause()` deliberately does not reproduce `homelab_apply_pause`'s return
 convention.** That helper returns 0 when paused and 1 when not, so every caller
@@ -200,3 +201,32 @@ def recover_failed(ctx: InstallContext, unit: str, timeout: int = RECOVER_TIMEOU
         log.warn(f"{unit} still failing after restart; left failed for alerting")
     else:
         log.warn(f"{unit} failed again and is waiting on its restart policy")
+
+
+def mask(ctx: InstallContext, unit: str, reason: str = "") -> bool:
+    """Mask a unit that must never run on this host, and clear its failed record.
+
+    The port of `homelab_mask_unwanted_service`. A unit that is not installed is
+    a reported no-op, since the distro default this exists for (`openipmi`, an LSB
+    script that fails at boot with no BMC) is absent on some hosts. Returns True
+    if it masked anything.
+
+    The stop before masking ignores its own failure, as the bash did: the unit
+    being masked is by definition one that does not work here, and `mask` is the
+    step whose failure matters.
+    """
+    if _run(["systemctl", "list-unit-files", unit], check=False, capture_output=True).returncode:
+        log.sub(f"{unit} not installed; nothing to mask")
+        return False
+
+    state = _run(["systemctl", "is-enabled", unit], check=False, capture_output=True, text=True)
+    if (state.stdout or "").strip() == "masked":
+        _run(["systemctl", "reset-failed", unit], check=False, capture_output=True)
+        log.sub(f"{unit} already masked")
+        return False
+
+    _run(["systemctl", "disable", "--now", unit], check=False, capture_output=True)
+    _run(["systemctl", "mask", unit], check=True)
+    _run(["systemctl", "reset-failed", unit], check=False, capture_output=True)
+    log.ok(f"{unit} masked{f' ({reason})' if reason else ''}")
+    return True
