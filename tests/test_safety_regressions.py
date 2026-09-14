@@ -468,14 +468,25 @@ def _stage_ssh_config_installer(tmp_path: Path) -> tuple[Path, Path]:
 
 
 def _run_ssh_config_installer(scripts_dir: Path, module_dir: Path, home: Path):
+    child_env = {
+        **os.environ,
+        "HOME": str(home),
+        "PYTHONPATH": str(ROOT / "lib" / "py"),
+    }
+    # Do not instrument the installer. site-packages ships a .pth that starts
+    # coverage in any child when COVERAGE_PROCESS_START is set, which pytest-cov
+    # sets under `./validate` and CI. The child would then write a statement-only
+    # data file next to the parent's branch-mode one, and the combine step at the
+    # end of the run fails outright with "Can't combine statement coverage data
+    # with branch data" -- after every test has already passed. The older
+    # subprocess tests in this file never hit it because they spawn `bash`.
+    for name in ("COVERAGE_PROCESS_START", "COVERAGE_PROCESS_CONFIG"):
+        child_env.pop(name, None)
+
     return subprocess.run(
         [sys.executable, str(scripts_dir / "install.py"), "ace"],
         cwd=module_dir,
-        env={
-            **os.environ,
-            "HOME": str(home),
-            "PYTHONPATH": str(ROOT / "lib" / "py"),
-        },
+        env=child_env,
         capture_output=True,
         text=True,
         check=False,
