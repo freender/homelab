@@ -1,28 +1,74 @@
-"""File-map install, the replacement for `install_build_file` / `install_file_map`.
+"""File install -- the replacement for `install_build_file` / `install_file_map`
+and the `backup_and_*` pair.
 
-Only what keepalived needs is here (freender/homelab-ops#31 decision 3: the
-library's gaps land demand-driven, never a helper with no caller). `has()` and
-`remove()` arrive with the modules that actually call them.
+Grown demand-driven (freender/homelab-ops#31 decision 3, never a helper with no
+caller): `install`/`install_all` with keepalived, `remove` with apt-upgrade,
+`install_to`/`ensure_dir`/`backup=` with ssh-config and wsl-conf.
+
+`install_to` is the primitive and `install` is the file-map lookup in front of
+it, rather than the other way round -- a destination that only exists on the
+host (`~/.ssh/config`) cannot be rendered into a map at build time.
 """
 
 from __future__ import annotations
 
 import filecmp
+import time
 from pathlib import Path
 
 from . import log
 from .context import InstallContext
 from .errors import InstallError
 
+# Matches `BACKUP_KEEP_COUNT` in lib/utils.sh. Changing it here alone would mean
+# a half-ported tree pruned to two different depths depending on which installer
+# last touched the file.
+BACKUP_KEEP_COUNT = 3
 
-def install(ctx: InstallContext, name: str) -> bool:
-    """Install one file-map entry from `ctx.build_dir`. Returns True if the
-    destination changed (new, or content/force differed from what was there)."""
-    try:
-        dest, mode = ctx.file_map[name]
-    except KeyError as exc:
-        raise InstallError(f"missing file-map entry: {name}") from exc
 
+def _backup(dest: Path) -> None:
+    """Copy `dest` aside as `<dest>.bak.<timestamp>`, keeping the newest few.
+
+    Same scheme and retention as `backup_config`/`prune_backup_history` in
+    lib/utils.sh, deliberately: these siblings are read by a human after a bad
+    deploy, and two naming schemes would mean looking in two places.
+
+    Note this is the sibling-file scheme, which AGENTS.md restricts to files that
+    are *not* inside an active include directory -- `~/.ssh/config` and
+    `/etc/wsl.conf` both qualify. A module writing into somewhere like
+    `/etc/apt/apt.conf.d/` must not use it, because the backup would itself be
+    parsed as config.
+    """
+    if not dest.exists():
+        return
+
+    backup = dest.with_name(f"{dest.name}.bak.{time.strftime('%Y%m%d%H%M%S')}")
+    backup.write_bytes(dest.read_bytes())
+
+    stale = sorted(dest.parent.glob(f"{dest.name}.bak.*"), reverse=True)[BACKUP_KEEP_COUNT:]
+    for path in stale:
+        path.unlink()
+
+
+def ensure_dir(ctx: InstallContext, path: str, mode: str) -> None:
+    """Create a directory and pin its mode. `~/.ssh` at 700 is the case that
+    needs it -- ssh silently ignores a config in a world-readable directory, so
+    creating it with the default umask would be a no-op deploy that looks fine."""
+    target = Path(path)
+    target.mkdir(parents=True, exist_ok=True)
+    target.chmod(int(mode, 8))
+
+
+def install_to(
+    ctx: InstallContext, name: str, dest: str, mode: str, backup: bool = False
+) -> bool:
+    """Install a build file to an explicit destination, bypassing the file map.
+
+    For destinations that are only knowable on the host. `ssh-config` writes
+    `~/.ssh/config`, and the orchestrator cannot render that into a map: it
+    knows `config.user` but not whether that user's home is `/home/<user>` or
+    `/root`, and guessing wrong writes a config ssh will never read.
+    """
     src = ctx.build_dir / name
     if not src.is_file():
         raise InstallError(f"missing build file: {src}")
@@ -41,11 +87,27 @@ def install(ctx: InstallContext, name: str) -> bool:
         return False
 
     dest_path.parent.mkdir(parents=True, exist_ok=True)
+    if backup:
+        _backup(dest_path)
     dest_path.write_bytes(src.read_bytes())
     dest_path.chmod(mode_bits)
     log.sub(f"Updated {dest}")
     ctx.changes.record(name)
     return True
+
+
+def install(ctx: InstallContext, name: str, backup: bool = False) -> bool:
+    """Install one file-map entry from `ctx.build_dir`. Returns True if the
+    destination changed (new, or content/force differed from what was there).
+
+    `backup=True` keeps a timestamped copy of what was there first, for the
+    files where being wrong locks you out of fixing it remotely.
+    """
+    try:
+        dest, mode = ctx.file_map[name]
+    except KeyError as exc:
+        raise InstallError(f"missing file-map entry: {name}") from exc
+    return install_to(ctx, name, dest, mode, backup=backup)
 
 
 def remove(ctx: InstallContext, dest: str, reason: str = "") -> bool:

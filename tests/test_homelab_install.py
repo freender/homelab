@@ -1183,3 +1183,97 @@ def test_installed_reports_an_absent_package_without_installing_it(
 
     assert packages.installed(_ctx(tmp_path), "unattended-upgrades") is False
     assert not any("install" in call for call in fake.calls)
+
+
+# ---------------------------------------------------------------------------
+# files.install_to / ensure_dir / backup= (ssh-config, wsl-conf)
+# ---------------------------------------------------------------------------
+
+
+def test_install_to_writes_an_explicit_destination_outside_the_file_map(tmp_path: Path) -> None:
+    """The destination that only exists on the host: `~/.ssh/config` cannot be
+    rendered into a map, because the orchestrator does not know the user's home."""
+    ctx = _ctx(tmp_path)
+    (ctx.build_dir / "config").write_text("Host ace\n", encoding="utf-8")
+    dest = tmp_path / "home" / ".ssh" / "config"
+
+    assert files.install_to(ctx, "config", str(dest), "600") is True
+    assert dest.read_text(encoding="utf-8") == "Host ace\n"
+    assert dest.stat().st_mode & 0o777 == 0o600
+
+
+def test_install_to_still_reports_no_change_when_content_matches(tmp_path: Path) -> None:
+    ctx = _ctx(tmp_path)
+    (ctx.build_dir / "config").write_text("same\n", encoding="utf-8")
+    dest = tmp_path / "config"
+    dest.write_text("same\n", encoding="utf-8")
+
+    assert files.install_to(ctx, "config", str(dest), "600") is False
+
+
+def test_ensure_dir_creates_with_the_mode_not_the_umask(tmp_path: Path) -> None:
+    ctx = _ctx(tmp_path)
+    target = tmp_path / "home" / ".ssh"
+
+    files.ensure_dir(ctx, str(target), "700")
+
+    assert target.is_dir()
+    assert target.stat().st_mode & 0o777 == 0o700
+
+
+def test_ensure_dir_tightens_an_existing_directory(tmp_path: Path) -> None:
+    """A ~/.ssh that already exists at 755 is exactly the case that makes ssh
+    ignore the config, so creating-if-absent is not enough."""
+    ctx = _ctx(tmp_path)
+    target = tmp_path / ".ssh"
+    target.mkdir(mode=0o755)
+
+    files.ensure_dir(ctx, str(target), "700")
+
+    assert target.stat().st_mode & 0o777 == 0o700
+
+
+def test_backup_keeps_a_timestamped_copy_of_what_was_there(tmp_path: Path) -> None:
+    ctx = _ctx(tmp_path)
+    (ctx.build_dir / "config").write_text("new\n", encoding="utf-8")
+    dest = tmp_path / "config"
+    dest.write_text("old\n", encoding="utf-8")
+
+    files.install_to(ctx, "config", str(dest), "600", backup=True)
+
+    backups = list(tmp_path.glob("config.bak.*"))
+    assert [path.read_text(encoding="utf-8") for path in backups] == ["old\n"]
+    assert dest.read_text(encoding="utf-8") == "new\n"
+
+
+def test_backup_is_skipped_when_there_is_nothing_to_back_up(tmp_path: Path) -> None:
+    ctx = _ctx(tmp_path)
+    (ctx.build_dir / "config").write_text("new\n", encoding="utf-8")
+
+    files.install_to(ctx, "config", str(tmp_path / "config"), "600", backup=True)
+
+    assert list(tmp_path.glob("config.bak.*")) == []
+
+
+def test_backup_history_is_pruned_to_the_same_depth_as_utils_sh(tmp_path: Path) -> None:
+    """A half-ported tree must not prune to two different depths depending on
+    which installer last touched the file."""
+    dest = tmp_path / "config"
+    dest.write_text("current\n", encoding="utf-8")
+    for index in range(6):
+        dest.with_name(f"config.bak.2026010100000{index}").write_text("x\n", encoding="utf-8")
+
+    files._backup(dest)
+
+    assert len(list(tmp_path.glob("config.bak.*"))) == files.BACKUP_KEEP_COUNT
+
+
+def test_install_is_unaffected_by_the_new_backup_default(tmp_path: Path) -> None:
+    """Every existing caller passes no `backup=`, and must keep not writing one."""
+    ctx = _ctx(tmp_path, thing=(str(tmp_path / "out"), "644"))
+    (ctx.build_dir / "thing").write_text("new\n", encoding="utf-8")
+    (tmp_path / "out").write_text("old\n", encoding="utf-8")
+
+    files.install(ctx, "thing")
+
+    assert list(tmp_path.glob("out.bak.*")) == []
