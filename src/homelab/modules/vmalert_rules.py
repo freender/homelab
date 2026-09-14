@@ -55,8 +55,8 @@ def validate(root: Path, hosts: list[str]) -> None:
             f"{MODULE_DIR} configs must be exactly {', '.join(RULE_FILES)}; "
             f"found {', '.join(actual_files) or 'none'}"
         )
-    if not (root / MODULE_DIR / "scripts" / "install.sh").is_file():
-        raise ValueError(f"missing installer: {root / MODULE_DIR / 'scripts' / 'install.sh'}")
+    if not (root / MODULE_DIR / "scripts" / "install.py").is_file():
+        raise ValueError(f"missing installer: {root / MODULE_DIR / 'scripts' / 'install.py'}")
 
     for host in hosts:
         if host != "helm":
@@ -84,10 +84,14 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
             (configs_dir, f"{REMOTE_ROOT}/rules"),
             (root / MODULE_DIR / "scripts", f"{REMOTE_ROOT}/scripts"),
         ],
-        "scripts/install.sh",
+        "scripts/install.py",
         host,
-        env=force_env(force),
+        # RULE_FILES is the single source of truth for the rule set: validate()
+        # asserts configs/ matches it exactly, and the installer asserts the
+        # staged bundle does too. The bash kept a second, hand-maintained list
+        # remotely, which had drifted to six of sixteen entries.
+        env={**force_env(force), "VMALERT_RULES": " ".join(RULE_FILES)},
         require_root=True,
-        interpreter="bash",
+        interpreter="python3",
         remote_subdirs=("rules", "scripts", "lib"),
     )

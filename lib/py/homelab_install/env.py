@@ -7,6 +7,10 @@ at all, so this arrives with it per #31 decision 3. `main._parse_env_file` has
 existed since #33 but nothing read its output: keepalived ships no env file and
 `base-packages` uses the process environment (`ctx.deploy_env`) instead.
 
+`deploy_flag` extends the same strictness to that second channel, added with
+`pve-upgrade`, which is the first module to read a *boolean* from it --
+`base-packages` reads only a string list, where a typo is self-evident.
+
 Two things the bash could not do, both of which it got wrong in the same place:
 
 * **Absent and empty are different.** `require_env` treated `-z "${!name}"` as
@@ -56,10 +60,13 @@ def text(ctx: InstallContext, name: str, default: str) -> str:
     return value or default
 
 
-def flag(ctx: InstallContext, name: str, default: bool = False) -> bool:
-    """Read a boolean. Absent or empty yields `default`; an unrecognised value
-    raises rather than being coerced to false."""
-    raw = ctx.env.get(name, "").strip()
+def _coerce_flag(name: str, raw: str, default: bool, source: str) -> bool:
+    """Shared by `flag` and `deploy_flag` so the two channels cannot drift apart.
+
+    The strictness is the whole point and it has to apply to both: a typo is no
+    less silent for having arrived on the command line than in the env file.
+    """
+    raw = raw.strip()
     if not raw:
         return default
     normalized = raw.lower()
@@ -67,4 +74,27 @@ def flag(ctx: InstallContext, name: str, default: bool = False) -> bool:
         return True
     if normalized in _FALSE:
         return False
-    raise InstallError(f"{name} must be true or false in {ctx.build_dir / 'env'}, got {raw!r}")
+    raise InstallError(f"{name} must be true or false in {source}, got {raw!r}")
+
+
+def flag(ctx: InstallContext, name: str, default: bool = False) -> bool:
+    """Read a boolean. Absent or empty yields `default`; an unrecognised value
+    raises rather than being coerced to false."""
+    return _coerce_flag(name, ctx.env.get(name, ""), default, str(ctx.build_dir / "env"))
+
+
+def deploy_flag(ctx: InstallContext, name: str, default: bool = False) -> bool:
+    """Read a boolean from the *process* environment rather than the env file.
+
+    For modules that have no build directory to render into, where
+    `run_remote_installer(env=...)` is the only channel the orchestrator has --
+    `pve-upgrade` and its `PAUSED` flag being the first (see `InstallContext` on
+    why the two channels stay distinct).
+
+    Separate from `flag` rather than a parameter on it because picking the wrong
+    channel is a silent bug, not a type error: `flag(ctx, "PAUSED")` against a
+    module with no env file returns the default forever, so a paused host would
+    quietly keep upgrading. Two named functions make the channel a choice the
+    caller has to spell out.
+    """
+    return _coerce_flag(name, ctx.deploy_env.get(name, ""), default, "the deploy environment")

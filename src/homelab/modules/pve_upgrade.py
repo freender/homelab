@@ -59,6 +59,8 @@ def deploy(
         session,
         feature=FEATURE,
         remote_root=REMOTE_ROOT,
+        installer="scripts/install.py",
+        interpreter="python3",
         env_for_host=env_for_host,
         dry_run_details=dry_run_details,
     )

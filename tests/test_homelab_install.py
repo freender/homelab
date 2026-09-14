@@ -96,11 +96,13 @@ class FakeApt:
         installs: bool = True,
         update_code: int = 0,
         install_code: int = 0,
+        dist_upgrade_code: int = 0,
     ) -> None:
         self.known = dict(known or {})
         self.installs = installs
         self.update_code = update_code
         self.install_code = install_code
+        self.dist_upgrade_code = dist_upgrade_code
         self.calls: list[list[str]] = []
         self.env: list[dict[str, str] | None] = []
 
@@ -122,6 +124,9 @@ class FakeApt:
                 for package in command[4:]:
                     self.known[package] = self.INSTALLED
             return subprocess.CompletedProcess(command, self.install_code)
+
+        if "dist-upgrade" in command:
+            return subprocess.CompletedProcess(command, self.dist_upgrade_code)
 
         raise AssertionError(f"unexpected command: {command}")
 
@@ -264,7 +269,7 @@ def test_install_raises_on_an_unknown_file_map_entry(tmp_path: Path) -> None:
 def test_install_raises_when_the_build_file_is_absent(tmp_path: Path) -> None:
     ctx = _ctx(tmp_path, **{"ghost.conf": (str(tmp_path / "out.conf"), "644")})
 
-    with pytest.raises(InstallError, match="missing build file"):
+    with pytest.raises(InstallError, match="missing source file"):
         files.install(ctx, "ghost.conf")
 
 
@@ -1277,3 +1282,159 @@ def test_install_is_unaffected_by_the_new_backup_default(tmp_path: Path) -> None
     files.install(ctx, "thing")
 
     assert list(tmp_path.glob("out.bak.*")) == []
+
+
+# ---------------------------------------------------------------------------
+# files.install_from (vmalert-rules)
+# ---------------------------------------------------------------------------
+
+
+def test_install_from_installs_a_source_outside_the_build_directory(tmp_path: Path) -> None:
+    """vmalert's rules are static configs staged to `<remote_root>/rules/`, so
+    there is no `build/<host>/` for them to be looked up in."""
+    ctx = _ctx(tmp_path)
+    src = tmp_path / "rules" / "ups.yml"
+    src.parent.mkdir()
+    src.write_text("groups: []\n", encoding="utf-8")
+    dest = tmp_path / "live" / "ups.yml"
+
+    assert files.install_from(ctx, src, str(dest), "644") is True
+    assert dest.read_text(encoding="utf-8") == "groups: []\n"
+    assert dest.stat().st_mode & 0o777 == 0o644
+
+
+def test_install_from_records_the_destination_by_default(tmp_path: Path) -> None:
+    ctx = _ctx(tmp_path)
+    src = tmp_path / "ups.yml"
+    src.write_text("a\n", encoding="utf-8")
+    dest = tmp_path / "live.yml"
+
+    files.install_from(ctx, src, str(dest), "644")
+
+    assert ctx.changes.names() == (str(dest),)
+
+
+def test_install_to_still_records_the_file_map_name_not_the_path(tmp_path: Path) -> None:
+    """The regression `install_from` could most easily have introduced.
+
+    `apt-upgrade` asks `ctx.changes.touched("service", "timer")` by file-map
+    *name*. Had `install_to` started recording the destination path instead, that
+    query would silently answer False forever -- a rewritten unit file and no
+    daemon-reload, which is the failure `daemon_reload` exists to prevent.
+    """
+    ctx = _ctx(tmp_path, service=(str(tmp_path / "out.service"), "644"))
+    (ctx.build_dir / "service").write_text("[Unit]\n", encoding="utf-8")
+
+    files.install(ctx, "service")
+
+    assert ctx.changes.touched("service") is True
+    assert ctx.changes.names() == ("service",)
+
+
+def test_install_from_is_idempotent_on_matching_content(tmp_path: Path) -> None:
+    """Every deploy of vmalert-rules runs this sixteen times; a false 'changed'
+    here would restart vmalert on every deploy and re-fire pending alerts."""
+    ctx = _ctx(tmp_path)
+    src = tmp_path / "ups.yml"
+    src.write_text("same\n", encoding="utf-8")
+    dest = tmp_path / "live.yml"
+    dest.write_text("same\n", encoding="utf-8")
+
+    assert files.install_from(ctx, src, str(dest), "644") is False
+    assert ctx.changes.names() == ()
+
+
+def test_install_from_raises_on_a_missing_source(tmp_path: Path) -> None:
+    ctx = _ctx(tmp_path)
+
+    with pytest.raises(InstallError, match="missing source file"):
+        files.install_from(ctx, tmp_path / "absent.yml", str(tmp_path / "out.yml"), "644")
+
+
+# ---------------------------------------------------------------------------
+# env.deploy_flag (pve-upgrade)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("raw", ["true", "TRUE", "Yes", "1", "on"])
+def test_deploy_flag_accepts_every_spelling_normalize_bool_does(
+    tmp_path: Path, raw: str
+) -> None:
+    assert env.deploy_flag(_ctx(tmp_path, deploy_env={"PAUSED": raw}), "PAUSED") is True
+
+
+@pytest.mark.parametrize("raw", ["false", "No", "0", "off"])
+def test_deploy_flag_accepts_every_false_spelling(tmp_path: Path, raw: str) -> None:
+    assert env.deploy_flag(_ctx(tmp_path, deploy_env={"PAUSED": raw}), "PAUSED") is False
+
+
+def test_deploy_flag_raises_on_a_typo_rather_than_silently_unpausing(tmp_path: Path) -> None:
+    """The bug this whole family exists to stop, in its most expensive form.
+
+    `PAUSED="ture"` under the bash comparison is false, so a host the operator
+    believed was paused would take a live dist-upgrade instead.
+    """
+    ctx = _ctx(tmp_path, deploy_env={"PAUSED": "ture"})
+
+    with pytest.raises(InstallError, match="must be true or false"):
+        env.deploy_flag(ctx, "PAUSED")
+
+
+def test_deploy_flag_reads_the_process_env_not_the_env_file(tmp_path: Path) -> None:
+    """The two channels must not be conflated: a module with no build directory
+    has nothing in `ctx.env`, so reading it would return the default forever."""
+    ctx = _ctx(tmp_path, env={"PAUSED": "true"}, deploy_env={"PAUSED": "false"})
+
+    assert env.deploy_flag(ctx, "PAUSED") is False
+    assert env.flag(ctx, "PAUSED") is True
+
+
+def test_deploy_flag_falls_back_to_the_default_when_absent(tmp_path: Path) -> None:
+    assert env.deploy_flag(_ctx(tmp_path), "PAUSED") is False
+    assert env.deploy_flag(_ctx(tmp_path), "PAUSED", default=True) is True
+
+
+# ---------------------------------------------------------------------------
+# packages.dist_upgrade (pve-upgrade)
+# ---------------------------------------------------------------------------
+
+
+def test_dist_upgrade_updates_before_upgrading(tmp_path: Path, monkeypatch) -> None:
+    """Order is the whole contract: a dist-upgrade against stale package lists
+    installs the versions of whenever `apt-get update` last ran."""
+    fake = _apt(monkeypatch, FakeApt())
+
+    packages.dist_upgrade(_ctx(tmp_path))
+
+    assert fake.apt_calls == [
+        ["apt-get", "update", "-qq"],
+        ["apt-get", "-y", "dist-upgrade"],
+    ]
+
+
+def test_dist_upgrade_is_noninteractive(tmp_path: Path, monkeypatch) -> None:
+    """A debconf prompt on a host nobody is watching hangs the deploy."""
+    fake = _apt(monkeypatch, FakeApt())
+
+    packages.dist_upgrade(_ctx(tmp_path))
+
+    assert fake.env[-1]["DEBIAN_FRONTEND"] == "noninteractive"
+
+
+def test_dist_upgrade_raises_when_the_upgrade_fails(tmp_path: Path, monkeypatch) -> None:
+    """The bug this port fixes: the bash called apt-get bare and reported a
+    failed dist-upgrade as a successful deploy."""
+    _apt(monkeypatch, FakeApt(dist_upgrade_code=100))
+
+    with pytest.raises(InstallError, match="dist-upgrade failed"):
+        packages.dist_upgrade(_ctx(tmp_path))
+
+
+def test_dist_upgrade_raises_when_the_update_fails(tmp_path: Path, monkeypatch) -> None:
+    fake = _apt(monkeypatch, FakeApt(update_code=1))
+
+    with pytest.raises(InstallError, match="apt-get update failed"):
+        packages.dist_upgrade(_ctx(tmp_path))
+
+    assert not any("dist-upgrade" in call for call in fake.apt_calls)
+

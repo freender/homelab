@@ -86,6 +86,37 @@ def installed(ctx: InstallContext, package: str) -> bool:
     return _installed(package)
 
 
+def dist_upgrade(ctx: InstallContext) -> None:
+    """Refresh package lists, then take every available upgrade.
+
+    Arrives with `pve-upgrade` (freender/homelab-ops#30), whose deploy action *is*
+    this call. Distinct from `ensure`: that converges a named set and is safe to
+    run anywhere, this changes whatever the host happens to have pending, which is
+    why its module is gated behind `--confirm-upgrade` and excluded from
+    `deploy all`.
+
+    Deliberately **not** `-q`, unlike `ensure`. This runs on demand with an
+    operator watching, and the package list it prints is the only record of what
+    a given upgrade actually changed -- `apt-upgrade`'s scheduled equivalent has
+    a systemd journal to fall back on, and this has nothing.
+
+    `_apt_update_once` is reused rather than an unconditional update: it is
+    already exactly once per installer process, and this module's process does
+    nothing else.
+    """
+    log.action("Running apt-get update")
+    _apt_update_once()
+
+    log.action("Running apt-get dist-upgrade")
+    result = _run(
+        ["apt-get", "-y", "dist-upgrade"],
+        check=False,
+        env={**os.environ, "DEBIAN_FRONTEND": "noninteractive"},
+    )
+    if result.returncode != 0:
+        raise InstallError(f"apt-get dist-upgrade failed (exit {result.returncode})")
+
+
 def ensure(ctx: InstallContext, *packages: str) -> None:
     """Install whichever of `packages` dpkg does not already report installed."""
     missing = [package for package in packages if not _installed(package)]

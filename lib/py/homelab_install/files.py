@@ -3,11 +3,21 @@ and the `backup_and_*` pair.
 
 Grown demand-driven (freender/homelab-ops#31 decision 3, never a helper with no
 caller): `install`/`install_all` with keepalived, `remove` with apt-upgrade,
-`install_to`/`ensure_dir`/`backup=` with ssh-config and wsl-conf.
+`install_to`/`ensure_dir`/`backup=` with ssh-config and wsl-conf,
+`install_from` with vmalert-rules.
 
-`install_to` is the primitive and `install` is the file-map lookup in front of
-it, rather than the other way round -- a destination that only exists on the
-host (`~/.ssh/config`) cannot be rendered into a map at build time.
+The three install entry points are one primitive with two lookups stacked in
+front, narrowest last:
+
+    install_from(src, dest)   arbitrary path  -> explicit destination
+    install_to(name, dest)    build/<host>/   -> explicit destination
+    install(name)             build/<host>/   -> file-map destination
+
+Built in that direction rather than the reverse because each outer layer assumes
+something the host may not support: a destination that only exists on the host
+(`~/.ssh/config`) cannot be rendered into a map at build time, and a static
+config staged outside `build/` (vmalert's rules) has no per-host directory to be
+looked up in either.
 """
 
 from __future__ import annotations
@@ -59,19 +69,31 @@ def ensure_dir(ctx: InstallContext, path: str, mode: str) -> None:
     target.chmod(int(mode, 8))
 
 
-def install_to(
-    ctx: InstallContext, name: str, dest: str, mode: str, backup: bool = False
+def install_from(
+    ctx: InstallContext,
+    src: Path,
+    dest: str,
+    mode: str,
+    backup: bool = False,
+    record: str | None = None,
 ) -> bool:
-    """Install a build file to an explicit destination, bypassing the file map.
+    """Install an arbitrary source path to an explicit destination.
 
-    For destinations that are only knowable on the host. `ssh-config` writes
-    `~/.ssh/config`, and the orchestrator cannot render that into a map: it
-    knows `config.user` but not whether that user's home is `/home/<user>` or
-    `/root`, and guessing wrong writes a config ssh will never read.
+    The deepest primitive: `install_to` is this with the source pinned to
+    `ctx.build_dir`, and `install` is the file-map lookup in front of that.
+
+    Added for `vmalert-rules` (freender/homelab-ops#30), the first module whose
+    sources are not rendered per-host at all. Its rules are static `configs/`
+    staged to `<remote_root>/rules/`, so there is no `build/<host>/` for them to
+    live in and nothing to look them up by.
+
+    `record` is the key written to `ctx.changes`, defaulting to `dest`.
+    `install_to` passes the file-map *name* instead, because that is what callers
+    like `apt-upgrade` query with (`ctx.changes.touched("service", "timer")`) --
+    recording the destination path there would silently break those checks.
     """
-    src = ctx.build_dir / name
     if not src.is_file():
-        raise InstallError(f"missing build file: {src}")
+        raise InstallError(f"missing source file: {src}")
 
     dest_path = Path(dest)
     mode_bits = int(mode, 8)
@@ -92,8 +114,21 @@ def install_to(
     dest_path.write_bytes(src.read_bytes())
     dest_path.chmod(mode_bits)
     log.sub(f"Updated {dest}")
-    ctx.changes.record(name)
+    ctx.changes.record(record or dest)
     return True
+
+
+def install_to(
+    ctx: InstallContext, name: str, dest: str, mode: str, backup: bool = False
+) -> bool:
+    """Install a build file to an explicit destination, bypassing the file map.
+
+    For destinations that are only knowable on the host. `ssh-config` writes
+    `~/.ssh/config`, and the orchestrator cannot render that into a map: it
+    knows `config.user` but not whether that user's home is `/home/<user>` or
+    `/root`, and guessing wrong writes a config ssh will never read.
+    """
+    return install_from(ctx, ctx.build_dir / name, dest, mode, backup=backup, record=name)
 
 
 def install(ctx: InstallContext, name: str, backup: bool = False) -> bool:
