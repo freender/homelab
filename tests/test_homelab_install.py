@@ -1510,3 +1510,97 @@ def test_enable_leaves_an_enabled_unit_alone(
     systemd.enable(_ctx(tmp_path), "r.service")
 
     assert fake.calls == [["systemctl", "is-enabled", "--quiet", "r.service"]]
+
+
+# ---------------------------------------------------------------------------
+# systemd.ensure_stopped / recover_failed
+# ---------------------------------------------------------------------------
+
+
+def test_ensure_stopped_reports_whether_it_acted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _units(monkeypatch, **{"systemctl__is-enabled__--quiet__t.timer": 0})
+    assert systemd.ensure_stopped(_ctx(tmp_path), "t.timer") is True
+
+    fake = _units(
+        monkeypatch,
+        **{
+            "systemctl__is-active__--quiet__t.timer": 3,
+            "systemctl__is-enabled__--quiet__t.timer": 1,
+        },
+    )
+    assert systemd.ensure_stopped(_ctx(tmp_path), "t.timer") is False
+    assert ["systemctl", "disable", "--now", "t.timer"] not in fake.calls
+
+
+def test_recover_failed_leaves_a_healthy_unit_alone(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake = _units(monkeypatch, **{"systemctl__is-failed__--quiet__u.service": 1})
+
+    systemd.recover_failed(_ctx(tmp_path), "u.service")
+
+    assert fake.calls == [["systemctl", "is-failed", "--quiet", "u.service"]]
+
+
+class FakeRecover:
+    """`is-failed` answers from state, so the post-start check sees what start did."""
+
+    def __init__(self, start: int | Exception, failed_after: bool) -> None:
+        self.start = start
+        self.failed = True
+        self.failed_after = failed_after
+        self.calls: list[list[str]] = []
+        self.kwargs: list[dict] = []
+
+    def __call__(self, command: list[str], **kwargs) -> subprocess.CompletedProcess:
+        self.calls.append(list(command))
+        self.kwargs.append(kwargs)
+        verb = command[1]
+        if verb == "is-failed":
+            return subprocess.CompletedProcess(command, 0 if self.failed else 1)
+        if verb == "reset-failed":
+            self.failed = False
+        if verb == "start":
+            if isinstance(self.start, Exception):
+                raise self.start
+            self.failed = self.failed_after
+            return subprocess.CompletedProcess(command, self.start)
+        return subprocess.CompletedProcess(command, 0)
+
+
+@pytest.mark.parametrize(
+    ("start", "failed_after", "message"),
+    [
+        (0, False, "u.service recovered"),
+        (1, True, "still failing after restart"),
+        (1, False, "waiting on its restart policy"),
+        (subprocess.TimeoutExpired(["systemctl"], 7), False, "did not settle within 7s"),
+    ],
+)
+def test_recover_failed_reports_each_outcome_and_never_raises(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    start: int | Exception,
+    failed_after: bool,
+    message: str,
+) -> None:
+    fake = FakeRecover(start, failed_after)
+    monkeypatch.setattr(systemd, "_run", fake)
+
+    systemd.recover_failed(_ctx(tmp_path), "u.service", timeout=7)
+
+    out = capsys.readouterr().out
+    assert message in out
+    outcomes = ("recovered", "still failing", "restart policy", "did not settle")
+    assert sum(outcome in out for outcome in outcomes) == 1
+    verbs = [call[1] for call in fake.calls]
+    assert verbs.index("reset-failed") < verbs.index("start")
+    assert fake.kwargs[verbs.index("start")]["timeout"] == 7
+
+
+def test_recover_failed_defaults_to_the_bash_timeout() -> None:
+    utils = (Path(__file__).resolve().parents[1] / "lib" / "utils.sh").read_text(encoding="utf-8")
+    assert f"HOMELAB_RECOVER_TIMEOUT:-{systemd.RECOVER_TIMEOUT_S}}}" in utils

@@ -4,7 +4,8 @@ rather than coalesced across the run (the design doc's proposal) -- there are at
 most two units in play per module so far.
 
 `pause()`, `retire_unit()` and `run_once()` arrived with `apt-upgrade`
-(freender/homelab-ops#30), which is the first module to need any of them.
+(freender/homelab-ops#30), which is the first module to need any of them;
+`ensure_stopped()` and `recover_failed()` with `docker`.
 
 **`pause()` deliberately does not reproduce `homelab_apply_pause`'s return
 convention.** That helper returns 0 when paused and 1 when not, so every caller
@@ -82,23 +83,37 @@ def daemon_reload(ctx: InstallContext) -> None:
     _run(["systemctl", "daemon-reload"], check=True)
 
 
+def ensure_stopped(ctx: InstallContext, unit: str) -> bool:
+    """Stop and disable one unit, leaving its unit file installed. Returns True
+    if it had to act.
+
+    The `ensure_running` counterpart, and the replacement for
+    `ensure_timer_state`'s disabled branch. Arrived with `docker`, where a host
+    without `docker.update_schedule` (ghost) must not keep an update timer that an
+    earlier config enabled. `pause` is this per unit plus its own heading.
+
+    Units already stopped are reported rather than skipped silently, because
+    "already stopped" and "I stopped it" are different facts when reading a
+    deploy log after an incident.
+    """
+    if _is_active(unit) or _is_enabled(unit):
+        _run(["systemctl", "disable", "--now", unit], check=True)
+        log.ok(f"{unit} stopped and disabled")
+        return True
+    log.sub(f"{unit} already stopped")
+    return False
+
+
 def pause(ctx: InstallContext, *units: str) -> None:
     """Stop and disable each unit, leaving its unit file installed.
 
     Pause is reversible, so the files stay: removing them is retirement, and a
-    resume would then have nothing to re-enable. Units already stopped are
-    reported rather than skipped silently, because "already stopped" and "I
-    stopped it" are different facts when reading a deploy log after an incident.
+    resume would then have nothing to re-enable.
     """
     log.action("Pausing")
     for unit in units:
-        if not unit:
-            continue
-        if _is_active(unit) or _is_enabled(unit):
-            _run(["systemctl", "disable", "--now", unit], check=True)
-            log.ok(f"{unit} stopped and disabled")
-        else:
-            log.sub(f"{unit} already stopped")
+        if unit:
+            ensure_stopped(ctx, unit)
 
 
 def retire_unit(ctx: InstallContext, unit: str, unit_path: str) -> bool:
@@ -139,3 +154,49 @@ def run_once(ctx: InstallContext, unit: str) -> None:
     result = _run(["systemctl", "start", unit], check=False)
     if result.returncode != 0:
         raise InstallError(f"{unit} failed (systemctl start exited {result.returncode})")
+
+
+# Matches `HOMELAB_RECOVER_TIMEOUT`'s default in lib/utils.sh.
+RECOVER_TIMEOUT_S = 300
+
+
+def _is_failed(unit: str) -> bool:
+    return _run(["systemctl", "is-failed", "--quiet", unit], check=False).returncode == 0
+
+
+def recover_failed(ctx: InstallContext, unit: str, timeout: int = RECOVER_TIMEOUT_S) -> None:
+    """Reset and restart a unit only if it is currently failed. Never fails the deploy.
+
+    The port of `homelab_recover_failed_units`, for units that fail from transient
+    external causes -- `homelab-docker-update.service` pulls images, and GHCR rate
+    limiting fails it with no file change for a redeploy to notice. `reset-failed`
+    also clears the `StartLimitBurst` limiter, without which systemd refuses the
+    start outright until the next timer fire.
+
+    A still-failing unit warns rather than raising: the unit's own run decides
+    the outcome, and leaving it failed keeps it visible to alerting.
+
+    Three outcomes where the bash reported two. It could not tell `timeout(1)`'s
+    124 from a start that failed, so any non-zero start that left the unit
+    not-failed read as "did not settle within 300s" -- but the docker unit is
+    `Restart=on-failure`, and a unit parked in `activating (auto-restart)` is also
+    not failed. Only a real timeout is reported as one here. The timeout kills the
+    `systemctl` client, never the job, same as `timeout(1)` did.
+    """
+    if not _is_failed(unit):
+        return
+
+    log.action(f"Recovering failed {unit}")
+    _run(["systemctl", "reset-failed", unit], check=False, capture_output=True)
+    try:
+        result = _run(["systemctl", "start", unit], check=False, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        log.warn(f"{unit} did not settle within {timeout}s; job still running")
+        return
+
+    if result.returncode == 0:
+        log.ok(f"{unit} recovered")
+    elif _is_failed(unit):
+        log.warn(f"{unit} still failing after restart; left failed for alerting")
+    else:
+        log.warn(f"{unit} failed again and is waiting on its restart policy")

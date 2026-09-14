@@ -47,6 +47,7 @@ commit, and this paragraph has been stale before.
 | `tests/test_zfs_normalize.py` | `zfs_automation/normalize.py` — validators, dataset-path helpers, snapshot plans and templates, migratable-LXC groups, dynamic-LXC source resolution, `source_private_keys` path confinement, `known_host_refresh` validation. Uses a real `HostRegistry` over a temp `hosts.conf`. This is where to add coverage for anything that turns `hosts.conf` into typed plans. |
 | `tests/test_zfs_replication_pause.py` | Pause semantics — per-job `paused` vs `enabled: false` in `zfs-automation`. Imports `normalize_replication_config` from the package's `__init__.py` re-export, not `.replication` directly — keep that export if you touch it. |
 | `tests/test_docker_stacks.py`, `tests/test_docker_start.py` | `docker-stacks` orchestration and the `docker` module's `start.sh`. |
+| `tests/test_docker.py` | The `docker` module's file map and ported installer: helper-script modes, update-timer on/off, failed-run recovery on redeploy. |
 | `tests/test_monitoring_config.py`, `tests/test_vmalert_rules.py` | Monitoring config rendering and vmalert rule validity. |
 | `tests/test_disk_label_exporter.py`, `tests/test_hba_exporter.py`, `tests/test_reboot_exporter.py` | The three `metrics-exporters` textfile collectors (naming, label identity, behavior). |
 | `tests/test_pbs_client_backup.py`, `tests/test_pve_backup.py`, `tests/test_pve_http_boot.py`, `tests/test_pve_notifications.py`, `tests/test_base_packages.py` | Module-specific behavior. |
@@ -60,14 +61,14 @@ a cross-host quorum, VIP, or failover group — it belongs in the golden-render 
 Modules with no dedicated test, carried only by the dry-run smoke test:
 `ubuntu_setup`, `disk_spindown`, and the three `pve_*_patch` wrappers.
 (`apt_upgrade`, `ssh_config`, `vmalert_rules`, `pve_upgrade`, `monitoring_config`,
-`pve_postinstall_webhook` and `apcupsd` have left this list as they were ported — porting is currently the
+`pve_postinstall_webhook`, `apcupsd` and `docker` have left this list as they were ported — porting is currently the
 main way coverage arrives. `wsl_conf` has installer tests in
 `test_homelab_install.py` but still no dedicated file.)
 `zfs_automation/{access,render,staging}.py` are likewise largely unasserted (7% /
 11% / 37% assertion-backed). `op_secrets.py` and `ssh.py` are no longer thin —
 commit `6273be2` took them to 71% / 72%. Prefer adding to these over re-covering
 well-tested areas.
-The ~3,360 lines of still-unported `scripts/install.sh` have no execution
+The ~3,240 lines of still-unported `scripts/install.sh` have no execution
 coverage at all — ShellCheck only. Each port moves a module out of that bucket
 and into real coverage: a `scripts/install.py` is scored by coverage and the CRAP
 gate like any other package, and is importable in-process, so its tests assert

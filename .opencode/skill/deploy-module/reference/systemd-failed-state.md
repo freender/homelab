@@ -49,8 +49,9 @@ transient fault -> `homelab_recover_failed_units`; unit going away ->
   warns rather than failing the deploy.
 
   Only for units that are cheap, idempotent, and safe to run off-schedule.
-  `docker` uses it for `homelab-docker-update.service` (a `docker compose up -d`
-  oneshot whose `start.sh` pulls images). Deliberately **not** used by
+  `docker` uses its Python port, `homelab_install.systemd.recover_failed`, for
+  `homelab-docker-update.service` (a `docker compose up -d` oneshot whose
+  `start.sh` pulls images); the bash helper currently has no caller. Deliberately **not** used by
   `pbs-client-backup` (multi-hour backup) or `apt-upgrade` (a start there means
   running a dist-upgrade at deploy time); those have daily timers that clear a
   stale failure on their next successful run, and keeping a possibly-real

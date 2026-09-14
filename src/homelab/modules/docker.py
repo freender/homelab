@@ -1,15 +1,18 @@
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 from ..build import render_file, write_env_file
 from ..deploy import DeploySession, force_env, prepare_build_dir, stage_and_run_remote_installer
 from ..hosts import default_registry
-from ..module_support import run_module_deploy
+from ..module_support import FileSpec, run_module_deploy, write_file_map
 from ..output import print_sub
 from ..ssh import HostConnection, build_files, diff_many
 
 REMOTE_ROOT = "/tmp/homelab-docker"
+INSTALLER = "scripts/install.py"
+INTERPRETER = "python3"
 
 HA_SWARM_DEFAULTS = {
     "tower": {
@@ -64,24 +67,28 @@ def swarm_env_values(host: str, swarm_defaults: dict) -> dict[str, str]:
     }
 
 
-def update_unit_diff_pairs(build_dir: Path) -> list[tuple[Path, str]]:
-    """The two systemd units, compared only when the update timer is configured."""
-    return [
-        (build_dir / UPDATE_SERVICE, f"/etc/systemd/system/{UPDATE_SERVICE}"),
-        (build_dir / UPDATE_TIMER, f"/etc/systemd/system/{UPDATE_TIMER}"),
-    ]
+# Copied from `docker/scripts/` into the build dir, so every installed file has a
+# `build/<host>/` source and one file map covers all of them.
+HELPER_SCRIPTS = ("start.sh", "rm.sh", "rebuild.sh", "docker-common.sh")
+
+# One owner for every destination: the dry-run diff and the file map the remote
+# installer reads are both derived from these, so they cannot disagree.
+HELPER_SPECS = (
+    FileSpec("start.sh", f"{REMOTE_APPDATA}/start.sh", "755"),
+    FileSpec("rm.sh", f"{REMOTE_APPDATA}/rm.sh", "755"),
+    FileSpec("rebuild.sh", f"{REMOTE_APPDATA}/rebuild.sh", "755"),
+    FileSpec("docker-common.sh", f"{REMOTE_APPDATA}/.homelab/docker/docker-common.sh", "755"),
+    FileSpec("env", f"{REMOTE_APPDATA}/.homelab/docker/env", "644"),
+)
+UPDATE_UNIT_SPECS = (
+    FileSpec(UPDATE_SERVICE, f"/etc/systemd/system/{UPDATE_SERVICE}", "644"),
+    FileSpec(UPDATE_TIMER, f"/etc/systemd/system/{UPDATE_TIMER}", "644"),
+)
 
 
-def script_diff_pairs(root: Path, build_dir: Path) -> list[tuple[Path, str]]:
-    """The appdata-resident helper scripts and env file every docker host gets."""
-    scripts = root / "docker" / "scripts"
-    return [
-        (scripts / "start.sh", f"{REMOTE_APPDATA}/start.sh"),
-        (scripts / "rm.sh", f"{REMOTE_APPDATA}/rm.sh"),
-        (scripts / "rebuild.sh", f"{REMOTE_APPDATA}/rebuild.sh"),
-        (scripts / "docker-common.sh", f"{REMOTE_APPDATA}/.homelab/docker/docker-common.sh"),
-        (build_dir / "env", f"{REMOTE_APPDATA}/.homelab/docker/env"),
-    ]
+def file_specs(update_timer: bool) -> tuple[FileSpec, ...]:
+    """The units are managed only where the update timer is configured."""
+    return HELPER_SPECS + (UPDATE_UNIT_SPECS if update_timer else ())
 
 
 def deploy(
@@ -107,13 +114,19 @@ def validate(root: Path, hosts: list[str]) -> None:
         file_path = templates_dir / file_name
         if not file_path.is_file():
             raise ValueError(f"missing required template: {file_path}")
+    scripts_dir = root / "docker" / "scripts"
+    for file_name in HELPER_SCRIPTS:
+        file_path = scripts_dir / file_name
+        if not file_path.is_file():
+            raise ValueError(f"missing required script: {file_path}")
 
 
-def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
-    registry = default_registry(root)
-    ssh_user = str(registry.get(host, "config.user"))
-    ssh_hostname = str(registry.get(host, "config.hostname", host))
-    update_schedule = str(registry.get(host, "docker.update_schedule", "")).strip()
+def render_build(root: Path, host: str, update_schedule: str) -> tuple[Path, tuple[FileSpec, ...]]:
+    """Render everything the installer reads into `docker/build/<host>/`.
+
+    An empty `update_schedule` means no update timer: its units are neither
+    rendered nor put in the file map.
+    """
     update_timer = bool(update_schedule)
     dependency_units: tuple[str, ...] = ()
 
@@ -140,12 +153,23 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
             **swarm_env_values(host, HA_SWARM_DEFAULTS.get(host, {})),
         },
     )
+    for name in HELPER_SCRIPTS:
+        shutil.copyfile(root / "docker" / "scripts" / name, build_dir / name)
+    specs = file_specs(update_timer)
+    write_file_map(build_dir, specs)
+    return build_dir, specs
+
+
+def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
+    registry = default_registry(root)
+    ssh_user = str(registry.get(host, "config.user"))
+    ssh_hostname = str(registry.get(host, "config.hostname", host))
+    update_schedule = str(registry.get(host, "docker.update_schedule", "")).strip()
+    build_dir, specs = render_build(root, host, update_schedule)
 
     connection = HostConnection(host, user=ssh_user, hostname=ssh_hostname)
     print_sub("Comparing with remote scripts...")
-    diff_pairs = script_diff_pairs(root, build_dir)
-    if update_timer:
-        diff_pairs += update_unit_diff_pairs(build_dir)
+    diff_pairs = [(build_dir / spec.build_name, spec.remote_path) for spec in specs]
     for message in diff_many(connection, diff_pairs):
         print_sub(message)
 
@@ -164,10 +188,10 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
             (build_dir, f"{REMOTE_ROOT}/build/{host}"),
             (root / "docker" / "scripts", f"{REMOTE_ROOT}/scripts"),
         ],
-        "scripts/install.sh",
+        INSTALLER,
         host,
         env=force_env(force),
         require_root=True,
-        interpreter="bash",
+        interpreter=INTERPRETER,
         remote_subdirs=("build", "lib"),
     )
