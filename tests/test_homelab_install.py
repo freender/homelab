@@ -30,7 +30,7 @@ from pathlib import Path
 
 import pytest
 
-from homelab_install import files, log, main, packages, systemd
+from homelab_install import env, files, log, main, packages, systemd
 from homelab_install.changes import ChangeSet
 from homelab_install.context import InstallContext
 from homelab_install.errors import InstallError
@@ -43,6 +43,7 @@ def _ctx(
     *,
     force: bool = False,
     deploy_env: dict[str, str] | None = None,
+    env: dict[str, str] | None = None,
     **file_map: tuple[str, str],
 ) -> InstallContext:
     build_dir = tmp_path / "build" / "testhost"
@@ -51,7 +52,7 @@ def _ctx(
         host="testhost",
         script_dir=tmp_path,
         build_dir=build_dir,
-        env={},
+        env=dict(env or {}),
         deploy_env=dict(deploy_env or {}),
         file_map=dict(file_map),
         force_update=force,
@@ -916,3 +917,269 @@ def test_the_library_imports_nothing_outside_the_standard_library() -> None:
 
 
 _STDLIB = sys.stdlib_module_names
+
+
+# ---------------------------------------------------------------------------
+# env — the build/<host>/env file (freender/homelab-ops#30, apt-upgrade)
+#
+# `_parse_env_file` has existed since #33 but nothing read its output until
+# apt-upgrade. These pin the two things the bash got wrong in the same place:
+# absent and empty were the same error, and an unparseable flag was `false`.
+# ---------------------------------------------------------------------------
+
+
+def test_require_accepts_an_env_file_that_has_every_name(tmp_path: Path) -> None:
+    env.require(_ctx(tmp_path, env={"AUTOUPGRADE": "true", "PAUSED": "false"}), "AUTOUPGRADE")
+
+
+def test_require_names_the_keys_that_are_absent(tmp_path: Path) -> None:
+    ctx = _ctx(tmp_path, env={"AUTOUPGRADE": "true"})
+
+    with pytest.raises(InstallError, match="missing: PAUSED, AUTO_REBOOT"):
+        env.require(ctx, "AUTOUPGRADE", "PAUSED", "AUTO_REBOOT")
+
+
+def test_require_separates_empty_from_absent(tmp_path: Path) -> None:
+    """Different causes: an empty value is a bad `hosts.conf` entry, an absent one
+    is a failed render. `require_env` in bash reported both as the same thing."""
+    ctx = _ctx(tmp_path, env={"PAUSED": "   "})
+
+    with pytest.raises(InstallError) as excinfo:
+        env.require(ctx, "PAUSED", "AUTOUPGRADE")
+
+    assert "empty: PAUSED" in str(excinfo.value)
+    assert "missing: AUTOUPGRADE" in str(excinfo.value)
+
+
+def test_require_points_at_the_env_file_it_read(tmp_path: Path) -> None:
+    """The locator is the useful half of the message -- which host's build dir."""
+    ctx = _ctx(tmp_path, env={})
+
+    with pytest.raises(InstallError, match=r"build/testhost/env"):
+        env.require(ctx, "PAUSED")
+
+
+@pytest.mark.parametrize("raw", ["true", "TRUE", "True", "yes", "1", "on"])
+def test_flag_accepts_every_true_spelling_normalize_bool_does(tmp_path: Path, raw: str) -> None:
+    assert env.flag(_ctx(tmp_path, env={"AUTOUPGRADE": raw}), "AUTOUPGRADE") is True
+
+
+@pytest.mark.parametrize("raw", ["false", "FALSE", "no", "0", "off"])
+def test_flag_accepts_every_false_spelling_normalize_bool_does(tmp_path: Path, raw: str) -> None:
+    assert env.flag(_ctx(tmp_path, env={"AUTOUPGRADE": raw}), "AUTOUPGRADE") is False
+
+
+def test_flag_raises_on_a_typo_rather_than_silently_disabling_the_feature(tmp_path: Path) -> None:
+    """`[[ "$AUTOUPGRADE" == "true" ]]` mapped `ture` to false and turned the
+    timer off with a fully successful deploy. This is the bug that motivated it."""
+    ctx = _ctx(tmp_path, env={"AUTOUPGRADE": "ture"})
+
+    with pytest.raises(InstallError, match="must be true or false"):
+        env.flag(ctx, "AUTOUPGRADE")
+
+
+def test_flag_falls_back_to_the_default_when_absent_or_empty(tmp_path: Path) -> None:
+    assert env.flag(_ctx(tmp_path, env={}), "AUTO_REBOOT") is False
+    assert env.flag(_ctx(tmp_path, env={}), "AUTO_REBOOT", default=True) is True
+    assert env.flag(_ctx(tmp_path, env={"AUTO_REBOOT": ""}), "AUTO_REBOOT", default=True) is True
+
+
+def test_text_returns_the_value_and_falls_back_when_blank(tmp_path: Path) -> None:
+    assert env.text(_ctx(tmp_path, env={"SCHEDULE": "*-*-* 04:00:00"}), "SCHEDULE", "x") == (
+        "*-*-* 04:00:00"
+    )
+    assert env.text(_ctx(tmp_path, env={"SCHEDULE": "  "}), "SCHEDULE", "fallback") == "fallback"
+    assert env.text(_ctx(tmp_path, env={}), "SCHEDULE", "fallback") == "fallback"
+
+
+# ---------------------------------------------------------------------------
+# files.remove — reversibility of a flag whose map entry is already gone
+# ---------------------------------------------------------------------------
+
+
+def test_remove_deletes_the_file_and_records_the_change(tmp_path: Path) -> None:
+    target = tmp_path / "53homelab-auto-reboot"
+    target.write_text("x\n", encoding="utf-8")
+    ctx = _ctx(tmp_path)
+
+    assert files.remove(ctx, str(target), reason="auto_reboot disabled") is True
+    assert not target.exists()
+    assert ctx.changes.any()
+
+
+def test_remove_is_a_no_op_when_the_file_is_already_gone(tmp_path: Path) -> None:
+    """Runs on every deploy to every host; "nothing to remove" is the normal case."""
+    ctx = _ctx(tmp_path)
+
+    assert files.remove(ctx, str(tmp_path / "absent")) is False
+    assert not ctx.changes.any()
+
+
+# ---------------------------------------------------------------------------
+# systemd.pause / retire_unit / run_once / daemon_reload
+# ---------------------------------------------------------------------------
+
+
+def _units(monkeypatch: pytest.MonkeyPatch, **codes: int) -> FakeRun:
+    fake = FakeRun({tuple(key.split("__")): value for key, value in codes.items()})
+    monkeypatch.setattr(systemd, "_run", fake)
+    return fake
+
+
+def test_pause_stops_and_disables_a_running_unit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake = _units(
+        monkeypatch,
+        **{
+            "systemctl__is-active__--quiet__t.timer": 0,
+            "systemctl__is-enabled__--quiet__t.timer": 0,
+        },
+    )
+
+    systemd.pause(_ctx(tmp_path), "t.timer")
+
+    assert ["systemctl", "disable", "--now", "t.timer"] in fake.calls
+
+
+def test_pause_leaves_the_unit_file_installed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Pause is reversible; removing the file is retirement, and a resume would
+    then have nothing to re-enable."""
+    fake = _units(monkeypatch, **{"systemctl__is-active__--quiet__t.timer": 0})
+
+    systemd.pause(_ctx(tmp_path), "t.timer")
+
+    assert not any("rm" in call[0] for call in fake.calls)
+    assert not any(call[:2] == ["systemctl", "daemon-reload"] for call in fake.calls)
+
+
+def test_pause_does_not_disable_a_unit_that_is_already_stopped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake = _units(
+        monkeypatch,
+        **{
+            "systemctl__is-active__--quiet__t.timer": 3,
+            "systemctl__is-enabled__--quiet__t.timer": 1,
+        },
+    )
+
+    systemd.pause(_ctx(tmp_path), "t.timer")
+
+    assert ["systemctl", "disable", "--now", "t.timer"] not in fake.calls
+
+
+def test_pause_handles_several_units(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    fake = _units(
+        monkeypatch,
+        **{
+            "systemctl__is-active__--quiet__a.timer": 0,
+            "systemctl__is-active__--quiet__b.service": 0,
+        },
+    )
+
+    systemd.pause(_ctx(tmp_path), "a.timer", "b.service")
+
+    assert ["systemctl", "disable", "--now", "a.timer"] in fake.calls
+    assert ["systemctl", "disable", "--now", "b.service"] in fake.calls
+
+
+def test_retire_unit_disables_removes_and_reloads(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    unit_path = tmp_path / "old.timer"
+    unit_path.write_text("[Unit]\n", encoding="utf-8")
+    fake = _units(monkeypatch, **{"systemctl__is-enabled__--quiet__old.timer": 0})
+
+    assert systemd.retire_unit(_ctx(tmp_path), "old.timer", str(unit_path)) is True
+    assert not unit_path.exists()
+    assert ["systemctl", "disable", "--now", "old.timer"] in fake.calls
+    assert ["systemctl", "daemon-reload"] in fake.calls
+
+
+def test_retire_unit_reports_no_change_when_there_was_nothing_to_retire(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The normal case on a host that never had the timer: no reload, no noise."""
+    fake = _units(
+        monkeypatch,
+        **{
+            "systemctl__is-enabled__--quiet__old.timer": 1,
+            "systemctl__is-active__--quiet__old.timer": 3,
+        },
+    )
+
+    assert systemd.retire_unit(_ctx(tmp_path), "old.timer", str(tmp_path / "absent")) is False
+    assert ["systemctl", "daemon-reload"] not in fake.calls
+
+
+def test_retire_unit_clears_failed_state_even_when_nothing_else_changed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A unit left in `failed` is matched by vmalert's SystemdUnitFailed rule, so
+    it would page for a unit this module just decided should not exist."""
+    fake = _units(
+        monkeypatch,
+        **{
+            "systemctl__is-enabled__--quiet__old.timer": 1,
+            "systemctl__is-active__--quiet__old.timer": 3,
+        },
+    )
+
+    systemd.retire_unit(_ctx(tmp_path), "old.timer", str(tmp_path / "absent"))
+
+    assert ["systemctl", "reset-failed", "old.timer"] in fake.calls
+
+
+def test_run_once_starts_the_unit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    fake = _units(monkeypatch)
+
+    systemd.run_once(_ctx(tmp_path), "job.service")
+
+    assert ["systemctl", "start", "job.service"] in fake.calls
+
+
+def test_run_once_raises_when_the_job_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`systemctl start` blocks on a Type=oneshot unit, so a non-zero exit is the
+    job failing. The bash called it bare and discarded that."""
+    _units(monkeypatch, **{"systemctl__start__job.service": 1})
+
+    with pytest.raises(InstallError, match="job.service failed"):
+        systemd.run_once(_ctx(tmp_path), "job.service")
+
+
+def test_daemon_reload_reloads(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    fake = _units(monkeypatch)
+
+    systemd.daemon_reload(_ctx(tmp_path))
+
+    assert fake.calls == [["systemctl", "daemon-reload"]]
+
+
+# ---------------------------------------------------------------------------
+# packages.installed — ask, do not ensure
+# ---------------------------------------------------------------------------
+
+
+def test_installed_reports_a_present_package_without_installing_anything(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    fake = _apt(monkeypatch, FakeApt({"unattended-upgrades": FakeApt.INSTALLED}))
+
+    assert packages.installed(_ctx(tmp_path), "unattended-upgrades") is True
+    assert not any("install" in call for call in fake.calls)
+
+
+def test_installed_reports_an_absent_package_without_installing_it(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """apt-upgrade must fail rather than install it: pulling unattended-upgrades
+    in would change the host's upgrade behaviour as a side effect of a reboot flag."""
+    fake = _apt(monkeypatch, FakeApt())
+
+    assert packages.installed(_ctx(tmp_path), "unattended-upgrades") is False
+    assert not any("install" in call for call in fake.calls)

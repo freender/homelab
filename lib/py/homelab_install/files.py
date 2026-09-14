@@ -48,6 +48,28 @@ def install(ctx: InstallContext, name: str) -> bool:
     return True
 
 
+def remove(ctx: InstallContext, dest: str, reason: str = "") -> bool:
+    """Delete a managed file that should no longer be on the host.
+
+    Takes an absolute destination rather than a file-map name, because the case
+    that needs it is a file the map no longer contains: `apt-upgrade` stops
+    rendering `auto-reboot.conf` the moment `auto_reboot` goes false, so at the
+    point the drop-in has to come off the host there is no map entry left to
+    look it up by. Removing it is what makes the flag reversible -- without this
+    a host keeps rebooting itself after the flag was taken away.
+
+    Returns True if a file was actually removed.
+    """
+    path = Path(dest)
+    if not path.exists():
+        return False
+
+    path.unlink()
+    log.sub(f"Removed {dest}{f' ({reason})' if reason else ''}")
+    ctx.changes.record(dest)
+    return True
+
+
 def install_all(ctx: InstallContext, exclude: tuple[str, ...] = ()) -> bool:
     """Install every file-map entry not in `exclude`. Returns True if anything
     changed. Replaces `install_file_map` and the per-call `rc=` dance."""

@@ -9,14 +9,96 @@ generated apt config to the keys u-u actually reads.
 
 from __future__ import annotations
 
+import contextlib
+import importlib.util
+import subprocess
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
 
 from homelab.hosts import default_registry
 from homelab.modules import apt_upgrade
+from homelab_install.context import InstallContext
+from homelab_install.errors import InstallError
 
 ROOT = Path(__file__).resolve().parents[1]
+INSTALLER_PATH = ROOT / "apt-upgrade" / "scripts" / "install.py"
+
+
+# ---------------------------------------------------------------------------
+# Loading the remote installer in-process.
+#
+# It is a script rather than a package module, so it is loaded by path. A fresh
+# load per test on purpose: these tests rebind module-level constants like
+# AUTO_REBOOT_PATH to a tmp_path, and a cached module would leak that into the
+# next test as a path that no longer exists.
+# ---------------------------------------------------------------------------
+
+
+def load_installer():
+    spec = importlib.util.spec_from_file_location("apt_upgrade_installer", INSTALLER_PATH)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def make_ctx(
+    tmp_path: Path,
+    env: dict[str, str] | None = None,
+    files: dict[str, str] | None = None,
+    file_map: dict[str, tuple[str, str]] | None = None,
+) -> InstallContext:
+    build_dir = tmp_path / "build"
+    build_dir.mkdir(parents=True, exist_ok=True)
+    for name, content in (files or {}).items():
+        (build_dir / name).write_text(content, encoding="utf-8")
+    return InstallContext(
+        host="testhost",
+        script_dir=tmp_path,
+        build_dir=build_dir,
+        env=env or {},
+        deploy_env={},
+        file_map=file_map or {},
+        force_update=False,
+    )
+
+
+@contextlib.contextmanager
+def fake_commands(
+    module, outputs: dict[tuple[str, ...], str], failing: tuple[tuple[str, ...], ...] = ()
+) -> Iterator[list[list[str]]]:
+    """Replace a module's `_run` indirection point. Matches on argv prefix, so a
+    test can pin `apt-config` without caring what else the installer shells out to."""
+    seen: list[list[str]] = []
+
+    def fake_run(command, **_kwargs):
+        seen.append(list(command))
+        for prefix, out in outputs.items():
+            if tuple(command[: len(prefix)]) == prefix:
+                return subprocess.CompletedProcess(command, 0, stdout=out, stderr="")
+        for prefix in failing:
+            if tuple(command[: len(prefix)]) == prefix:
+                return subprocess.CompletedProcess(command, 1, stdout="", stderr="")
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    original = module._run
+    module._run = fake_run
+    try:
+        yield seen
+    finally:
+        module._run = original
+
+
+@contextlib.contextmanager
+def installed_packages(installer, present: tuple[str, ...]) -> Iterator[None]:
+    original = installer.packages.installed
+    installer.packages.installed = lambda _ctx, name: name in present
+    try:
+        yield
+    finally:
+        installer.packages.installed = original
 
 # Hosts that carry an HA role or a singleton the rest of the homelab depends on:
 # tower is primary keepalived/Traefik and the media/storage host, helm is the
@@ -156,18 +238,102 @@ def test_env_carries_auto_reboot_to_the_installer(tmp_path: Path) -> None:
     assert "AUTO_REBOOT=false" in (tmp_path / "env").read_text(encoding="utf-8")
 
 
-def test_installer_removes_the_drop_in_when_disabled() -> None:
-    """The flag must be reversible: no drop-in left behind when it is taken away."""
-    text = (ROOT / "apt-upgrade" / "scripts" / "install.sh").read_text(encoding="utf-8")
+def test_installer_removes_the_drop_in_when_disabled(tmp_path: Path) -> None:
+    """The flag must be reversible: no drop-in left behind when it is taken away.
 
-    assert 'if [[ "$AUTO_REBOOT" != "true" ]]; then' in text
-    assert 'rm -f "$AUTO_REBOOT_PATH"' in text
-    # Pause must also stop the host rebooting itself.
-    assert 'AUTO_REBOOT="false"\n    apply_auto_reboot' in text
-    # Verify the resolved policy, not just the written file.
-    assert "apt-config dump Unattended-Upgrade::Automatic-Reboot" in text
-    # The reboot only happens at the end of a u-u run, so its timer is required.
-    assert "apt-daily-upgrade.timer" in text
+    Behavioural now that the installer is Python. The bash version of this test
+    could only match source text, which would have passed just as happily on a
+    `rm -f` that ran in an unreachable branch.
+    """
+    installer = load_installer()
+    dropin = tmp_path / "53homelab-auto-reboot"
+    dropin.write_text("Unattended-Upgrade::Automatic-Reboot \"true\";\n", encoding="utf-8")
+
+    ctx = make_ctx(tmp_path)
+    installer.AUTO_REBOOT_PATH = str(dropin)
+    installer.apply_auto_reboot(ctx, auto_reboot=False)
+
+    assert not dropin.exists()
+
+
+def test_installer_leaves_an_absent_drop_in_alone(tmp_path: Path) -> None:
+    """Removal has to be idempotent -- this runs on every deploy to every host,
+    and the overwhelmingly common case is that there is nothing to remove."""
+    installer = load_installer()
+    installer.AUTO_REBOOT_PATH = str(tmp_path / "never-existed")
+
+    installer.apply_auto_reboot(make_ctx(tmp_path), auto_reboot=False)
+
+
+def test_installer_refuses_auto_reboot_without_unattended_upgrades(tmp_path: Path) -> None:
+    """It supplies the reboot mechanism; installing it silently would change the
+    host's upgrade behaviour as a side effect of setting a reboot flag."""
+    installer = load_installer()
+    ctx = make_ctx(tmp_path)
+
+    with pytest.raises(InstallError, match="requires unattended-upgrades"):
+        with installed_packages(installer, present=()):
+            installer.apply_auto_reboot(ctx, auto_reboot=True)
+
+
+def test_installer_verifies_the_resolved_policy_not_the_file_it_wrote(tmp_path: Path) -> None:
+    """APT merges all of apt.conf.d in order, so a later fragment can still win.
+    Checking the file we just wrote would only confirm we wrote it."""
+    installer = load_installer()
+    installer.AUTO_REBOOT_PATH = str(tmp_path / "dropin")
+    ctx = make_ctx(
+        tmp_path,
+        files={"auto-reboot.conf": "// managed\n"},
+        file_map={"auto-reboot.conf": (str(tmp_path / "dropin"), "644")},
+    )
+
+    with installed_packages(installer, present=("unattended-upgrades",)):
+        overridden = 'Unattended-Upgrade::Automatic-Reboot "";'
+        with fake_commands(installer, {("apt-config",): overridden}):
+            with pytest.raises(InstallError, match="Automatic-Reboot is not true"):
+                installer.apply_auto_reboot(ctx, auto_reboot=True)
+
+
+def test_installer_requires_the_timer_that_would_actually_reboot(tmp_path: Path) -> None:
+    """auto_reboot only ever fires at the end of an unattended-upgrades run."""
+    installer = load_installer()
+    installer.AUTO_REBOOT_PATH = str(tmp_path / "dropin")
+    ctx = make_ctx(
+        tmp_path,
+        files={"auto-reboot.conf": "// managed\n"},
+        file_map={"auto-reboot.conf": (str(tmp_path / "dropin"), "644")},
+    )
+
+    with installed_packages(installer, present=("unattended-upgrades",)):
+        with fake_commands(
+            installer,
+            {("apt-config",): 'Unattended-Upgrade::Automatic-Reboot "true";'},
+            failing=(("systemctl", "is-enabled"),),
+        ):
+            with pytest.raises(InstallError, match="apt-daily-upgrade.timer is not enabled"):
+                installer.apply_auto_reboot(ctx, auto_reboot=True)
+
+
+def test_pause_stops_the_host_rebooting_itself(tmp_path: Path) -> None:
+    """Pause means the host stops acting on its own, and rebooting itself is
+    acting on its own. This is the assertion the bash test approximated by
+    grepping for `AUTO_REBOOT="false"` next to the call."""
+    installer = load_installer()
+    dropin = tmp_path / "53homelab-auto-reboot"
+    dropin.write_text("Unattended-Upgrade::Automatic-Reboot \"true\";\n", encoding="utf-8")
+    installer.AUTO_REBOOT_PATH = str(dropin)
+
+    ctx = make_ctx(
+        tmp_path,
+        env={"AUTOUPGRADE": "true", "PAUSED": "true", "AUTO_REBOOT": "true"},
+        files={"service": "[Unit]\n"},
+        file_map={"service": (str(tmp_path / "svc"), "644")},
+    )
+
+    with fake_commands(installer.systemd, {}):
+        installer.install(ctx)
+
+    assert not dropin.exists(), "a paused host must not keep the reboot drop-in"
 
 
 # ---------------------------------------------------------------------------
@@ -210,47 +376,48 @@ def _build_dir(tmp_path: Path, *names: str) -> Path:
     return build_dir
 
 
-def test_stage_uploads_the_scripts_dir_and_every_built_file(
+def test_stage_uploads_the_scripts_dir_and_the_per_host_build_dir(
     tmp_path: Path, staged: list[dict]
 ) -> None:
+    """`homelab_install.run()` resolves `build/<host>/`, so the directory is
+    staged whole rather than as a hand-maintained list of filenames. That list
+    was a second place the set of built files had to be kept in step."""
     build_dir = _build_dir(tmp_path, "service", "env", "timer", "auto-reboot.conf")
 
-    apt_upgrade.stage_and_install(tmp_path, build_dir, connection=object(), force=False)
+    apt_upgrade.stage_and_install(tmp_path, build_dir, connection=object(), host="ace", force=False)
 
-    remote_targets = [remote for _local, remote in staged[0]["upload_paths"]]
-    assert remote_targets == [
+    assert [remote for _local, remote in staged[0]["upload_paths"]] == [
         f"{apt_upgrade.REMOTE_ROOT}/scripts",
-        f"{apt_upgrade.REMOTE_ROOT}/build/service",
-        f"{apt_upgrade.REMOTE_ROOT}/build/env",
-        f"{apt_upgrade.REMOTE_ROOT}/build/timer",
-        f"{apt_upgrade.REMOTE_ROOT}/build/auto-reboot.conf",
+        f"{apt_upgrade.REMOTE_ROOT}/build/ace",
     ]
     assert staged[0]["upload_paths"][0][0] == tmp_path / "apt-upgrade" / "scripts"
+    assert staged[0]["upload_paths"][1][0] == build_dir
 
 
-def test_stage_omits_auto_reboot_conf_when_it_was_not_built(
+def test_stage_passes_the_host_so_the_installer_finds_its_build_dir(
     tmp_path: Path, staged: list[dict]
 ) -> None:
-    """Uploading a stale conf would re-enable a flag deploy_host declined to set."""
-    build_dir = _build_dir(tmp_path, "service", "env", "timer")
+    """`run()` defaults the host to `socket.gethostname()`, which is not the
+    inventory name for every host -- deepstone answers to `timemachine`. Left to
+    the default it would look for a build directory that was never staged."""
+    apt_upgrade.stage_and_install(
+        tmp_path, _build_dir(tmp_path, "env"), connection=object(), host="deepstone", force=False
+    )
 
-    apt_upgrade.stage_and_install(tmp_path, build_dir, connection=object(), force=False)
-
-    remote_targets = [remote for _local, remote in staged[0]["upload_paths"]]
-    assert f"{apt_upgrade.REMOTE_ROOT}/build/auto-reboot.conf" not in remote_targets
-    assert len(remote_targets) == 4
+    assert staged[0]["args"] == ("deepstone",)
 
 
 def test_stage_requires_root_and_makes_the_three_remote_subdirs(
     tmp_path: Path, staged: list[dict]
 ) -> None:
     apt_upgrade.stage_and_install(
-        tmp_path, _build_dir(tmp_path, "env"), connection=object(), force=False
+        tmp_path, _build_dir(tmp_path, "env"), connection=object(), host="ace", force=False
     )
 
     call = staged[0]
-    assert call["installer"] == "scripts/install.sh"
-    assert call["require_root"] is True  # install.sh writes to /etc and systemd
+    assert call["installer"] == apt_upgrade.INSTALLER
+    assert call["interpreter"] == apt_upgrade.INTERPRETER
+    assert call["require_root"] is True  # the installer writes to /etc and systemd
     assert call["remote_subdirs"] == ("build", "lib", "scripts")
 
 
@@ -259,8 +426,49 @@ def test_stage_passes_force_through_to_the_installer_env(
 ) -> None:
     build_dir = _build_dir(tmp_path, "env")
 
-    apt_upgrade.stage_and_install(tmp_path, build_dir, connection=object(), force=True)
-    apt_upgrade.stage_and_install(tmp_path, build_dir, connection=object(), force=False)
+    apt_upgrade.stage_and_install(tmp_path, build_dir, connection=object(), host="ace", force=True)
+    apt_upgrade.stage_and_install(tmp_path, build_dir, connection=object(), host="ace", force=False)
 
     assert staged[0]["env"] == apt_upgrade.force_env(True)
     assert staged[1]["env"] == apt_upgrade.force_env(False)
+
+
+def test_the_file_map_only_lists_files_this_host_actually_gets(tmp_path: Path) -> None:
+    """A map entry with no build file behind it makes `files.install` raise on a
+    missing source, so the conditional render and the conditional map entry have
+    to stay in step. This is where the old "is it uploaded?" guard now lives."""
+    build_dir = tmp_path / "build" / "ace"
+
+    apt_upgrade.build_unit_files(
+        build_dir,
+        autoupgrade="false",
+        schedule="*-*-* 09:00:00",
+        paused=False,
+        auto_reboot=False,
+        auto_reboot_time="now",
+    )
+
+    mapped = (build_dir / "file-map.conf").read_text(encoding="utf-8")
+    assert "auto-reboot.conf" not in mapped, "a flag deploy_host declined to set"
+    assert "timer" not in mapped
+    for name in [line.split("|")[0] for line in mapped.splitlines() if line.strip()]:
+        assert (build_dir / name).is_file(), f"{name} is mapped but was never rendered"
+
+
+def test_the_file_map_gains_the_timer_and_drop_in_when_both_are_on(tmp_path: Path) -> None:
+    build_dir = tmp_path / "build" / "cinci"
+
+    apt_upgrade.build_unit_files(
+        build_dir,
+        autoupgrade="true",
+        schedule="*-*-* 09:00:00",
+        paused=False,
+        auto_reboot=True,
+        auto_reboot_time="now",
+    )
+
+    mapped = (build_dir / "file-map.conf").read_text(encoding="utf-8")
+    assert f"/etc/systemd/system/{apt_upgrade.TIMER_NAME}" in mapped
+    assert apt_upgrade.AUTO_REBOOT_PATH in mapped
+    for name in [line.split("|")[0] for line in mapped.splitlines() if line.strip()]:
+        assert (build_dir / name).is_file(), f"{name} is mapped but was never rendered"
