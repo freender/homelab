@@ -74,6 +74,18 @@ def _apt_update_once() -> None:
     _apt_updated = True
 
 
+def installed(ctx: InstallContext, package: str) -> bool:
+    """Whether dpkg reports `package` installed, without installing anything.
+
+    `apt-upgrade` needs to *ask* rather than ensure: its `auto_reboot` flag
+    delegates the actual reboot to `unattended-upgrades`, so a host that opted in
+    without that package present must fail loudly instead of having it silently
+    installed underneath. Installing it would change the host's upgrade behaviour
+    as a side effect of setting a reboot flag.
+    """
+    return _installed(package)
+
+
 def ensure(ctx: InstallContext, *packages: str) -> None:
     """Install whichever of `packages` dpkg does not already report installed."""
     missing = [package for package in packages if not _installed(package)]

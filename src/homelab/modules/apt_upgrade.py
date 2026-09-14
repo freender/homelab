@@ -5,7 +5,13 @@ from pathlib import Path
 from ..build import write_env_file
 from ..deploy import DeploySession, force_env, prepare_build_dir, stage_and_run_remote_installer
 from ..hosts import HostLookupError, default_registry
-from ..module_support import feature_paused, normalize_bool, run_module_deploy
+from ..module_support import (
+    FileSpec,
+    feature_paused,
+    normalize_bool,
+    run_module_deploy,
+    write_file_map,
+)
 from ..output import print_sub
 from ..ssh import HostConnection
 
@@ -14,6 +20,17 @@ SERVICE_NAME = "homelab-apt-dist-upgrade.service"
 TIMER_NAME = "homelab-apt-dist-upgrade.timer"
 AUTO_REBOOT_PATH = "/etc/apt/apt.conf.d/53homelab-auto-reboot"
 DEFAULT_AUTO_REBOOT_TIME = "now"
+
+# Read in two places -- the `validate` installer glob and the staging call below --
+# so they are constants rather than two literals free to disagree (#36).
+INSTALLER = "scripts/install.py"
+INTERPRETER = "python3"
+
+# The destinations the bash installer hardcoded. They travel in `file-map.conf`
+# now, which is what lets the installer stay a list of names.
+SERVICE_SPEC = FileSpec("service", f"/etc/systemd/system/{SERVICE_NAME}", "644")
+TIMER_SPEC = FileSpec("timer", f"/etc/systemd/system/{TIMER_NAME}", "644")
+AUTO_REBOOT_SPEC = FileSpec("auto-reboot.conf", AUTO_REBOOT_PATH, "644")
 
 # Every Debian/Ubuntu-derived host type in the fleet. This was `ubuntu` alone
 # until the Proxmox stream was automated: pve (the four nodes), pbs (xur) and
@@ -95,7 +112,7 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
         )
         return
 
-    stage_and_install(root, build_dir, connection, force=force)
+    stage_and_install(root, build_dir, connection, host, force=force)
 
 
 def build_unit_files(
@@ -114,10 +131,13 @@ def build_unit_files(
     """
     prepare_build_dir(build_dir)
     write_service(build_dir, cleanup=False)
+    specs = [SERVICE_SPEC]
     if autoupgrade == "true":
         write_timer(build_dir, schedule)
+        specs.append(TIMER_SPEC)
     if auto_reboot:
         write_auto_reboot_conf(build_dir, auto_reboot_time)
+        specs.append(AUTO_REBOOT_SPEC)
     write_env(
         build_dir,
         autoupgrade=autoupgrade,
@@ -125,6 +145,10 @@ def build_unit_files(
         paused=paused,
         auto_reboot=auto_reboot,
     )
+    # Only the files this host actually gets. A map entry with no build file
+    # behind it would make `files.install` raise on a missing source, so the
+    # conditional render and the conditional map entry have to stay in step.
+    write_file_map(build_dir, tuple(specs))
 
 
 def diff_remote_units(
@@ -316,22 +340,31 @@ def write_env(
     )
 
 
-def stage_and_install(root: Path, build_dir: Path, connection: HostConnection, force: bool) -> None:
+def stage_and_install(
+    root: Path, build_dir: Path, connection: HostConnection, host: str, force: bool
+) -> None:
+    """Stage the whole build directory under `build/<host>/`.
+
+    The bash installer read `build/env` and `build/service` from a flat directory;
+    `homelab_install.run()` resolves `build/<host>/`, the same layout keepalived
+    already stages. Uploading the directory rather than an explicit file list also
+    carries `file-map.conf`, which is what tells the installer where each file
+    goes -- the destinations used to be hardcoded in the bash.
+    """
     upload_paths: list[tuple[Path, str]] = [
-        (root / "apt-upgrade" / "scripts", f"{REMOTE_ROOT}/scripts")
+        (root / "apt-upgrade" / "scripts", f"{REMOTE_ROOT}/scripts"),
+        (build_dir, f"{REMOTE_ROOT}/build/{host}"),
     ]
-    for file_name in ["service", "env", "timer", "auto-reboot.conf"]:
-        file_path = build_dir / file_name
-        if file_path.is_file():
-            upload_paths.append((file_path, f"{REMOTE_ROOT}/build/{file_name}"))
 
     stage_and_run_remote_installer(
         root,
         connection,
         REMOTE_ROOT,
         upload_paths,
-        "scripts/install.sh",
+        INSTALLER,
+        host,
         env=force_env(force),
         require_root=True,
         remote_subdirs=("build", "lib", "scripts"),
+        interpreter=INTERPRETER,
     )

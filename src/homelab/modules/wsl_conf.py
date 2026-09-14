@@ -11,6 +11,10 @@ from ..ssh import HostConnection, build_files, diff_many
 
 REMOTE_ROOT = "/tmp/homelab-wsl-conf"
 
+# Read by both the `validate` installer glob and the staging call below (#36).
+INSTALLER = "scripts/install.py"
+INTERPRETER = "python3"
+
 
 def deploy(
     root: Path,
@@ -79,9 +83,10 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
             (build_dir, f"{REMOTE_ROOT}/build/{host}"),
             (module_dir / "scripts", f"{REMOTE_ROOT}/scripts"),
         ],
-        "scripts/install.sh",
+        INSTALLER,
         host,
         env=force_env(force),
         require_root=True,
         remote_subdirs=("build", "lib"),
+        interpreter=INTERPRETER,
     )

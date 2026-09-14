@@ -73,7 +73,11 @@ def _parse_file_map(path: Path) -> dict[str, tuple[str, str]]:
     return file_map
 
 
-def run(install_fn: Callable[[InstallContext], None], module_name: str) -> None:
+def run(
+    install_fn: Callable[[InstallContext], None],
+    module_name: str,
+    require_root: bool = True,
+) -> None:
     """Parse `[host] [--force]`, build the `InstallContext`, call `install_fn`,
     and turn its outcome into the same exit codes and footer `install.sh` gave.
 
@@ -89,7 +93,14 @@ def run(install_fn: Callable[[InstallContext], None], module_name: str) -> None:
     parser.add_argument("--force", action="store_true")
     args = parser.parse_args()
 
-    if os.geteuid() != 0:
+    # `require_root=False` is not "root optional" -- it is for the modules whose
+    # target is the *deploy user's* own home, where running as root would write
+    # root-owned files into it and break the next non-root deploy. `ssh-config`
+    # installs `~/.ssh/config` and is the first such caller; its orchestrator
+    # already stages with `require_root=False`. Everything else stays root-only,
+    # since the failure it catches is a silent one: writing to /etc as a normal
+    # user fails per-file, late, after some of the bundle has already applied.
+    if require_root and os.geteuid() != 0:
         log.error("must be run as root")
         sys.exit(1)
 

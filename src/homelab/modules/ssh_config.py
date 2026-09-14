@@ -14,6 +14,10 @@ from ..output import print_sub
 from ..ssh import HostConnection, build_files, offline_diff, offline_mode
 
 REMOTE_ROOT = "/tmp/homelab-ssh-config"
+
+# Read by both the `validate` installer glob and the staging call below (#36).
+INSTALLER = "scripts/install.py"
+INTERPRETER = "python3"
 IDENTITY_FILES = {
     "homelab": "id_ed25519",
     "infra": "id_ed25519_pve",
@@ -218,9 +222,10 @@ def stage_and_install(
             (build_dir, f"{REMOTE_ROOT}/build/{host}"),
             (root / "ssh-config" / "scripts", f"{REMOTE_ROOT}/scripts"),
         ],
-        "scripts/install.sh",
+        INSTALLER,
         host,
         env=force_env(force),
         require_root=False,
         remote_subdirs=("build", "lib"),
+        interpreter=INTERPRETER,
     )
