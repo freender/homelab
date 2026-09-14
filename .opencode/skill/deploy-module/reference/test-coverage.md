@@ -61,15 +61,18 @@ a cross-host quorum, VIP, or failover group — it belongs in the golden-render 
 Modules with no dedicated test, carried only by the dry-run smoke test:
 `ubuntu_setup`, `disk_spindown`, and the three `pve_*_patch` wrappers.
 (`apt_upgrade`, `ssh_config`, `vmalert_rules`, `pve_upgrade`, `monitoring_config`,
-`pve_postinstall_webhook`, `apcupsd` and `docker` have left this list as they were ported — porting is currently the
+`pve_postinstall_webhook`, `apcupsd`, `docker` and `pve_interface_pinning` have left this list as they were ported — porting is currently the
 main way coverage arrives. `wsl_conf` has installer tests in
 `test_homelab_install.py` but still no dedicated file.)
 `zfs_automation/{access,render,staging}.py` are likewise largely unasserted (7% /
 11% / 37% assertion-backed). `op_secrets.py` and `ssh.py` are no longer thin —
 commit `6273be2` took them to 71% / 72%. Prefer adding to these over re-covering
 well-tested areas.
-The ~3,240 lines of still-unported `scripts/install.sh` have no execution
-coverage at all — ShellCheck only. Each port moves a module out of that bucket
-and into real coverage: a `scripts/install.py` is scored by coverage and the CRAP
-gate like any other package, and is importable in-process, so its tests assert
-behaviour rather than grepping the script for a string.
+The ~3,120 lines of still-unported `scripts/install.sh` have no execution
+coverage at all — ShellCheck only. A port moves a module's installer into
+in-process tests that assert behaviour rather than grepping the script for a
+string. **It does not move it into the coverage report or the CRAP gate:** tests
+load `<module>/scripts/install.py` by file path under an ad-hoc module name, and
+pytest's `--cov` names only `homelab` and `homelab_install`, so no ported
+installer is measured. Measure one by hand with
+`coverage run --include='*/<module>/scripts/install.py' -m pytest --no-cov tests/test_<module>.py`.

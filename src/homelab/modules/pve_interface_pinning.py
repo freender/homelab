@@ -18,6 +18,10 @@ from ..output import print_sub
 from ..ssh import HostConnection, build_files, diff_many
 
 REMOTE_ROOT = "/tmp/homelab-pve-interface-pinning"
+INSTALLER = "scripts/install.py"
+INTERPRETER = "python3"
+WOL_SERVICE = "homelab-interface-wol.service"
+WOL_CONFIG = "interface-wol.conf"
 MAC_RE = re.compile(r"^[0-9a-f]{2}(:[0-9a-f]{2}){5}$")
 IFACE_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,15}$")
 
@@ -49,7 +53,7 @@ def deploy(
 
 def validate(root: Path, hosts: list[str]) -> None:
     registry = default_registry(root)
-    script = root / "pve-interface-pinning" / "scripts" / "install.sh"
+    script = root / "pve-interface-pinning" / INSTALLER
     if not script.is_file():
         raise ValueError(f"missing installer: {script}")
     for host in hosts:
@@ -154,10 +158,11 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
             (artifacts.build_dir, f"{REMOTE_ROOT}/build/{host}"),
             (root / "pve-interface-pinning" / "scripts", f"{REMOTE_ROOT}/scripts"),
         ],
-        "scripts/install.sh",
+        INSTALLER,
         host,
         env=force_env(force),
         require_root=True,
+        interpreter=INTERPRETER,
         remote_subdirs=("build", "lib"),
     )
 
@@ -306,37 +311,27 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
     prepare_build_dir(build_dir)
 
     file_specs: list[FileSpec] = []
-    link_names: list[str] = []
     for pin in pins:
         build_name = f"10-homelab-{pin.name}.link"
         (build_dir / build_name).write_text(link_file(pin, host), encoding="utf-8")
         file_specs.append(FileSpec(build_name, f"/etc/systemd/network/{build_name}"))
-        link_names.append(build_name)
 
     wol_pins = [pin for pin in pins if pin.wake_on_lan]
-    (build_dir / "interface-wol.conf").write_text(
+    (build_dir / WOL_CONFIG).write_text(
         "".join(f"{pin.name}|{pin.mac}\n" for pin in wol_pins),
         encoding="utf-8",
     )
     (build_dir / "homelab-interface-wol").write_text(wol_script(), encoding="utf-8")
-    (build_dir / "homelab-interface-wol.service").write_text(
+    (build_dir / WOL_SERVICE).write_text(
         wol_service(),
-        encoding="utf-8",
-    )
-    (build_dir / "link-files.conf").write_text(
-        "".join(f"{name}\n" for name in link_names),
         encoding="utf-8",
     )
 
     file_specs.extend(
         [
-            FileSpec("interface-wol.conf", "/etc/homelab/interface-wol.conf", "644"),
+            FileSpec(WOL_CONFIG, f"/etc/homelab/{WOL_CONFIG}", "644"),
             FileSpec("homelab-interface-wol", "/usr/local/sbin/homelab-interface-wol", "755"),
-            FileSpec(
-                "homelab-interface-wol.service",
-                "/etc/systemd/system/homelab-interface-wol.service",
-                "644",
-            ),
+            FileSpec(WOL_SERVICE, f"/etc/systemd/system/{WOL_SERVICE}", "644"),
         ]
     )
     write_file_map(build_dir, tuple(file_specs))
