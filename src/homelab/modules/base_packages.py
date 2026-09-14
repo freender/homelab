@@ -9,6 +9,13 @@ from ..module_support import normalize_string_list, simple_root_installer_deploy
 FEATURE = "base-packages"
 REMOTE_ROOT = "/tmp/homelab-base-packages"
 
+# Ported to `homelab_install` (freender/homelab-ops#30). The `.py` suffix is what
+# makes the staging step upload `lib/py/` and set `PYTHONPATH`, so the two must
+# agree; unlike keepalived there is only one call site, because
+# `simple_root_installer_deploy` validates the installer path it is given.
+INSTALLER = "scripts/install.py"
+INTERPRETER = "python3"
+
 # Baseline packages every apt-managed host gets. Kept small and boring on
 # purpose: these are the tools the agent and the operator expect to exist on any
 # host before doing anything else.
@@ -48,6 +55,8 @@ def deploy(
         session,
         feature=FEATURE,
         remote_root=REMOTE_ROOT,
+        installer=INSTALLER,
+        interpreter=INTERPRETER,
         env_for_host=env_for_host,
         dry_run_details=dry_run_details,
     )

@@ -8,8 +8,14 @@ modules and operators assume are present are actually guaranteed by the repo.
 ./deploy base-packages all
 ```
 
-Idempotent: it checks `dpkg -s` per package and only runs apt when something is
-missing, so a no-op run touches nothing and does not hit the network.
+Idempotent: it checks dpkg's status field per package and only runs apt when
+something is missing, so a no-op run touches nothing and does not hit the
+network — which matters because this module is first in `MODULE_ORDER` and runs
+on every host on every deploy.
+
+The installer is `scripts/install.py`, on the shared `homelab_install` library
+(freender/homelab-ops#30). It reads `BASE_PACKAGES` from the deploy environment
+rather than a rendered env file, because this module stages no build directory.
 
 ## The baseline
 

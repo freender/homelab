@@ -296,8 +296,9 @@ def test_simple_root_installer_deploy_defaults_to_the_bash_installer_pair(
 ) -> None:
     """The Python arguments must be opt-in.
 
-    Every caller today omits them, so a default that changed either one would
-    silently re-point 20-odd modules at an installer that does not exist.
+    Every caller except `base-packages` omits them, so a default that changed
+    either one would silently re-point the remaining callers at an installer
+    that does not exist.
     """
     module_support.simple_root_installer_deploy(
         root,

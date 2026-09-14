@@ -99,7 +99,9 @@ def run(install_fn: Callable[[InstallContext], None], module_name: str) -> None:
     # FORCE_UPDATE arrives in the process environment, not the build/<host>/env
     # file: stage_and_run_remote_installer always passes it via `env=`, and the
     # bash re-exec that used to strip it under `sudo -n` is the dead code above.
-    # This is a different source than ctx.env below -- see _parse_env_file.
+    # This is a different source than ctx.env below -- see _parse_env_file. It is
+    # the same source as ctx.deploy_env, of which this is a parsed convenience
+    # over one key.
     force_update = args.force or os.environ.get("FORCE_UPDATE", "false").lower() == "true"
 
     ctx = InstallContext(
@@ -107,6 +109,7 @@ def run(install_fn: Callable[[InstallContext], None], module_name: str) -> None:
         script_dir=script_dir,
         build_dir=build_dir,
         env=_parse_env_file(build_dir / ENV_NAME),
+        deploy_env=dict(os.environ),
         file_map=_parse_file_map(build_dir / FILE_MAP_NAME),
         force_update=force_update,
     )

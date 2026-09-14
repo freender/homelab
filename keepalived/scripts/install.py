@@ -15,6 +15,11 @@ Note the ordering: `files.install_all(ctx)` must run before `ensure_running`, an
 `changed=` must come from `ctx.changes` rather than a local flag. A changed
 `keepalived.conf` with no restart is a live config and a stale process — on the host
 that owns VIP 10.0.40.15.
+
+`packages.ensure` lost its `probe=` when `base-packages` gave it real per-package
+`dpkg` checks. This call is what that fixed: `probe="keepalived"` meant a host with
+keepalived present but `curl` missing installed neither, and `curl` is what
+`healthcheck.sh` runs.
 """
 
 from __future__ import annotations
@@ -25,8 +30,7 @@ from homelab_install.context import InstallContext
 
 def install(ctx: InstallContext) -> None:
     log.header("Keepalived")
-    log.action("Package")
-    packages.ensure(ctx, "keepalived", "curl", probe="keepalived")
+    packages.ensure(ctx, "keepalived", "curl")
     files.install_all(ctx)
     systemd.ensure_running(ctx, "keepalived", changed=ctx.changes.any())
 

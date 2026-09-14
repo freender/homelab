@@ -11,6 +11,7 @@ replication on the next rebuild, not at deploy time.
 
 from __future__ import annotations
 
+import ast
 from pathlib import Path
 
 import pytest
@@ -104,3 +105,52 @@ def test_bad_extra_type_is_rejected(tmp_path: Path) -> None:
     )
     with pytest.raises(ValueError):
         base_packages.packages_for_host(root, "tower")
+
+
+# --- the port to homelab_install (freender/homelab-ops#30) -------------------
+
+
+def test_ships_exactly_one_installer() -> None:
+    """The migration rule: `install.py` added and `install.sh` deleted in the
+    same commit, never both present. Both present would leave which one runs
+    decided by `base_packages.py` alone, with a stale copy of the logic beside
+    it."""
+    scripts = ROOT / "base-packages" / "scripts"
+
+    assert (scripts / "install.py").is_file()
+    assert not (scripts / "install.sh").exists()
+    assert sorted(path.name for path in scripts.glob("install*")) == ["install.py"]
+
+
+def test_declares_the_python_installer_pair() -> None:
+    """The two must agree: the `.py` suffix is what makes the staging step upload
+    `lib/py/` and set `PYTHONPATH`, so a name reverted to `install.sh` would take
+    the library with it silently and the installer would fail to import on the
+    target."""
+    assert base_packages.INSTALLER == "scripts/install.py"
+    assert base_packages.INTERPRETER == "python3"
+    assert (ROOT / "base-packages" / base_packages.INSTALLER).is_file()
+
+
+def test_the_installer_reads_its_package_list_from_the_deploy_env() -> None:
+    """`BASE_PACKAGES` is passed via `env=` on the remote command line, because
+    `simple_root_installer_deploy` stages no build directory for this module to
+    render an env file into. Reading `ctx.env` instead would find `{}` on every
+    host.
+
+    Asserted on the parsed source rather than a substring, because the docstring
+    names `ctx.env` to explain why it is the wrong one; and on the source rather
+    than by importing, because importing would put a second module named
+    `install` on `sys.path`.
+    """
+    source = (ROOT / "base-packages" / "scripts" / "install.py").read_text(encoding="utf-8")
+
+    attributes = {
+        node.attr
+        for node in ast.walk(ast.parse(source))
+        if isinstance(node, ast.Attribute)
+        and isinstance(node.value, ast.Name)
+        and node.value.id == "ctx"
+    }
+
+    assert attributes == {"deploy_env"}

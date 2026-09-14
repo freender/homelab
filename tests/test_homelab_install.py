@@ -38,7 +38,13 @@ from homelab_install.errors import InstallError
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
-def _ctx(tmp_path: Path, *, force: bool = False, **file_map: tuple[str, str]) -> InstallContext:
+def _ctx(
+    tmp_path: Path,
+    *,
+    force: bool = False,
+    deploy_env: dict[str, str] | None = None,
+    **file_map: tuple[str, str],
+) -> InstallContext:
     build_dir = tmp_path / "build" / "testhost"
     build_dir.mkdir(parents=True, exist_ok=True)
     return InstallContext(
@@ -46,6 +52,7 @@ def _ctx(tmp_path: Path, *, force: bool = False, **file_map: tuple[str, str]) ->
         script_dir=tmp_path,
         build_dir=build_dir,
         env={},
+        deploy_env=dict(deploy_env or {}),
         file_map=dict(file_map),
         force_update=force,
     )
@@ -64,6 +71,76 @@ class FakeRun:
         if code != 0 and kwargs.get("check"):
             raise subprocess.CalledProcessError(code, command)
         return subprocess.CompletedProcess(command, code)
+
+
+class FakeApt:
+    """A stateful `dpkg-query`/`apt-get` double.
+
+    Stateful on purpose: `packages.ensure` checks, installs, then checks *again*,
+    and a fake replaying canned codes would answer the re-verify pass with the
+    same "missing" it gave the first pass. That would make the re-verify branch
+    untestable — and re-verifying is the one thing `base-packages`' bash did that
+    a naive port would drop.
+
+    `known` maps package -> dpkg `Status` field. A package absent from it is one
+    `dpkg-query` exits 1 for.
+    """
+
+    INSTALLED = "install ok installed"
+
+    def __init__(
+        self,
+        known: dict[str, str] | None = None,
+        *,
+        installs: bool = True,
+        update_code: int = 0,
+        install_code: int = 0,
+    ) -> None:
+        self.known = dict(known or {})
+        self.installs = installs
+        self.update_code = update_code
+        self.install_code = install_code
+        self.calls: list[list[str]] = []
+        self.env: list[dict[str, str] | None] = []
+
+    def __call__(self, command: list[str], **kwargs) -> subprocess.CompletedProcess:
+        self.calls.append(list(command))
+        self.env.append(kwargs.get("env"))
+
+        if command[0] == "dpkg-query":
+            package = command[-1]
+            if package not in self.known:
+                return subprocess.CompletedProcess(command, 1, stdout="")
+            return subprocess.CompletedProcess(command, 0, stdout=self.known[package])
+
+        if command[:2] == ["apt-get", "update"]:
+            return subprocess.CompletedProcess(command, self.update_code)
+
+        if command[:2] == ["apt-get", "install"]:
+            if self.installs and self.install_code == 0:
+                for package in command[4:]:
+                    self.known[package] = self.INSTALLED
+            return subprocess.CompletedProcess(command, self.install_code)
+
+        raise AssertionError(f"unexpected command: {command}")
+
+    @property
+    def apt_calls(self) -> list[list[str]]:
+        return [call for call in self.calls if call[0] == "apt-get"]
+
+
+def _apt(monkeypatch: pytest.MonkeyPatch, fake: FakeApt) -> FakeApt:
+    monkeypatch.setattr(packages, "_run", fake)
+    return fake
+
+
+@pytest.fixture(autouse=True)
+def _reset_apt_update_cache(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`packages._apt_updated` coalesces `apt-get update` across one installer
+    process. Without this reset the first test to install would suppress the
+    update in every test after it, and the ordering assertions would pass for
+    the wrong reason."""
+    monkeypatch.setattr(packages, "_apt_updated", False)
 
 
 # ---------------------------------------------------------------------------
@@ -251,40 +328,76 @@ def test_install_all_honours_exclude(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_ensure_skips_apt_when_the_probe_is_already_on_path(
+def test_ensure_touches_apt_not_at_all_when_every_package_is_installed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    fake = FakeRun()
-    monkeypatch.setattr(packages, "_run", fake)
-    monkeypatch.setattr(packages.shutil, "which", lambda name: "/usr/sbin/keepalived")
+    """The no-op run must not hit the network. `base-packages` is first in
+    `MODULE_ORDER` and runs on every host on every deploy; an unconditional
+    `apt-get update` there would put a network round-trip in front of
+    everything else the repo does."""
+    fake = _apt(monkeypatch, FakeApt({"mbuffer": FakeApt.INSTALLED, "vim": FakeApt.INSTALLED}))
 
-    packages.ensure(_ctx(tmp_path), "keepalived", "curl", probe="keepalived")
+    packages.ensure(_ctx(tmp_path), "mbuffer", "vim")
 
-    assert fake.calls == []
+    assert fake.apt_calls == []
 
 
-def test_ensure_installs_when_the_probe_is_missing(
+def test_ensure_installs_only_the_packages_that_are_missing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    fake = FakeRun()
-    monkeypatch.setattr(packages, "_run", fake)
-    monkeypatch.setattr(packages.shutil, "which", lambda name: None)
+    """The bug the `probe=` removal fixed, pinned as a regression.
 
-    packages.ensure(_ctx(tmp_path), "keepalived", "curl", probe="keepalived")
+    `ensure(ctx, "keepalived", "curl", probe="keepalived")` skipped *both* when
+    the keepalived binary was on PATH, so a host missing `curl` stayed missing it
+    — and `curl` is what keepalived's `healthcheck.sh` runs to decide the VIP.
+    """
+    fake = _apt(monkeypatch, FakeApt({"keepalived": FakeApt.INSTALLED}))
 
-    assert fake.calls == [["apt-get", "install", "-y", "-q", "keepalived", "curl"]]
+    packages.ensure(_ctx(tmp_path), "keepalived", "curl")
+
+    assert ["apt-get", "install", "-y", "-q", "curl"] in fake.calls
 
 
-def test_ensure_without_a_probe_always_calls_apt(
+def test_ensure_runs_apt_get_update_before_installing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    fake = FakeRun()
-    monkeypatch.setattr(packages, "_run", fake)
-    monkeypatch.setattr(packages.shutil, "which", lambda name: "/usr/bin/anything")
+    fake = _apt(monkeypatch, FakeApt())
 
-    packages.ensure(_ctx(tmp_path), "curl")
+    packages.ensure(_ctx(tmp_path), "ripgrep")
 
-    assert fake.calls == [["apt-get", "install", "-y", "-q", "curl"]]
+    assert fake.apt_calls == [
+        ["apt-get", "update", "-qq"],
+        ["apt-get", "install", "-y", "-q", "ripgrep"],
+    ]
+
+
+def test_apt_get_update_runs_at_most_once_per_process(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The design doc's "one lazy `apt-get update` per run", which `base-packages`
+    is the first module to need."""
+    fake = _apt(monkeypatch, FakeApt())
+    ctx = _ctx(tmp_path)
+
+    packages.ensure(ctx, "mbuffer")
+    packages.ensure(ctx, "ripgrep")
+
+    assert fake.calls.count(["apt-get", "update", "-qq"]) == 1
+
+
+def test_ensure_sets_debian_frontend_without_dropping_the_parent_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Replacing the environment rather than extending it would strip PATH, and
+    apt-get shells out to maintainer-script helpers that need it."""
+    monkeypatch.setenv("PATH", "/sentinel/bin")
+    fake = _apt(monkeypatch, FakeApt())
+
+    packages.ensure(_ctx(tmp_path), "mc")
+
+    install_env = fake.env[fake.calls.index(["apt-get", "install", "-y", "-q", "mc"])]
+    assert install_env["DEBIAN_FRONTEND"] == "noninteractive"
+    assert install_env["PATH"] == "/sentinel/bin"
 
 
 def test_ensure_raises_install_error_when_apt_fails(
@@ -292,12 +405,83 @@ def test_ensure_raises_install_error_when_apt_fails(
 ) -> None:
     """`InstallError`, not `CalledProcessError` — #31 requires a module to be able
     to catch a single failed item and continue, as docker-stacks does in bash."""
-    fake = FakeRun({("apt-get", "install", "-y", "-q", "keepalived"): 100})
-    monkeypatch.setattr(packages, "_run", fake)
-    monkeypatch.setattr(packages.shutil, "which", lambda name: None)
+    _apt(monkeypatch, FakeApt(install_code=100))
 
     with pytest.raises(InstallError, match="failed to install packages: keepalived"):
-        packages.ensure(_ctx(tmp_path), "keepalived", probe="keepalived")
+        packages.ensure(_ctx(tmp_path), "keepalived")
+
+
+def test_ensure_raises_when_apt_get_update_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake = _apt(monkeypatch, FakeApt(update_code=1))
+
+    with pytest.raises(InstallError, match="apt-get update failed"):
+        packages.ensure(_ctx(tmp_path), "mbuffer")
+
+    assert ["apt-get", "install", "-y", "-q", "mbuffer"] not in fake.calls
+
+
+def test_ensure_raises_when_a_package_is_still_missing_after_a_successful_install(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The re-verify pass `base-packages`' bash did deliberately: a package that
+    resolves but fails to configure leaves apt exiting 0, so the exit status alone
+    would report it installed."""
+    _apt(monkeypatch, FakeApt(installs=False))
+
+    with pytest.raises(InstallError, match="packages still missing after install: mbuffer"):
+        packages.ensure(_ctx(tmp_path), "mbuffer")
+
+
+def test_ensure_re_verifies_only_what_it_installed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake = _apt(monkeypatch, FakeApt({"vim": FakeApt.INSTALLED}))
+
+    packages.ensure(_ctx(tmp_path), "vim", "mc")
+
+    queries = [call[-1] for call in fake.calls if call[0] == "dpkg-query"]
+    assert queries == ["vim", "mc", "mc"]
+
+
+# --- dpkg status parsing ---------------------------------------------------
+
+
+def test_a_removed_but_not_purged_package_counts_as_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`dpkg -s` — what the bash used — exits 0 for a package in `config-files`
+    state, so it reported a removed package as installed and never reinstalled
+    it. Only the third word of the Status field answers the question."""
+    fake = _apt(monkeypatch, FakeApt({"ripgrep": "deinstall ok config-files"}))
+
+    packages.ensure(_ctx(tmp_path), "ripgrep")
+
+    assert ["apt-get", "install", "-y", "-q", "ripgrep"] in fake.calls
+
+
+def test_a_held_package_counts_as_installed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The other direction: matching the whole field against `install ok installed`
+    would reinstall a held package on every single deploy. `apt-upgrade`
+    dist-upgrades these hosts daily, so holds are a live condition here."""
+    fake = _apt(monkeypatch, FakeApt({"mbuffer": "hold ok installed"}))
+
+    packages.ensure(_ctx(tmp_path), "mbuffer")
+
+    assert fake.apt_calls == []
+
+
+def test_an_unknown_package_counts_as_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake = _apt(monkeypatch, FakeApt())
+
+    packages.ensure(_ctx(tmp_path), "mc")
+
+    assert ["apt-get", "install", "-y", "-q", "mc"] in fake.calls
 
 
 # ---------------------------------------------------------------------------
@@ -524,6 +708,40 @@ def test_run_builds_the_context_from_the_build_dir(
     assert ctx.file_map == {"a.conf": ("/etc/a.conf", "600")}
     assert ctx.env == {"PAUSED": "false"}
     assert ctx.force_update is False
+
+
+def test_run_keeps_the_deploy_env_and_the_build_env_file_apart(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The distinction `InstallContext` exists to enforce.
+
+    `ctx.env` is what the orchestrator *rendered*; `ctx.deploy_env` is what it
+    passed on the remote command line. `base-packages` has no build directory at
+    all, so `BASE_PACKAGES` can only arrive by the second route — and a module
+    that read the wrong one would silently get `{}` and refuse to run, or worse,
+    inherit whatever the calling shell happened to hold.
+    """
+    build = tmp_path / "build" / "testhost"
+    build.mkdir(parents=True)
+    (build / "env").write_text("RENDERED=from-file\n", encoding="utf-8")
+    _harness(monkeypatch, tmp_path, environ={"BASE_PACKAGES": "mbuffer vim mc ripgrep"})
+    seen: list[InstallContext] = []
+
+    main.run(seen.append, "Demo")
+
+    assert seen[0].env == {"RENDERED": "from-file"}
+    assert seen[0].deploy_env == {"BASE_PACKAGES": "mbuffer vim mc ripgrep"}
+
+
+def test_deploy_env_is_empty_rather_than_absent_when_nothing_was_passed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _harness(monkeypatch, tmp_path)
+    seen: list[InstallContext] = []
+
+    main.run(seen.append, "Demo")
+
+    assert seen[0].deploy_env == {}
 
 
 def test_run_defaults_the_host_to_the_local_hostname(
