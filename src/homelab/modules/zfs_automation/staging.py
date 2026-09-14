@@ -1,4 +1,4 @@
-"""Per-host build + deploy: render the file map, stage secrets, run install.sh.
+"""Per-host build + deploy: render the file map, stage secrets, run install.py.
 
 This is the module's `deploy_host`/`build_host_artifacts` — it turns the typed
 config objects from `.normalize`/`.replication`/`.access` and the rendered
@@ -37,6 +37,7 @@ from .render import (
 from .replication import normalize_replication_config
 from .types import (
     BASE_FILE_SPECS,
+    INSTALLER,
     REMOTE_ROOT,
     STATIC_CONFIG_FILES,
     FileSpec,
@@ -178,16 +179,17 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
             connection,
             REMOTE_ROOT,
             upload_paths_for(module_dir, host, artifacts, secret_paths),
-            "scripts/install.sh",
+            INSTALLER,
             host,
             env=force_env(force),
             require_root=True,
+            interpreter="python3",
             remote_subdirs=("build", "lib"),
         )
 
 
 def _flag(value: object) -> str:
-    """Render a truthiness check as the "true"/"false" strings install.sh reads."""
+    """Render a truthiness check as the "true"/"false" strings install.py reads."""
     return "true" if value else "false"
 
 
@@ -384,7 +386,7 @@ def _write_zfs_env(
     replication_jobs: Any,
     push_target_access: Any,
 ) -> None:
-    """The env install.sh sources: what to enable, and what to freeze."""
+    """The env install.py parses: what to enable, and what to freeze."""
     paused_replication_timers = " ".join(
         f"homelab-zfs-replication-{job.name}.timer"
         for job in replication_jobs
@@ -403,10 +405,6 @@ def _write_zfs_env(
                 settings.replication_recovery_start_failed
             ),
             "ENABLE_ZFS_SCRUB": _flag(pools and settings.manage_scrub),
-            # These retained cleanup inputs remove access artifacts created by old releases.
-            "ENABLE_ZFS_PULL_SOURCE": "false",
-            "ZFS_PULL_SOURCE_USER": "zfs-pull",
-            "ZFS_PULL_SOURCE_HOME": "/var/lib/homelab-zfs-pull",
             "ENABLE_ZFS_PUSH_TARGET": _flag(push_target_access is not None),
             "ZFS_PUSH_TARGET_USER": push_target_access.user if push_target_access else "zfs-push",
             "ZFS_PUSH_TARGET_HOME": "/var/lib/homelab-zfs-push",
@@ -433,7 +431,7 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
     _write_snapshot_artifacts(templates_dir, build_dir, snapshot_plans, settings.snapshot_schedule)
     _write_scrub_artifacts(templates_dir, build_dir, pools)
 
-    # Order matters: file-map.conf is written in this order and install.sh
+    # Order matters: file-map.conf is written in this order and install.py
     # applies it top to bottom.
     file_specs = [
         *BASE_FILE_SPECS,

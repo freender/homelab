@@ -173,7 +173,7 @@ class TestDryRunReport:
 # This function was at 100% coverage purely because test_dry_run_all_modules.py
 # executes it and asserts exit_code == 0 — the known hole in the CRAP metric.
 # Nothing checked *what* it built. These tests drive the flag matrix through a
-# stub registry and assert the two outputs install.sh actually consumes:
+# stub registry and assert the two outputs install.py actually consumes:
 # file-map.conf (which files land where, in order) and env (what gets enabled,
 # and what gets frozen).
 # ---------------------------------------------------------------------------
@@ -272,7 +272,7 @@ class TestBuildHostArtifactsFileMap:
         assert artifacts.secret_file_specs == ()
 
     def test_file_map_lists_every_spec_in_order(self, zfs_build) -> None:
-        """install.sh applies file-map.conf top to bottom, so order is contract."""
+        """install.py applies file-map.conf top to bottom, so order is contract."""
         artifacts = zfs_build(replication_jobs=[JOB])
         lines = (artifacts.build_dir / "file-map.conf").read_text(encoding="utf-8").splitlines()
 
@@ -363,7 +363,7 @@ class TestBuildHostArtifactsFileMap:
             "/root/.ssh/id_zfs"
         ]
         assert not (artifacts.build_dir / "source-private-key-0").exists()
-        # Still listed in the file map, so install.sh knows where it goes.
+        # Still listed in the file map, so install.py knows where it goes.
         file_map = (artifacts.build_dir / "file-map.conf").read_text(encoding="utf-8")
         assert "source-private-key-0|/root/.ssh/id_zfs" in file_map
 
@@ -452,9 +452,8 @@ class TestBuildHostArtifactsEnv:
             == "true"
         )
 
-    def test_retired_pull_source_inputs_stay_false_for_cleanup(self, zfs_build) -> None:
-        """install.sh reads these to remove artifacts from old releases."""
+    def test_retired_pull_source_inputs_are_not_rendered(self, zfs_build) -> None:
+        """Their cleanup was checked done on every host and dropped with the port."""
         env = _env(zfs_build())
 
-        assert env["ENABLE_ZFS_PULL_SOURCE"] == "false"
-        assert env["ZFS_PULL_SOURCE_USER"] == "zfs-pull"
+        assert not any(key.startswith(("ENABLE_ZFS_PULL", "ZFS_PULL")) for key in env)

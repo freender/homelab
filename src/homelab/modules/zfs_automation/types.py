@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 REMOTE_ROOT = "/tmp/homelab-zfs-automation"
+INSTALLER = "scripts/install.py"
 STATIC_CONFIG_FILES = ["zfs-scrub.timer"]
 TEMPLATE_FILES = [
     "homelab-zfs-snapshots.service",
