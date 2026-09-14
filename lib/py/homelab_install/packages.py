@@ -13,9 +13,10 @@ Three things arrived with it, all demand-driven:
   missing `curl`. PATH is also the wrong question: `ripgrep` installs `rg`, and a
   library package installs no binary at all. Each package is now checked on its own.
 * **A lazy `apt-get update`.** The design doc's "one per run", finally with a caller.
-  It fires at most once per installer process, and only on a run that is actually
-  about to install something -- an all-present run still touches the network zero
-  times, which is what makes this safe to leave first in `MODULE_ORDER`.
+  It fires at most once per installer process (again only after `sources_changed`),
+  and only on a run that is actually about to install something -- an all-present
+  run still touches the network zero times, which is what makes this safe to leave
+  first in `MODULE_ORDER`.
 * **Re-verify after installing.** `base-packages/scripts/install.sh` did this
   deliberately and the comment is worth keeping: a package that resolves but fails
   to configure leaves apt exiting 0, so trusting the exit status alone reports a
@@ -72,6 +73,22 @@ def _apt_update_once() -> None:
     if _run(["apt-get", "update", "-qq"], check=False).returncode != 0:
         raise InstallError("apt-get update failed")
     _apt_updated = True
+
+
+def sources_changed(ctx: InstallContext) -> None:
+    """Mark the package lists stale after writing an apt source.
+
+    `ensure` refreshes the lists at most once per process, which is wrong the moment
+    a module adds a repo mid-run: `pve-http-boot` may already have run the update to
+    install `curl`, then uses `curl` to fetch the Proxmox key, then needs a package
+    that only the new repo carries. Without this the second `ensure` trusts lists
+    fetched before the repo existed and apt reports the package as unknown.
+
+    Only marks, never fetches -- a run that adds a source but has nothing left to
+    install still touches the network zero times.
+    """
+    global _apt_updated
+    _apt_updated = False
 
 
 def installed(ctx: InstallContext, package: str) -> bool:

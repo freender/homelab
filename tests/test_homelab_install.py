@@ -392,6 +392,39 @@ def test_apt_get_update_runs_at_most_once_per_process(
     assert fake.calls.count(["apt-get", "update", "-qq"]) == 1
 
 
+def test_a_new_apt_source_makes_the_next_install_refresh_the_lists_again(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`pve-http-boot` installs `curl`, uses it to add the Proxmox repo, then needs a
+    package only that repo carries. Coalescing the update across the source change
+    would ask apt for it against lists fetched before the repo existed."""
+    fake = _apt(monkeypatch, FakeApt())
+    ctx = _ctx(tmp_path)
+
+    packages.ensure(ctx, "curl")
+    packages.sources_changed(ctx)
+    packages.ensure(ctx, "proxmox-auto-install-assistant")
+
+    assert fake.apt_calls == [
+        ["apt-get", "update", "-qq"],
+        ["apt-get", "install", "-y", "-q", "curl"],
+        ["apt-get", "update", "-qq"],
+        ["apt-get", "install", "-y", "-q", "proxmox-auto-install-assistant"],
+    ]
+
+
+def test_a_new_apt_source_alone_touches_the_network_not_at_all(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake = _apt(monkeypatch, FakeApt({"nginx": FakeApt.INSTALLED}))
+    ctx = _ctx(tmp_path)
+
+    packages.sources_changed(ctx)
+    packages.ensure(ctx, "nginx")
+
+    assert fake.apt_calls == []
+
+
 def test_ensure_sets_debian_frontend_without_dropping_the_parent_environment(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

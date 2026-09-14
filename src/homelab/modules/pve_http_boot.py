@@ -261,9 +261,13 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
             connection,
             REMOTE_ROOT,
             upload_paths,
-            "scripts/install.sh",
+            "scripts/install.py",
             host,
-            env=force_env(force),
+            # Only for the closing hint. The value is already rendered into
+            # http-boot-mgmt.conf, which is mode 600 and carries the PDM cert
+            # fingerprint, so the installer is handed it rather than re-reading it.
+            env={**force_env(force), "HTTP_BOOT_MGMT_IP": mgmt_ip},
             require_root=True,
+            interpreter="python3",
             remote_subdirs=("build", "lib"),
         )

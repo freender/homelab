@@ -103,7 +103,7 @@ def test_every_built_file_is_actually_installed(build_dir: Path) -> None:
 
 
 def test_every_installed_file_is_actually_built(build_dir: Path) -> None:
-    """The loud direction of the same mismatch — install.sh aborts on a missing
+    """The loud direction of the same mismatch — install.py aborts on a missing
     build file. Asserted anyway so the pair documents both halves."""
     declared = {spec.build_name for spec in pve_http_boot.FILE_SPECS}
 
