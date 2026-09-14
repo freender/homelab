@@ -5,11 +5,34 @@ from pathlib import Path
 from ..build import render_file, write_env_file
 from ..deploy import DeploySession, force_env, prepare_build_dir, stage_and_run_remote_installer
 from ..hosts import HostLookupError, default_registry
-from ..module_support import run_module_deploy
+from ..module_support import FileSpec, run_module_deploy, write_file_map
 from ..output import print_sub
 from ..ssh import HostConnection, build_files, diff_many
 
 REMOTE_ROOT = "/tmp/homelab-apcupsd"
+INSTALLER = "scripts/install.py"
+INTERPRETER = "python3"
+
+ROLES = ("master", "slave", "master-standalone")
+# Roles that belong to the PVE HA cluster and so get the boot-time HA re-arm.
+# `master-standalone` (osiris) is not a cluster member and must not have it.
+HA_ROLES = frozenset({"master", "slave"})
+
+# One owner for every destination: the dry-run diff and the file map the remote
+# installer reads are both derived from this, so they cannot disagree about where
+# a file goes.
+APCUPSD_SPECS = (
+    FileSpec("apcupsd.conf", "/etc/apcupsd/apcupsd.conf", "644"),
+    FileSpec("doshutdown", "/etc/apcupsd/doshutdown", "755"),
+)
+HA_REARM_SPECS = (
+    FileSpec("homelab-ha-rearm", "/usr/local/sbin/homelab-ha-rearm", "755"),
+    FileSpec("homelab-ha-rearm.service", "/etc/systemd/system/homelab-ha-rearm.service", "644"),
+)
+
+
+def file_specs(role: str) -> tuple[FileSpec, ...]:
+    return APCUPSD_SPECS + (HA_REARM_SPECS if role in HA_ROLES else ())
 
 
 def deploy(
@@ -72,18 +95,7 @@ def deploy_host(root: Path, host: str, slave_hosts: str, dry_run: bool, force: b
 
     connection = HostConnection(host)
     print_sub("Comparing with remote configs...")
-    files = [
-        (build_dir / "apcupsd.conf", "/etc/apcupsd/apcupsd.conf"),
-        (build_dir / "doshutdown", "/etc/apcupsd/doshutdown"),
-    ]
-    if role in {"master", "slave"}:
-        files.extend([
-            (build_dir / "homelab-ha-rearm", "/usr/local/sbin/homelab-ha-rearm"),
-            (
-                build_dir / "homelab-ha-rearm.service",
-                "/etc/systemd/system/homelab-ha-rearm.service",
-            ),
-        ])
+    files = [(build_dir / spec.build_name, spec.remote_path) for spec in file_specs(role)]
     for message in diff_many(connection, files):
         print_sub(message)
 
@@ -136,7 +148,7 @@ def render_configs(
     }
     render_file(conf_template, build_dir / "apcupsd.conf", **context)
     render_file(shutdown_template, build_dir / "doshutdown", **context)
-    if role in {"master", "slave"}:
+    if role in HA_ROLES:
         render_file(
             templates_dir / "homelab-ha-rearm.tpl",
             build_dir / "homelab-ha-rearm",
@@ -150,6 +162,7 @@ def render_configs(
         (build_dir / "homelab-ha-rearm").chmod(0o755)
     (build_dir / "doshutdown").chmod(0o755)
     write_env_file(build_dir / "env", {"ROLE": role, "HOST": host})
+    write_file_map(build_dir, file_specs(role))
     return build_dir
 
 
@@ -168,9 +181,10 @@ def stage_and_install(
             (build_dir, f"{REMOTE_ROOT}/build/{host}"),
             (root / "apcupsd" / "scripts", f"{REMOTE_ROOT}/scripts"),
         ],
-        "scripts/install.sh",
+        INSTALLER,
         host,
         env=force_env(force),
         require_root=True,
         remote_subdirs=("build", "lib"),
+        interpreter=INTERPRETER,
     )

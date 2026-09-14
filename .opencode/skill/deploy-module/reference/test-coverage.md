@@ -58,16 +58,16 @@ a cross-host quorum, VIP, or failover group — it belongs in the golden-render 
 ## Known thin spots
 
 Modules with no dedicated test, carried only by the dry-run smoke test:
-`ubuntu_setup`, `apcupsd`, `disk_spindown`, `pve_postinstall_webhook`, and the
-three `pve_*_patch` wrappers. (`apt_upgrade`, `ssh_config`, `vmalert_rules` and
-`pve_upgrade` have left this list as they were ported — porting is currently the
+`ubuntu_setup`, `disk_spindown`, and the three `pve_*_patch` wrappers.
+(`apt_upgrade`, `ssh_config`, `vmalert_rules`, `pve_upgrade`, `monitoring_config`,
+`pve_postinstall_webhook` and `apcupsd` have left this list as they were ported — porting is currently the
 main way coverage arrives. `wsl_conf` has installer tests in
 `test_homelab_install.py` but still no dedicated file.)
 `zfs_automation/{access,render,staging}.py` are likewise largely unasserted (7% /
 11% / 37% assertion-backed). `op_secrets.py` and `ssh.py` are no longer thin —
 commit `6273be2` took them to 71% / 72%. Prefer adding to these over re-covering
 well-tested areas.
-The ~3,650 lines of still-unported `scripts/install.sh` have no execution
+The ~3,360 lines of still-unported `scripts/install.sh` have no execution
 coverage at all — ShellCheck only. Each port moves a module out of that bucket
 and into real coverage: a `scripts/install.py` is scored by coverage and the CRAP
 gate like any other package, and is importable in-process, so its tests assert

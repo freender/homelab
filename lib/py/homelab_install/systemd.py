@@ -55,6 +55,22 @@ def ensure_running(ctx: InstallContext, unit: str, changed: bool) -> None:
         log.sub(f"{unit} already enabled")
 
 
+def enable(ctx: InstallContext, unit: str) -> None:
+    """Enable a unit for the next boot without starting it now.
+
+    Arrives with `apcupsd`, whose `homelab-ha-rearm.service` is a boot-time
+    oneshot that runs `ha-manager crm-command arm-ha`. `ensure_running` would
+    `enable --now` it, and starting it on a deploy would re-arm HA on a cluster
+    the operator may have disarmed on purpose. This is for units whose *start*
+    is the action, not the service.
+    """
+    if _is_enabled(unit):
+        log.sub(f"{unit} already enabled")
+        return
+    _run(["systemctl", "enable", unit], check=True)
+    log.ok(f"{unit} enabled")
+
+
 def daemon_reload(ctx: InstallContext) -> None:
     """Make systemd re-read unit files after one has been rewritten.
 

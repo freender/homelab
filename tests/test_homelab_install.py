@@ -1489,3 +1489,24 @@ def test_run_line_buffers_stdout_so_child_output_stays_in_order(tmp_path: Path) 
 
     assert lines.index("==> before child") < lines.index("child output")
     assert lines.index("child output") < lines.index("==> after child")
+
+
+def test_enable_enables_without_starting(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """For boot-time oneshots whose start *is* the action: apcupsd's HA re-arm
+    runs `ha-manager crm-command arm-ha`, which a deploy must never trigger."""
+    fake = _units(monkeypatch, **{"systemctl__is-enabled__--quiet__r.service": 1})
+
+    systemd.enable(_ctx(tmp_path), "r.service")
+
+    assert ["systemctl", "enable", "r.service"] in fake.calls
+    assert not any("--now" in call or "start" in call or "restart" in call for call in fake.calls)
+
+
+def test_enable_leaves_an_enabled_unit_alone(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake = _units(monkeypatch, **{"systemctl__is-enabled__--quiet__r.service": 0})
+
+    systemd.enable(_ctx(tmp_path), "r.service")
+
+    assert fake.calls == [["systemctl", "is-enabled", "--quiet", "r.service"]]
