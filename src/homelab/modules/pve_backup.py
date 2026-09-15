@@ -45,10 +45,9 @@ def deploy(
 
 
 def validate(root: Path, hosts: list[str]) -> None:
-    config_dir = root / "pve-backup" / "configs"
-    for name in ["pbs-tokens.env.example"]:
-        if not (config_dir / name).is_file():
-            raise ValueError(f"missing config file: {config_dir / name}")
+    install_script = root / "pve-backup" / "scripts" / "install.py"
+    if not install_script.is_file():
+        raise ValueError(f"missing install script: {install_script}")
     for host in hosts:
         validate_standalone_backup_config(root, host)
         if host_has_encrypted_storage(root, host):
@@ -205,10 +204,11 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
             HostConnection(host),
             REMOTE_ROOT,
             upload_paths,
-            "scripts/install.sh",
+            "scripts/install.py",
             host,
             env=force_env(force),
             require_root=True,
+            interpreter="python3",
             remote_subdirs=("build", "lib"),
         )
 

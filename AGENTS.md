@@ -1,9 +1,9 @@
 # Homelab Agent Guide (AGENTS.md)
 
 Python-orchestrated automation for a Proxmox homelab. Python + Bash + YAML; inventory in
-`hosts.conf`; local orchestration in `src/homelab/`; shared remote libs in `lib/utils.sh`
-and `lib/print.sh`. Pattern: a Python module builds and stages files, then runs a remote
-`scripts/install.sh`.
+`hosts.conf`; local orchestration in `src/homelab/`; shared remote library in
+`lib/py/homelab_install/`. Pattern: a Python module builds and stages files, then runs a
+remote `scripts/install.py` (the three `pve-*-patch` modules keep a bash `install.sh`).
 
 - **Repo work** (edit `src/homelab/`, add/modify a module, `./validate`, or `./deploy`
   dry-run or live) -> the commands below plus the `deploy-module` skill. Topology isn't
@@ -51,7 +51,7 @@ judgment calls above are still yours.
 - Topology, VLANs, storage layout, heavy-path warnings, cross-host context -> the
   `homelab-infra` skill (self-contained topology map).
 - Module changes -> read the orchestrator in `src/homelab/modules/` and the matching
-  `<module>/scripts/install.sh` before editing.
+  `<module>/scripts/install.py` (or `install.sh`) before editing.
 - Docker app placement and compose definitions -> the repo copy under `docker/`; don't
   inspect live `/mnt/cache/appdata` unless a task requires a known app path.
 - **Never** run broad recursive scans on a homelab host under `/`, `/mnt/*`,
@@ -69,7 +69,7 @@ judgment calls above are still yours.
 .venv/bin/python -m ruff check src/homelab/cli.py     # targeted lint
 PYTHONPATH=src .venv/bin/python -m homelab.cli crap   # CRAP scores from the last pytest run
 PYTHONPATH=src .venv/bin/python -m homelab.cli mutants   # mutation sweep (slow; out of band)
-shellcheck -S warning pve-backup/scripts/install.sh
+shellcheck -S warning pve-zfs-large-block-patch/scripts/install.sh
 find . -name '*.sh' -not -path './.bin/*' -exec shellcheck -S warning {} +   # repo root only
 yq '.' hosts.conf >/dev/null                          # apt's yq (kislyuk/yq, jq syntax) — no `eval`, no mikefarah-style paths
 ```
@@ -185,8 +185,8 @@ delete `mutants/` by hand once after pulling this change.
 Scope is `[tool.mutmut].only_mutate` in `pyproject.toml` and is stated nowhere else — the
 paths where a wrong answer is *silent* rather than an exception. Widening it is a
 deliberate act; the Fabric surface fails loudly and is not worth the runtime. Nothing here
-touches Bash, so `lib/utils.sh` and every `scripts/install.sh` stay covered only by their
-own subprocess tests.
+touches Bash, so `lib/utils.sh`, the `remove*.sh` scripts and the three patch modules'
+`install.sh` stay covered only by their own subprocess tests.
 
 **`only_mutate` globs whole files — there is no function-level granularity** (patterns
 must end in `*` or `.py`, and `do_not_mutate_patterns` is parsed but unused in mutmut
@@ -204,7 +204,8 @@ test would have failed on.
 ## Layout
 
 - `src/homelab/modules/*.py` — local orchestrator for one module.
-- `*/scripts/install.sh` — remote installer for the staged bundle.
+- `*/scripts/install.py` — remote installer for the staged bundle (`install.sh` for the
+  three `pve-*-patch` modules).
 - `*/templates` — files rendered from Jinja `{{ VAR }}`; `*/configs` — static copies.
 - `*/build` — generated output (gitignored).
 - `secrets/` — 1Password-backed deploy-time catalog/templates only; no plaintext `.env`.
@@ -254,8 +255,8 @@ go through a command:
 - Python 3.13; local orchestration should be Python.
 - Reuse `HostRegistry`, `HostConnection`, `DeploySession`, and the helpers in
   `src/homelab/module_support.py`; don't invent parallel deployment frameworks.
-- Remote installers should source staged `lib/utils.sh` when present and reuse shared
-  file-map helpers instead of reimplementing them.
+- Remote installers are Python on `lib/py/homelab_install/` and reuse its file, package
+  and systemd helpers instead of reimplementing them.
 - Bash: portable where shared, quote variables, `$(...)`, localized ShellCheck
   suppressions.
 - `hosts.conf`: prefer full systemd calendar expressions (`*-*-* HH:MM:SS`) for

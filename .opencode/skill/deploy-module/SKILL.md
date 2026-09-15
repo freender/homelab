@@ -7,7 +7,7 @@ description: Create, modify, or invoke Python deployment modules in the homelab 
 
 Load this skill when the user asks to:
 - Create a new deployment module in the homelab repo
-- Modify an existing Python module in `src/homelab/modules/` or a remote `scripts/install.sh`
+- Modify an existing Python module in `src/homelab/modules/` or a remote `scripts/install.py`
 - Debug deployment issues or dry-run failures
 - Work with `hosts.conf`, `src/homelab/`, or the deployment framework
 - Invoke `./deploy` itself — dry-run or live, for one module/host or `all all`
@@ -97,7 +97,7 @@ From `src/homelab/module_support.py` and `src/homelab/deploy.py`:
 ## Module boundary
 
 Put logic in the **Python orchestrator** when it needs inventory, templating,
-diffing, or a decision made once across hosts. Put it in **`scripts/install.sh`**
+diffing, or a decision made once across hosts. Put it in **`scripts/install.py`**
 when it needs to inspect or mutate live host state (systemd units, installed
 packages, device nodes).
 
@@ -116,7 +116,6 @@ then re-derives it in Bash will drift. Render once, pass it down.
 
 Rules:
 - Stage module bundles in `/tmp/homelab-<module>/`
-- Remote `scripts/install.sh` should source staged `lib/utils.sh` when present
 - Preserve root-user checks where needed
 - Never hardcode host lists — derive from `hosts list --feature ...`
 
