@@ -78,7 +78,12 @@ yq '.' hosts.conf >/dev/null                          # apt's yq (kislyuk/yq, jq
 validation, the inventory/module cross-check, the leak check, ShellCheck, and module
 dry-runs — the same set CI runs on push/PR to `main` (`.github/workflows/validate.yml`).
 Ruff and Pytest are skipped with a warning when missing,
-so run it from the repo `.venv` (or `uv run`) for true CI parity. Run the targeted checks
+so run it from the repo `.venv` for true CI parity. CI and the venv install the same
+exact versions from `constraints.txt`
+(`.venv/bin/python -m pip install -c constraints.txt '.[dev,mutation]'`), and
+`tests/test_dev_constraints.py` fails when the venv drifts from it — never install or
+upgrade a dev tool without `-c`. Change a version by regenerating the file (its header
+says how), not by hand-editing one line. Run the targeted checks
 above first and `./validate` last — it is the slowest and repeats them all. After any push,
 check that push's Actions run and inspect failures immediately if any job is red.
 
@@ -123,7 +128,7 @@ time — `continue` to `break`, `>` to `>=` — and reruns the tests that touch 
 the suite still passes is a behaviour **nothing asserts**, which coverage cannot see.
 
 ```bash
-.venv/bin/python -m pip install '.[mutation]'   # separate extra, deliberately not in dev
+.venv/bin/python -m pip install -c constraints.txt '.[mutation]'   # separate extra, not in dev
 M=".venv/bin/python -m homelab.cli mutants"     # see the PYTHONPATH note below
 PYTHONPATH=src $M                               # sweep the scoped core, then gate
 PYTHONPATH=src $M --no-run                      # re-score the last sweep without redoing it

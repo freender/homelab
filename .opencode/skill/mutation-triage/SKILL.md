@@ -16,7 +16,7 @@ ratchet rules). This skill owns the *loop*.
 ## The loop
 
 ```bash
-.venv/bin/python -m pip install '.[mutation]'        # one-off; deliberately not in dev
+.venv/bin/python -m pip install -c constraints.txt '.[mutation]'   # one-off; not in dev
 PYTHONPATH=src .venv/bin/python -m homelab.cli mutants 'homelab.op_secrets.*'   # sweep one file
 PYTHONPATH=src .venv/bin/python -m homelab.cli survivors op_secrets             # what changed
 PYTHONPATH=src .venv/bin/python -m homelab.cli survivors op_secrets cleanup     # one function
