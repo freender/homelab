@@ -93,15 +93,28 @@ plain complexity at 100% coverage, the gate reads first as "no function above co
 10", and only second as a coverage rule — you cannot pass it by having
 `test_dry_run_all_modules.py` merely execute the code.
 
-`crap-baseline.json` is a **ratchet, not an exemption list**: it grandfathers the
-functions that were already over 10, and it may only shrink.
+`crap-baseline.json` grandfathers the functions that were already over 10. It may only
+shrink, never grow.
 
 - New or moved code is held to 10 from its first commit — it is never in the baseline.
+  Note the key is `filename::name`, not line number, so *moving* a function counts as new.
 - A baselined function that gets *worse* fails too (0.5 tolerance for coverage noise).
 - Never hand-add or hand-raise an entry. Regenerate with
   `homelab crap --update-baseline` only to lock in an improvement.
-- Clearing an entry means splitting the function or adding tests that **assert**, not
-  tests that merely execute it. Coverage-gaming is this metric's known hole.
+
+**The remaining baseline is frozen — do not refactor to clear an entry.** The gate's value
+is holding *new* code to 10, and that is fully intact above. The entries left are
+validators and env-loaders that are case-heavy because the inventory they validate
+genuinely has many cases; splitting them further scatters the logic without reducing real
+complexity. The one previous clearing pass that reached this floor (`5b833e7`) also
+changed three error-precedence orderings — evidence that metric-driven splitting of these
+particular functions stops being behaviour-preserving. Treat a `cleared` notice from
+`validate` as informational, not a chore.
+
+Still regenerate when an entry clears *incidentally* during real work — the ratchet only
+shrinks either way. Known cost of not regenerating: a stale entry keeps its old recorded
+score, so a function that organically improved could creep back up to that score without
+failing. Bounded, since it can never exceed where it already was.
 
 ### Mutation Testing (`homelab mutants`)
 
