@@ -134,8 +134,15 @@ def dist_upgrade(ctx: InstallContext) -> None:
         raise InstallError(f"apt-get dist-upgrade failed (exit {result.returncode})")
 
 
-def ensure(ctx: InstallContext, *packages: str) -> None:
-    """Install whichever of `packages` dpkg does not already report installed."""
+def ensure(ctx: InstallContext, *packages: str, target_release: str | None = None) -> None:
+    """Install whichever of `packages` dpkg does not already report installed.
+
+    `target_release` is apt's `-t`, added with `metrics-exporters`: Debian stable
+    ships `prometheus-smartctl-exporter` only in `<codename>-backports`, which is
+    `NotAutomatic`, so its dependencies have to be resolved from the same suite. It
+    only affects the install; a package already present is left alone, and which
+    suite it came from is not checked.
+    """
     missing = [package for package in packages if not _installed(package)]
     if not missing:
         log.sub(f"All packages already installed: {' '.join(packages)}")
@@ -143,12 +150,13 @@ def ensure(ctx: InstallContext, *packages: str) -> None:
 
     log.action(f"Installing missing packages: {' '.join(missing)}")
     _apt_update_once()
+    target = ["-t", target_release] if target_release else []
 
     # DEBIAN_FRONTEND is set on the child only. Inherited from the parent env
     # rather than replacing it, because dropping PATH here would leave apt-get
     # unable to find the maintainer-script helpers it shells out to.
     result = _run(
-        ["apt-get", "install", "-y", "-q", *missing],
+        ["apt-get", "install", "-y", "-q", *target, *missing],
         check=False,
         env={**os.environ, "DEBIAN_FRONTEND": "noninteractive"},
     )

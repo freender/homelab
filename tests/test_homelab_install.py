@@ -524,6 +524,35 @@ def test_an_unknown_package_counts_as_missing(
     assert ["apt-get", "install", "-y", "-q", "mc"] in fake.calls
 
 
+def test_ensure_passes_a_target_release_to_the_install_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Debian's smartctl exporter lives in NotAutomatic backports (metrics-exporters)."""
+    fake = _apt(monkeypatch, FakeApt())
+
+    packages.ensure(
+        _ctx(tmp_path), "prometheus-smartctl-exporter", target_release="trixie-backports"
+    )
+
+    assert fake.apt_calls == [
+        ["apt-get", "update", "-qq"],
+        ["apt-get", "install", "-y", "-q"]
+        + ["-t", "trixie-backports", "prometheus-smartctl-exporter"],
+    ]
+
+
+def test_ensure_with_a_target_release_leaves_an_installed_package_alone(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake = _apt(monkeypatch, FakeApt({"prometheus-smartctl-exporter": FakeApt.INSTALLED}))
+
+    packages.ensure(
+        _ctx(tmp_path), "prometheus-smartctl-exporter", target_release="trixie-backports"
+    )
+
+    assert fake.apt_calls == []
+
+
 # ---------------------------------------------------------------------------
 # systemd.ensure_running — the enable / restart / start ladder
 # ---------------------------------------------------------------------------
@@ -1724,6 +1753,35 @@ def test_install_validated_removes_a_new_file_the_validator_rejects(
 def test_install_validated_raises_on_an_unknown_file_map_entry(tmp_path: Path) -> None:
     with pytest.raises(InstallError, match="missing file-map entry: nope"):
         files.install_validated(_ctx(tmp_path), "nope", ["true"])
+
+
+def test_require_active_passes_when_every_unit_is_active(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake = FakeRun({})
+    monkeypatch.setattr(systemd, "_run", fake)
+
+    systemd.require_active(_ctx(tmp_path), "a.service", "b.timer")
+
+    assert fake.calls == [
+        ["systemctl", "is-active", "--quiet", "a.service"],
+        ["systemctl", "is-active", "--quiet", "b.timer"],
+    ]
+
+
+def test_require_active_names_every_inactive_unit_not_just_the_first(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake = FakeRun(
+        {
+            ("systemctl", "is-active", "--quiet", "a.service"): 3,
+            ("systemctl", "is-active", "--quiet", "c.timer"): 3,
+        }
+    )
+    monkeypatch.setattr(systemd, "_run", fake)
+
+    with pytest.raises(InstallError, match=r"not active after deploy: a\.service, c\.timer$"):
+        systemd.require_active(_ctx(tmp_path), "a.service", "b.service", "c.timer")
 
 
 class _UnitState(FakeRun):

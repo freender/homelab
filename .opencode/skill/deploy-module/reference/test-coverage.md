@@ -55,6 +55,7 @@ commit, and this paragraph has been stale before.
 | `tests/test_ubuntu_setup_installer.py` | The ported `ubuntu-setup` installer: every refusal (staged sudoers, env, timezone, deploy user) before any write, a converged host touched not at all, the NIC-rule fallback MAC, sshd drop-in rollback, and the *effective* `sshd -T` config checked against the drop-in, since an earlier `sshd_config.d` file wins. |
 | `tests/test_pbs_client_backup_installer.py` | The ported `pbs-client-backup` installer: every refusal (env keys, flag typos, host type, staged credentials and keyfile, Ubuntu suite and vendored keyring, PVE client, `zfs`) before any write, a converged host touched not at all, the keyfile install/purge/leave-alone split, and a changed definition clearing the failed record without starting a backup. |
 | `tests/test_zfs_automation_installer.py` | The ported `zfs-automation` installer: every refusal (env keys, flag typos, staged files, a push dataset with no existing parent) before any write, a converged host touched not at all, a retired replication job's timer stopped before its service, a timer restarted only when its own unit changed, host-wide and per-job pause, failed-job recovery, and push-target grants and removal. |
+| `tests/test_metrics_exporters_installer.py` | The ported `metrics-exporters` installer, driven by real `build_file_specs` maps: every refusal (`/etc/os-release`, a partial exporter group, staged files) before any write, a converged bare-metal, all-exporter and guest host touched not at all, backports only on Debian and `-t` only on install, each textfile oneshot run only when its own files changed, restarts per exporter, every inactive unit named, retirement of unconfigured exporters with their `.prom`, retirement paths pinned to `FILE_SPECS`, and container-only masking keyed on `/dev/zfs`. |
 | `tests/test_apt_upgrade.py` | `apt-upgrade`, the single apt mechanism for the fleet since `apt-security-updates` was archived. Pins `auto_reboot` against live inventory (only the offsite hosts opt in) and `SUPPORTED_TYPES` against every host declaring the feature. |
 
 If a new module can take a host off the network or off SSH — or can desynchronize
@@ -72,7 +73,7 @@ main way coverage arrives. `wsl_conf` has installer tests in
 11% / 37% assertion-backed). `op_secrets.py` and `ssh.py` are no longer thin —
 commit `6273be2` took them to 71% / 72%. Prefer adding to these over re-covering
 well-tested areas.
-The ~1,560 lines of still-unported `scripts/install.sh` have no execution
+The ~1,130 lines of still-unported `scripts/install.sh` have no execution
 coverage at all — ShellCheck only. A port moves a module's installer into
 in-process tests that assert behaviour rather than grepping the script for a
 string. **It does not move it into the coverage report or the CRAP gate:** tests

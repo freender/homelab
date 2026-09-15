@@ -6,7 +6,8 @@ most two units in play per module so far.
 `pause()`, `retire_unit()` and `run_once()` arrived with `apt-upgrade`
 (freender/homelab-ops#30), which is the first module to need any of them;
 `ensure_stopped()` and `recover_failed()` with `docker`; `mask()` with
-`ubuntu-setup`; `reset_failed()` with `pbs-client-backup`.
+`ubuntu-setup`; `reset_failed()` with `pbs-client-backup`; `require_active()` with
+`metrics-exporters`.
 
 **`pause()` deliberately does not reproduce `homelab_apply_pause`'s return
 convention.** That helper returns 0 when paused and 1 when not, so every caller
@@ -71,6 +72,22 @@ def enable(ctx: InstallContext, unit: str) -> None:
         return
     _run(["systemctl", "enable", unit], check=True)
     log.ok(f"{unit} enabled")
+
+
+def require_active(ctx: InstallContext, *units: str) -> None:
+    """Fail the deploy unless every unit is active right now.
+
+    The port of the `systemctl is-active --quiet` lines `metrics-exporters` ends
+    with, which under `set -e` failed the deploy on the first inactive unit. All
+    units are checked and named together, so one run reports every dead exporter
+    rather than the first.
+
+    A point-in-time check: a service that crashes a second after starting still
+    passes. It catches a unit that never came up, which is what it is for.
+    """
+    inactive = [unit for unit in units if not _is_active(unit)]
+    if inactive:
+        raise InstallError(f"not active after deploy: {', '.join(inactive)}")
 
 
 def daemon_reload(ctx: InstallContext) -> None:

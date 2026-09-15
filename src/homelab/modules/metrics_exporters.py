@@ -11,6 +11,7 @@ from ..output import print_sub
 from ..ssh import HostConnection, diff_many
 
 REMOTE_ROOT = "/tmp/homelab-metrics-exporters"
+INSTALLER = "scripts/install.py"
 
 # Path smartctl_exporter is pointed at. Hosts whose disks need the scan/exit-code
 # workaround (metrics-exporters.smartctl_wrapper) get the wrapper instead of smartctl
@@ -125,13 +126,13 @@ _NODE_EXPORTER_LXC_ARGS = (
 
 # Single source of truth for what this module manages: build_name (file staged
 # under build/<host>/), remote_path, mode, and the feature flag (if any) that
-# gates whether the file is part of a given host's file-map at all. install.sh
+# gates whether the file is part of a given host's file-map at all. install.py
 # derives everything it needs (which packages to check for, which units to
 # enable/disable) from the resulting file-map instead of carrying its own copy
 # of this list.
 FILE_SPECS = (
     # zfs/smartctl need /dev/zfs and real disk device nodes, neither of which
-    # exists in an unprivileged LXC guest, so both are bare-metal only. install.sh
+    # exists in an unprivileged LXC guest, so both are bare-metal only. install.py
     # keys off their presence in the file map, so a guest simply never installs or
     # enables them.
     FileSpec(
@@ -717,9 +718,10 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
             (build_dir, f"{REMOTE_ROOT}/build/{host}"),
             (root / "metrics-exporters" / "scripts", f"{REMOTE_ROOT}/scripts"),
         ],
-        "scripts/install.sh",
+        INSTALLER,
         host,
         env=force_env(force),
         require_root=True,
+        interpreter="python3",
         remote_subdirs=("build", "lib"),
     )

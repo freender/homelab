@@ -76,8 +76,8 @@ fragile, invisible dependencies:
   real uplink traffic on `nic0`.
 
 `systemd-failed-textfile-exporter`, a host-native fallback that existed only
-because the container had no dbus access, was retired earlier;
-`scripts/install.sh` still removes it wherever it was installed.
+because the container had no dbus access, was retired earlier
+and is gone from every host.
 
 Deploy to these hosts is over the offsite root SSH path (`config.user: root`,
 `sshkey: offsite`), which requires the offsite key loaded in the shared agent
@@ -85,10 +85,12 @@ Deploy to these hosts is over the offsite root SSH path (`config.user: root`,
 
 ### Migrating a host off containerised exporters
 
-`install.sh` refuses to run while a container named `node-exporter` or
-`smartctl-exporter` is up, because the native units cannot bind `:9100`/`:9633`
-underneath it and the package postinst would fail half-way. The compose file is
-host-managed, so removing those two services is a manual step:
+The migration is complete: no host runs a `node-exporter` or `smartctl-exporter`
+container, and no compose file in this repo defines one. The installer no longer
+refuses to run while such a container is up. A host that somehow still had one
+would fail the deploy at the package postinst, because the native units cannot
+bind `:9100`/`:9633` underneath it. Removing the service from the host-managed
+compose file is a manual step:
 
 ```bash
 cd /mnt/cache/appdata/<host>-exporters
@@ -412,12 +414,11 @@ must stay.
 
 #### smartctl_exporter and Debian backports
 
-On Debian, `install.sh` writes
+On Debian, `scripts/install.py` writes
 `/etc/apt/sources.list.d/debian-backports.sources` (suite derived from
 `/etc/os-release` at install time, so it survives a Debian major upgrade) and
 installs `prometheus-smartctl-exporter` with `-t <codename>-backports`. On Ubuntu
-the package is in the normal archive, so no extra repo is added — and a
-backports file left by an earlier Debian-shaped deploy is removed. The backport is the same upstream version this module
+the package is in the normal archive, so no extra repo is added. The backport is the same upstream version this module
 previously downloaded by hand, so nothing regresses by letting `apt` own it, and
 in exchange:
 
