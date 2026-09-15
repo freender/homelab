@@ -662,14 +662,12 @@ ssh bray "curl -s http://127.0.0.1:9633/metrics | head"
 
 ## Removal
 
-```bash
-./remove.sh all
-./remove.sh --purge all
-```
+Retired (freender/homelab-ops#38), same reasoning as every other module: the repo
+no longer ships an uninstall path.
 
-**What it does:**
-- Stops and disables smartctl-exporter service
-- Stops and disables apcupsd-exporter service
-- Removes smartctl-exporter binary and config
-- Removes apcupsd-exporter binary and config
-- Optionally purges node_exporter package
+Per-feature unwind still happens on deploy — `scripts/install.py` retires the units,
+configs and textfiles for anything the host's inventory stops asking for. Removing
+the module outright is ad-hoc work against that installer's file map: disable the
+exporter units, delete the binaries, units and `/etc/default` files it lists, run
+`systemctl daemon-reload`, and purge the distro packages if wanted. Note
+`deploy: false` only skips the module; it never stops a service.

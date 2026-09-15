@@ -22,9 +22,9 @@ def force_env(force: bool) -> dict[str, str]:
     return {"FORCE_UPDATE": "true" if force else "false"}
 
 
-# Where `upload_shared_libs(include_python=True)` puts `homelab_install`, relative
-# to a module's remote staging root. Stated once here; `ssh.py` builds the same
-# path from its own two components and nothing else may hardcode it.
+# Where `upload_python_lib` puts `homelab_install`, relative to a module's remote
+# staging root. Stated once here; `ssh.py` builds the same path from its own two
+# components and nothing else may hardcode it.
 PYTHON_LIB_SUBDIR = "lib/py"
 
 
@@ -100,8 +100,8 @@ def stage_and_run_remote_installer(
     print_sub("Staging bundle...")
     connection.prepare_remote_dir(remote_root, *remote_subdirs)
     connection.upload_paths(upload_paths)
-    connection.upload_shared_libs(root, remote_root, include_python=python_installer)
     if python_installer:
+        connection.upload_python_lib(root, remote_root)
         env = python_lib_env(remote_root, env)
 
     print_sub("Running installer...")

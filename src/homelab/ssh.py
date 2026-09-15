@@ -89,25 +89,21 @@ class HostConnection:
                 self.connection.run(f"mkdir -p {shlex.quote(parent)}", hide=True)
                 self.connection.put(str(path), remote=target_path)
 
-    def upload_shared_libs(
-        self, root: Path, remote_root: str, *, include_python: bool = False
-    ) -> None:
-        """Stage the shared remote libraries under `{remote_root}/lib/`.
+    def upload_python_lib(self, root: Path, remote_root: str) -> None:
+        """Stage `lib/py/homelab_install/` — the stdlib-only installer library.
 
-        `include_python` adds `lib/py/homelab_install/`, the stdlib-only installer
-        library a `scripts/install.py` imports. It is off by default so a bash
-        installer's bundle stays exactly what it is today; the caller that knows
-        which installer is about to run (`stage_and_run_remote_installer`) turns it
-        on. Both bash libs keep uploading either way — a half-ported tree runs both
-        kinds of installer, and `lib/utils.sh` is cheap.
+        This was `upload_shared_libs`, which also pushed `lib/print.sh` and
+        `lib/utils.sh` into every bundle so that a half-ported tree could run
+        either kind of installer. Both are gone (homelab-ops#38): the only bash
+        installers left are the three `pve-*-patch` modules, and they have never
+        sourced either file. The caller that knows which installer is about to
+        run (`stage_and_run_remote_installer`) is the one that skips this for
+        them, rather than a flag on a function that would otherwise do nothing.
         """
-        self.upload(root / "lib" / "print.sh", f"{remote_root}/lib/print.sh")
-        self.upload(root / "lib" / "utils.sh", f"{remote_root}/lib/utils.sh")
-        if include_python:
-            self.upload(
-                root / "lib" / "py" / "homelab_install",
-                f"{remote_root}/lib/py/homelab_install",
-            )
+        self.upload(
+            root / "lib" / "py" / "homelab_install",
+            f"{remote_root}/lib/py/homelab_install",
+        )
 
     def upload_paths(self, paths: list[tuple[Path, str]]) -> None:
         for local_path, remote_path in paths:

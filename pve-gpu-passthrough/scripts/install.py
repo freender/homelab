@@ -11,9 +11,12 @@ Worth knowing before reading:
 
 * **Every refusal happens before anything is written.** The cmdline token, the
   root dataset and `/etc/kernel/cmdline` itself are all checked first. The bash
-  backed files up before checking, and deployed the emergency removal script
-  last -- after the boot config it exists to undo.
-* **The emergency removal script is installed first**, for that reason.
+  backed files up before checking.
+* **No emergency removal script** (homelab-ops#38). The `/root/` copy this
+  installed existed for a node left headless by a blacklisted host GPU driver,
+  and `isolate_host_gpu` is now false on every host, so nothing blacklists one.
+  The unwind is `pci_ids: ""` in `hosts.conf` plus a redeploy: `sync_managed_file`
+  removes whatever is no longer rendered, which is what the script did by hand.
 * **Backups only on change.** The bash backed up `/etc/kernel/cmdline` and
   `/etc/modules` unconditionally, so every no-op deploy wrote a `.bak` and
   pruned a real one: all four nodes held three copies of an identical cmdline,
@@ -43,13 +46,11 @@ REQUIRED_ROOT_TOKEN = "root=ZFS=rpool/ROOT/pve-1"
 ROOT_DATASET = REQUIRED_ROOT_TOKEN.removeprefix("root=ZFS=")
 LEGACY_DRIVERS = ("i915", "nvidia", "nouveau")
 MIGRATED_MARKER = "  # Migrated by pve-gpu-passthrough"
-REMOVAL_SCRIPT = "remove-local.sh"
 
 # Module-level so tests can rebind them under tmp_path.
 KERNEL_CMDLINE = "/etc/kernel/cmdline"
 ETC_MODULES = "/etc/modules"
 LEGACY_BLACKLIST = "/etc/modprobe.d/blacklist.conf"
-REMOVAL_SCRIPT_DEST = "/root/pve-gpu-passthrough-remove.sh"
 # build name -> destination. A name absent from the build means the host's
 # inventory no longer asks for it, and the destination is removed.
 MANAGED_FILES = {
@@ -161,9 +162,6 @@ def run_boot_command(argv: list[str]) -> None:
 def install(ctx: InstallContext) -> None:
     log.header("PVE GPU Passthrough")
     cmdline_src = preflight(ctx)
-
-    log.action("Emergency removal script")
-    files.install_from(ctx, ctx.script_dir / "scripts" / REMOVAL_SCRIPT, REMOVAL_SCRIPT_DEST, "755")
 
     log.action("systemd-boot cmdline")
     boot_changed = files.install_from(ctx, cmdline_src, KERNEL_CMDLINE, "644", backup=True)

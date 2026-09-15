@@ -434,59 +434,36 @@ def test_upload_dir_skips_bytecode_caches(monkeypatch, tmp_path: Path) -> None:
 
 
 def _lib_tree(root: Path) -> None:
-    (root / "lib").mkdir()
-    (root / "lib" / "print.sh").write_text("print\n", encoding="utf-8")
-    (root / "lib" / "utils.sh").write_text("utils\n", encoding="utf-8")
     package = root / "lib" / "py" / "homelab_install"
     package.mkdir(parents=True)
     (package / "__init__.py").write_text("x\n", encoding="utf-8")
     (package / "files.py").write_text("x\n", encoding="utf-8")
 
 
-def test_upload_shared_libs_sends_both_lib_files(monkeypatch, tmp_path: Path) -> None:
+def test_upload_python_lib_sends_the_whole_package(monkeypatch, tmp_path: Path) -> None:
     dummy = DummyConnection("test-host")
     connection = _connection(monkeypatch, dummy)
     _lib_tree(tmp_path)
 
-    connection.upload_shared_libs(tmp_path, "/tmp/build")
+    connection.upload_python_lib(tmp_path, "/tmp/build")
 
     assert [remote for _local, remote in dummy.put_calls] == [
-        "/tmp/build/lib/print.sh",
-        "/tmp/build/lib/utils.sh",
-    ]
-
-
-def test_upload_shared_libs_adds_the_python_library_on_request(
-    monkeypatch, tmp_path: Path
-) -> None:
-    dummy = DummyConnection("test-host")
-    connection = _connection(monkeypatch, dummy)
-    _lib_tree(tmp_path)
-
-    connection.upload_shared_libs(tmp_path, "/tmp/build", include_python=True)
-
-    assert [remote for _local, remote in dummy.put_calls] == [
-        "/tmp/build/lib/print.sh",
-        "/tmp/build/lib/utils.sh",
         "/tmp/build/lib/py/homelab_install/__init__.py",
         "/tmp/build/lib/py/homelab_install/files.py",
     ]
 
 
-def test_upload_shared_libs_still_sends_the_bash_libs_alongside_python(
-    monkeypatch, tmp_path: Path
-) -> None:
-    """A half-ported tree runs both kinds of installer; dropping `utils.sh` from a
-    Python module's bundle would break any sub-installer it still shells out to."""
+def test_upload_python_lib_sends_no_bash_libs(monkeypatch, tmp_path: Path) -> None:
+    """`lib/print.sh` and `lib/utils.sh` are deleted (homelab-ops#38). A bundle that
+    still tried to carry them would fail on the upload, not skip them quietly."""
     dummy = DummyConnection("test-host")
     connection = _connection(monkeypatch, dummy)
     _lib_tree(tmp_path)
 
-    connection.upload_shared_libs(tmp_path, "/tmp/build", include_python=True)
+    connection.upload_python_lib(tmp_path, "/tmp/build")
 
     remotes = [remote for _local, remote in dummy.put_calls]
-    assert "/tmp/build/lib/utils.sh" in remotes
-    assert "/tmp/build/lib/print.sh" in remotes
+    assert not any(remote.endswith(".sh") for remote in remotes)
 
 
 def test_upload_paths_preserves_the_given_order(monkeypatch, tmp_path: Path) -> None:

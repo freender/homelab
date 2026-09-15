@@ -7,8 +7,9 @@ cmdline render and the orchestrator's token guard live in `test_render_golden.py
 What carries the risk, and what these pin:
 
 * **Refusals come before writes.** A bad cmdline or a missing root dataset must
-  leave the host exactly as it was -- including the removal script, which is
-  otherwise installed first.
+  leave the host exactly as it was.
+* **Nothing is installed to `/root/`.** The emergency removal script is retired
+  (homelab-ops#38); the unwind is `pci_ids: ""` plus a redeploy.
 * **A no-op deploy runs no boot command and writes no backup.** The bash backed
   up the cmdline on every run, so three routine deploys pruned the copy a human
   would want after a bad boot.
@@ -65,14 +66,12 @@ class Host:
         self.build.mkdir(parents=True)
         scripts = tmp_path / "stage" / "scripts"
         scripts.mkdir(parents=True)
-        (scripts / "remove-local.sh").write_text("#!/bin/bash\n", encoding="utf-8")
         (self.build / "cmdline").write_text(CMDLINE, encoding="utf-8")
 
         paths = {
             "KERNEL_CMDLINE": self.etc / "kernel" / "cmdline",
             "ETC_MODULES": self.etc / "modules",
             "LEGACY_BLACKLIST": self.etc / "modprobe.d" / "blacklist.conf",
-            "REMOVAL_SCRIPT_DEST": tmp_path / "root" / "pve-gpu-passthrough-remove.sh",
         }
         for name, path in paths.items():
             monkeypatch.setattr(self.installer, name, str(path))
@@ -87,7 +86,6 @@ class Host:
         self.cmdline = paths["KERNEL_CMDLINE"]
         self.modules = paths["ETC_MODULES"]
         self.legacy = paths["LEGACY_BLACKLIST"]
-        self.removal = paths["REMOVAL_SCRIPT_DEST"]
         self.cmdline.parent.mkdir(parents=True)
         self.cmdline.write_text(CMDLINE, encoding="utf-8")
         self.modules.write_text(ETC_MODULES, encoding="utf-8")
@@ -145,11 +143,6 @@ def test_both_ends_agree_on_the_root_token_and_destinations() -> None:
     }
 
 
-def test_the_removal_script_the_installer_copies_is_staged() -> None:
-    installer = load_installer()
-    assert (REPO_ROOT / "pve-gpu-passthrough" / "scripts" / installer.REMOVAL_SCRIPT).is_file()
-
-
 def test_validate_requires_the_python_installer(tmp_path: Path) -> None:
     configs = tmp_path / "pve-gpu-passthrough" / "configs"
     configs.mkdir(parents=True)
@@ -197,7 +190,6 @@ def test_an_unsafe_cmdline_is_refused_before_anything_is_written(
         host.install()
 
     assert host.cmdline.read_text(encoding="utf-8") == CMDLINE
-    assert not host.removal.exists()
     assert not Path(host.managed["vfio.conf"]).exists()
     assert host.run.calls == []
 
@@ -217,7 +209,6 @@ def test_a_missing_root_dataset_is_refused_before_anything_is_written(host: Host
 
     assert host.run.calls == [["zfs", "list", "-H", "-o", "name", "rpool/ROOT/pve-1"]]
     assert host.cmdline.read_text(encoding="utf-8") == CMDLINE
-    assert not host.removal.exists()
 
 
 def test_a_host_without_systemd_boot_is_refused(host: Host) -> None:
@@ -238,8 +229,6 @@ def test_a_converged_host_runs_no_boot_command_and_writes_no_backup(host: Host) 
     host.render("modules", "vfio\n")
     host.place("vfio.conf", "options vfio-pci ids=10de:2208\n")
     host.place("modules", "vfio\n")
-    host.removal.parent.mkdir(parents=True)
-    host.removal.write_text("#!/bin/bash\n", encoding="utf-8")
 
     host.install()
 
@@ -247,10 +236,12 @@ def test_a_converged_host_runs_no_boot_command_and_writes_no_backup(host: Host) 
     assert host.backups() == []
 
 
-def test_the_removal_script_is_installed_executable(host: Host) -> None:
+def test_the_retired_removal_script_is_not_installed(host: Host) -> None:
+    """`/root/pve-gpu-passthrough-remove.sh` is gone (homelab-ops#38). A deploy
+    that re-created it would undo the manual cleanup done on the four nodes."""
     host.install()
-    assert host.removal.read_text(encoding="utf-8") == "#!/bin/bash\n"
-    assert host.removal.stat().st_mode & 0o777 == 0o755
+    assert not (host.script_dir.parent / "root").exists()
+    assert not hasattr(load_installer(), "REMOVAL_SCRIPT_DEST")
 
 
 # ---------------------------------------------------------------------------

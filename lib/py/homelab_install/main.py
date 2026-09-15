@@ -1,6 +1,7 @@
-"""The `run()` harness -- replaces the 19-line preamble every `install.sh` opens
+"""The `run()` harness -- replaces the 19-line preamble every `install.sh` opened
 with (`set -e`, `HOST=${1:-$(hostname)}`, `SCRIPT_DIR`, `BUILD_DIR`, sourcing
-`lib/utils.sh` or dying, `require_dir`/`require_file`).
+`lib/utils.sh` or dying, `require_dir`/`require_file`). That file is gone
+(homelab-ops#38); this is what every module opens with now.
 
 Deliberately does **not** replicate `keepalived/scripts/install.sh:5-7`'s `sudo -n`
 re-exec -- it is dead code on every target host (helm/neo/tower are all

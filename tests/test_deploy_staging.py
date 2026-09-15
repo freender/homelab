@@ -28,7 +28,7 @@ class RecordingConnection:
     def __init__(self) -> None:
         self.prepared: list[tuple[str, tuple[str, ...]]] = []
         self.uploaded: list[list[tuple[Path, str]]] = []
-        self.shared_libs: list[tuple[Path, str, bool]] = []
+        self.python_libs: list[tuple[Path, str]] = []
         self.installer_calls: list[dict[str, Any]] = []
 
     def prepare_remote_dir(self, remote_root: str, *subdirs: str) -> None:
@@ -37,10 +37,8 @@ class RecordingConnection:
     def upload_paths(self, paths: list[tuple[Path, str]]) -> None:
         self.uploaded.append(paths)
 
-    def upload_shared_libs(
-        self, root: Path, remote_root: str, *, include_python: bool = False
-    ) -> None:
-        self.shared_libs.append((root, remote_root, include_python))
+    def upload_python_lib(self, root: Path, remote_root: str) -> None:
+        self.python_libs.append((root, remote_root))
 
     def run_remote_installer(self, remote_dir: str, installer: str, *args: str, **kwargs) -> None:
         self.installer_calls.append(
@@ -121,14 +119,15 @@ def test_python_lib_env_does_not_mutate_the_callers_dict() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_staging_a_bash_installer_leaves_the_bundle_unchanged() -> None:
-    """The regression guard for the whole ticket: 20-odd modules still ship bash,
-    and none of them should have gained a `PYTHONPATH` or a `lib/py/` upload."""
+def test_staging_a_bash_installer_uploads_no_library_at_all() -> None:
+    """The three `pve-*-patch` modules are the only bash installers left, and they
+    source nothing — so their bundle is now their own files and nothing else. They
+    must not gain a `PYTHONPATH` or a `lib/py/` upload either."""
     connection = RecordingConnection()
 
     _stage(connection, "scripts/install.sh", env={"FORCE_UPDATE": "false"})
 
-    assert connection.shared_libs == [(Path("/repo"), "/tmp/homelab-demo", False)]
+    assert connection.python_libs == []
     assert connection.installer_calls[0]["env"] == {"FORCE_UPDATE": "false"}
 
 
@@ -145,7 +144,7 @@ def test_staging_a_python_installer_uploads_the_shared_library() -> None:
 
     _stage(connection, "scripts/install.py", interpreter="python3")
 
-    assert connection.shared_libs == [(Path("/repo"), "/tmp/homelab-demo", True)]
+    assert connection.python_libs == [(Path("/repo"), "/tmp/homelab-demo")]
 
 
 def test_staging_a_python_installer_sets_pythonpath_alongside_force_update() -> None:

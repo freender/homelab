@@ -659,8 +659,8 @@ def test_parse_file_map_reads_name_dest_mode(tmp_path: Path) -> None:
 
 
 def test_parse_file_map_defaults_a_missing_mode_to_644(tmp_path: Path) -> None:
-    """Matches `load_file_map` in `lib/utils.sh`; a different default would silently
-    re-permission every entry written without one."""
+    """Inherited from `load_file_map` in the retired `lib/utils.sh`; a different
+    default would silently re-permission every entry written without one."""
     path = tmp_path / "file-map.conf"
     path.write_text("a.conf|/etc/a.conf\nb.conf|/etc/b.conf|\n", encoding="utf-8")
 
@@ -918,11 +918,15 @@ def test_run_exits_2_with_a_traceback_on_an_unexpected_error(
 
 
 # ---------------------------------------------------------------------------
-# log — frozen byte-for-byte on lib/print.sh (#31 decision 5)
+# log — the prefixes inherited from the retired lib/print.sh (#31 decision 5)
+#
+# This is now the only definition of them (homelab-ops#38). Asserted as literals
+# for that reason: there is no second file left to cross-check against, and deploy
+# logs from before and after the port have to stay greppable as one corpus.
 # ---------------------------------------------------------------------------
 
 
-def test_log_helpers_match_print_sh_byte_for_byte(capsys: pytest.CaptureFixture[str]) -> None:
+def test_log_helpers_emit_the_frozen_prefixes(capsys: pytest.CaptureFixture[str]) -> None:
     log.header("Keepalived")
     log.action("Package")
     log.sub("detail")
@@ -939,19 +943,6 @@ def test_log_helpers_match_print_sh_byte_for_byte(capsys: pytest.CaptureFixture[
         "    \u2717 Warning: careful\n"
     )
     assert captured.err == "    \u2717 Error: broken\n"
-
-
-def test_log_format_still_matches_the_bash_originals() -> None:
-    """Read the real `lib/print.sh` rather than restating its format here, so the
-    two cannot drift apart silently while both tests stay green."""
-    print_sh = (REPO_ROOT / "lib" / "print.sh").read_text(encoding="utf-8")
-
-    assert 'echo "=== $* ==="' in print_sh
-    assert 'echo "==> $*"' in print_sh
-    assert 'echo "    $*"' in print_sh
-    assert 'echo "    \u2713 $*"' in print_sh
-    assert 'echo "    \u2717 Warning: $*"' in print_sh
-    assert 'echo "    \u2717 Error: $*" >&2' in print_sh
 
 
 # ---------------------------------------------------------------------------
@@ -1323,9 +1314,14 @@ def test_backup_is_skipped_when_there_is_nothing_to_back_up(tmp_path: Path) -> N
     assert list(tmp_path.glob("config.bak.*")) == []
 
 
-def test_backup_history_is_pruned_to_the_same_depth_as_utils_sh(tmp_path: Path) -> None:
-    """A half-ported tree must not prune to two different depths depending on
-    which installer last touched the file."""
+def test_backup_history_is_pruned_to_three_copies(tmp_path: Path) -> None:
+    """The depth is asserted as a literal, not against `BACKUP_KEEP_COUNT`.
+
+    It used to be cross-checked against `lib/utils.sh`, which is gone
+    (homelab-ops#38). Comparing to the constant the code already uses would make
+    this test agree with any value; hosts carry `.bak.` siblings written under the
+    old depth, so the number itself is the thing worth pinning.
+    """
     dest = tmp_path / "config"
     dest.write_text("current\n", encoding="utf-8")
     for index in range(6):
@@ -1333,7 +1329,8 @@ def test_backup_history_is_pruned_to_the_same_depth_as_utils_sh(tmp_path: Path) 
 
     files._backup(dest)
 
-    assert len(list(tmp_path.glob("config.bak.*"))) == files.BACKUP_KEEP_COUNT
+    assert len(list(tmp_path.glob("config.bak.*"))) == 3
+    assert files.BACKUP_KEEP_COUNT == 3
 
 
 def test_install_is_unaffected_by_the_new_backup_default(tmp_path: Path) -> None:
@@ -1683,9 +1680,23 @@ def test_recover_failed_reports_each_outcome_and_never_raises(
     assert fake.kwargs[verbs.index("start")]["timeout"] == 7
 
 
-def test_recover_failed_defaults_to_the_bash_timeout() -> None:
-    utils = (Path(__file__).resolve().parents[1] / "lib" / "utils.sh").read_text(encoding="utf-8")
-    assert f"HOMELAB_RECOVER_TIMEOUT:-{systemd.RECOVER_TIMEOUT_S}}}" in utils
+def test_recover_failed_passes_its_default_timeout_to_systemctl_start(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The default must actually reach the subprocess, not just exist as a constant.
+
+    This used to cross-check `HOMELAB_RECOVER_TIMEOUT` in `lib/utils.sh`, which is
+    gone (homelab-ops#38). A caller that omits `timeout=` is the common case, and a
+    default that never made it to `start` would hang a deploy on a wedged unit.
+    """
+    fake = FakeRecover(0, False)
+    monkeypatch.setattr(systemd, "_run", fake)
+
+    systemd.recover_failed(_ctx(tmp_path), "u.service")
+
+    verbs = [call[1] for call in fake.calls]
+    assert fake.kwargs[verbs.index("start")]["timeout"] == 300
+    assert systemd.RECOVER_TIMEOUT_S == 300
 
 
 # ---------------------------------------------------------------------------

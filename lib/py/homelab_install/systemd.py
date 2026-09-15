@@ -185,7 +185,9 @@ def run_once(ctx: InstallContext, unit: str) -> None:
         raise InstallError(f"{unit} failed (systemctl start exited {result.returncode})")
 
 
-# Matches `HOMELAB_RECOVER_TIMEOUT`'s default in lib/utils.sh.
+# Inherited from `HOMELAB_RECOVER_TIMEOUT`'s default in the retired lib/utils.sh
+# (homelab-ops#38); this is now its only definition. Long enough for the slowest
+# managed unit to start, short enough that a wedged one does not hold a deploy.
 RECOVER_TIMEOUT_S = 300
 
 

@@ -138,63 +138,33 @@ List IOMMU groups:
 ssh <host> "find /sys/kernel/iommu_groups/ -type l | sort -V"
 ```
 
-## Emergency Recovery
+## Removing Passthrough
 
-### Restore Console Display (Remove GPU Passthrough)
+**Set `pci_ids: ""` for the host in `hosts.conf`, redeploy, reboot.**
 
-**Use when:** GPU passthrough prevents console access and you need to restore display output.
-
-**Method 1: Pre-deployed Script (Fastest)**
-
-Script is auto-deployed to `/root/pve-gpu-passthrough-remove.sh` on each host during deployment.
-
-1) Boot into recovery mode:
-   - Hold `Space` at systemd-boot menu
-   - Press `e` on Proxmox entry
-   - Append `systemd.unit=emergency.target` to options line
-   - Press `Ctrl+X` to boot to root shell
-
-2) Execute removal script:
 ```bash
-/root/pve-gpu-passthrough-remove.sh
+cd ~/homelab
+./deploy pve-gpu-passthrough clovis
+ssh clovis reboot
 ```
 
-3) Reboot:
-```bash
-reboot
-```
+`sync_managed_file` in `scripts/install.py` removes every managed file the host no
+longer renders — `vfio.conf`, the VFIO module list, the GPU blacklist — and restores
+the baseline cmdline. That is the same work the retired `remove.sh` did, through code
+that is tested and runs on every deploy.
 
-**Method 2: Remote Execution (from helm)**
+**There is no emergency removal script.** `/root/pve-gpu-passthrough-remove.sh` and
+`remove.sh` were retired in freender/homelab-ops#38. They existed for a node left
+without console output by a blacklisted host GPU driver, and `isolate_host_gpu` is
+false on every host today, so nothing blacklists one: `ace`, `bray` and `osiris`
+render no modprobe files at all, and `clovis` binds only a secondary NVIDIA card.
 
-If SSH access is available:
-```bash
-cd ~/homelab/pve-gpu-passthrough
-./remove.sh ace          # Remove from specific host
-./remove.sh all          # Remove from all hosts
-./remove.sh --yes ace     # Skip confirmation
-
-# Then reboot
-ssh ace reboot
-```
-
-**Note:** The script discovers and validates Proxmox hosts from `hosts.conf` (`config.type: pve`).
-
-**What it does:**
-- Removes `video=efifb:off` from kernel cmdline
-- Comments out GPU driver blacklists
-- Comments out VFIO device bindings
-- Removes VFIO module config
-- Preserves IOMMU/ACS settings
-- Updates initramfs and bootloader
-
-**After recovery:** GPU will use native driver (i915/nouveau) and display will work.
-
-**Re-enable passthrough:**
-```bash
-cd ~/homelab/pve-gpu-passthrough
-./deploy pve-gpu-passthrough ace
-ssh ace reboot
-```
+If a future host does set `isolate_host_gpu: true`, that recovery path has to be
+reconsidered before the first deploy — from a recovery console
+(`systemd.unit=emergency.target` at the systemd-boot menu), the unwind is by hand:
+restore `/etc/kernel/cmdline` from its `.bak.` sibling, delete
+`/etc/modprobe.d/homelab-gpu-blacklist.conf`, then `update-initramfs -u -k all` and
+`proxmox-boot-tool refresh`.
 
 ## Troubleshooting
 
@@ -257,7 +227,7 @@ If Proxmox takes 30-60 seconds before the GPU shows output, reboot `clovis` to c
 ### No display after reboot
 **Expected behavior** - GPU is bound to vfio-pci and unavailable to host.
 
-**Solution:** Use Proxmox web GUI at `https://<host>:8006` or see Emergency Recovery above.
+**Solution:** Use Proxmox web GUI at `https://<host>:8006`, or see "Removing Passthrough" above.
 
 ### Code 43 error in Windows VM
 NVIDIA driver returns Code 43 when KVM detection enabled.
@@ -295,7 +265,8 @@ If host console appears to hang during boot, this is expected.
 
 **Cause:** GPU passed to VM, no display output available to host.
 
-**Recovery:** Run `/root/pve-gpu-passthrough-remove.sh` from recovery console (see Emergency Recovery above)
+**Recovery:** See "Removing Passthrough" above. Not reachable today — no host sets
+`isolate_host_gpu: true`, so the host driver is never blacklisted.
 
 ## File Locations
 
@@ -331,11 +302,9 @@ cd ~/homelab/pve-gpu-passthrough
 ssh <host> reboot
 ```
 
-**Emergency Recovery:**
+**Removing passthrough:**
 ```bash
-# From recovery console on affected host:
-/root/pve-gpu-passthrough-remove.sh
-
-# From helm (if SSH works):
-./remove.sh <host>
+# Set pci_ids: "" for the host in hosts.conf, then:
+./deploy pve-gpu-passthrough <host>
+ssh <host> reboot
 ```

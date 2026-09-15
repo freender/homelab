@@ -49,32 +49,15 @@ cd ~/homelab && ./deploy apcupsd all
 
 ## Removal
 
-**Single host:**
-```bash
-./remove.sh <hostname>
-```
+Retired (freender/homelab-ops#38). There is no `remove.sh` and no `homelab remove`;
+an uninstall path that existed for 3 of 25 modules was a half-feature, so the repo
+no longer claims one.
 
-**All hosts:**
-```bash
-./remove.sh all
-```
-
-**Purge package:**
-```bash
-./remove.sh --purge all
-```
-
-**Skip confirmation:**
-```bash
-./remove.sh --yes all
-```
-
-**What it does:**
-- Stops and disables the apcupsd service
-- Backs up `/etc/apcupsd/` to `/etc/apcupsd.bak.TIMESTAMP`
-- Removes config files (including the retired telegram integration, if present)
-- Resets `/etc/default/apcupsd` (ISCONFIGURED=no)
-- Optionally purges the apcupsd package with `--purge`
+Per-feature unwind still happens on deploy — dropping the cluster role retires the
+HA rearm unit and its script (`scripts/install.py`). Removing the module outright
+is ad-hoc work against that installer: stop and disable `apcupsd`, delete the files
+it lists, reset `ISCONFIGURED=no` in `/etc/default/apcupsd`, and purge the package
+if wanted. Note `deploy: false` only skips the module; it never stops a service.
 
 ## Testing
 

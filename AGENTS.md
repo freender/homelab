@@ -190,8 +190,9 @@ delete `mutants/` by hand once after pulling this change.
 Scope is `[tool.mutmut].only_mutate` in `pyproject.toml` and is stated nowhere else — the
 paths where a wrong answer is *silent* rather than an exception. Widening it is a
 deliberate act; the Fabric surface fails loudly and is not worth the runtime. Nothing here
-touches Bash, so `lib/utils.sh`, the `remove*.sh` scripts and the three patch modules'
-`install.sh` stay covered only by their own subprocess tests.
+touches Bash, so the three patch modules' `install.sh` — the only bash installers left,
+after `lib/utils.sh`, `lib/print.sh` and the four `remove*.sh` were deleted in
+homelab-ops#38 — stay covered only by their own subprocess tests.
 
 **`only_mutate` globs whole files — there is no function-level granularity** (patterns
 must end in `*` or `.py`, and `do_not_mutate_patterns` is parsed but unused in mutmut

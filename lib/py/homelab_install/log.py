@@ -1,6 +1,7 @@
-"""Output helpers, frozen byte-for-byte on `lib/print.sh` (decision 5 of
-freender/homelab-ops#31). No new glyphs, no footer/summary logic here -- the
-`<Module> Complete` footer belongs to the run() harness, not this module.
+"""Output helpers, frozen byte-for-byte on the retired `lib/print.sh` (decision 5
+of freender/homelab-ops#31; that file is now deleted, homelab-ops#38, so this is
+the only definition of the prefixes). No new glyphs, no footer/summary logic here
+-- the `<Module> Complete` footer belongs to the run() harness, not this module.
 """
 
 from __future__ import annotations

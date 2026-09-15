@@ -32,9 +32,11 @@ from . import log
 from .context import InstallContext
 from .errors import InstallError
 
-# Matches `BACKUP_KEEP_COUNT` in lib/utils.sh. Changing it here alone would mean
-# a half-ported tree pruned to two different depths depending on which installer
-# last touched the file.
+# How many `.bak.<timestamp>` siblings survive a backup. Inherited from
+# `BACKUP_KEEP_COUNT` in the retired lib/utils.sh (homelab-ops#38), which is why
+# it is 3 and not a rounder number; this is now its only definition. Raising it
+# means more copies of the same file in active config directories, which AGENTS.md
+# already restricts.
 BACKUP_KEEP_COUNT = 3
 
 # Indirection point for tests, same pattern as `homelab_install.systemd._run`.
@@ -44,9 +46,10 @@ _run = subprocess.run
 def _backup(dest: Path) -> None:
     """Copy `dest` aside as `<dest>.bak.<timestamp>`, keeping the newest few.
 
-    Same scheme and retention as `backup_config`/`prune_backup_history` in
-    lib/utils.sh, deliberately: these siblings are read by a human after a bad
-    deploy, and two naming schemes would mean looking in two places.
+    The scheme and retention are inherited from `backup_config`/
+    `prune_backup_history` in the retired lib/utils.sh, deliberately: hosts still
+    carry `.bak.<timestamp>` siblings that bash wrote, and these are read by a
+    human after a bad deploy. Two naming schemes would mean looking in two places.
 
     Note this is the sibling-file scheme, which AGENTS.md restricts to files that
     are *not* inside an active include directory -- `~/.ssh/config` and

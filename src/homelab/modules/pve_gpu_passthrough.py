@@ -184,7 +184,6 @@ def stage_and_install(
         [
             (build_dir, f"{REMOTE_ROOT}/build/{host}"),
             (root / "pve-gpu-passthrough" / "scripts", f"{REMOTE_ROOT}/scripts"),
-            (root / "pve-gpu-passthrough" / "remove.sh", f"{REMOTE_ROOT}/remove.sh"),
         ],
         INSTALLER,
         host,
