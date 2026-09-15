@@ -37,8 +37,8 @@ transient fault -> `homelab_recover_failed_units`; unit going away ->
   unwanted distro default) and clear its failed record. Idempotent, and a
   reported no-op when the unit isn't installed. The reason is optional and
   echoed to output — omit it rather than asserting something host-specific you
-  haven't verified. Used by `pve-postinstall`; `ubuntu-setup` uses its Python port,
-  `homelab_install.systemd.mask`.
+  haven't verified. The bash helper has no caller since `pve-postinstall` ported;
+  `pve-postinstall` and `ubuntu-setup` use its Python port, `homelab_install.systemd.mask`.
 - **`homelab_recover_failed_units unit1 [unit2 ...]`** — for units that fail
   from *transient external* causes (registry rate limits, network blips), where
   a redeploy sees no file change and so the gated helper above does nothing.

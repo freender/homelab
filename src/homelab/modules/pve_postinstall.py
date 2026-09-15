@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
-from ..build import copy_files, render_file
+from ..build import copy_files, render_file, write_env_file
 from ..deploy import DeploySession, force_env, prepare_build_dir, stage_and_run_remote_installer
 from ..hosts import HostLookupError, default_registry
 from ..module_support import FileSpec, normalize_bool, run_module_deploy, write_file_map
@@ -16,6 +16,7 @@ class _Registry(Protocol):
     def get(self, host: str, key: str, default: object = None) -> object: ...
 
 REMOTE_ROOT = "/tmp/homelab-pve-postinstall"
+INSTALLER = "scripts/install.py"
 PVE_FILES = [
     "proxmox.sources",
     "pve-test.sources",
@@ -206,6 +207,7 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
     build_cluster_rejoin_helper(root, build_dir)
 
     write_file_map(build_dir, FILE_SPECS)
+    write_installer_env(build_dir / "env", settings)
     build_network_interfaces_bundle(root, host, build_dir)
 
     connection = HostConnection(host)
@@ -225,19 +227,7 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
         report_dry_run(host, build_dir, interfaces_path)
         return
 
-    stage_and_install(
-        root,
-        host,
-        settings.host_type,
-        settings.timezone,
-        settings.import_pools,
-        settings.mounts,
-        settings.expected_clustered,
-        settings.cluster_link0,
-        build_dir,
-        connection,
-        force=force,
-    )
+    stage_and_install(root, host, build_dir, connection, force=force)
 
 
 def build_network_interfaces_bundle(root: Path, host: str, build_dir: Path) -> None:
@@ -416,15 +406,29 @@ def build_cluster_rejoin_helper(root: Path, build_dir: Path) -> None:
     )
 
 
+def write_installer_env(path: Path, settings: HostSettings) -> None:
+    """Hand the installer its settings through `build/<host>/env`.
+
+    `install.py` requires every key to be present, so a truncated render fails the
+    deploy instead of reading as no pools, no mounts and not clustered -- which is
+    what the positional arguments this replaced defaulted to. The host type is not
+    sent: `_pve_host_type` already refused anything but `pve`.
+    """
+    write_env_file(
+        path,
+        {
+            "TIMEZONE": settings.timezone,
+            "IMPORT_POOLS": settings.import_pools,
+            "MOUNTS": settings.mounts,
+            "EXPECTED_CLUSTERED": settings.expected_clustered,
+            "CLUSTER_LINK0": settings.cluster_link0,
+        },
+    )
+
+
 def stage_and_install(
     root: Path,
     host: str,
-    host_type: str,
-    timezone: str,
-    import_pools: str,
-    mounts: str,
-    expected_clustered: str,
-    cluster_link0: str,
     build_dir: Path,
     connection: HostConnection,
     force: bool,
@@ -438,15 +442,10 @@ def stage_and_install(
         connection,
         REMOTE_ROOT,
         upload_paths,
-        "scripts/install.sh",
+        INSTALLER,
         host,
-        host_type,
-        timezone,
-        import_pools,
-        mounts,
-        expected_clustered,
-        cluster_link0,
         env=force_env(force),
         require_root=True,
+        interpreter="python3",
         remote_subdirs=("build", "lib"),
     )
