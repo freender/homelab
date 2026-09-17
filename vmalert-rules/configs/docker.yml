@@ -78,6 +78,30 @@ groups:
           summary: "{{ $labels.host }} {{ $labels.mountpoint }} is almost full"
           description: "Filesystem has less than 5 percent free space for 5 minutes."
 
+      # Forecast counterpart to the two filesystem rules above; same design and
+      # same band-limiting as NodeFilesystemFillingUp in node-resources.yml,
+      # which covers the hosts this file does not.
+      #
+      # This is where the forecast earns the most: /mnt/tank/media and
+      # /mnt/cache/downloads grow monotonically under normal use, so "10 percent
+      # free" arrives as a surprise on a multi-TB volume where 10 percent is
+      # still hundreds of GB and the remaining time depends entirely on the fill
+      # rate. A projection states the remaining time directly.
+      - alert: DockerHostFilesystemFillingUp
+        expr: |
+          predict_linear(node_filesystem_avail_bytes{job="pve-node", host=~"tower|helm|neo", fstype!="tmpfs", mountpoint=~"/|/mnt/cache/appdata|/mnt/cache/downloads|/mnt/cache/pictures|/mnt/cache/documents|/mnt/cache/obsidian|/mnt/cache/logseq|/mnt/cache/games|/mnt/tank/media"}[24h], 7 * 24 * 3600) < 0
+          and
+          node_filesystem_avail_bytes{job="pve-node", host=~"tower|helm|neo", fstype!="tmpfs", mountpoint=~"/|/mnt/cache/appdata|/mnt/cache/downloads|/mnt/cache/pictures|/mnt/cache/documents|/mnt/cache/obsidian|/mnt/cache/logseq|/mnt/cache/games|/mnt/tank/media"}
+          /
+          node_filesystem_size_bytes{job="pve-node", host=~"tower|helm|neo", fstype!="tmpfs", mountpoint=~"/|/mnt/cache/appdata|/mnt/cache/downloads|/mnt/cache/pictures|/mnt/cache/documents|/mnt/cache/obsidian|/mnt/cache/logseq|/mnt/cache/games|/mnt/tank/media"}
+          > 0.10 < 0.30
+        for: 6h
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.host }} {{ $labels.mountpoint }} is on track to fill within 7 days"
+          description: "{{ $labels.mountpoint }} on {{ $labels.host }} still has headroom but its 24-hour trend reaches zero free space inside 7 days. This is the early warning for DockerHostFilesystemLowSpace; act now while there is still room to work in."
+
       - alert: ContainerMemoryNearLimit
         expr: |
           (

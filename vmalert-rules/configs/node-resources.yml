@@ -1,0 +1,151 @@
+groups:
+  - name: node-resources
+    interval: 1m
+    rules:
+      # Memory and filesystem pressure for every metrics-exporters host that
+      # docker.yml does not already own.
+      #
+      # Before this file, DockerHostLowMemory / DockerHostFilesystemLowSpace in
+      # docker.yml were the *only* node_memory_* and node_filesystem_* rules in
+      # the rule set, and both are scoped host=~"tower|helm|neo". Every other
+      # host -- the four PVE nodes and every other LXC -- had ZFS, SMART,
+      # temperature, systemd, apt and node-down coverage but no memory or
+      # rootfs coverage at all.
+      #
+      # The host selector here is deliberately a *negative* match rather than
+      # the explicit lists used elsewhere in this rule set. The gap above was
+      # created by an explicit list that was correct when written and then
+      # silently failed to grow with the fleet; inverting it makes the default
+      # for a newly added host "covered" instead of "invisible". ghost is
+      # excluded because it is a WSL instance on a work laptop, not homelab
+      # infrastructure -- it reports /init, /mnt/c and 9p mounts and is
+      # expected to be off for days at a time.
+
+      - alert: NodeMemoryPressure
+        expr: |
+          1 - (
+            node_memory_MemAvailable_bytes{job="pve-node", host!~"tower|helm|neo|ghost"}
+            /
+            node_memory_MemTotal_bytes{job="pve-node", host!~"tower|helm|neo|ghost"}
+          ) > 0.90
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.host }} memory pressure is high"
+          description: "Available memory on {{ $labels.host }} has stayed below 10 percent for 15 minutes. Check `free -h` and the top consumers with `ps aux --sort=-%mem | head`."
+
+      # Filesystem coverage is split by class because most ZFS mountpoints here
+      # must NOT be alerted on individually.
+      #
+      # On the PVE nodes and on cinci/cottonwood, the /rpool, /vm-flash,
+      # /vault-hdd and /mnt/cache/* mountpoints are all datasets sharing one
+      # pool's free space, so node_filesystem_avail_bytes reports the *same*
+      # number for every one of them. cottonwood alone would fire seven
+      # near-identical alerts for one pool filling. That case is already
+      # covered once, at the right level, by ZfsPoolSpaceHigh/Critical in
+      # zfs-pools.yml, which reads homelab_zpool_used_percent per pool. This is
+      # the same alert-multiplication problem that got ZfsPoolDeviceErrors
+      # dropped on 2026-08-11, so those mountpoints are excluded here.
+      #
+      # What is genuinely uncovered is:
+      #
+      #   arc, xur, deepstone, riven -- LXC rootfs and data volumes. These are
+      #     vm-flash/subvol-* datasets with their own refquota, so they fill
+      #     independently of the host pool and the pool rule cannot see it.
+      #     Several are small (xur / and deepstone / are 8.6 GB) and can fill
+      #     from logs alone while the underlying vm-flash pool sits at ~30%.
+      #
+      #   cinci, cottonwood -- / is ext4 on a plain partition (501 GB and
+      #     1006 GB), not ZFS at all, so no zpool metric covers it. /boot is on
+      #     that same filesystem, so accumulated old kernels land here too.
+      #
+      # /boot/efi is deliberately not included: 1.1 GB vfat that holds no
+      # kernels on these two hosts and does not grow.
+      #
+      # Thresholds and `for:` match DockerHostFilesystemLowSpace/AlmostFull so
+      # the two files cannot disagree about what "low" means.
+      - alert: NodeFilesystemLowSpace
+        expr: |
+          (
+            node_filesystem_avail_bytes{job="pve-node", host=~"arc|xur|deepstone|riven", fstype="zfs"}
+            /
+            node_filesystem_size_bytes{job="pve-node", host=~"arc|xur|deepstone|riven", fstype="zfs"}
+            < 0.10
+          )
+          or
+          (
+            node_filesystem_avail_bytes{job="pve-node", host=~"cinci|cottonwood", fstype="ext4", mountpoint="/"}
+            /
+            node_filesystem_size_bytes{job="pve-node", host=~"cinci|cottonwood", fstype="ext4", mountpoint="/"}
+            < 0.10
+          )
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.host }} {{ $labels.mountpoint }} is low on space"
+          description: "{{ $labels.mountpoint }} on {{ $labels.host }} has had less than 10 percent free for 10 minutes. Check `df -h {{ $labels.mountpoint }}` and `du -xh --max-depth=1 {{ $labels.mountpoint }} | sort -h | tail`."
+
+      - alert: NodeFilesystemAlmostFull
+        expr: |
+          (
+            node_filesystem_avail_bytes{job="pve-node", host=~"arc|xur|deepstone|riven", fstype="zfs"}
+            /
+            node_filesystem_size_bytes{job="pve-node", host=~"arc|xur|deepstone|riven", fstype="zfs"}
+            < 0.05
+          )
+          or
+          (
+            node_filesystem_avail_bytes{job="pve-node", host=~"cinci|cottonwood", fstype="ext4", mountpoint="/"}
+            /
+            node_filesystem_size_bytes{job="pve-node", host=~"cinci|cottonwood", fstype="ext4", mountpoint="/"}
+            < 0.05
+          )
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.host }} {{ $labels.mountpoint }} is almost full"
+          description: "{{ $labels.mountpoint }} on {{ $labels.host }} has had less than 5 percent free for 5 minutes. Writes will start failing; free space now."
+
+      # Forecast counterpart to the two threshold rules above: catches a
+      # filesystem heading for zero while it still has room, which is the only
+      # form of warning that is useful on a volume small enough to go from
+      # comfortable to full inside a day.
+      #
+      # Band-limited on purpose, to sit strictly between the "fine" and "low"
+      # states and never double-report:
+      #   > 0.10 free -- above NodeFilesystemLowSpace, which already owns this
+      #     series once it drops below 10 percent.
+      #   < 0.30 free -- a filesystem with plenty of headroom is left alone. A
+      #     one-off restore or download burst on a mostly-empty volume
+      #     extrapolates to "full in a week" very easily, and that is a
+      #     transient, not an incident.
+      # 24h of history for a 7d projection, held for 6h, so a short spike
+      # cannot fire it.
+      - alert: NodeFilesystemFillingUp
+        expr: |
+          (
+            predict_linear(node_filesystem_avail_bytes{job="pve-node", host=~"arc|xur|deepstone|riven", fstype="zfs"}[24h], 7 * 24 * 3600) < 0
+            and
+            node_filesystem_avail_bytes{job="pve-node", host=~"arc|xur|deepstone|riven", fstype="zfs"}
+            /
+            node_filesystem_size_bytes{job="pve-node", host=~"arc|xur|deepstone|riven", fstype="zfs"}
+            > 0.10 < 0.30
+          )
+          or
+          (
+            predict_linear(node_filesystem_avail_bytes{job="pve-node", host=~"cinci|cottonwood", fstype="ext4", mountpoint="/"}[24h], 7 * 24 * 3600) < 0
+            and
+            node_filesystem_avail_bytes{job="pve-node", host=~"cinci|cottonwood", fstype="ext4", mountpoint="/"}
+            /
+            node_filesystem_size_bytes{job="pve-node", host=~"cinci|cottonwood", fstype="ext4", mountpoint="/"}
+            > 0.10 < 0.30
+          )
+        for: 6h
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.host }} {{ $labels.mountpoint }} is on track to fill within 7 days"
+          description: "{{ $labels.mountpoint }} on {{ $labels.host }} still has headroom but its 24-hour trend reaches zero free space inside 7 days. This is the early warning for NodeFilesystemLowSpace; act now while there is still room to work in."

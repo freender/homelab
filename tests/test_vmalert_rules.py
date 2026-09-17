@@ -271,4 +271,4 @@ def test_orchestrator_sends_the_whole_rule_set_to_the_installer() -> None:
     exactly this list, so a RULE_FILES edit that never reached the env would
     fail every deploy rather than silently install a subset."""
     assert set(vmalert_rules.RULE_FILES) == set(" ".join(vmalert_rules.RULE_FILES).split())
-    assert len(vmalert_rules.RULE_FILES) == 16
+    assert len(vmalert_rules.RULE_FILES) == 17

@@ -56,6 +56,34 @@ groups:
           summary: "{{ $labels.host }} zpool {{ $labels.zpool }} is {{ $value }}% full"
           description: "{{ $labels.host }}/{{ $labels.zpool }} (tier={{ $labels.tier }}, role={{ $labels.role }}) is at {{ $value }}% capacity. ZFS pools become unstable and writes can fail as they approach 100%; free space or expand now."
 
+      # Forecast counterpart to the two threshold rules above. ZfsPoolSpaceHigh
+      # fires at 90%, which on a pool this size is not much notice: freeing
+      # space on a media pool means deciding what to delete, and expanding one
+      # means buying disks and scheduling downtime. Neither fits in the time
+      # between 90% and 95%.
+      #
+      # Projects used_percent forward 14 days from a 7-day trend and fires if
+      # it reaches the 95% critical line. The horizon is longer than the
+      # filesystem rule's 7 days in node-resources.yml precisely because the
+      # remedy is slower to arrange.
+      #
+      # Guards, for the same no-double-reporting reason as NodeFilesystemFillingUp:
+      #   < 90 -- above this ZfsPoolSpaceHigh already owns the pool.
+      #   >= 70 -- below this the projection is not worth acting on, and small
+      #     nearly-empty pools (ace/rpool at 1%, bray/rpool at 4%) produce
+      #     wild extrapolations from ordinary noise.
+      - alert: ZfsPoolFillingUp
+        expr: |
+          predict_linear(homelab_zpool_used_percent[7d], 14 * 24 * 3600) >= 95
+          and
+          homelab_zpool_used_percent >= 70 < 90
+        for: 6h
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.host }} zpool {{ $labels.zpool }} is on track to reach 95% within 14 days"
+          description: "{{ $labels.host }}/{{ $labels.zpool }} (tier={{ $labels.tier }}, role={{ $labels.role }}) is at {{ $value }}% and its 7-day trend crosses the 95% critical line inside 14 days. This is the early warning for ZfsPoolSpaceHigh -- start planning cleanup or expansion now rather than at 90%."
+
       - alert: ZfsPoolMetricsMissing
         expr: absent_over_time(homelab_zpool_healthy{host=~"ace|bray|clovis|osiris"}[15m])
         for: 5m

@@ -66,6 +66,42 @@ groups:
           summary: "{{ $labels.host }} disk {{ $labels.device }} has {{ $labels.attribute_name }} = {{ $value }}"
           description: "SMART attribute {{ $labels.attribute_name }} (id {{ $labels.attribute_id }}) is {{ $value }} (raw) on {{ $labels.device }}/{{ $labels.host }}. This should normally be 0; a nonzero value means the drive has already remapped or failed to read/verify sectors. Check `smartctl -a /dev/{{ $labels.device }}` on {{ $labels.host }}."
 
+      # Companion to SmartAttributeUncorrectable above, covering the signal that
+      # rule structurally cannot carry: rate of change.
+      #
+      # `raw > 0` latches. The moment a drive remaps a single sector it fires
+      # and then fires forever, because the raw counter never goes back down.
+      # Once that has happened the series is pinned in the firing state and
+      # stops distinguishing "this drive remapped one sector two years ago and
+      # has been stable since" from "this drive is shedding sectors right now"
+      # -- and the realistic response to a permanently-firing warning is a
+      # silence, which makes the drive silent for the second case too.
+      #
+      # Growth is the actual pre-failure indicator: a stable nonzero count is
+      # common and usually benign, an increasing one is not. Verified against
+      # live data 2026-09-16: no disk in the fleet currently has a nonzero
+      # value for any of these four attributes, so this rule is preventive --
+      # it is in place before the first reallocation rather than in response to
+      # one, and neither rule is firing today.
+      #
+      # Critical rather than warning, unlike the static rule: the static one is
+      # expected to be firing (or silenced) on any drive this can match, so
+      # matching its severity would file the active-degradation case into the
+      # same bucket as the latched one and defeat the point.
+      #
+      # delta() over 7d is negative when a drive is replaced and the counter
+      # resets to 0, so a swap cannot fire this. It does mean the alert stays
+      # up for 7 days after the last increment; that is intended -- the window
+      # is the claim ("degraded during the last week"), not a debounce.
+      - alert: SmartAttributeGrowing
+        expr: delta(smartctl_device_attribute{attribute_value_type="raw", attribute_name=~"Reallocated_Sector_Ct|Current_Pending_Sector|Offline_Uncorrectable|Reported_Uncorrect"}[7d]) > 0
+        for: 15m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.host }} disk {{ $labels.device }} gained {{ $value }} {{ $labels.attribute_name }} in 7 days"
+          description: "SMART attribute {{ $labels.attribute_name }} on {{ $labels.device }}/{{ $labels.host }} has increased by {{ $value }} in the last 7 days. A drive actively remapping or failing to read sectors now is a stronger failure signal than a stable nonzero count. Check `smartctl -a /dev/{{ $labels.device }}` on {{ $labels.host }}, confirm the pool has redundancy, and plan a replacement."
+
       - alert: SmartMetricsMissing
         expr: absent_over_time(smartctl_device_smart_status{host=~"ace|bray|clovis|osiris"}[15m])
         for: 5m
