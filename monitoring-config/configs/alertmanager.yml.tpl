@@ -213,6 +213,35 @@ route:
       mute_time_intervals:
         - scheduled-maintenance
       continue: false
+    # Boot-entry health is the slowest-moving standing condition this stack
+    # carries: nothing in Proxmox ever repairs a mangled NVRAM entry, so once
+    # BootEntriesDead fires the only thing that clears it is a human running
+    # efibootmgr. At the parent's 4h repeat that is 6 identical notifications a
+    # day for a condition that has usually stood for months already -- the same
+    # silencing pressure the ZfsPoolUnhealthy note above describes, and here it
+    # would be worse, because the alert is easy to mistake for cosmetic until
+    # the day a node fails to boot.
+    #
+    # BootEntryUnloadable is included at the same 24h repeat despite being
+    # critical. It is not urgent in the paging sense -- the host is up and
+    # serving -- but it is time-sensitive in a way a digest window would break,
+    # which is why this route only slows the repeat and does NOT mute into the
+    # Saturday window the way RebootRequired does.
+    #
+    # host stays in group_by: each affected node needs its own efibootmgr run
+    # against its own bootnums, and collapsing two nodes would let the second
+    # inherit the first's 24h repeat and vanish behind it.
+    - receiver: mwbot
+      matchers:
+        - alertname=~"BootEntryUnloadable|BootEntriesDead"
+      group_by:
+        - alertname
+        - host
+        - severity
+      repeat_interval: 24h
+      mute_time_intervals:
+        - scheduled-maintenance
+      continue: false
     # Mains power state is orthogonal to the maintenance windows below: nothing
     # in the 02:00 container image update or the 08:00 apt upgrade can put a UPS
     # on battery. Muting these would delay a real power event until the window

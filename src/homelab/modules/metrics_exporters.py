@@ -220,6 +220,28 @@ FILE_SPECS = (
         "/etc/systemd/system/reboot-textfile-exporter.timer",
         feature="baremetal",
     ),
+    # UEFI boot-entry health: whether the entry the firmware would actually try
+    # can load anything. Same `baremetal` gate as the pending-reboot exporter,
+    # for the same reason turned inside out -- a container guest has no firmware
+    # and no NVRAM, so there is nothing to inspect. The script additionally
+    # no-ops on a legacy-BIOS host, which is why the absence rule covers only
+    # the four PVE nodes and not every host carrying this flag.
+    FileSpec(
+        "boot-entry-textfile-exporter",
+        "/usr/local/bin/boot-entry-textfile-exporter",
+        mode="755",
+        feature="baremetal",
+    ),
+    FileSpec(
+        "boot-entry-textfile-exporter.service",
+        "/etc/systemd/system/boot-entry-textfile-exporter.service",
+        feature="baremetal",
+    ),
+    FileSpec(
+        "boot-entry-textfile-exporter.timer",
+        "/etc/systemd/system/boot-entry-textfile-exporter.timer",
+        feature="baremetal",
+    ),
     FileSpec(
         "pve-patch-statuses.conf",
         "/etc/homelab/pve-patch-statuses.conf",
@@ -503,6 +525,9 @@ BARE_METAL_COMMON_FILES = [
     "reboot-textfile-exporter",
     "reboot-textfile-exporter.service",
     "reboot-textfile-exporter.timer",
+    "boot-entry-textfile-exporter",
+    "boot-entry-textfile-exporter.service",
+    "boot-entry-textfile-exporter.timer",
     "disk-label-textfile-exporter.py",
     "disk-label-textfile-exporter.service",
     "disk-label-textfile-exporter.timer",

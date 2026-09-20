@@ -1,0 +1,87 @@
+groups:
+  - name: boot-entries
+    # Deliberately slower than the 1m used elsewhere. boot-entry-textfile-exporter
+    # refreshes hourly because NVRAM boot entries only move when firmware rewrites
+    # them or a human runs efibootmgr; evaluating every minute would re-read the
+    # same sample sixty times per change opportunity.
+    interval: 5m
+    rules:
+      # The alert that would have caught ace on 2026-09-19. ace carried three
+      # entries all labelled "Linux Boot Manager", two of them firmware-mangled
+      # husks with no loadable device path, and one of the husks sat first in
+      # BootOrder. The firmware tried it and stopped; the host was unreachable
+      # for ~40 minutes and only came back after someone changed the boot entry
+      # in the BIOS by hand. Nothing in the existing pre-flight could see it:
+      # quorum, replication, zpool and UPS were all green while the node was
+      # unbootable.
+      #
+      # Critical, and deliberately NOT held for the Saturday digest window that
+      # RebootRequired uses, even though both are remediated during the same
+      # rolling reboot. The difference is that this one is fixable *right now*
+      # and only right now: the host is still up and reachable, so
+      # `efibootmgr -b <num> -B` over SSH fixes it in seconds. Once anything
+      # reboots the node -- a planned roll, a panic, a power cut, or an HA fence,
+      # which on this cluster works by rebooting the node -- it does not come
+      # back, and recovery needs physical console access that exists for no PVE
+      # node here. Waiting up to seven days to mention that is the wrong trade.
+      #
+      # Note the metric is *omitted* rather than set to 1 when the exporter
+      # cannot determine a first entry, so this rule cannot false-fire on a
+      # missing reading; BootEntryMetricsMissing owns that case.
+      - alert: BootEntryUnloadable
+        expr: homelab_boot_first_entry_loadable == 0
+        for: 15m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.host }} would not survive a reboot"
+          description: "The first UEFI boot entry {{ $labels.host }} would actually attempt has a device path that cannot load anything, so this host will not come back from its next reboot -- planned, panic, power cut, or HA fence. It is still running and still reachable, so fix it now, before anything reboots it. Run `efibootmgr -v` on {{ $labels.host }}: entries showing a bare VenHw(...) path with no File() or MAC() component are unbootable husks and can be deleted with `efibootmgr -b <bootnum> -B`. Do not delete PXE/HTTP entries, which legitimately have MAC()/IPv4() paths and no File(). A snapshot is written to /var/backups/homelab/boot-entries/ before any manual edit. Never run proxmox-boot-tool init/reinit to 'repair' this without re-checking efibootmgr afterwards -- it is the only operation that rewrites NVRAM."
+
+      # The early-warning half, and the one that catches the situation before it
+      # becomes the alert above. clovis carried four husks on 2026-09-20 while
+      # still booting perfectly, purely because BootOrder happened to list its
+      # one real entry first. Any firmware update, CMOS reset or NVRAM shuffle
+      # would have promoted a husk and stranded it exactly like ace.
+      #
+      # Warning rather than critical: nothing is broken yet and the host boots
+      # fine today. It is still worth a standing notification because nothing in
+      # Proxmox ever cleans these up -- `proxmox-boot-tool refresh` does not
+      # touch NVRAM at all on PVE 9.2 -- so a husk persists until a human
+      # removes it, and the count only ever grows.
+      - alert: BootEntriesDead
+        expr: homelab_boot_entries_dead > 0
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.host }} has {{ $value }} unbootable UEFI boot entry/entries"
+          description: "{{ $labels.host }} carries {{ $value }} active UEFI boot entry/entries whose device path cannot load anything. The host boots today only because BootOrder lists a working entry first; promoting one of these -- a firmware update, a CMOS reset, or an NVRAM shuffle -- would strand it. See homelab_boot_entry_dead{host=\"{{ $labels.host }}\"} for the offending bootnum and label, then remove each with `efibootmgr -b <bootnum> -B`. Verify each target is a bare VenHw(...) path with no File() or MAC() component first: PXE/HTTP network boot entries have no File() either and must be kept."
+
+      # Absence, per the pattern established by RebootMetricsMissing and
+      # ZfsPoolMetricsMissing: one absent_over_time() per exact host, because a
+      # regex matcher only detects full-vector absence and stays silent unless
+      # every host goes dark at once.
+      #
+      # Scoped to the four PVE nodes rather than every host carrying the
+      # `baremetal` flag. The exporter no-ops on a legacy-BIOS host (no
+      # /sys/firmware/efi) and on any host without the efibootmgr package,
+      # removing its .prom rather than reporting a false all-clear -- so listing
+      # cinci or cottonwood here without first confirming both are UEFI would
+      # manufacture a permanent false positive. These four are also the hosts
+      # where the failure actually matters: they reboot rarely, which is how the
+      # condition accumulates unseen, and they are the ones HA can fence.
+      #
+      # 3h against an hourly refresh, the same 3x margin RebootMetricsMissing
+      # uses against its 15m one.
+      - alert: BootEntryMetricsMissing
+        expr: |
+          absent_over_time(homelab_boot_entries_dead{host="ace"}[3h])
+          or absent_over_time(homelab_boot_entries_dead{host="bray"}[3h])
+          or absent_over_time(homelab_boot_entries_dead{host="clovis"}[3h])
+          or absent_over_time(homelab_boot_entries_dead{host="osiris"}[3h])
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Boot-entry metrics missing on {{ $labels.host }}"
+          description: "homelab_boot_entries_dead has produced no samples for {{ $labels.host }} in 3 hours, so boot-path alerting is blind there and an unbootable node would look identical to a healthy one. The window is 3h because the exporter only refreshes hourly. Check `systemctl status boot-entry-textfile-exporter.timer` and `journalctl -u boot-entry-textfile-exporter` on {{ $labels.host }}. The exporter deliberately removes its .prom and exits 0 when the host is not UEFI or efibootmgr is absent, so a missing efibootmgr package presents as absence rather than as a failed unit."

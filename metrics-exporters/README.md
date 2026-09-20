@@ -145,6 +145,9 @@ Then `./deploy metrics-exporters <host>` from the repo.
 - `/etc/systemd/system/reboot-textfile-exporter.service`
 - `/etc/systemd/system/reboot-textfile-exporter.timer`
 - `/etc/homelab/pve-patch-statuses.conf`
+- `/usr/local/bin/boot-entry-textfile-exporter`
+- `/etc/systemd/system/boot-entry-textfile-exporter.service`
+- `/etc/systemd/system/boot-entry-textfile-exporter.timer`
 - `/usr/local/bin/disk-label-textfile-exporter`
 - `/etc/systemd/system/disk-label-textfile-exporter.service`
 - `/etc/systemd/system/disk-label-textfile-exporter.timer`
@@ -169,6 +172,9 @@ Then `./deploy metrics-exporters <host>` from the repo.
 - `configs/common/reboot-textfile-exporter.service`
 - `configs/common/reboot-textfile-exporter.timer`
 - `templates/pve-patch-statuses.conf.tpl`
+- `configs/common/boot-entry-textfile-exporter`
+- `configs/common/boot-entry-textfile-exporter.service`
+- `configs/common/boot-entry-textfile-exporter.timer`
 - `configs/common/disk-label-textfile-exporter.py`
 - `configs/common/disk-label-textfile-exporter.service`
 - `configs/common/disk-label-textfile-exporter.timer`
@@ -216,6 +222,55 @@ packages (`linux-image-generic`, `proxmox-kernel-7.0`, `proxmox-kernel-helper`)
 encode no release and are skipped — without that, `proxmox-kernel-helper 9.2.0`
 sorts above every real kernel. `tests/test_reboot_exporter.py` covers each of
 these cases against live-host output.
+
+### UEFI boot-entry health
+
+`boot-entry-textfile-exporter` answers a question no other check here asks:
+would this host actually come back if it rebooted? It emits
+`homelab_boot_first_entry_loadable` (0/1), `homelab_boot_entries_dead` (a count),
+and `homelab_boot_entry_dead{bootnum,label}` for each offender.
+`vmalert-rules/configs/boot-entries.yml` alerts on all three.
+
+It exists because on 2026-09-19 `ace` was rebooted during a routine roll and did
+not return. NVRAM held three entries all labelled `Linux Boot Manager`, two of
+them firmware-mangled into a bare `VenHw()` device path with no partition and no
+file; one of the dead ones sat first in `BootOrder`, so the firmware tried it and
+stopped. In the BIOS menu all three render as the same string. Every existing
+pre-flight — quorum, replication, `zpool status -x`, UPS — was green while the
+node was unbootable, and `clovis` was found carrying four of the same husks,
+booting only because `BootOrder` happened to list its one real entry first.
+
+Nothing in Proxmox repairs this. On PVE 9.2 `proxmox-boot-tool refresh` only runs
+the kernel postinst hooks, and neither references `efibootmgr`, `bootctl` or
+`BootOrder`; the sole NVRAM writer is `bootctl --graceful install`, reachable
+only via `proxmox-boot-tool init`/`reinit`, which never run on a kernel upgrade.
+A husk therefore persists until a human deletes it — so this metric never
+self-heals and never flaps.
+
+**Classification is deliberately conservative, and this is the part to preserve
+when editing it.** An entry counts as dead only when positively recognised as a
+husk: a bare `VenHw()` with neither `File()` nor `MAC()`. Anything unrecognised
+is reported loadable. The obvious rule — "no `HD()/File()` means dead" — is
+wrong, because PXE/HTTP boot entries legitimately use `MAC()/IPv4()/Uri()` paths
+and have none; applying it would condemn the PXE entries `arc`'s auto-install
+delivery depends on. `osiris` additionally carries four firmware device-class
+stubs (`BBS()`/`VenMedia()`: EFI Shell, CD/DVD, Removable, Network) that land in
+the unrecognised bucket on purpose. A false positive here would train the
+operator to ignore the metric, or to delete a working entry.
+
+The first-entry check models firmware behaviour rather than just reading
+`BootOrder[0]`: a bootnum with no matching entry, or one marked inactive, is
+skipped, because firmware skips those silently. What strands a host is an entry
+that is present, active, and unloadable. When no first entry can be determined
+the metric is **omitted** rather than set to 1, so a broken reading can never
+present as healthy; the absence rule owns that case.
+
+Bare metal only, via the same `baremetal` gate as the pending-reboot exporter —
+a container guest has no firmware and no NVRAM. The script additionally no-ops
+(removing any stale `.prom`) on a legacy-BIOS host or where `efibootmgr` is
+absent, which is why the absence rule covers only the four PVE nodes and not
+every host carrying the flag. `tests/test_boot_entry_exporter.py` reproduces the
+`ace`, `clovis` and `osiris` readings verbatim.
 
 ### disk-label-textfile-exporter
 

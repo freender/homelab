@@ -1,0 +1,6 @@
+[Unit]
+Description=Write UEFI boot-entry health metrics for node_exporter textfile collector
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/boot-entry-textfile-exporter

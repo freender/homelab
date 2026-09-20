@@ -77,6 +77,7 @@ TEXTFILE_EXPORTERS = {
     "zfs-pool-textfile-exporter": ("zfs-pool-textfile-exporter", ("zfs-expected-pools.conf",)),
     "hba-textfile-exporter.py": ("hba-textfile-exporter", ()),
     "reboot-textfile-exporter": ("reboot-textfile-exporter", ("pve-patch-statuses.conf",)),
+    "boot-entry-textfile-exporter": ("boot-entry-textfile-exporter", ()),
     "disk-label-textfile-exporter.py": ("disk-label-textfile-exporter", ("disk-labels.conf",)),
 }
 

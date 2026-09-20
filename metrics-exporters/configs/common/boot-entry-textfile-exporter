@@ -1,0 +1,197 @@
+#!/bin/bash
+# Report whether this host's UEFI boot entries can actually load anything, for
+# the node_exporter textfile collector.
+#
+# Why this exists: on 2026-09-19 ace was rebooted as part of a routine rolling
+# reboot and did not come back. The cause was not the reboot, the kernel, or
+# ZFS -- it was NVRAM. ace carried three boot entries all labelled
+# "Linux Boot Manager", of which only one was real; the other two had been
+# collapsed by firmware into a bare VenHw() device path with no partition and
+# no file, so there was nothing to load. One of the dead ones sat first in
+# BootOrder, the firmware tried it, and stopped. In the BIOS menu all three
+# render as the same string, so there is no way to tell them apart by eye.
+#
+# Nothing in Proxmox repairs this. Verified on PVE 9.2: `proxmox-boot-tool
+# refresh` only runs the kernel postinst hooks, and neither hook references
+# efibootmgr, bootctl or BootOrder -- a grep of /etc/kernel/ returns nothing.
+# The only NVRAM writer in the tool is `bootctl --graceful install`, reachable
+# solely through `proxmox-boot-tool init`/`reinit`, which never run on a kernel
+# upgrade. So a mangled entry stays mangled forever until a human deletes it,
+# and there is no self-healing path this check could race with.
+#
+# Why this needs to be an alert and not just a reboot pre-flight: a pre-flight
+# only runs when you are deliberately rebooting, but an unbootable node also
+# fails to return from a panic, a power cut, or an HA fence -- and fencing on
+# this cluster works by rebooting the node. It is a standing availability risk.
+# The PVE nodes are also precisely the hosts that reboot rarely, which is how
+# this accumulated unseen; cinci and cottonwood auto-reboot via
+# unattended-upgrades and so continuously self-test their own boot path.
+#
+# CLASSIFICATION IS DELIBERATELY CONSERVATIVE. The first version of this check
+# asked only "does the device path contain HD()/File()", which is what the two
+# dead entries lacked. That rule is wrong: it also flags every PXE/HTTP network
+# boot entry, because those legitimately use MAC()/IPv4()/Uri() paths and have
+# no File() component at all. Acting on it would have deleted the PXE entries
+# that arc's auto-install delivery depends on. An entry is therefore called
+# dead only when it is positively recognised as a husk -- a bare VenHw() with
+# neither File() nor MAC() -- and anything unrecognised is reported loadable.
+# osiris carries four firmware device-class stubs (EFI Shell, CD/DVD,
+# Removable, Network) that land in that unrecognised bucket on purpose. False
+# negatives here cost a missed alert; false positives would train the operator
+# to ignore this metric, or worse, to delete a working entry.
+#
+# Bare metal only, gated on `baremetal` by metrics_exporters.py: a container
+# guest has no firmware and no NVRAM of its own. The runtime guard below is a
+# second line of defence, matching reboot-textfile-exporter.
+
+set -euo pipefail
+
+HOST="${HOSTNAME_OVERRIDE:-$(hostname -s)}"
+OUT_DIR="${TEXTFILE_DIR:-/var/lib/prometheus/node-exporter}"
+OUT_FILE="$OUT_DIR/boot-entries.prom"
+EFI_SYS_DIR="${EFI_SYS_DIR:-/sys/firmware/efi}"
+EFIBOOTMGR="${EFIBOOTMGR:-efibootmgr}"
+
+# A stale .prom outlives whatever stopped producing it, and the textfile
+# collector will serve it forever. Every early exit below therefore removes it
+# rather than leaving the last good reading in place.
+drop_and_exit() {
+    echo "boot-entry-textfile-exporter: $1" >&2
+    rm -f "$OUT_FILE"
+    exit 0
+}
+
+if systemd-detect-virt --container --quiet; then
+    drop_and_exit "container guest has no firmware boot entries"
+fi
+
+if [[ ! -d "$EFI_SYS_DIR" ]]; then
+    drop_and_exit "not booted via UEFI ($EFI_SYS_DIR absent), no boot entries to report"
+fi
+
+if ! command -v "$EFIBOOTMGR" >/dev/null 2>&1; then
+    drop_and_exit "$EFIBOOTMGR not available - install the efibootmgr package"
+fi
+
+# Prometheus label values may not carry a raw backslash or double quote, and
+# entry labels are firmware-supplied free text. Paths like \EFI\BOOT never
+# reach a label value, but the entry *name* is equally unconstrained.
+escape_label() {
+    local v="$1"
+    v="${v//\\/\\\\}"
+    v="${v//\"/\\\"}"
+    printf '%s' "$v"
+}
+
+# The corrected rule described in the header. Order matters: File() and MAC()
+# are checked before VenHw(), because a real entry may carry a vendor prefix
+# ahead of the part that actually resolves.
+classify() {
+    local dp="$1"
+    case "$dp" in
+        *"File("*) printf 'local' ;;
+        *"MAC("*) printf 'network' ;;
+        "VenHw("*) printf 'dead' ;;
+        *) printf 'unknown' ;;
+    esac
+}
+
+if ! efi_output="$("$EFIBOOTMGR" -v 2>/dev/null)"; then
+    drop_and_exit "$EFIBOOTMGR -v failed, cannot enumerate boot entries"
+fi
+
+declare -A ENTRY_KIND=()
+declare -A ENTRY_LABEL=()
+declare -A ENTRY_ACTIVE=()
+dead_count=0
+entry_count=0
+
+while IFS=$'\t' read -r head path_field; do
+    [[ "$head" =~ ^Boot[0-9A-Fa-f]{4} ]] || continue
+    num="${head:4:4}"
+    tail_field="${head:8}"
+
+    # An entry without the asterisk is inactive and the firmware skips it, so
+    # it can neither boot the host nor break the boot -- tracked, not counted.
+    if [[ "$tail_field" == \** ]]; then
+        active=1
+        label="${tail_field:1}"
+    else
+        active=0
+        label="$tail_field"
+    fi
+    label="${label#"${label%%[![:space:]]*}"}"
+
+    kind="$(classify "$path_field")"
+    ENTRY_KIND["$num"]="$kind"
+    ENTRY_LABEL["$num"]="$label"
+    ENTRY_ACTIVE["$num"]="$active"
+    entry_count=$((entry_count + 1))
+    if [[ "$kind" == "dead" && "$active" -eq 1 ]]; then
+        dead_count=$((dead_count + 1))
+    fi
+done <<< "$efi_output"
+
+if [[ "$entry_count" -eq 0 ]]; then
+    drop_and_exit "$EFIBOOTMGR reported no boot entries, refusing to report a false all-clear"
+fi
+
+boot_order="$(printf '%s\n' "$efi_output" | sed -n 's/^BootOrder: //p' | head -1)"
+
+mkdir -p "$OUT_DIR"
+TMP_FILE="$(mktemp "$OUT_DIR/.boot-entries.prom.XXXXXX")"
+cleanup() {
+    rm -f "$TMP_FILE"
+}
+trap cleanup EXIT
+
+{
+    printf '# HELP homelab_boot_entries_dead Active UEFI boot entries whose device path cannot load anything.\n'
+    printf '# TYPE homelab_boot_entries_dead gauge\n'
+    printf 'homelab_boot_entries_dead{host="%s"} %s\n' "$HOST" "$dead_count"
+
+    printf '# HELP homelab_boot_entry_dead An individual unbootable UEFI boot entry; emitted only when one exists.\n'
+    printf '# TYPE homelab_boot_entry_dead gauge\n'
+    for num in "${!ENTRY_KIND[@]}"; do
+        if [[ "${ENTRY_KIND[$num]}" == "dead" && "${ENTRY_ACTIVE[$num]}" -eq 1 ]]; then
+            printf 'homelab_boot_entry_dead{host="%s",bootnum="%s",label="%s"} 1\n' \
+                "$HOST" "$num" "$(escape_label "${ENTRY_LABEL[$num]}")"
+        fi
+    done
+
+    printf '# HELP homelab_boot_first_entry_loadable Whether the first entry the firmware would actually try can load something (1) or not (0).\n'
+    printf '# TYPE homelab_boot_first_entry_loadable gauge\n'
+
+    # Model what the firmware does rather than just reading BootOrder[0]: a
+    # bootnum listed in BootOrder with no matching entry, or one marked
+    # inactive, is skipped silently. What strands a host is an entry that is
+    # present and active but resolves to nothing -- which is exactly how ace
+    # failed. Walk the order and judge the first candidate the firmware would
+    # genuinely attempt.
+    first_kind=""
+    if [[ -n "$boot_order" ]]; then
+        IFS=',' read -r -a order <<< "$boot_order"
+        for num in "${order[@]}"; do
+            num="${num//[[:space:]]/}"
+            [[ -n "${ENTRY_KIND[$num]:-}" ]] || continue
+            [[ "${ENTRY_ACTIVE[$num]}" -eq 1 ]] || continue
+            first_kind="${ENTRY_KIND[$num]}"
+            break
+        done
+    fi
+
+    # No BootOrder, or nothing in it the firmware would try: the check cannot
+    # tell whether this host boots, so it deliberately emits nothing rather
+    # than a reassuring 1. The absence rule in vmalert is what surfaces that,
+    # the same way reboot-textfile-exporter omits homelab_reboot_required when
+    # it cannot identify an installed kernel.
+    if [[ -n "$first_kind" ]]; then
+        loadable=1
+        [[ "$first_kind" == "dead" ]] && loadable=0
+        printf 'homelab_boot_first_entry_loadable{host="%s"} %s\n' "$HOST" "$loadable"
+    fi
+} > "$TMP_FILE"
+
+chmod 0644 "$TMP_FILE"
+mv "$TMP_FILE" "$OUT_FILE"
+trap - EXIT

@@ -168,6 +168,11 @@ ssh <node> 'pvesr status'
 # Storage healthy — never start with a degraded pool
 ssh <node> 'zpool status -x'
 
+# The node can actually boot. Every other check on this list was green on ace
+# on 2026-09-19 while its NVRAM pointed at an unbootable entry, and it did not
+# come back from the reboot. 0 dead entries and a loadable first entry.
+ssh <node> 'grep -v "^#" /var/lib/prometheus/node-exporter/boot-entries.prom'
+
 # On mains power, not battery
 ssh <node> 'apcaccess status 2>/dev/null | grep -E "STATUS|TIMELEFT" || true'
 
@@ -177,7 +182,11 @@ ssh <node> 'pvesh get /nodes/<node>/tasks --limit 5 --output-format json-pretty 
 
 **Stop if:** not quorate, `ha-manager status` shows anything but `quorum OK` and
 active LRMs, any replication job failing, `zpool status -x` is not
-`all pools are healthy`, the UPS is on battery, or a backup is in progress.
+`all pools are healthy`, the UPS is on battery, a backup is in progress, or
+`homelab_boot_first_entry_loadable` is `0` (the node will not come back — fix
+the boot entry with `efibootmgr` first, while it is still reachable) or
+`homelab_boot_entries_dead` is above `0` (clean the husks before rebooting, or
+the node is one NVRAM shuffle from the same fate).
 
 ### 2. Confirm the automation is current
 

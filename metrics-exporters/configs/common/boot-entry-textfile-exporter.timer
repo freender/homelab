@@ -1,0 +1,17 @@
+[Unit]
+Description=Refresh UEFI boot-entry health metrics
+
+[Timer]
+# The slowest-moving metric this module ships. NVRAM boot entries change only
+# when firmware rewrites them or a human runs efibootmgr / proxmox-boot-tool
+# init, so an hourly read is already far more often than the state can move --
+# a faster poll would just re-read the same EFI variables. OnBootSec is short
+# because a firmware-mangled entry is most likely to appear across a reboot,
+# which is precisely when the previous reading became untrustworthy.
+OnBootSec=3min
+OnUnitActiveSec=1h
+AccuracySec=5min
+Unit=boot-entry-textfile-exporter.service
+
+[Install]
+WantedBy=timers.target

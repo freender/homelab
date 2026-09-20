@@ -53,6 +53,15 @@ select = [
     "UP",
 ]
 
+[tool.ruff.lint.per-file-ignores]
+# `efibootmgr -v` output is reproduced verbatim as fixtures in this file. A UEFI
+# device path carrying a partition GUID is simply longer than 100 characters, and
+# rewrapping it with implicit string concatenation would destroy the one property
+# the fixtures exist for: being byte-identical to what the real tool prints, so a
+# reading captured from a live host can be diffed straight into the test. Scoped
+# to this single file, not to tests/ generally.
+"tests/test_boot_entry_exporter.py" = ["E501"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "--cov=homelab --cov=homelab_install --cov-report=term-missing"
