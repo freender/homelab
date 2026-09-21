@@ -23,8 +23,11 @@ PYTHONPATH=src .venv/bin/python -m homelab.cli survivors op_secrets cleanup     
 ```
 
 `PYTHONPATH=src` with `-m homelab.cli` is **load-bearing**; the bare `homelab` console
-script resolves the repo to `.venv/lib/...` and reports "nothing scored". `survivors`
-reads the existing `mutants/` tree and never sweeps, so it is instant and safe to rerun.
+script resolves the repo to `.venv/lib/...` (non-editable install) and reports "nothing
+scored". Setting it on the parent is safe because `mutmut_env()` pops `PYTHONPATH` back
+off for the mutmut children, which must not see the real `src/`. `survivors` reads the
+existing `mutants/` tree — a gitignored working copy of the repo where results accumulate
+across runs — and never sweeps, so it is instant and safe to rerun.
 
 1. **Sweep one file at a time.** A narrowed sweep is minutes where a full one is hours.
 2. **Read survivors by function, worst cluster first.** `survivors` prints the per-function
@@ -45,10 +48,15 @@ reads the existing `mutants/` tree and never sweeps, so it is instant and safe t
 - **Never hand-edit `mutation-baseline.json`.** It may only shrink. Regenerate with
   `--update-baseline` to lock in an improvement, never to admit a regression.
 - **Do not lower `timeout_multiplier = 60.0`** in `[tool.mutmut]` to save time. mutmut
-  scores a CPU-cap timeout as *killed*, so a low multiplier silently inflates the score.
-- **Measure a file twice before ratcheting.** The error is only safe in one direction: an
-  entry that is too high reports as "improved", one that is too low fails the gate for
-  everyone afterwards.
+  scores a CPU-cap timeout as *killed* (SIGXCPU, exit `-24`; `DETECTED_EXIT_CODES` mirrors
+  this deliberately — a hang is a detection), so a low multiplier silently inflates the
+  score: at the stock value the cap fired on hundreds of mutants that were not hanging.
+- **Measure a file twice before ratcheting.** Every baseline entry was reproduced on two
+  independent fresh serial sweeps, so the baseline is exact with no drift tolerance — a
+  sweep that disagrees is a real change or a parallel run, not noise. The error is only
+  safe in one direction: an entry that is too high reports as "improved", one that is too
+  low fails the gate for everyone afterwards. Do not compare against any figure older
+  than `4f1048b`.
 
 ## Judging a survivor
 

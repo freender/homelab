@@ -107,99 +107,34 @@ shrink, never grow.
 - Never hand-add or hand-raise an entry. Regenerate with
   `homelab crap --update-baseline` only to lock in an improvement.
 
-**The remaining baseline is frozen — do not refactor to clear an entry.** The gate's value
-is holding *new* code to 10, and that is fully intact above. The entries left are
-validators and env-loaders that are case-heavy because the inventory they validate
-genuinely has many cases; splitting them further scatters the logic without reducing real
-complexity. The one previous clearing pass that reached this floor (`5b833e7`) also
-changed three error-precedence orderings — evidence that metric-driven splitting of these
-particular functions stops being behaviour-preserving. Treat a `cleared` notice from
-`validate` as informational, not a chore.
-
-Still regenerate when an entry clears *incidentally* during real work — the ratchet only
-shrinks either way. Known cost of not regenerating: a stale entry keeps its old recorded
-score, so a function that organically improved could creep back up to that score without
-failing. Bounded, since it can never exceed where it already was.
+**The remaining baseline is frozen — do not refactor to clear an entry.** The entries left
+are case-heavy validators whose complexity mirrors the inventory they validate; the one
+clearing pass that reached this floor (`5b833e7`) also changed three error-precedence
+orderings, so further metric-driven splitting of these functions is not
+behaviour-preserving. Treat a `cleared` notice from `validate` as informational, not a
+chore. Still regenerate when an entry clears *incidentally* during real work — the ratchet
+only shrinks, and a stale entry lets an organically improved function creep back up to its
+old recorded score without failing.
 
 ### Mutation Testing (`homelab mutants`)
 
-The check for the hole the CRAP gate names above. mutmut rewrites one expression at a
-time — `continue` to `break`, `>` to `>=` — and reruns the tests that touch it. A mutant
-the suite still passes is a behaviour **nothing asserts**, which coverage cannot see.
-
-```bash
-.venv/bin/python -m pip install -c constraints.txt '.[mutation]'   # separate extra, not in dev
-M=".venv/bin/python -m homelab.cli mutants"     # see the PYTHONPATH note below
-PYTHONPATH=src $M                               # sweep the scoped core, then gate
-PYTHONPATH=src $M --no-run                      # re-score the last sweep without redoing it
-PYTHONPATH=src $M 'homelab.hosts.*'             # narrow further than the configured scope
-PYTHONPATH=src .venv/bin/python -m homelab.cli survivors op_secrets [function]  # what changed
-```
-
-Working the backlog — reading survivors, telling a real gap from an equivalent mutant, the
-test shapes that kill them — is the `mutation-triage` skill. `mutmut show` cannot resolve a
-mutant in this tree; `homelab survivors` is the replacement.
-
-**`PYTHONPATH=src` and `-m homelab.cli` are both load-bearing; the bare `homelab`
-console script does not work here.** `repo_root()` is `Path(__file__).parents[2]`, and
-the repo `.venv` is a *non-editable* install, so the installed script resolves the "repo"
-to `.venv/lib/python3.13` — `--no-run` then reports "nothing scored" and a full sweep
-would run mutmut with that as its cwd. Same workaround the dry-run job in
-`validate.yml` already uses. Setting it for the parent is safe precisely because
-`mutmut_env()` pops `PYTHONPATH` back off for the mutmut children, which must not see the
-real `src/`.
+The check for the hole the CRAP gate names above: mutmut rewrites one expression at a
+time and reruns the tests that touch it; a mutant the suite still passes is a behaviour
+**nothing asserts**, which coverage cannot see. The whole loop — commands, the rails
+(`PYTHONPATH=src`, serial-only, `timeout_multiplier`, measure-twice, the stale-tree
+fingerprint), judging survivors, and the test shapes that kill them — is the
+`mutation-triage` skill; load it before running any sweep.
 
 **Not a `./validate` step and not a PR gate:** a sweep is tens of minutes against a suite
-`./validate` clears in under one, so gating on it would make the fast check something you
-route around. It is also a different question — `./validate` gates a *change*, this
-ratchets the *suite*. Run it by hand when you change a scoped file, then fix or
-re-baseline. `mutants/` is a gitignored working copy of the repo; results accumulate
-there across runs.
-
-**`timeout_multiplier = 60.0` in `[tool.mutmut]` is load-bearing — do not drop it to save
-time.** mutmut puts a CPU-seconds cap on each mutant and **scores a mutant that hits it as
-killed** (SIGXCPU, exit `-24`; `DETECTED_EXIT_CODES` mirrors mutmut here deliberately, on
-the theory that a hang is a detection). At the stock multiplier that cap fired on hundreds
-of mutants that were not hanging, inflating every score.
-
-**Run it serially. `--max-children` defaults to 1, and `--update-baseline` refuses
-anything else.** Every child shares the *same* `mutants/` working tree, so a mutant that
-writes under it makes a **different** child's test fail, and that unrelated mutant is
-recorded as killed. Parallel sweeps are therefore biased *low*. Use `--max-children 8` to
-explore quickly, never to judge.
-
-**Measure a file twice before ratcheting it.** Every baseline entry was reproduced on two
-independent fresh serial sweeps, so `mutation-baseline.json` is exact and carries no drift
-tolerance — a sweep that disagrees is reporting a real change or a parallel run, not noise.
-The error is only safe in one direction: an entry that is too high reports as "improved",
-one that is too low fails the gate for everyone afterwards. Both artifacts that once
-inflated these figures, the five dead hypotheses for the drift, and why this is still not a
-nightly CI job: `.opencode/skill/mutation-triage/reference/measurement-history.md`. Do not
-compare against any figure older than `4f1048b`.
-
-**Stale results are the trap here, and `homelab mutants` handles it — mutmut does not.**
-mutmut caches a verdict per mutant and invalidates only on the *mutated source*, its own
-config, and tracked non-Python files. A test-only edit matches none of those, so plain
-`mutmut run` reprints the previous sweep's numbers after nine minutes of looking busy —
-and a test-only edit is what this loop consists of. `homelab mutants` fingerprints
-`tests/**/*.py` into `mutants/homelab-test-fingerprint` and discards the tree when it
-moves. Two consequences: narrowing with TARGETS only warns (wiping would drop the
-untargeted files from the report), and a tree with no fingerprint is treated as fresh, so
-delete `mutants/` by hand once after pulling this change.
+`./validate` clears in under one, and it asks a different question — `./validate` gates a
+*change*, this ratchets the *suite*. Run it by hand when you change a scoped file, then
+fix or re-baseline.
 
 Scope is `[tool.mutmut].only_mutate` in `pyproject.toml` and is stated nowhere else — the
-paths where a wrong answer is *silent* rather than an exception. Widening it is a
-deliberate act; the Fabric surface fails loudly and is not worth the runtime. Nothing here
-touches Bash, so the three patch modules' `install.sh` — the only bash installers left,
-after `lib/utils.sh`, `lib/print.sh` and the four `remove*.sh` were deleted in
-homelab-ops#38 — stay covered only by their own subprocess tests.
-
-**`only_mutate` globs whole files — there is no function-level granularity** (patterns
-must end in `*` or `.py`, and `do_not_mutate_patterns` is parsed but unused in mutmut
-3.8). That is why the public-repo leak check lives in `src/homelab/leakcheck.py` rather
-than in `cli.py`: scoping it in place would have meant mutating all 1,000+ lines of
-`cli.py`, click wrappers included. Keep that in mind before adding anything to scope — the
-unit is the file, so the file has to be worth it.
+paths where a wrong answer is *silent* rather than an exception. It globs whole files
+with no function-level granularity, so widening it is a deliberate act: the unit is the
+file, and the file has to be worth it. The three patch modules' bash `install.sh` stay
+covered only by their own subprocess tests.
 
 `mutation-baseline.json` is the same ratchet as `crap-baseline.json`: per-file undetected
 counts that may only shrink, never hand-raised, regenerated with
