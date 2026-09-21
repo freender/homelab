@@ -30,12 +30,11 @@ permanent, including history. Treat every edit as publication.
 
 **Intentionally public — do NOT "sanitize" these:** `*.freender.internal` hostnames,
 RFC1918 IPs, usernames, NIC MACs, SSH *public* keys, PBS account/token *names*, and
-schedules. `hosts.conf` depends on them; scrubbing them breaks deploys. `.internal` is
-split-horizon DNS resolvable only on the LAN, and RFC1918 is unroutable — both are deploy
-metadata, not attack surface. Do not confuse `.internal` with the public route domain
-above, which is the one that must never appear here. The leak check ignores `.internal`,
-`.local`, `.lan`, `.invalid`, and `.test` by design, and allows vendor URLs
-(`github.com`, `download.proxmox.com`, `get.docker.com`, `api.telegram.org`).
+schedules. `hosts.conf` depends on them and scrubbing them breaks deploys; `.internal` is
+LAN-only split-horizon DNS and RFC1918 is unroutable, so both are deploy metadata, not
+attack surface. Do not confuse `.internal` with the public route domain above. The leak
+check ignores `.internal`, `.local`, `.lan`, `.invalid`, `.test` and vendor URLs by
+design.
 
 **Skills:** only repo-scoped tooling docs belong here (`.opencode/skill/deploy-module/`).
 Topology, storage, backup, SSH, offsite, monitoring, and secret-handling skills stay
@@ -52,8 +51,9 @@ judgment calls above are still yours.
   `homelab-infra` skill (self-contained topology map).
 - Module changes -> read the orchestrator in `src/homelab/modules/` and the matching
   `<module>/scripts/install.py` (or `install.sh`) before editing.
-- Docker app placement and compose definitions -> the repo copy under `docker/`; don't
-  inspect live `/mnt/cache/appdata` unless a task requires a known app path.
+- Docker app placement and compose definitions -> the repo copy under
+  `docker-stacks/stacks/`; don't inspect live `/mnt/cache/appdata` unless a task requires
+  a known app path.
 - **Never** run broad recursive scans on a homelab host under `/`, `/mnt/*`,
   `/mnt/cache`, `/mnt/tank`, `/vm-flash`, `/backup`, or `/srv/timemachine`. `find .` is
   repo-root only — never adapt it to remote storage, media, backup, or appdata paths.
@@ -74,18 +74,15 @@ find . -name '*.sh' -not -path './.bin/*' -exec shellcheck -S warning {} +   # r
 yq '.' hosts.conf >/dev/null                          # apt's yq (kislyuk/yq, jq syntax) — no `eval`, no mikefarah-style paths
 ```
 
-`./validate` runs Python compile, Ruff, Pytest, the CRAP gate, `hosts.conf` parse
-validation, the inventory/module cross-check, the leak check, ShellCheck, and module
-dry-runs — the same set CI runs on push/PR to `main` (`.github/workflows/validate.yml`).
-Ruff and Pytest are skipped with a warning when missing,
-so run it from the repo `.venv` for true CI parity. CI and the venv install the same
-exact versions from `constraints.txt`
-(`.venv/bin/python -m pip install -c constraints.txt '.[dev,mutation]'`), and
-`tests/test_dev_constraints.py` fails when the venv drifts from it — never install or
-upgrade a dev tool without `-c`. Change a version by regenerating the file (its header
-says how), not by hand-editing one line. Run the targeted checks
-above first and `./validate` last — it is the slowest and repeats them all. After any push,
+`./validate` runs the same set CI runs on push/PR to `main`
+(`.github/workflows/validate.yml`). Ruff and Pytest are skipped with a warning when
+missing, so run it from the repo `.venv` for CI parity. Run the targeted checks above
+first and `./validate` last — it is the slowest and repeats them all. After any push,
 check that push's Actions run and inspect failures immediately if any job is red.
+
+**Never install or upgrade a dev tool without `-c constraints.txt`** — CI and the venv
+pin the same versions, and `tests/test_dev_constraints.py` fails when they drift. Change
+a version by regenerating the file (its header says how), not by hand-editing one line.
 
 The `deploy-module` skill carries the test coverage map (golden renders, pause semantics,
 network-critical modules) and which test owns which area; update tests when touching them.
@@ -107,14 +104,12 @@ shrink, never grow.
 - Never hand-add or hand-raise an entry. Regenerate with
   `homelab crap --update-baseline` only to lock in an improvement.
 
-**The remaining baseline is frozen — do not refactor to clear an entry.** The entries left
-are case-heavy validators whose complexity mirrors the inventory they validate; the one
-clearing pass that reached this floor (`5b833e7`) also changed three error-precedence
-orderings, so further metric-driven splitting of these functions is not
-behaviour-preserving. Treat a `cleared` notice from `validate` as informational, not a
-chore. Still regenerate when an entry clears *incidentally* during real work — the ratchet
-only shrinks, and a stale entry lets an organically improved function creep back up to its
-old recorded score without failing.
+**The remaining baseline is frozen — do not refactor to clear an entry.** Those functions
+are case-heavy validators whose complexity mirrors the inventory they validate, and the
+one clearing pass that reached this floor (`5b833e7`) changed three error-precedence
+orderings in the process. A `cleared` notice from `validate` is informational, not a
+chore — but still regenerate when an entry clears *incidentally*, or it keeps its old
+recorded score as headroom to creep back up to.
 
 ### Mutation Testing (`homelab mutants`)
 
