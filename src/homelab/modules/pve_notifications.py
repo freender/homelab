@@ -179,6 +179,11 @@ def normalize_plan(root: Path, host: str) -> dict[str, object]:
             f"{prefix}.match_severity",
             host,
         ),
+        "match_field": match_field_list(
+            registry.get(host, f"{prefix}.match_field", []),
+            f"{prefix}.match_field",
+            host,
+        ),
         "disable_mail_to_root": normalize_bool(
             registry.get(host, f"{prefix}.disable_mail_to_root", True),
             True,
@@ -220,6 +225,36 @@ def name_list(values: object, key: str, host: str) -> list[str]:
     return items
 
 
+MATCH_FIELD_MATCHERS = ("regex", "exact")
+
+
+def match_field_list(values: object, key: str, host: str) -> list[str]:
+    """PVE `match-field` rules, in its own `(regex|exact):<field>=<value>` syntax.
+
+    Separate from `name_list` because the shape is checked, not just the absence
+    of whitespace: a rule PVE cannot parse is rejected by `pvesh` *after* the
+    endpoint has already been written, leaving the deploy half-applied. The
+    field name is deliberately not whitelisted -- `type`, `hostname` and `job-id`
+    are PVE's to extend, and an unknown one fails loudly at `pvesh` rather than
+    being silently dropped here.
+
+    Whitespace is still refused for the same reason as `name_list`: the value
+    travels to the installer in a space-separated env variable.
+    """
+    items = normalize_string_list(values, f"{key} must be a list for {host}")
+    for item in items:
+        if any(char.isspace() for char in item):
+            raise ValueError(f"{key} entries must not contain whitespace for {host}: {item!r}")
+        matcher, _, rule = item.partition(":")
+        field, sep, value = rule.partition("=")
+        if matcher not in MATCH_FIELD_MATCHERS or not field or not sep or not value:
+            raise ValueError(
+                f"{key} entries must be "
+                f"'{'|'.join(MATCH_FIELD_MATCHERS)}:<field>=<value>' for {host}: {item!r}"
+            )
+    return items
+
+
 def plan_env(plan: dict[str, object]) -> dict[str, object]:
     return {
         "NOTIFY_TARGET": plan["notify_target"],
@@ -232,6 +267,7 @@ def plan_env(plan: dict[str, object]) -> dict[str, object]:
         "DISABLE_MAIL_TO_ROOT": str(plan["disable_mail_to_root"]).lower(),
         "DISABLE_DEFAULT_MATCHER": str(plan["disable_default_matcher"]).lower(),
         "MATCH_SEVERITY": " ".join(plan["match_severity"]),
+        "MATCH_FIELD": " ".join(plan["match_field"]),
         "REMOVE_MATCHERS": " ".join(plan["remove_matchers"]),
         "REMOVE_WEBHOOK_TARGETS": " ".join(plan["remove_webhook_targets"]),
     }

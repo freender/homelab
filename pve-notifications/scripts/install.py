@@ -26,6 +26,16 @@ survived every deploy:
 * A `match-field`, `match-calendar`, `invert-match` or `disable` added by hand
   silently narrowed or turned off alerting, and no redeploy would ever undo it.
 
+`match-field` is now *managed* rather than merely deleted (homelab-ops#44): it
+carries the same declare-or-unset contract as `match-severity`, so inventory
+declaring no rules still removes a hand-added one. It exists because PVE's
+notification bus has no per-field negation -- `match-field` is
+`(regex|exact):<field>=<value>` with no lookahead, and `invert-match` inverts the
+*whole* matcher rather than one field. Excluding one event type is therefore only
+expressible as a positive allowlist of the others, which is what `ace` and
+`osiris` carry to keep `type=replication` off this path now that
+`PveReplicationFailing` owns it from metrics.
+
 Those are now deleted as part of the same `set`. This is the fifth "a step did
 less than the surrounding code assumed" finding in this port.
 
@@ -73,7 +83,7 @@ TELEGRAM_URL = "https://api.telegram.org/bot{{ secrets.token }}/sendMessage"
 # Properties this module owns on each object but may not set. Any of them present
 # on the live object is deleted, because `pvesh set` would otherwise leave it.
 ENDPOINT_UNSET = ("disable",)
-MATCHER_UNSET = ("disable", "invert-match", "match-calendar", "match-field")
+MATCHER_UNSET = ("disable", "invert-match", "match-calendar")
 
 REQUIRED_ENV = ("NOTIFY_TARGET", "TARGET_NAME", "MATCHER_NAME", "MATCHER_COMMENT")
 REQUIRED_ALERTMANAGER_ENV = ("ALERTMANAGER_URL", "ALERTMANAGER_ALERTNAME", "ALERTMANAGER_SEVERITY")
@@ -252,12 +262,15 @@ def configure_matcher(
         "target": [target_name],
         "comment": ctx.env["MATCHER_COMMENT"],
     }
-    severities = list(names(ctx, "MATCH_SEVERITY"))
     unset = MATCHER_UNSET
-    if severities:
-        desired["match-severity"] = severities
-    else:
-        unset = unset + ("match-severity",)
+    for prop, values in (
+        ("match-severity", list(names(ctx, "MATCH_SEVERITY"))),
+        ("match-field", list(names(ctx, "MATCH_FIELD"))),
+    ):
+        if values:
+            desired[prop] = values
+        else:
+            unset = unset + (prop,)
 
     log.action(f"Configuring notification matcher {name}")
     current = matchers.get(name)

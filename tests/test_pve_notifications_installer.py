@@ -333,6 +333,44 @@ def test_severities_are_passed_as_a_list(host: Host) -> None:
     assert host.matchers["alertmanager-matcher"]["match-severity"] == ["warning", "error"]
 
 
+def test_match_fields_are_passed_as_a_list(host: Host) -> None:
+    # The de-route in homelab-ops#44: `type=replication` is kept off Alertmanager
+    # by allowing the other types, since PVE can negate neither a field nor one
+    # half of a matcher.
+    allowlist = "regex:type=^(package-updates|fencing|vzdump|system-mail)$"
+
+    host.deploy({**ENV, "MATCH_FIELD": f"{allowlist} exact:hostname=ace"})
+
+    assert host.matchers["alertmanager-matcher"]["match-field"] == [
+        allowlist,
+        "exact:hostname=ace",
+    ]
+
+
+def test_an_emptied_match_field_list_stops_filtering(host: Host) -> None:
+    """The declare-or-unset contract `match-severity` already had. Without it,
+    removing `match_field` from `hosts.conf` would leave the allowlist in place
+    and go on dropping replication events while the deploy reported success --
+    the same class of bug the port found for `match-severity`."""
+    host.matchers["alertmanager-matcher"]["match-field"] = ["exact:type=vzdump"]
+
+    host.deploy({**ENV, "MATCH_FIELD": ""})
+
+    assert "match-field" not in host.matchers["alertmanager-matcher"]
+
+
+def test_a_converged_match_field_is_not_rewritten(host: Host) -> None:
+    """A rewrite bumps the notification config digest cluster-wide, so an
+    unchanged matcher must produce no write at all -- the property that makes the
+    canary deploy meaningful."""
+    allowlist = "regex:type=^(package-updates|fencing|vzdump|system-mail)$"
+    host.matchers["alertmanager-matcher"]["match-field"] = [allowlist]
+
+    host.deploy({**ENV, "MATCH_FIELD": allowlist})
+
+    assert host.pvesh.writes == []
+
+
 def test_stale_objects_are_removed_only_after_the_new_route_exists(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -92,9 +92,67 @@ def test_plan_env_renders_every_installer_variable(monkeypatch: pytest.MonkeyPat
         "DISABLE_MAIL_TO_ROOT": "true",
         "DISABLE_DEFAULT_MATCHER": "true",
         "MATCH_SEVERITY": "error",
+        "MATCH_FIELD": "",
         "REMOVE_MATCHERS": "backup-errors telegram-matcher",
         "REMOVE_WEBHOOK_TARGETS": "telegram",
     }
+
+
+def test_match_field_defaults_to_no_field_filtering(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Absent means every type is routed, which is what every host did before the
+    allowlist existed -- so adding the key cannot silently narrow a host that
+    never declared it."""
+    plan = plan_for(monkeypatch, {})
+
+    assert plan["match_field"] == []
+    assert pve_notifications.plan_env(plan)["MATCH_FIELD"] == ""
+
+
+def test_match_field_rules_travel_space_separated(monkeypatch: pytest.MonkeyPatch) -> None:
+    plan = plan_for(
+        monkeypatch,
+        {
+            "pve-notifications.match_field": [
+                "regex:type=^(vzdump|fencing)$",
+                "exact:hostname=ace",
+            ]
+        },
+    )
+
+    assert pve_notifications.plan_env(plan)["MATCH_FIELD"] == (
+        "regex:type=^(vzdump|fencing)$ exact:hostname=ace"
+    )
+
+
+@pytest.mark.parametrize(
+    "rule",
+    [
+        "type=replication",  # no matcher prefix
+        "glob:type=replication",  # not one PVE accepts
+        "regex:type",  # no value
+        "regex:=replication",  # no field
+        "regex:type=",  # empty value
+    ],
+)
+def test_a_malformed_match_field_rule_is_refused(
+    monkeypatch: pytest.MonkeyPatch, rule: str
+) -> None:
+    """`pvesh` rejects these only *after* the webhook endpoint has been written,
+    which leaves the deploy half-applied -- so the shape is checked locally."""
+    with pytest.raises(ValueError, match="must be 'regex|exact:<field>=<value>'"):
+        plan_for(monkeypatch, {"pve-notifications.match_field": [rule]})
+
+
+def test_an_unknown_match_field_name_is_accepted(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Deliberately not whitelisted against type/hostname/job-id: the field set is
+    PVE's to extend, and an unknown one fails loudly at `pvesh` rather than being
+    dropped here, where it would look like the rule was applied."""
+    plan = plan_for(
+        monkeypatch,
+        {"pve-notifications.match_field": ["exact:something-new=1"]},
+    )
+
+    assert plan["match_field"] == ["exact:something-new=1"]
 
 
 def test_an_empty_severity_list_renders_empty_rather_than_the_default(
@@ -105,7 +163,9 @@ def test_an_empty_severity_list_renders_empty_rather_than_the_default(
     assert pve_notifications.plan_env(plan)["MATCH_SEVERITY"] == ""
 
 
-@pytest.mark.parametrize("key", ["match_severity", "remove_matchers", "remove_webhook_targets"])
+@pytest.mark.parametrize(
+    "key", ["match_severity", "remove_matchers", "remove_webhook_targets", "match_field"]
+)
 def test_a_list_entry_with_whitespace_is_refused(
     monkeypatch: pytest.MonkeyPatch, key: str
 ) -> None:
