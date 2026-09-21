@@ -111,11 +111,13 @@ Found repeatedly across `normalize.py` and `op_secrets.py`. Check these first:
   what this loop consists of. `homelab mutants` fingerprints `tests/**/*.py` and discards
   the tree when it moves; narrowing with TARGETS only warns, since wiping would drop the
   untargeted files from the report.
-- **`only_mutate` globs whole files — there is no function-level granularity.** The unit of
-  scope is the file, so adding one means accepting all of it. This is why the leak check
-  lives in `leakcheck.py` rather than in `cli.py`.
+- **Scope is per-file** (`AGENTS.md` owns the rule). The worked consequence: the leak check
+  lives in `leakcheck.py` rather than in `cli.py`, because scoping it in place would have
+  meant accepting all of `cli.py`'s click wrappers too.
 - `mutmut show` cannot resolve a mutant in this tree; that is what `homelab survivors` is
   for.
+
+## Reference files (read on demand, not up front)
 
 | File | When |
 |---|---|

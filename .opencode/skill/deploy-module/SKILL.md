@@ -69,13 +69,6 @@ Never parse `hosts.conf` ad hoc from modules. Use the repo helpers:
 
 If a new CLI inventory operation is needed, add it to `src/homelab/cli.py` instead of documenting commands that do not exist.
 
-## Naming conventions
-
-- **Indentation:** 4 spaces, no tabs
-- **Globals:** `UPPER_SNAKE_CASE` (e.g., `BUILD_ROOT`, `FORCE_UPDATE`)
-- **Functions:** `snake_case` descriptive names (e.g., `render_template`)
-- **Booleans:** `true`/`false` strings
-
 ## Shared helpers
 
 From `src/homelab/module_support.py` and `src/homelab/deploy.py`:
@@ -164,24 +157,12 @@ thin spots — is in `reference/test-coverage.md`. Note that headline `--cov`
 numbers are inflated by the dry-run smoke test; that file explains how to read
 them.
 
-## Output/logging
+## Output and error handling
 
-Use output helpers from `src/homelab/output.py`:
-- `print_header "Module Name"` — section header
-- `print_action "Doing something"` — action step
-- `print_sub "Detail"` — sub-step detail
-- `print_ok "Success"` — success message
-- `print_warn "Warning"` — recoverable condition
-- `print_error "Error"` — hard failure
-
-Keep output operational and short. Exit non-zero on hard failures.
-
-## Error handling and idempotency
-
-- Fail fast on missing required files/secrets/config keys
-- Return `0` for "not applicable" module/host skips
-- Track host-level failures via framework arrays
-- Copy/update only when content changes unless `FORCE_UPDATE=true`
+Use the `print_*` helpers in `src/homelab/output.py` rather than bare `print`; keep
+output operational and short. Fail fast on a missing required file, secret, or config
+key and exit non-zero; return `0` for a "not applicable" module/host skip; copy only
+when content changes unless `FORCE_UPDATE=true`.
 
 ## ShellCheck
 
@@ -193,13 +174,6 @@ splitting). Suppress nothing else without a reason in the comment.
 `./deploy [--dry-run] <module|all> <host|all>` — positional args are always
 `<module> <host>`, both accept `all`. Same signature for dry-run and live; the only
 difference is the flag.
-
-```bash
-./deploy --dry-run apcupsd ace      # dry-run, one module, one host
-./deploy --dry-run all all          # dry-run, every module, every host
-./deploy apcupsd ace                # live, one module, one host
-./deploy all all                    # live, every module, every host
-```
 
 `./deploy all all` without `--dry-run` is the broadest possible live action this repo
 can take: every module against every host. Treat requests framed as "deploy
@@ -221,9 +195,3 @@ unchanged files). Use `all_registered_modules()` rather than `ordered_modules()`
 exhaustive checks that must still cover excluded modules — `tests/test_dry_run_all_modules.py`
 does exactly that so `pve-upgrade` keeps its dry-run smoke coverage.
 
-## Shipping (`/ship` pipeline)
-
-`/ship` wraps this CLI in validate -> dry-run -> deploy/canary -> verify -> commit -> push
--> CI. `.opencode/command/ship.md` owns the behavior and stop conditions for every step
-(`AGENTS.md` keeps only the rails that outlive the command); this skill provides the
-deployment CLI and implementation mechanics used by that pipeline.

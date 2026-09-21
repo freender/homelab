@@ -3,11 +3,11 @@
 Read this when adding or updating tests, or when judging whether an area is
 actually covered. Not needed for a routine module edit.
 
-**Read coverage numbers carefully.** The full suite reports ~83%, but roughly a
-quarter of that (~24 points) comes from `test_dry_run_all_modules.py`, which
-asserts only `exit_code == 0`. Excluding it, assertion-backed coverage is ~59%.
-A module can be "covered" and still render semantically wrong output. When
-judging whether an area needs tests, use the assertion-backed number:
+**Read coverage numbers carefully.** A large share of the headline `--cov` number
+comes from `test_dry_run_all_modules.py`, which asserts only `exit_code == 0` — a
+module can be "covered" by it and still render semantically wrong output. Judge an
+area by the assertion-backed number, and measure it rather than trusting any figure
+written down here:
 
 ```bash
 COVERAGE_FILE=/tmp/cov_nosmoke .venv/bin/python -m pytest tests/ \
@@ -18,9 +18,6 @@ Use a separate `COVERAGE_FILE` and an explicit `--cov-report=term`: reusing the
 repo's `.coverage` (which `validate` has already written from the full suite) or
 passing an empty `--cov-report=` will print the *previous* run's totals and make
 the smoke test look like it contributes nothing.
-
-Re-measure rather than trusting the figures above — they move with every coverage
-commit, and this paragraph has been stale before.
 
 ## Cross-cutting
 
@@ -64,15 +61,12 @@ a cross-host quorum, VIP, or failover group — it belongs in the golden-render 
 ## Known thin spots
 
 Modules with no dedicated test, carried only by the dry-run smoke test:
-`disk_spindown` and the three `pve_*_patch` wrappers.
-(`apt_upgrade`, `ssh_config`, `vmalert_rules`, `pve_upgrade`, `monitoring_config`,
-`pve_postinstall_webhook`, `apcupsd`, `docker`, `pve_interface_pinning`, `pve_notifications`, `ubuntu_setup` and `zfs_automation`'s installer have left this list as they were ported — porting is currently the
-main way coverage arrives. `wsl_conf` has installer tests in
-`test_homelab_install.py` but still no dedicated file.)
-`zfs_automation/{access,render,staging}.py` are likewise largely unasserted (7% /
-11% / 37% assertion-backed). `op_secrets.py` and `ssh.py` are no longer thin —
-commit `6273be2` took them to 71% / 72%. Prefer adding to these over re-covering
-well-tested areas.
+`disk_spindown` and the three `pve_*_patch` wrappers. Porting a module to Python is
+currently the main way coverage arrives, so re-check this list against a fresh
+assertion-backed run rather than trusting it. `wsl_conf` has installer tests in
+`test_homelab_install.py` but still no dedicated file, and
+`zfs_automation/{access,render,staging}.py` are largely unasserted. Prefer adding to
+these over re-covering well-tested areas.
 The three `pve-*-patch` modules' `install.sh` (~610 lines, never ported per
 homelab-ops#35) have no execution coverage at all — ShellCheck only. A port moves a module's installer into
 in-process tests that assert behaviour rather than grepping the script for a

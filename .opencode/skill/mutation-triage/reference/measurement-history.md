@@ -50,13 +50,6 @@ All are disproved:
 5. **mutmut's stats phase** — two fresh collections produce byte-identical test-selection
    maps.
 
-## Reproduction standard
-
-Every baseline entry was scored identically on **two independent fresh serial sweeps**
-(`rm -rf mutants` between; `--no-run` re-scores the same tree and does not count). That is
-what makes the ratchet enforceable: the baseline is exact and carries no drift tolerance,
-so a sweep that disagrees is reporting a real change or a parallel run — not noise.
-
 ## Not a nightly CI job
 
 The scheduled workflow built and reverted on 2026-09-12 stays reverted. The reason is now

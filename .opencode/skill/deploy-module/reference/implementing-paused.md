@@ -39,10 +39,8 @@ deliberately does **not** reproduce that return: it only does the stopping, and 
 caller writes a plain `if paused:`, so there is no inverted code to misread.
 
 Either way the units end up stopped *and* disabled with their unit files still
-installed — removing them is retirement, not pause, and would break resume.
-
-Keep unit files installed when paused. Removing them is retirement
-(`enabled: false`), not pause, and breaks resume.
+installed — removing them is retirement (`enabled: false`), not pause, and would
+break resume.
 
 **Why the gate is spelled `deploy:` and never `enabled:`.** A feature-level `enabled:`
 key is module-owned and the framework never reads it — `pbs-client-backup.enabled` is

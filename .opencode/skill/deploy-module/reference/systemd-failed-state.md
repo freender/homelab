@@ -7,10 +7,8 @@ A unit left in `systemctl --failed` after a fix is redeployed stays "failed" unt
 its next successful run or an explicit `reset-failed` — that gap is what
 homelab-alerting/vmalert failed-unit checks see. Four shared `lib/utils.sh`
 helpers cover this; reach for them before writing `systemctl reset-failed` by hand.
-Which one you want depends on whether the redeploy changed anything:
-changed content -> `homelab_reload_and_clear_failed`; unchanged content but a
-transient fault -> `homelab_recover_failed_units`; unit going away ->
-`retire_systemd_unit`.
+`SKILL.md` carries the pick-by-what-changed mapping; this file is the semantics of
+each helper once you have chosen one.
 
 - **`homelab_reload_and_clear_failed "$changed" unit1 [unit2 ...]`** — the
   standard follow-up to `install_file_map`. Runs `daemon-reload` and clears the
