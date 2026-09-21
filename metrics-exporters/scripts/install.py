@@ -79,6 +79,7 @@ TEXTFILE_EXPORTERS = {
     "reboot-textfile-exporter": ("reboot-textfile-exporter", ("pve-patch-statuses.conf",)),
     "boot-entry-textfile-exporter": ("boot-entry-textfile-exporter", ()),
     "disk-label-textfile-exporter.py": ("disk-label-textfile-exporter", ("disk-labels.conf",)),
+    "pve-replication-textfile-exporter.py": ("pve-replication-textfile-exporter", ()),
 }
 
 # Entries that only make sense together. A map carries all of a group or none of it.

@@ -1,0 +1,7 @@
+[Unit]
+Description=Write PVE replication state metrics for node_exporter textfile collector
+ConditionPathExists=/usr/bin/pvesh
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/pve-replication-textfile-exporter

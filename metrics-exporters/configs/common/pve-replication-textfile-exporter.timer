@@ -1,0 +1,15 @@
+[Unit]
+Description=Refresh PVE replication textfile metrics
+
+[Timer]
+# Jobs run on a */15 schedule at the fastest, so per-minute polling is already
+# far finer than the state it reports. It is kept at a minute anyway to match
+# the other textfile exporters: the cost is one pvesh call, and a coarser timer
+# would only add lag to the `for:` window the alert rule depends on.
+OnBootSec=2min
+OnUnitActiveSec=1min
+AccuracySec=10s
+Unit=pve-replication-textfile-exporter.service
+
+[Install]
+WantedBy=timers.target

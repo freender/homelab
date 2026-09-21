@@ -21,6 +21,7 @@ RULE_FILES = (
     "node-down.yml",
     "node-resources.yml",
     "pve-patches.yml",
+    "pve-replication.yml",
     "reboot.yml",
     "sas-links.yml",
     "smart-disks.yml",

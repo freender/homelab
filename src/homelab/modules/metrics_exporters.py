@@ -242,6 +242,29 @@ FILE_SPECS = (
         "/etc/systemd/system/boot-entry-textfile-exporter.timer",
         feature="baremetal",
     ),
+    # PVE storage-replication state. Gated on being a PVE node rather than on
+    # `baremetal`, because the gate is the presence of `pvesh` and a node's own
+    # /nodes/<node>/replication endpoint, which no LXC guest and no non-PVE bare
+    # metal (tower, neo) has. Deployed to every PVE node including the ones with
+    # no jobs: ace is every job's target and osiris is standalone, so both
+    # report `jobs_total 0`, which is a real answer and the thing that
+    # distinguishes "no jobs here" from "exporter is dead".
+    FileSpec(
+        "pve-replication-textfile-exporter.py",
+        "/usr/local/bin/pve-replication-textfile-exporter",
+        mode="755",
+        feature="pve_replication",
+    ),
+    FileSpec(
+        "pve-replication-textfile-exporter.service",
+        "/etc/systemd/system/pve-replication-textfile-exporter.service",
+        feature="pve_replication",
+    ),
+    FileSpec(
+        "pve-replication-textfile-exporter.timer",
+        "/etc/systemd/system/pve-replication-textfile-exporter.timer",
+        feature="pve_replication",
+    ),
     FileSpec(
         "pve-patch-statuses.conf",
         "/etc/homelab/pve-patch-statuses.conf",
@@ -397,6 +420,17 @@ def has_hba_exporter(root: Path, host: str) -> bool:
     )
 
 
+def is_pve_node(root: Path, host: str) -> bool:
+    """Whether this host is a Proxmox VE node.
+
+    The replication exporter shells out to `pvesh` against the node's own
+    /nodes/<node>/replication endpoint, so it is meaningless anywhere else --
+    including on bare metal that is not PVE (tower, neo).
+    """
+    registry = default_registry(root)
+    return str(registry.get(host, "config.type", "")) == "pve"
+
+
 def has_igpu_exporter(root: Path, host: str) -> bool:
     registry = default_registry(root)
     exporter_config = registry.get(host, "metrics-exporters.intel_gpu_exporter", None)
@@ -498,6 +532,7 @@ def build_file_specs(
     has_expected_pools: bool,
     has_disk_label_overrides: bool,
     has_pve_patch_statuses: bool,
+    has_pve_replication: bool,
     has_wrapper: bool,
     lxc_guest: bool,
 ) -> tuple[FileSpec, ...]:
@@ -506,6 +541,7 @@ def build_file_specs(
         "apcupsd": has_apcupsd,
         "igpu": has_igpu,
         "hba": has_hba and not lxc_guest,
+        "pve_replication": has_pve_replication and not lxc_guest,
         "zfs_expected_pools": has_expected_pools and not lxc_guest,
         "disk_label_overrides": has_disk_label_overrides and not lxc_guest,
         "pve_patch_statuses": has_pve_patch_statuses and not lxc_guest,
@@ -540,6 +576,12 @@ HBA_EXPORTER_FILES = [
     "hba-textfile-exporter.timer",
 ]
 
+PVE_REPLICATION_EXPORTER_FILES = [
+    "pve-replication-textfile-exporter.py",
+    "pve-replication-textfile-exporter.service",
+    "pve-replication-textfile-exporter.timer",
+]
+
 APCACCESS_SERIAL_CMD = (
     "apcaccess status 2>/dev/null | sed -n "
     "'s/^SERIALNO[[:space:]]*:[[:space:]]*//p' | xargs"
@@ -555,13 +597,16 @@ class ExporterFlags:
     has_apcupsd: bool
     has_igpu: bool
     has_hba: bool
+    has_pve_replication: bool
 
 
 def exporter_flags(root: Path, host: str) -> ExporterFlags:
     """Resolve every per-host exporter switch.
 
     The smartctl wrapper and the HBA exporter both read real disks, so neither is
-    ever enabled inside an LXC guest regardless of what inventory says.
+    ever enabled inside an LXC guest regardless of what inventory says. The
+    replication exporter carries the same guard for a different reason: a guest
+    has no pvesh, and inventory could still call it type pve by mistake.
     """
     lxc_guest = is_lxc_guest(root, host)
     return ExporterFlags(
@@ -570,6 +615,7 @@ def exporter_flags(root: Path, host: str) -> ExporterFlags:
         has_apcupsd=has_apcupsd_exporter(root, host),
         has_igpu=has_igpu_exporter(root, host),
         has_hba=has_hba_exporter(root, host) and not lxc_guest,
+        has_pve_replication=is_pve_node(root, host) and not lxc_guest,
     )
 
 
@@ -693,6 +739,8 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
         build_igpu_exporter(registry, common_dir, build_dir, host)
     if flags.has_hba:
         copy_files(common_dir, build_dir, HBA_EXPORTER_FILES)
+    if flags.has_pve_replication:
+        copy_files(common_dir, build_dir, PVE_REPLICATION_EXPORTER_FILES)
 
     data = bare_metal_data(root, host, flags.lxc_guest)
     render_if_any(
@@ -721,6 +769,7 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
         has_expected_pools=bool(data.expected_pools),
         has_disk_label_overrides=bool(data.label_overrides),
         has_pve_patch_statuses=bool(data.patch_statuses),
+        has_pve_replication=flags.has_pve_replication,
         has_wrapper=flags.has_wrapper,
         lxc_guest=flags.lxc_guest,
     )

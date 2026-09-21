@@ -1,0 +1,103 @@
+groups:
+  - name: pve-replication
+    interval: 1m
+    rules:
+      # The state-based replacement for PVE's one-shot replication notification
+      # (homelab-ops#42). The event path could not express this rule at all:
+      # `PVE::Notify::error("replication", ...)` has no recovery counterpart, so
+      # the alert could only expire on Alertmanager's 12h `resolve_timeout`
+      # rather than on the job recovering. A four-minute ace reboot on
+      # 2026-09-20 produced two `critical` alerts that stood for twelve hours
+      # after `pvesr status` was clean on both source nodes.
+      #
+      # Two deliberate pieces of label surgery, both load-bearing:
+      #
+      # `host` is rewritten to the replication *target*. Every job in this
+      # cluster targets ace (`/etc/pve/replication.cfg`: 101-0, 107-1 from
+      # clovis; 104-0, 106-2, 108-1 from bray), and the notification was emitted
+      # by the surviving *source* node -- so the alert arrived labelled
+      # host=bray/host=clovis while the node at fault was ace. That is precisely
+      # why Alertmanager's `equal: [host]` inhibit rule never suppressed it
+      # during an ace outage: it had no label in common to match on. Rewriting
+      # host to the target makes the existing inhibition apply with no change to
+      # alertmanager.yml.tpl, and points the alert at the node you would
+      # actually go and look at.
+      #
+      # This does mean the alert blames the target for a fault that could be on
+      # the source side (a broken source pool, a bad link). That is a real
+      # trade-off and it is accepted knowingly: the source node is preserved
+      # verbatim as `source_node` and named in both the summary and the
+      # description, so nothing is lost but the default place to look.
+      #
+      # The gate is the other half. `min_over_time(up[30m]) == 1` on the
+      # rewritten host means the rule is silent unless the *target* has been
+      # continuously up for half an hour, which is the same host-up-gate pattern
+      # every absence rule in this ruleset carries, joined on the blamed node
+      # rather than the reporting one. It covers the window inhibition cannot:
+      # NodeDown needs 10m to fire, and it resolves the moment the node answers
+      # again while replication is still catching up for another cycle.
+      #
+      # for: 45m is the piece that only a metric can have, and the actual answer
+      # to the reboot noise. Jobs run `*/15`, so 45m is three consecutive failed
+      # runs -- longer than any reboot in 60 days of observed outages (5-15
+      # minutes) and the same "first few" window PVE's own
+      # _should_mail_at_failcount uses before it goes quiet until fail_count 48.
+      #
+      # warning, not critical, and that is a downgrade from the event it
+      # replaces. A job that has failed for 45 minutes with its target up is a
+      # degraded DR position, not an outage: the guests are still running on
+      # their source nodes. The old `critical` is a large part of what taught us
+      # to scroll past these -- #42 records both of them being dismissed as
+      # background noise during a live incident. The default route re-notifies
+      # every 4h, which is the right amount of pressure for something whose fix
+      # is "go look at why the sync is failing".
+      - alert: PveReplicationFailing
+        expr: |
+          label_replace(
+            homelab_pve_replication_fail_count > 0,
+            "host", "$1", "target", "(.*)"
+          )
+          and on(host) (min_over_time(up{job="pve-node"}[30m]) == 1)
+        for: 45m
+        labels:
+          severity: warning
+        annotations:
+          summary: "PVE replication {{ $labels.job_id }} into {{ $labels.host }} is failing"
+          description: "Replication job {{ $labels.job_id }} (guest {{ $labels.guest }}) from {{ $labels.source_node }} to {{ $labels.host }} has failed {{ $value }} consecutive times over at least 45 minutes, and {{ $labels.host }} has been up throughout, so this is not a reboot. The guest is still running on {{ $labels.source_node }}, but its replica on {{ $labels.host }} is stale and an HA failover would lose everything since the last successful sync. Run `pvesr status` on {{ $labels.source_node }} for the error text; check the target pool with `zpool status -x` on {{ $labels.host }}."
+
+      # Without this the alert above is silently dead. node_exporter's textfile
+      # collector keeps serving whatever is already in its directory, so a
+      # stopped pve-replication-textfile-exporter.timer leaves every
+      # homelab_pve_replication_* series present and frozen at its last value --
+      # fail_count pinned at 0 while jobs fail. Identical reasoning and
+      # threshold to ZfsPoolMetricsStale in zfs-pools.yml; the timer runs every
+      # minute, so 15 minutes without a rewrite is broken.
+      - alert: PveReplicationMetricsStale
+        expr: time() - node_textfile_mtime_seconds{file=~".*/pve-replication\\.prom"} > 900
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.host }} PVE replication metrics are stale"
+          description: "pve-replication.prom on {{ $labels.host }} has not been rewritten in over 15 minutes, so homelab_pve_replication_fail_count is frozen at its last value and PveReplicationFailing cannot fire on anything that has changed since. Check `systemctl status pve-replication-textfile-exporter.timer` on {{ $labels.host }}."
+
+      # Backstop for the case the staleness rule cannot see: a .prom that was
+      # never written at all has no node_textfile_mtime_seconds series either,
+      # so an exporter that was removed or never deployed would leave both this
+      # file's alerts permanently silent and look exactly like "no jobs are
+      # failing".
+      #
+      # Carries the known full-vector limitation of the other absence rules in
+      # this ruleset (see the note in reference/rule-authoring.md): this only
+      # fires when *every* PVE node stops reporting, not when one does. That
+      # single-host gap is the case PveReplicationMetricsStale above already
+      # owns, which is why it is acceptable here and not worth four per-host
+      # copies of the same rule.
+      - alert: PveReplicationMetricsMissing
+        expr: absent_over_time(homelab_pve_replication_jobs_total{host=~"ace|bray|clovis|osiris"}[15m])
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "PVE replication metrics missing"
+          description: "homelab_pve_replication_jobs_total has produced no samples from any of ace/bray/clovis/osiris in 15 minutes. The pve-replication-textfile-exporter timer may be stopped fleet-wide, or the metrics-exporters deploy may have dropped it. Replication failures are unmonitored while this fires."

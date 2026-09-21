@@ -55,6 +55,7 @@ def specs(**flags: bool):
         "has_expected_pools": False,
         "has_disk_label_overrides": False,
         "has_pve_patch_statuses": False,
+        "has_pve_replication": False,
         "has_wrapper": False,
         "lxc_guest": False,
     }
@@ -70,6 +71,7 @@ def everything():
         has_expected_pools=True,
         has_disk_label_overrides=True,
         has_pve_patch_statuses=True,
+        has_pve_replication=True,
         has_wrapper=True,
     )
 
