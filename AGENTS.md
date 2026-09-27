@@ -36,7 +36,8 @@ attack surface. Do not confuse `.internal` with the public route domain above. T
 check ignores `.internal`, `.local`, `.lan`, `.invalid`, `.test` and vendor URLs by
 design.
 
-**Skills:** only repo-scoped tooling docs belong here (`.opencode/skill/deploy-module/`).
+**Skills:** only repo-scoped tooling docs belong here (`.opencode/skill/deploy-module/`,
+`.opencode/skill/mutation-triage/`).
 Topology, storage, backup, SSH, offsite, monitoring, and secret-handling skills stay
 host-local in `~/.config/opencode/skills/` — they are credential and recon maps, not repo
 documentation.
