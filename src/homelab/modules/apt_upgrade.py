@@ -363,7 +363,7 @@ def write_auto_reboot_conf(build_dir: Path, reboot_time: str) -> None:
 def write_service(build_dir: Path, cleanup: bool) -> None:
     lines = [
         "[Unit]",
-        "Description=Homelab daily apt update and dist-upgrade",
+        "Description=Homelab scheduled apt update and dist-upgrade",
         "Wants=network-online.target",
         "After=network-online.target",
         "",
@@ -404,7 +404,7 @@ def write_timer(build_dir: Path, schedule: str) -> None:
     content = "\n".join(
         [
             "[Unit]",
-            "Description=Run homelab daily apt update and dist-upgrade",
+            "Description=Run homelab scheduled apt update and dist-upgrade",
             "",
             "[Timer]",
             f"OnCalendar={schedule}",
