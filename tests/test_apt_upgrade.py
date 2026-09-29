@@ -194,20 +194,59 @@ def test_every_enabled_host_has_a_supported_type() -> None:
         assert host_type in apt_upgrade.SUPPORTED_TYPES, f"{host}: {host_type}"
 
 
+PVE_NODES = ("ace", "bray", "clovis", "osiris")
+
+
 def test_pve_nodes_are_scheduled_before_the_saturday_reboot_digest() -> None:
-    """The 05:00-05:15 band is coupled to RebootRequired's 1h `for:`.
+    """The Saturday 05:00-05:15 band is coupled to RebootRequired's 1h `for:`.
 
     A kernel installed on a PVE node must cross that threshold before the
     Saturday 09:00-09:10 Alertmanager window, or the prompt to reboot is held
     for a further week. The exporter refreshes every 15m, so the run must
-    finish comfortably before 08:00. Moving these later without also moving the
-    alert is the regression.
+    finish comfortably before 08:00. Moving these later, or off Saturday,
+    without also moving the alert is the regression.
     """
     registry = default_registry(ROOT)
-    for host in ("ace", "bray", "clovis", "osiris"):
+    for host in PVE_NODES:
         schedule = str(registry.get(host, "apt-upgrade.schedule"))
+        assert schedule.startswith("Sat "), f"{host} runs at {schedule}, not Saturday-only"
         hour = int(schedule.rsplit(" ", 1)[1].split(":")[0])
         assert 3 <= hour <= 6, f"{host} runs at {schedule}, too close to the 09:00 digest"
+
+
+def test_weekly_pve_nodes_keep_daily_security_updates() -> None:
+    """A weekly dist-upgrade without the daily security scope would hold Debian
+    security fixes for up to a week -- the gap this flag exists to close."""
+    registry = default_registry(ROOT)
+    for host in PVE_NODES:
+        assert apt_upgrade.normalize_security_updates(registry, host) is True, host
+
+
+def test_security_updates_defaults_to_false(tmp_path: Path) -> None:
+    registry = registry_for(tmp_path, "somehost")
+    assert apt_upgrade.normalize_security_updates(registry, "somehost") is False
+
+
+def test_security_updates_rejects_a_non_boolean(tmp_path: Path) -> None:
+    registry = registry_for(tmp_path, "somehost", extra="      security_updates: maybe\n")
+    with pytest.raises(ValueError, match="security_updates must be true or false"):
+        apt_upgrade.normalize_security_updates(registry, "somehost")
+
+
+def test_security_conf_clears_the_packaged_origins_before_narrowing(tmp_path: Path) -> None:
+    """APT list assignment appends; without #clear the packaged `label=Debian`
+    point-release origin would stay active next to ours."""
+    apt_upgrade.write_security_updates_conf(tmp_path)
+    text = (tmp_path / "security-updates.conf").read_text(encoding="utf-8")
+
+    clear = text.index("#clear Unattended-Upgrade::Origins-Pattern;")
+    pattern = text.index("Unattended-Upgrade::Origins-Pattern {")
+    assert clear < pattern
+    origins = [line.strip() for line in text.splitlines() if "origin=" in line]
+    assert origins == [
+        '"origin=Debian,codename=${distro_codename}-security,label=Debian-Security";'
+    ]
+    assert "Automatic-Reboot" not in text, "reboot policy belongs to 53homelab-auto-reboot"
 
 
 def test_generated_conf_sets_the_keys_unattended_upgrades_reads(tmp_path: Path) -> None:
@@ -322,10 +361,16 @@ def test_pause_stops_the_host_rebooting_itself(tmp_path: Path) -> None:
     dropin = tmp_path / "53homelab-auto-reboot"
     dropin.write_text("Unattended-Upgrade::Automatic-Reboot \"true\";\n", encoding="utf-8")
     installer.AUTO_REBOOT_PATH = str(dropin)
+    installer.SECURITY_UPDATES_PATH = str(tmp_path / "52homelab-security-updates")
 
     ctx = make_ctx(
         tmp_path,
-        env={"AUTOUPGRADE": "true", "PAUSED": "true", "AUTO_REBOOT": "true"},
+        env={
+            "AUTOUPGRADE": "true",
+            "PAUSED": "true",
+            "AUTO_REBOOT": "true",
+            "SECURITY_UPDATES": "false",
+        },
         files={"service": "[Unit]\n"},
         file_map={"service": (str(tmp_path / "svc"), "644")},
     )
@@ -472,3 +517,159 @@ def test_the_file_map_gains_the_timer_and_drop_in_when_both_are_on(tmp_path: Pat
     assert apt_upgrade.AUTO_REBOOT_PATH in mapped
     for name in [line.split("|")[0] for line in mapped.splitlines() if line.strip()]:
         assert (build_dir / name).is_file(), f"{name} is mapped but was never rendered"
+
+
+def test_the_file_map_gains_the_security_drop_in_when_opted_in(tmp_path: Path) -> None:
+    build_dir = tmp_path / "build" / "ace"
+
+    apt_upgrade.build_unit_files(
+        build_dir,
+        autoupgrade="true",
+        schedule="Sat *-*-* 05:10:00",
+        paused=False,
+        auto_reboot=False,
+        auto_reboot_time="now",
+        security_updates=True,
+    )
+
+    mapped = (build_dir / "file-map.conf").read_text(encoding="utf-8")
+    assert apt_upgrade.SECURITY_UPDATES_PATH in mapped
+    assert "SECURITY_UPDATES=true" in (build_dir / "env").read_text(encoding="utf-8")
+    for name in [line.split("|")[0] for line in mapped.splitlines() if line.strip()]:
+        assert (build_dir / name).is_file(), f"{name} is mapped but was never rendered"
+
+
+# ---------------------------------------------------------------------------
+# apply_security_updates: the installer side of security_updates.
+# ---------------------------------------------------------------------------
+
+SECURITY_ONLY_DUMP = (
+    'Unattended-Upgrade::Origins-Pattern "";\n'
+    'Unattended-Upgrade::Origins-Pattern:: '
+    '"origin=Debian,codename=${distro_codename}-security,label=Debian-Security";\n'
+)
+PACKAGED_DEFAULT_DUMP = SECURITY_ONLY_DUMP + (
+    'Unattended-Upgrade::Origins-Pattern:: '
+    '"origin=Debian,codename=${distro_codename},label=Debian";\n'
+)
+PERIODIC_ON = 'APT::Periodic::Unattended-Upgrade "1";\n'
+
+
+def _security_ctx(installer, tmp_path: Path) -> InstallContext:
+    dest = tmp_path / "52homelab-security-updates"
+    installer.SECURITY_UPDATES_PATH = str(dest)
+    return make_ctx(
+        tmp_path,
+        files={"security-updates.conf": "// managed\n"},
+        file_map={"security-updates.conf": (str(dest), "644")},
+    )
+
+
+def _apt_config(origins: str, periodic: str = PERIODIC_ON) -> dict[tuple[str, ...], str]:
+    return {
+        ("apt-config", "dump", "Unattended-Upgrade::Origins-Pattern"): origins,
+        ("apt-config", "dump", "APT::Periodic::Unattended-Upgrade"): periodic,
+    }
+
+
+def test_security_updates_installs_and_accepts_a_security_only_scope(tmp_path: Path) -> None:
+    installer = load_installer()
+    ctx = _security_ctx(installer, tmp_path)
+
+    with installed_packages(installer, present=("unattended-upgrades",)):
+        with fake_commands(installer, _apt_config(SECURITY_ONLY_DUMP)):
+            installer.apply_security_updates(ctx, enabled=True)
+
+    assert (tmp_path / "52homelab-security-updates").is_file()
+
+
+def test_security_updates_fails_closed_when_the_scope_is_wider(tmp_path: Path) -> None:
+    """The #clear not taking effect leaves the packaged point-release origin in
+    place; the resolved policy is what u-u reads, so that must fail the deploy."""
+    installer = load_installer()
+    ctx = _security_ctx(installer, tmp_path)
+
+    with installed_packages(installer, present=("unattended-upgrades",)):
+        with fake_commands(installer, _apt_config(PACKAGED_DEFAULT_DUMP)):
+            with pytest.raises(InstallError, match="not scoped to Debian-Security"):
+                installer.apply_security_updates(ctx, enabled=True)
+
+
+def test_security_updates_fails_when_no_origin_resolves(tmp_path: Path) -> None:
+    installer = load_installer()
+    ctx = _security_ctx(installer, tmp_path)
+
+    with installed_packages(installer, present=("unattended-upgrades",)):
+        with fake_commands(installer, _apt_config("")):
+            with pytest.raises(InstallError, match="not scoped to Debian-Security"):
+                installer.apply_security_updates(ctx, enabled=True)
+
+
+def test_security_updates_requires_periodic_unattended_upgrade(tmp_path: Path) -> None:
+    installer = load_installer()
+    ctx = _security_ctx(installer, tmp_path)
+
+    with installed_packages(installer, present=("unattended-upgrades",)):
+        off = 'APT::Periodic::Unattended-Upgrade "0";\n'
+        with fake_commands(installer, _apt_config(SECURITY_ONLY_DUMP, periodic=off)):
+            with pytest.raises(InstallError, match="Periodic::Unattended-Upgrade is not 1"):
+                installer.apply_security_updates(ctx, enabled=True)
+
+
+def test_security_updates_requires_the_timer_that_runs_it(tmp_path: Path) -> None:
+    installer = load_installer()
+    ctx = _security_ctx(installer, tmp_path)
+
+    with installed_packages(installer, present=("unattended-upgrades",)):
+        with fake_commands(
+            installer,
+            _apt_config(SECURITY_ONLY_DUMP),
+            failing=(("systemctl", "is-enabled"),),
+        ):
+            with pytest.raises(InstallError, match="apt-daily-upgrade.timer is not enabled"):
+                installer.apply_security_updates(ctx, enabled=True)
+
+
+def test_security_updates_refuses_without_unattended_upgrades(tmp_path: Path) -> None:
+    installer = load_installer()
+    ctx = _security_ctx(installer, tmp_path)
+
+    with installed_packages(installer, present=()):
+        with pytest.raises(InstallError, match="requires unattended-upgrades"):
+            installer.apply_security_updates(ctx, enabled=True)
+
+
+def test_security_updates_drop_in_is_removed_when_disabled(tmp_path: Path) -> None:
+    installer = load_installer()
+    ctx = _security_ctx(installer, tmp_path)
+    dest = tmp_path / "52homelab-security-updates"
+    dest.write_text("// stale\n", encoding="utf-8")
+
+    installer.apply_security_updates(ctx, enabled=False)
+
+    assert not dest.exists()
+
+
+def test_pause_keeps_the_security_scope(tmp_path: Path) -> None:
+    """Removing the drop-in on pause would widen u-u back to the packaged
+    defaults, so pause must leave it applied."""
+    installer = load_installer()
+    ctx = _security_ctx(installer, tmp_path)
+    ctx.env.update(
+        {
+            "AUTOUPGRADE": "true",
+            "PAUSED": "true",
+            "AUTO_REBOOT": "false",
+            "SECURITY_UPDATES": "true",
+        }
+    )
+    (ctx.build_dir / "service").write_text("[Unit]\n", encoding="utf-8")
+    ctx.file_map["service"] = (str(tmp_path / "svc"), "644")
+    installer.AUTO_REBOOT_PATH = str(tmp_path / "53homelab-auto-reboot")
+
+    with installed_packages(installer, present=("unattended-upgrades",)):
+        with fake_commands(installer, _apt_config(SECURITY_ONLY_DUMP)):
+            with fake_commands(installer.systemd, {}):
+                installer.install(ctx)
+
+    assert (tmp_path / "52homelab-security-updates").is_file()

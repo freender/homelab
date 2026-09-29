@@ -36,6 +36,9 @@ TIMER_NAME = "homelab-apt-dist-upgrade.timer"
 TIMER_PATH = f"/etc/systemd/system/{TIMER_NAME}"
 AUTO_REBOOT_PATH = "/etc/apt/apt.conf.d/53homelab-auto-reboot"
 AUTO_REBOOT_CONF = "auto-reboot.conf"
+SECURITY_UPDATES_PATH = "/etc/apt/apt.conf.d/52homelab-security-updates"
+SECURITY_UPDATES_CONF = "security-updates.conf"
+SECURITY_LABEL = "label=Debian-Security"
 REBOOT_REQUIRED = "/var/run/reboot-required"
 
 DEFAULT_SCHEDULE = "*-*-* 09:00:00"
@@ -81,6 +84,65 @@ def apply_auto_reboot(ctx: InstallContext, auto_reboot: bool) -> None:
     log.ok(f"Unattended-upgrades will reboot when {REBOOT_REQUIRED} is present")
 
 
+def resolved_origins() -> list[str]:
+    """The Origins-Pattern entries unattended-upgrades will actually read."""
+    dump = _run(
+        ["apt-config", "dump", "Unattended-Upgrade::Origins-Pattern"],
+        check=False,
+        capture_output=True,
+        text=True,
+    ).stdout or ""
+    prefix = 'Unattended-Upgrade::Origins-Pattern:: "'
+    return [
+        line[len(prefix):].rstrip('";')
+        for line in dump.splitlines()
+        if line.startswith(prefix)
+    ]
+
+
+def apply_security_updates(ctx: InstallContext, enabled: bool) -> None:
+    """Install or remove the Debian-Security-only unattended-upgrades scope.
+
+    Like auto_reboot, this relies on the stock unattended-upgrades already on
+    the host rather than installing it, and verifies the *resolved* policy:
+    every surviving origin must be the security suite, so a #clear that stops
+    working fails the deploy instead of quietly widening the daily scope.
+    """
+    if not enabled:
+        files.remove(ctx, SECURITY_UPDATES_PATH, reason="security_updates disabled")
+        return
+
+    if not packages.installed(ctx, "unattended-upgrades"):
+        raise InstallError("security_updates requires unattended-upgrades, which is not installed")
+
+    files.install(ctx, SECURITY_UPDATES_CONF)
+
+    origins = resolved_origins()
+    if not origins or any(SECURITY_LABEL not in origin for origin in origins):
+        log.sub("\n".join(origins) or "<no Origins-Pattern resolved>")
+        raise InstallError("resolved Origins-Pattern is not scoped to Debian-Security only")
+
+    periodic = _run(
+        ["apt-config", "dump", "APT::Periodic::Unattended-Upgrade"],
+        check=False,
+        capture_output=True,
+        text=True,
+    ).stdout or ""
+    if 'APT::Periodic::Unattended-Upgrade "1"' not in periodic:
+        raise InstallError(
+            "APT::Periodic::Unattended-Upgrade is not 1; security updates would never run"
+        )
+
+    if _run(
+        ["systemctl", "is-enabled", "--quiet", "apt-daily-upgrade.timer"], check=False
+    ).returncode != 0:
+        raise InstallError(
+            "apt-daily-upgrade.timer is not enabled; security updates would never run"
+        )
+
+    log.ok("Daily unattended-upgrades scoped to Debian-Security")
+
+
 def report_reboot_required(auto_reboot: bool) -> None:
     """Mirror the bash's `$(hostname)`, not `ctx.host`.
 
@@ -103,11 +165,17 @@ def install(ctx: InstallContext) -> None:
     # AUTOUPGRADE and PAUSED decide whether this host upgrades itself and whether
     # it may reboot; a truncated env file that silently defaulted them to false
     # would disable the feature rather than fail.
-    env.require(ctx, "AUTOUPGRADE", "PAUSED", "AUTO_REBOOT")
+    env.require(ctx, "AUTOUPGRADE", "PAUSED", "AUTO_REBOOT", "SECURITY_UPDATES")
     autoupgrade = env.flag(ctx, "AUTOUPGRADE")
     paused = env.flag(ctx, "PAUSED")
     auto_reboot = env.flag(ctx, "AUTO_REBOOT")
+    security_updates = env.flag(ctx, "SECURITY_UPDATES")
     schedule = env.text(ctx, "SCHEDULE", DEFAULT_SCHEDULE)
+
+    # Applied on the paused path too: the drop-in only narrows what stock
+    # unattended-upgrades already does, and removing it on pause would widen
+    # the host back to the packaged defaults.
+    apply_security_updates(ctx, security_updates)
 
     # The service unit is installed unconditionally: it is what both the timer
     # and the on-demand path invoke. The reload has to happen here rather than

@@ -24,17 +24,19 @@ effect on whether packages are upgraded.
 ## What is automated, and what this runbook is now for
 
 **Upgrades on the four PVE nodes are no longer manual.** `apt-upgrade` runs a
-full `apt-get -y dist-upgrade` on each node daily — Proxmox packages, ZFS and
-the kernel included — at 05:00, 05:05, 05:10 and 05:15 (osiris, bray, ace,
-clovis). `arc` and `xur` are on the same module at 04:05 and 04:00. The
-`apt-security-updates` module that previously narrowed the nodes to the
-Debian-Security origin has been archived; `apt-upgrade` is now the single apt
-mechanism for the fleet.
+full `apt-get -y dist-upgrade` on each node every **Saturday** — Proxmox
+packages, ZFS and the kernel included — at 05:00, 05:05, 05:10 and 05:15
+(osiris, bray, ace, clovis), a few hours before the 09:00 `RebootRequired`
+digest. In between, `apt-upgrade.security_updates` scopes the stock
+unattended-upgrades to Debian-Security, so Debian security fixes still install
+daily (06:00–07:00). Proxmox has no security suite, so an urgent Proxmox CVE
+is the one case for running `./deploy --confirm-upgrade pve-upgrade <node>`
+mid-week. `arc` and `xur` are on the same module, daily at 04:05 and 04:00.
 
 | Stream | How it is applied |
 | --- | --- |
-| Debian security | **Automatic** — `apt-upgrade`, daily |
-| Proxmox, ZFS, kernel | **Automatic** — `apt-upgrade`, daily |
+| Debian security | **Automatic** — unattended-upgrades, daily |
+| Proxmox, ZFS, kernel | **Automatic** — `apt-upgrade`, Saturday |
 | **Reboot into a new kernel** | **Manual** — this runbook |
 
 What was never automated, and still is not, is the reboot. Installing a kernel
@@ -195,7 +197,7 @@ owns these nodes; dist-upgrading one mid-runbook introduces the unreviewed
 package change the ordering exists to prevent. This step only reads state:
 
 ```bash
-# The daily upgrade ran and succeeded
+# The Saturday upgrade ran and succeeded
 ssh <node> 'systemctl status homelab-apt-dist-upgrade.timer --no-pager | head -4'
 ssh <node> 'systemctl show homelab-apt-dist-upgrade.service -p Result -p ExecMainStatus'
 
@@ -317,11 +319,12 @@ You do not need to poll for it:
   older kernel than the one installed, and is delivered as a single collapsed
   Telegram message in the Saturday 09:00–09:10 window. **This is now the primary
   trigger for this runbook.** The 1h `for:` is deliberately short and coupled to
-  the 05:00–05:15 upgrade band: a kernel installed then must cross the threshold
-  before 09:00 or the prompt is held a further week. Do not move either without
-  the other.
+  the Saturday 05:00–05:15 upgrade band: a kernel installed then must cross the
+  threshold before 09:00 or the prompt is held a further week. Do not move
+  either without the other.
 - **`SecurityUpdatesPending`** / **`ProxmoxUpdatesAvailable`** — should now both
-  be silent. Either firing means `apt-upgrade`'s daily dist-upgrade has stopped
+  be silent. Either firing means the daily security run or the Saturday
+  dist-upgrade has stopped
   achieving anything on that host, which is a bug in the automation, not a
   reason to run this runbook. The faster signal for a hard failure is
   `SystemdUnitFailed` on `homelab-apt-dist-upgrade.service`.

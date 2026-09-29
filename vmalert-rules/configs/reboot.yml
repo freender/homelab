@@ -23,7 +23,7 @@ groups:
       # routes RebootRequired to a Saturday 09:00-09:10 window with
       # continue: false, so it can only ever notify once a week no matter how
       # long the pending state has stood. All 24h bought after that was a race:
-      # apt-upgrade runs the PVE nodes at 05:00-05:15 and the exporter refreshes
+      # apt-upgrade runs the PVE nodes Saturday 05:00-05:15 and the exporter refreshes
       # every 15m, so a Saturday-morning kernel crossed the threshold at ~05:30,
       # too late for a 24h `for:` to elapse before 09:00 -- and was then held
       # until the *following* Saturday. A ~1-in-7 chance of a week-late reboot

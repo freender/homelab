@@ -179,7 +179,7 @@ go through a command:
 - **Stage only files belonging to the requested change.** Unrelated dirty files never
   block shipping and are never staged.
 - **Reboots are human-authorized, once, against a named plan.** Upgrades are already
-  automated (`apt-upgrade` dist-upgrades every PVE node daily, kernel included), so a
+  automated (`apt-upgrade` dist-upgrades every PVE node every Saturday, kernel included), so a
   reboot request installs nothing. Never reboot a PVE node that was not named in an
   approved plan — but survey first and ask for that approval once, covering the whole
   roll, rather than re-confirming each node. Never take two *cluster* nodes

@@ -19,6 +19,9 @@ REMOTE_ROOT = "/tmp/homelab-apt-upgrade"
 SERVICE_NAME = "homelab-apt-dist-upgrade.service"
 TIMER_NAME = "homelab-apt-dist-upgrade.timer"
 AUTO_REBOOT_PATH = "/etc/apt/apt.conf.d/53homelab-auto-reboot"
+# 52 sorts after the package's 50unattended-upgrades, which the #clear in this
+# file depends on, and before 53homelab-auto-reboot.
+SECURITY_UPDATES_PATH = "/etc/apt/apt.conf.d/52homelab-security-updates"
 DEFAULT_AUTO_REBOOT_TIME = "now"
 
 # Read in two places -- the `validate` installer glob and the staging call below --
@@ -31,6 +34,7 @@ INTERPRETER = "python3"
 SERVICE_SPEC = FileSpec("service", f"/etc/systemd/system/{SERVICE_NAME}", "644")
 TIMER_SPEC = FileSpec("timer", f"/etc/systemd/system/{TIMER_NAME}", "644")
 AUTO_REBOOT_SPEC = FileSpec("auto-reboot.conf", AUTO_REBOOT_PATH, "644")
+SECURITY_UPDATES_SPEC = FileSpec("security-updates.conf", SECURITY_UPDATES_PATH, "644")
 
 # Every Debian/Ubuntu-derived host type in the fleet. This was `ubuntu` alone
 # until the Proxmox stream was automated: pve (the four nodes), pbs (xur) and
@@ -84,6 +88,7 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
     auto_reboot_time = str(
         registry.get(host, "apt-upgrade.auto_reboot_time", DEFAULT_AUTO_REBOOT_TIME)
     )
+    security_updates = normalize_security_updates(registry, host)
 
     build_dir = root / "apt-upgrade" / "build" / host
     build_unit_files(
@@ -93,13 +98,20 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
         paused=paused,
         auto_reboot=auto_reboot,
         auto_reboot_time=auto_reboot_time,
+        security_updates=security_updates,
     )
 
     ssh_hostname = str(registry.get(host, "config.hostname", host))
     ssh_user = str(registry.get(host, "config.user"))
     connection = HostConnection(host, user=ssh_user, hostname=ssh_hostname)
     print_sub("Comparing with remote configs...")
-    diff_remote_units(connection, build_dir, autoupgrade=autoupgrade, auto_reboot=auto_reboot)
+    diff_remote_units(
+        connection,
+        build_dir,
+        autoupgrade=autoupgrade,
+        auto_reboot=auto_reboot,
+        security_updates=security_updates,
+    )
 
     if dry_run:
         report_dry_run(
@@ -110,6 +122,7 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
             auto_reboot=auto_reboot,
             auto_reboot_time=auto_reboot_time,
         )
+        report_security_updates(host, security_updates)
         return
 
     stage_and_install(root, build_dir, connection, host, force=force)
@@ -123,11 +136,14 @@ def build_unit_files(
     paused: bool,
     auto_reboot: bool,
     auto_reboot_time: str,
+    security_updates: bool = False,
 ) -> None:
-    """Render the service, and conditionally the timer and auto-reboot drop-in.
+    """Render the service, and conditionally the timer and the two apt drop-ins.
 
-    The timer is only written when autoupgrade is on; the drop-in only when the
-    host opts into rebooting itself. `stage_and_install` uploads whatever exists.
+    The timer is only written when autoupgrade is on; the reboot drop-in only
+    when the host opts into rebooting itself; the security drop-in only when it
+    opts into daily security-only unattended-upgrades. `stage_and_install`
+    uploads whatever exists.
     """
     prepare_build_dir(build_dir)
     write_service(build_dir, cleanup=False)
@@ -138,12 +154,16 @@ def build_unit_files(
     if auto_reboot:
         write_auto_reboot_conf(build_dir, auto_reboot_time)
         specs.append(AUTO_REBOOT_SPEC)
+    if security_updates:
+        write_security_updates_conf(build_dir)
+        specs.append(SECURITY_UPDATES_SPEC)
     write_env(
         build_dir,
         autoupgrade=autoupgrade,
         schedule=schedule,
         paused=paused,
         auto_reboot=auto_reboot,
+        security_updates=security_updates,
     )
     # Only the files this host actually gets. A map entry with no build file
     # behind it would make `files.install` raise on a missing source, so the
@@ -152,7 +172,12 @@ def build_unit_files(
 
 
 def diff_remote_units(
-    connection, build_dir: Path, *, autoupgrade: str, auto_reboot: bool
+    connection,
+    build_dir: Path,
+    *,
+    autoupgrade: str,
+    auto_reboot: bool,
+    security_updates: bool = False,
 ) -> None:
     """Report the remote diff for each unit file this host actually gets."""
     pairs = [(build_dir / "service", f"/etc/systemd/system/{SERVICE_NAME}")]
@@ -160,6 +185,8 @@ def diff_remote_units(
         pairs.append((build_dir / "timer", f"/etc/systemd/system/{TIMER_NAME}"))
     if auto_reboot:
         pairs.append((build_dir / "auto-reboot.conf", AUTO_REBOOT_PATH))
+    if security_updates:
+        pairs.append((build_dir / "security-updates.conf", SECURITY_UPDATES_PATH))
     for local, remote in pairs:
         _, message = connection.remote_diff(local, remote)
         print_sub(message)
@@ -196,6 +223,76 @@ def report_dry_run(
         )
     else:
         print_sub(f"[DRY-RUN] Would ensure {host} never reboots itself")
+
+
+def report_security_updates(host: str, security_updates: bool) -> None:
+    if security_updates:
+        print_sub(
+            f"[DRY-RUN] Would scope unattended-upgrades on {host} to Debian-Security "
+            "(daily, independent of the dist-upgrade schedule)"
+        )
+    else:
+        print_sub(f"[DRY-RUN] Would ensure no homelab security-updates drop-in on {host}")
+
+
+def normalize_security_updates(registry, host: str) -> bool:
+    """Opt-in daily Debian-security-only unattended-upgrades, default false.
+
+    For hosts whose full dist-upgrade runs weekly (the PVE nodes): security
+    fixes should not wait for that window. Proxmox has no security suite, so
+    Proxmox packages and the kernel still arrive only with the dist-upgrade.
+    """
+    return normalize_bool(
+        registry.get(host, "apt-upgrade.security_updates", None),
+        False,
+        f"apt-upgrade.security_updates must be true or false for {host}",
+    )
+
+
+def write_security_updates_conf(build_dir: Path) -> None:
+    """Narrow stock unattended-upgrades to Debian-Security.
+
+    Debian's packaged 50unattended-upgrades also allows the plain `label=Debian`
+    origin (stable point releases), which is not a security suite and should
+    wait for the weekly dist-upgrade. APT list assignment appends, so the
+    #clear is what makes this file narrow the scope instead of widening it; the
+    installer verifies the resolved result rather than trusting this text.
+    """
+    content = "\n".join(
+        [
+            "// Managed by homelab (apt-upgrade security_updates) -- do not edit on the host.",
+            "//",
+            "// Daily Debian security fixes via stock unattended-upgrades. Everything",
+            "// else, Proxmox packages and the kernel included, waits for the scheduled",
+            "// homelab-apt-dist-upgrade.timer run.",
+            "",
+            "#clear Unattended-Upgrade::Origins-Pattern;",
+            "Unattended-Upgrade::Origins-Pattern {",
+            '    "origin=Debian,codename=${distro_codename}-security,label=Debian-Security";',
+            "};",
+            "",
+            "// Fails closed if the pattern above is ever widened by mistake.",
+            "#clear Unattended-Upgrade::Package-Blacklist;",
+            "Unattended-Upgrade::Package-Blacklist {",
+            '    "^proxmox-";',
+            '    "^pve-";',
+            '    "^libpve-";',
+            '    "^zfs";',
+            '    "^libzfs";',
+            "};",
+            "",
+            "// Kernel and dependency lifecycle belongs to the dist-upgrade, not here.",
+            'Unattended-Upgrade::Remove-Unused-Kernel-Packages "false";',
+            'Unattended-Upgrade::Remove-New-Unused-Dependencies "false";',
+            'Unattended-Upgrade::Remove-Unused-Dependencies "false";',
+            "",
+            "// Smaller transactions so an interrupted run (UPS shutdown) leaves dpkg",
+            "// consistent.",
+            'Unattended-Upgrade::MinimalSteps "true";',
+            "",
+        ]
+    )
+    (build_dir / "security-updates.conf").write_text(content, encoding="utf-8")
 
 
 def normalize_autoupgrade(registry, host: str) -> bool:
@@ -327,6 +424,7 @@ def write_env(
     schedule: str,
     paused: bool,
     auto_reboot: bool = False,
+    security_updates: bool = False,
 ) -> None:
     write_env_file(
         build_dir / "env",
@@ -336,6 +434,7 @@ def write_env(
             "SCHEDULE": schedule,
             "PAUSED": "true" if paused else "false",
             "AUTO_REBOOT": "true" if auto_reboot else "false",
+            "SECURITY_UPDATES": "true" if security_updates else "false",
         },
     )
 

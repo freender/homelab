@@ -16,8 +16,8 @@ reality stops matching the approved plan (see step 4). A clean roll should cost 
 human exactly one decision.
 
 **Upgrades are already automated; this run installs nothing.** `apt-upgrade`
-dist-upgrades every PVE node daily at 05:00–05:15 (and `arc`/`xur` at 04:05/04:00),
-kernel included. The trigger for this command is the Saturday 09:00 `RebootRequired`
+dist-upgrades every PVE node on Saturday at 05:00–05:15 (and `arc`/`xur` daily at
+04:05/04:00), kernel included; Debian security fixes install daily in between. The trigger for this command is the Saturday 09:00 `RebootRequired`
 Telegram digest.
 
 **Refuse to start** inside the 02:00 or 08:00 maintenance windows — alert suppression
