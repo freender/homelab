@@ -18,6 +18,7 @@ import pytest
 from homelab_install import packages, systemd
 from homelab_install.context import InstallContext
 from homelab_install.errors import InstallError
+from homelab_install.packages import APT_GET
 
 ROOT = Path(__file__).resolve().parents[1]
 INSTALLER_PATH = ROOT / "pve-http-boot" / "scripts" / "install.py"
@@ -47,7 +48,7 @@ class FakeApt:
             if command[-1] in self.missing:
                 return subprocess.CompletedProcess(command, 1, stdout="")
             return subprocess.CompletedProcess(command, 0, stdout="install ok installed")
-        if command[:2] == ["apt-get", "install"]:
+        if command[:4] == [*APT_GET, "install"]:
             self.missing -= set(command[4:])
         return subprocess.CompletedProcess(command, 0, stdout="")
 
@@ -267,7 +268,7 @@ def test_the_ipxe_package_is_ensured(harness: Harness) -> None:
 
     harness.run()
 
-    assert ["apt-get", "install", "-y", "-q", "ipxe"] in harness.apt.apt_calls
+    assert [*APT_GET, "install", "-y", "-q", "ipxe"] in harness.apt.apt_calls
 
 
 # --------------------------------------------------------------------------
@@ -418,10 +419,10 @@ def test_a_missing_repo_is_added_and_the_lists_refreshed_before_the_assistant_in
     )
     assert Path(harness.installer.PROXMOX_KEY).read_bytes() == b"proxmox key"
     assert harness.apt.apt_calls == [
-        ["apt-get", "update", "-qq"],
-        ["apt-get", "install", "-y", "-q", "curl"],
-        ["apt-get", "update", "-qq"],
-        ["apt-get", "install", "-y", "-q", "proxmox-auto-install-assistant"],
+        [*APT_GET, "update", "-qq"],
+        [*APT_GET, "install", "-y", "-q", "curl"],
+        [*APT_GET, "update", "-qq"],
+        [*APT_GET, "install", "-y", "-q", "proxmox-auto-install-assistant"],
     ]
 
 

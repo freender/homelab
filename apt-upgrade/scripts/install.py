@@ -2,8 +2,8 @@
 """Remote installer for the apt-upgrade module (freender/homelab-ops#30, third port).
 
 Picked third by #35(d) for the surface the first two never touched: the
-`build/<host>/env` file, `require_env`, `homelab_apply_pause`, and timer units.
-All four are now library calls -- `env.require`/`env.flag`, `systemd.pause`,
+`build/<host>/env` file, env-key checks, pausing, and timer units. All four are
+library calls -- `env.require`/`env.flag`, `systemd.pause`,
 `systemd.ensure_running` against a `.timer`.
 
 Two behaviours the bash had that are worth keeping in view while reading this:

@@ -128,7 +128,7 @@ Optional per-host keys:
    `<host>.yml` verbatim.
 1. Refuse any stack whose appdata directory is missing, or that needs an undefined
    `${VAR}`, or that renames away a still-running container (see below).
-2. Copy each `compose.yml` when content differs (`copy_if_changed`), honouring `FORCE_UPDATE`.
+2. Copy each `compose.yml` when content differs (`files.install_from`), honouring `FORCE_UPDATE`.
 3. For each stack that actually changed, run `docker compose up -d` in its directory.
    Unchanged stacks are never touched, so an edit to one stack does not restart 47 others.
 4. Report stacks present on the host but absent from the repo. They are **never

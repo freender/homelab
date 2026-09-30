@@ -62,6 +62,6 @@ ssh cinci-root 'docker ps --filter name=zavala'
 
 ```
 configs/common.conf         # Shared Host * defaults
-scripts/install.sh          # Remote installer
+scripts/install.py          # Remote installer
 ../deploy                   # Repo-root deployment wrapper
 ```

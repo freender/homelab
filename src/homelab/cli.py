@@ -16,7 +16,7 @@ import yaml
 from . import crap, mutants, op_secrets
 from .deploy import DeploySession
 from .hosts import HostLookupError, HostRegistry, default_registry, validate_hosts_data
-from .leakcheck import check_env_example_placeholders, check_public_repo_leaks
+from .leakcheck import check_env_example_placeholders, check_public_repo_leaks, tracked_files
 from .modules import MODULES, ordered_modules
 from .modules.pve_upgrade import CONFIRM_ENV as CONFIRM_UPGRADE_ENV
 from .output import print_action, print_error, print_header, print_ok, print_sub, print_warn
@@ -665,7 +665,7 @@ def validate() -> None:
     shellcheck = shutil.which("shellcheck")
     if shellcheck:
         print_action("ShellCheck")
-        shell_scripts = sorted(str(path) for path in root.rglob("*.sh") if ".bin" not in path.parts)
+        shell_scripts = shell_lint_targets(root)
         if shell_scripts:
             _run_command([shellcheck, "-S", "warning", *shell_scripts], cwd=root)
         print_ok("ShellCheck passed")
@@ -673,6 +673,30 @@ def validate() -> None:
         print_warn("shellcheck not installed; skipping shell lint")
 
     print_header("Validation Complete")
+
+
+# Walked only when git cannot list files (no checkout): these hold copies of the
+# tree or third-party code, never scripts this repo publishes.
+_SHELL_LINT_SKIP = {".bin", ".git", ".venv", "build", "mutants"}
+
+
+def shell_lint_targets(root: Path) -> list[str]:
+    """The `*.sh` files this repo publishes -- the same list the leak check reads.
+
+    Walking the tree instead picks up `.venv/`, the `mutants/` copy of every
+    payload, and gitignored build output: slower, and failures in files nobody
+    ships.
+    """
+    tracked = tracked_files(root)
+    if tracked:
+        candidates = [path for path in tracked if path.suffix == ".sh" and path.is_file()]
+    else:
+        candidates = [
+            path
+            for path in root.rglob("*.sh")
+            if not _SHELL_LINT_SKIP.intersection(path.relative_to(root).parts)
+        ]
+    return sorted(str(path) for path in candidates)
 
 
 def _run_command(command: list[str], cwd: Path) -> None:

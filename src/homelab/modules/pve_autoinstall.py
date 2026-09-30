@@ -21,8 +21,6 @@ import json
 from pathlib import Path
 from typing import Any
 
-from invoke.exceptions import UnexpectedExit
-
 from .. import op_secrets
 from ..deploy import DeploySession, stage_and_run_remote_installer
 from ..hosts import HostLookupError, default_registry
@@ -208,17 +206,6 @@ def validate(
 # Remote execution
 # ---------------------------------------------------------------------------
 
-def _cleanup_remote_pdm_dir(connection: HostConnection) -> None:
-    """Best-effort remote rm -rf of the PDM staging dir; it holds secrets so we
-    always attempt it, but a connection drop here must not fail a deploy whose
-    sync-answers.py run already succeeded.
-    """
-    try:
-        connection.connection.run(f'rm -rf "{REMOTE_ROOT}"', hide=True, warn=True)
-    except (UnexpectedExit, OSError) as exc:
-        print_sub(f"warning: could not confirm remote cleanup of {REMOTE_ROOT}: {exc}")
-
-
 def _run_on_pdm_host(
     root: Path,
     registry: Any,
@@ -248,26 +235,23 @@ def _run_on_pdm_host(
 
         script_src = root / "pve-autoinstall" / "scripts" / "sync-answers.py"
 
-        try:
-            stage_and_run_remote_installer(
-                root,
-                connection,
-                REMOTE_ROOT,
-                [
-                    (plan_path, f"{REMOTE_ROOT}/answer-plan.json"),
-                    (token_path, f"{REMOTE_ROOT}/pdm-api-token"),
-                    (script_src, f"{REMOTE_ROOT}/sync-answers.py"),
-                ],
-                "sync-answers.py",
-                *(["--force"] if force else []),
-                interpreter="python3",
-                remote_subdirs=("lib",),
-            )
-            print_ok("PDM answers synced")
-        finally:
-            # Remote staging dir holds the same secrets tmpfs_secret_stage just
-            # shredded locally; it must not survive on the PDM host either.
-            _cleanup_remote_pdm_dir(connection)
+        # The remote staging dir holds the same secrets; stage_and_run_remote_installer
+        # shreds it after the run, success or failure.
+        stage_and_run_remote_installer(
+            root,
+            connection,
+            REMOTE_ROOT,
+            [
+                (plan_path, f"{REMOTE_ROOT}/answer-plan.json"),
+                (token_path, f"{REMOTE_ROOT}/pdm-api-token"),
+                (script_src, f"{REMOTE_ROOT}/sync-answers.py"),
+            ],
+            "sync-answers.py",
+            *(["--force"] if force else []),
+            interpreter="python3",
+            remote_subdirs=("lib",),
+        )
+        print_ok("PDM answers synced")
 
 
 # ---------------------------------------------------------------------------

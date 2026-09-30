@@ -11,7 +11,7 @@ groups:
           severity: warning
         annotations:
           summary: "{{ $labels.name }} failed on {{ $labels.host }}"
-          description: "The repo-deployed unit {{ $labels.name }} is in the failed state on {{ $labels.host }}. Check `systemctl status {{ $labels.name }}` and `journalctl -u {{ $labels.name }}`. A redeploy of the owning module clears transient failures for units wired to homelab_recover_failed_units."
+          description: "The repo-deployed unit {{ $labels.name }} is in the failed state on {{ $labels.host }}. Check `systemctl status {{ $labels.name }}` and `journalctl -u {{ $labels.name }}`. A redeploy of the owning module clears transient failures for units wired to systemd.recover_failed."
 
       # Failed-unit coverage from node_exporter's native systemd collector, by
       # name, for every non-homelab unit (homelab-* is covered above with

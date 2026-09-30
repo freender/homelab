@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import shlex
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -11,6 +12,7 @@ from ..module_support import (
     ENCRYPTION_KEY_SECRET as _ENCRYPTION_KEY_SECRET,
 )
 from ..module_support import (
+    connection_for_host,
     copy_cached_secret,
     normalize_bool,
     normalize_string_list,
@@ -21,7 +23,7 @@ from ..module_support import (
     validate_secret_reference,
 )
 from ..output import print_sub
-from ..ssh import HostConnection, build_files
+from ..ssh import build_files
 from . import pbs_client_backup
 
 REMOTE_ROOT = "/tmp/homelab-pve-backup"
@@ -201,7 +203,7 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
         ]
         stage_and_run_remote_installer(
             root,
-            HostConnection(host),
+            connection_for_host(root, host),
             REMOTE_ROOT,
             upload_paths,
             "scripts/install.py",
@@ -216,10 +218,6 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
 def normalize_storage_name(name: str) -> str:
     normalized = re.sub(r"[^A-Z0-9]+", "_", name.upper()).strip("_")
     return normalized
-
-
-def shell_quote(value: object) -> str:
-    return str(value).replace("'", "'\"'\"'")
 
 
 REQUIRED_STORAGE_KEYS = ["name", "server", "datastore", "username"]
@@ -271,13 +269,13 @@ def storage_plan_lines(root: Path, storage: dict, index: int, host: str) -> list
         f"pve-backup.pbs_setup.storages[{index}].encryption must be boolean for {host}",
     )
     return [
-        f"STORAGE_{index}_NAME='{shell_quote(storage['name'])}'",
-        f"STORAGE_{index}_SERVER='{shell_quote(storage['server'])}'",
-        f"STORAGE_{index}_DATASTORE='{shell_quote(storage['datastore'])}'",
-        f"STORAGE_{index}_NAMESPACE='{shell_quote(storage.get('namespace', ''))}'",
-        f"STORAGE_{index}_USERNAME='{shell_quote(storage['username'])}'",
-        f"STORAGE_{index}_FINGERPRINT='{shell_quote(fingerprint)}'",
-        f"STORAGE_{index}_PASSWORD_VAR='{shell_quote(password_var)}'",
+        f"STORAGE_{index}_NAME={shlex.quote(str(storage['name']))}",
+        f"STORAGE_{index}_SERVER={shlex.quote(str(storage['server']))}",
+        f"STORAGE_{index}_DATASTORE={shlex.quote(str(storage['datastore']))}",
+        f"STORAGE_{index}_NAMESPACE={shlex.quote(str(storage.get('namespace', '')))}",
+        f"STORAGE_{index}_USERNAME={shlex.quote(str(storage['username']))}",
+        f"STORAGE_{index}_FINGERPRINT={shlex.quote(str(fingerprint))}",
+        f"STORAGE_{index}_PASSWORD_VAR={shlex.quote(str(password_var))}",
         f"STORAGE_{index}_ENCRYPTION='{str(encryption).lower()}'",
     ]
 
@@ -348,10 +346,10 @@ def job_plan_lines(root: Path, job: dict, index: int, host: str) -> list[str]:
         )
     merged = {**JOB_DEFAULTS, **job}
     exclude_paths = job_exclude_paths(root, merged, index, host)
-    lines = [f"JOB_{index}_{key.upper()}='{shell_quote(merged[key])}'" for key in JOB_PLAN_KEYS]
+    lines = [f"JOB_{index}_{key.upper()}={shlex.quote(str(merged[key]))}" for key in JOB_PLAN_KEYS]
     lines.append(f"JOB_{index}_EXCLUDE_PATH_COUNT='{len(exclude_paths)}'")
     lines.extend(
-        f"JOB_{index}_EXCLUDE_PATH_{path_index}='{shell_quote(exclude_path)}'"
+        f"JOB_{index}_EXCLUDE_PATH_{path_index}={shlex.quote(str(exclude_path))}"
         for path_index, exclude_path in enumerate(exclude_paths)
     )
     return lines
@@ -435,7 +433,7 @@ def write_pbs_tokens_file(root: Path, host: str, destination: Path) -> None:
             continue
         seen.add(password_var)
         lines.append(
-            f"{password_var}='{shell_quote(read_pbs_password(root, password_var))}'"
+            f"{password_var}={shlex.quote(str(read_pbs_password(root, password_var)))}"
         )
 
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -492,21 +490,21 @@ def restore_plan_lines(plan, pve_archive, restore_lxc: RestoreLxcConfigs) -> lis
     """The rendered `restore-plan.conf` body."""
     destinations = pbs_client_backup.destinations_for(plan)
     return [
-        f"NAMESPACE='{shell_quote(plan.namespace)}'",
-        f"BACKUP_ID='{shell_quote(plan.backup_id)}'",
-        f"ARCHIVE_NAME='{shell_quote(pve_archive.name)}'",
+        f"NAMESPACE={shlex.quote(str(plan.namespace))}",
+        f"BACKUP_ID={shlex.quote(str(plan.backup_id))}",
+        f"ARCHIVE_NAME={shlex.quote(str(pve_archive.name))}",
         f"ENCRYPT='{str(plan.encrypt).lower()}'",
-        f"KEYFILE='{shell_quote(pbs_client_backup.KEYFILE_REMOTE_PATH)}'",
+        f"KEYFILE={shlex.quote(str(pbs_client_backup.KEYFILE_REMOTE_PATH))}",
         f"RESTORE_LXC_CONFIGS_ENABLED='{str(restore_lxc.enabled).lower()}'",
         f"RESTORE_LXC_AUTOSTART='{str(restore_lxc.autostart).lower()}'",
         f"RESTORE_LXC_CONFIG_COUNT='{len(restore_lxc.vmids)}'",
         f"DESTINATION_COUNT='{len(destinations)}'",
         *[
-            f"DESTINATION_{index}_REPOSITORY='{shell_quote(destination.repository)}'"
+            f"DESTINATION_{index}_REPOSITORY={shlex.quote(str(destination.repository))}"
             for index, destination in enumerate(destinations)
         ],
         *[
-            f"RESTORE_LXC_CONFIG_{index}_VMID='{shell_quote(vmid)}'"
+            f"RESTORE_LXC_CONFIG_{index}_VMID={shlex.quote(str(vmid))}"
             for index, vmid in enumerate(restore_lxc.vmids)
         ],
         "",

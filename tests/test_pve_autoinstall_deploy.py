@@ -23,8 +23,6 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from invoke.exceptions import UnexpectedExit
-from invoke.runners import Result
 
 from homelab import op_secrets
 from homelab.deploy import DeploySession
@@ -383,7 +381,6 @@ def pdm_run(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> dict[str, Any]:
         "stage_dir": None,
         "stage_open": False,
         "installer": None,
-        "cleanups": [],
         "files": {},
         "modes": {},
         "raise_from_installer": None,
@@ -422,11 +419,6 @@ def pdm_run(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> dict[str, Any]:
     monkeypatch.setattr(pve_autoinstall, "HostConnection", _StubConnection)
     monkeypatch.setattr(pve_autoinstall, "tmpfs_secret_stage", fake_stage)
     monkeypatch.setattr(pve_autoinstall, "stage_and_run_remote_installer", fake_installer)
-    monkeypatch.setattr(
-        pve_autoinstall,
-        "_cleanup_remote_pdm_dir",
-        lambda connection: state["cleanups"].append(connection),
-    )
     return state
 
 
@@ -528,61 +520,13 @@ class TestRunOnPdmHost:
             "arc.internal",
         )
 
-    def test_remote_staging_dir_is_cleaned_up_on_success(
+    def test_local_stage_is_released_when_the_sync_run_fails(
         self, tmp_path: Path, pdm_run: dict[str, Any]
     ) -> None:
-        _run_pdm(tmp_path)
-
-        assert len(pdm_run["cleanups"]) == 1
-
-    def test_remote_staging_dir_is_cleaned_up_when_the_sync_run_fails(
-        self, tmp_path: Path, pdm_run: dict[str, Any]
-    ) -> None:
-        """The failing dir is the one still holding the root passwords."""
+        """Remote cleanup is stage_and_run_remote_installer's job (test_deploy_staging)."""
         pdm_run["raise_from_installer"] = RuntimeError("sync-answers.py exited 1")
 
         with pytest.raises(RuntimeError):
             _run_pdm(tmp_path)
 
-        assert len(pdm_run["cleanups"]) == 1
-        assert pdm_run["stage_open"] is False  # local tmpfs stage released too
-
-
-class TestCleanupRemotePdmDir:
-    def test_removes_the_remote_staging_dir(self) -> None:
-        commands: list[tuple[str, dict]] = []
-
-        class Connection:
-            def run(self, command: str, **kwargs) -> None:
-                commands.append((command, kwargs))
-
-        class Wrapper:
-            connection = Connection()
-
-        pve_autoinstall._cleanup_remote_pdm_dir(Wrapper())
-
-        assert commands[0][0] == f'rm -rf "{pve_autoinstall.REMOTE_ROOT}"'
-        assert commands[0][1] == {"hide": True, "warn": True}
-
-    @pytest.mark.parametrize(
-        "error",
-        [
-            OSError("connection reset"),
-            UnexpectedExit(result=Result(command="rm -rf ...", exited=1)),
-        ],
-    )
-    def test_a_failed_cleanup_warns_instead_of_failing_the_deploy(
-        self, capsys, error: Exception
-    ) -> None:
-        """sync-answers.py has already run by this point; the deploy succeeded."""
-
-        class Connection:
-            def run(self, command: str, **kwargs) -> None:
-                raise error
-
-        class Wrapper:
-            connection = Connection()
-
-        pve_autoinstall._cleanup_remote_pdm_dir(Wrapper())  # must not raise
-
-        assert "could not confirm remote cleanup" in capsys.readouterr().out
+        assert pdm_run["stage_open"] is False

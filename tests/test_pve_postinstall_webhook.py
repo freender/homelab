@@ -16,6 +16,7 @@ import pytest
 from homelab_install import packages, systemd
 from homelab_install.context import InstallContext
 from homelab_install.errors import InstallError
+from homelab_install.packages import APT_GET
 
 INSTALLER_PATH = (
     Path(__file__).resolve().parents[1] / "pve-postinstall-webhook" / "scripts" / "install.py"
@@ -298,7 +299,7 @@ def test_missing_packages_are_installed_by_name(harness) -> None:
     with pytest.raises(InstallError, match="python3-yaml"):
         installer.install(ctx)
 
-    installs = [call for call in apt.calls if call[:2] == ["apt-get", "install"]]
+    installs = [call for call in apt.calls if call[:4] == [*APT_GET, "install"]]
     assert installs and installs[0][-1] == "python3-yaml"
 
 

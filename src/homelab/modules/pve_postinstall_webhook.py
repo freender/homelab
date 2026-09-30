@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-import shlex
 from pathlib import Path
 
 from .. import op_secrets
+from ..build import write_env_file
 from ..deploy import DeploySession, force_env, prepare_build_dir, stage_and_run_remote_installer
 from ..hosts import default_registry
 from ..module_support import (
@@ -144,7 +144,7 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
     pdm_token = _read_pdm_token(root)
     with tmpfs_secret_stage("homelab-pve-postinstall-webhook.") as secret_dir:
         env_path = secret_dir / "env"
-        _write_env(
+        write_env_file(
             env_path,
             _env_values(
                 repo_dir,
@@ -153,6 +153,7 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
                 ssh_timeout,
                 deploy_timeout,
             ),
+            mode=0o600,
         )
         stage_and_run_remote_installer(
             root,
@@ -214,8 +215,3 @@ def _read_pdm_token(root: Path) -> str:
     return pdm_token
 
 
-def _write_env(path: Path, values: dict[str, str]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    lines = [f"{key}={shlex.quote(value)}" for key, value in values.items()]
-    path.write_text("\n".join([*lines, ""]), encoding="utf-8")
-    path.chmod(0o600)

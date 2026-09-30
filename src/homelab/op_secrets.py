@@ -255,7 +255,7 @@ def _prune_secret_cache(entry: SecretEntry) -> None:
     current = _secret_cache_key(entry)
     for path in cache_dir.glob(f"{safe_name}.*.env"):
         if path.name != current:
-            _remove_secret_file(path)
+            remove_secret_file(path)
 
 
 def _install_signal_handlers() -> None:
@@ -283,28 +283,16 @@ def cleanup() -> None:
     _rendered.clear()
     if not target.exists():
         return
-    shred = shutil.which("shred")
-    for file_path in sorted(target.rglob("*"), reverse=True):
-        if file_path.is_file():
-            try:
-                if shred:
-                    subprocess.run(
-                        [shred, "-u", "-n", "1", str(file_path)],
-                        check=False,
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
-                    )
-                else:
-                    file_path.unlink(missing_ok=True)
-            except OSError:
-                pass
-    try:
-        shutil.rmtree(target, ignore_errors=True)
-    except OSError:
-        pass
+    remove_secret_tree(target)
 
 
-def _remove_secret_file(path: Path) -> None:
+def remove_secret_file(path: Path) -> None:
+    """Shred `path`, falling back to a plain unlink. The one owner of this for
+    every local secret file: session dir, cache, and module tmpfs stages.
+
+    The unlink also runs after a shred that failed or is missing, so a secret is
+    never left behind just because `shred` could not be run.
+    """
     shred = shutil.which("shred")
     try:
         if shred:
@@ -314,10 +302,20 @@ def _remove_secret_file(path: Path) -> None:
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
-        else:
-            path.unlink(missing_ok=True)
     except OSError:
         pass
+    try:
+        path.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def remove_secret_tree(root: Path) -> None:
+    """Shred every file under `root` (deepest first), then remove the tree."""
+    for file_path in sorted(root.rglob("*"), reverse=True):
+        if file_path.is_file():
+            remove_secret_file(file_path)
+    shutil.rmtree(root, ignore_errors=True)
 
 
 def clear_cache() -> None:
@@ -331,10 +329,7 @@ def clear_cache() -> None:
     info = path.stat()
     if info.st_uid != os.getuid():
         raise OpSecretsError(f"refusing to remove cache not owned by current user: {path}")
-    for file_path in sorted(path.rglob("*"), reverse=True):
-        if file_path.is_file():
-            _remove_secret_file(file_path)
-    shutil.rmtree(path, ignore_errors=True)
+    remove_secret_tree(path)
 
 
 def cache_info() -> dict[str, object]:
@@ -429,7 +424,7 @@ def secret_file(root: Path, name: str) -> Path:
             cache_path.chmod(0o600)
         finally:
             if temp_path.exists():
-                _remove_secret_file(temp_path)
+                remove_secret_file(temp_path)
         _rendered[name] = cache_path
         return cache_path
 

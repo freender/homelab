@@ -5,7 +5,7 @@ from pathlib import Path
 from ..build import render_file, write_env_file
 from ..deploy import DeploySession, force_env, prepare_build_dir, stage_and_run_remote_installer
 from ..hosts import HostLookupError, default_registry
-from ..module_support import FileSpec, run_module_deploy, write_file_map
+from ..module_support import FileSpec, connection_for_host, run_module_deploy, write_file_map
 from ..output import print_sub
 from ..ssh import HostConnection, build_files, diff_many
 
@@ -93,7 +93,7 @@ def deploy_host(root: Path, host: str, slave_hosts: str, dry_run: bool, force: b
 
     build_dir = render_configs(root, host, role, upsname, device, nisip, slave_hosts)
 
-    connection = HostConnection(host)
+    connection = connection_for_host(root, host)
     print_sub("Comparing with remote configs...")
     files = [(build_dir / spec.build_name, spec.remote_path) for spec in file_specs(role)]
     for message in diff_many(connection, files):

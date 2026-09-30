@@ -392,9 +392,9 @@ def write_service(build_dir: Path, cleanup: bool) -> None:
             [
                 (
                     "ExecStart=/usr/bin/env DEBIAN_FRONTEND=noninteractive "
-                    "/usr/bin/apt-get -y autoremove"
+                    "/usr/bin/apt-get -o DPkg::Lock::Timeout=600 -y autoremove"
                 ),
-                "ExecStart=/usr/bin/apt-get -y autoclean",
+                "ExecStart=/usr/bin/apt-get -o DPkg::Lock::Timeout=600 -y autoclean",
             ]
         )
     (build_dir / "service").write_text("\n".join(lines) + "\n", encoding="utf-8")

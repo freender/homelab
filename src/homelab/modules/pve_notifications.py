@@ -7,6 +7,7 @@ from ..build import write_env_file
 from ..deploy import DeploySession, force_env, prepare_build_dir, stage_and_run_remote_installer
 from ..hosts import default_registry
 from ..module_support import (
+    connection_for_host,
     copy_cached_secret,
     normalize_bool,
     normalize_string_list,
@@ -14,7 +15,7 @@ from ..module_support import (
     tmpfs_secret_stage,
 )
 from ..output import print_sub
-from ..ssh import HostConnection, build_files
+from ..ssh import build_files
 
 MODULE_DIR = "pve-notifications"
 REMOTE_ROOT = "/tmp/homelab-pve-notifications"
@@ -104,7 +105,7 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
     if plan["notify_target"] != "telegram":
         stage_and_run_remote_installer(
             root,
-            HostConnection(host),
+            connection_for_host(root, host),
             REMOTE_ROOT,
             uploads,
             "scripts/install.py",
@@ -124,7 +125,7 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
         )
         stage_and_run_remote_installer(
             root,
-            HostConnection(host),
+            connection_for_host(root, host),
             REMOTE_ROOT,
             [*uploads, (secret_stage, f"{REMOTE_ROOT}/build/{host}/telegram.env")],
             "scripts/install.py",

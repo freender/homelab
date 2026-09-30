@@ -25,6 +25,7 @@ from pathlib import Path
 
 import pytest
 
+from homelab_install import files
 from homelab_install.context import InstallContext
 from homelab_install.errors import InstallError
 
@@ -193,6 +194,8 @@ class Host:
         self.build.mkdir(parents=True)
         monkeypatch.setattr(self.installer, "_run", self.pvesh)
         monkeypatch.setattr(self.installer, "_which", lambda name: f"/usr/bin/{name}")
+        monkeypatch.setattr(files, "_run", self.pvesh)
+        monkeypatch.setattr(files, "_which", lambda name: f"/usr/bin/{name}")
 
     def write_secret(self, token: str = "123:abc", chat_id: str = "-1001") -> Path:
         path = self.build / "telegram.env"

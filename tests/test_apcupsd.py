@@ -17,6 +17,7 @@ from homelab_install import packages, systemd
 from homelab_install.context import InstallContext
 from homelab_install.errors import InstallError
 from homelab_install.main import _parse_file_map
+from homelab_install.packages import APT_GET
 
 INSTALLER_PATH = Path(__file__).resolve().parents[1] / "apcupsd" / "scripts" / "install.py"
 
@@ -110,7 +111,7 @@ class FakeApt:
             if command[-1] in self.missing:
                 return subprocess.CompletedProcess(command, 1, "")
             return subprocess.CompletedProcess(command, 0, "install ok installed")
-        if command[:2] == ["apt-get", "install"]:
+        if command[:4] == [*APT_GET, "install"]:
             self.missing -= set(command[4:])
         return subprocess.CompletedProcess(command, 0, "")
 
@@ -297,7 +298,7 @@ def test_a_missing_package_is_installed(host_for) -> None:
     host.apt.missing = {"apcupsd"}
     host.deploy()
 
-    assert any(call[:2] == ["apt-get", "install"] and "apcupsd" in call for call in host.apt.calls)
+    assert any(call[:4] == [*APT_GET, "install"] and "apcupsd" in call for call in host.apt.calls)
 
 
 def test_a_non_executable_apccontrol_is_fixed(host_for) -> None:

@@ -42,6 +42,11 @@ _run = subprocess.run
 # installer process handles exactly one host, so there is nothing to key it on.
 _apt_updated = False
 
+# Wait for the dpkg lock instead of failing when a deploy lands on top of
+# apt-daily, unattended-upgrades, or the apt-upgrade timer. Same value the
+# scheduled apt-upgrade unit uses.
+APT_GET = ("apt-get", "-o", "DPkg::Lock::Timeout=600")
+
 
 def _installed(package: str) -> bool:
     """Whether dpkg reports `package` as installed.
@@ -70,7 +75,7 @@ def _apt_update_once() -> None:
     global _apt_updated
     if _apt_updated:
         return
-    if _run(["apt-get", "update", "-qq"], check=False).returncode != 0:
+    if _run([*APT_GET, "update", "-qq"], check=False).returncode != 0:
         raise InstallError("apt-get update failed")
     _apt_updated = True
 
@@ -126,7 +131,7 @@ def dist_upgrade(ctx: InstallContext) -> None:
 
     log.action("Running apt-get dist-upgrade")
     result = _run(
-        ["apt-get", "-y", "dist-upgrade"],
+        [*APT_GET, "-y", "dist-upgrade"],
         check=False,
         env={**os.environ, "DEBIAN_FRONTEND": "noninteractive"},
     )
@@ -156,7 +161,7 @@ def ensure(ctx: InstallContext, *packages: str, target_release: str | None = Non
     # rather than replacing it, because dropping PATH here would leave apt-get
     # unable to find the maintainer-script helpers it shells out to.
     result = _run(
-        ["apt-get", "install", "-y", "-q", *target, *missing],
+        [*APT_GET, "install", "-y", "-q", *target, *missing],
         check=False,
         env={**os.environ, "DEBIAN_FRONTEND": "noninteractive"},
     )

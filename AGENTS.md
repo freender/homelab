@@ -156,14 +156,16 @@ Three distinct "off/freeze" switches in `hosts.conf` — do not conflate them:
   framework-level gate; a feature-level `enabled:` key is **module-owned** and the
   framework never reads it.
 - **`<feature>.paused: true`** (module-wide) — stays deployed, but its managed systemd
-  units are **stopped and disabled**; reversible. Supported by `disk-spindown`,
-  `apt-upgrade`, `pbs-client-backup`, `zfs-automation`.
+  units are **stopped and disabled**; reversible. Supported by `apt-upgrade`,
+  `pbs-client-backup`, `zfs-automation`; `pve-upgrade.paused` instead skips the
+  dist-upgrade (it has no units).
 - **Per-job `paused: true`** (fine-grained) — pauses one unit while others run (e.g.
   `zfs-automation.replication_jobs.<job>.paused`). Distinct from that job's
   `enabled: false`, which retires it entirely (unit files removed).
 
-Implementation how-to (Python flag read, the `homelab_apply_pause` bash helper, unit-file
-semantics, why the `enabled:` spelling of the gate was removed): `deploy-module` skill.
+Implementation how-to (Python flag read, `env.flag` vs `env.deploy_flag`,
+`systemd.pause()`, unit-file semantics, why the `enabled:` spelling of the gate was
+removed): `deploy-module` skill.
 
 ## Shipping and Reboots — Rails
 

@@ -191,7 +191,7 @@ fi
 # 4. Build the prepared payload. prepare-iso emits vmlinuz, initrd.img, the
 # prepared ISO, and the stock iPXE boot menu.
 command -v proxmox-auto-install-assistant >/dev/null \
-    || apt-get install -y proxmox-auto-install-assistant xorriso >/dev/null
+    || apt-get -o DPkg::Lock::Timeout=600 install -y proxmox-auto-install-assistant xorriso >/dev/null
 
 rm -rf "$HTTP_BOOT_BUILD"
 mkdir -p "$HTTP_BOOT_BUILD"

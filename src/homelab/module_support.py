@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import shutil
-import subprocess
 import tempfile
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
@@ -108,23 +107,7 @@ def tmpfs_secret_stage(prefix: str) -> Iterator[Path]:
     try:
         yield stage_dir
     finally:
-        shred = shutil.which("shred")
-        for file_path in sorted(stage_dir.rglob("*"), reverse=True):
-            if not file_path.is_file():
-                continue
-            try:
-                if shred:
-                    subprocess.run(
-                        [shred, "-u", "-n", "1", str(file_path)],
-                        check=False,
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
-                    )
-                else:
-                    file_path.unlink(missing_ok=True)
-            except OSError:
-                pass
-        shutil.rmtree(stage_dir, ignore_errors=True)
+        op_secrets.remove_secret_tree(stage_dir)
 
 
 def copy_cached_secret(root: Path, secret_name: str, destination: Path) -> Path:

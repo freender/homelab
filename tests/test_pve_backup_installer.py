@@ -29,6 +29,7 @@ from pathlib import Path
 import pytest
 
 from homelab.modules import pve_backup
+from homelab_install import files
 from homelab_install.context import InstallContext
 from homelab_install.errors import InstallError
 
@@ -172,6 +173,8 @@ class Node:
             monkeypatch.setattr(self.m, name, value)
         monkeypatch.setattr(self.m, "_run", self)
         monkeypatch.setattr(self.m, "_which", lambda name: f"/usr/bin/{name}")
+        monkeypatch.setattr(files, "_run", self)
+        monkeypatch.setattr(files, "_which", lambda name: f"/usr/bin/{name}")
         monkeypatch.setattr(shutil, "chown", lambda *_args, **_kwargs: None)
 
         self.build = tmp_path / "build" / "osiris"
@@ -728,7 +731,7 @@ def test_the_orchestrator_stages_the_python_installer(tmp_path: Path, monkeypatc
     )
     monkeypatch.setattr(pve_backup, "build_standalone_backup_plans", lambda *_args: None)
     monkeypatch.setattr(pve_backup, "build_config_restore_plan", lambda *_args: None)
-    monkeypatch.setattr(pve_backup, "HostConnection", lambda host: host)
+    monkeypatch.setattr(pve_backup, "connection_for_host", lambda _root, host: host)
 
     pve_backup.deploy_host(ROOT, "osiris", dry_run=False, force=False)
 

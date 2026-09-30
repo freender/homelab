@@ -40,11 +40,10 @@ No compose file in the repo defines either container any more.
 
 from __future__ import annotations
 
-import shlex
 import subprocess
 from pathlib import Path
 
-from homelab_install import files, log, packages, run, systemd
+from homelab_install import files, log, osinfo, packages, run, systemd
 from homelab_install.context import InstallContext
 from homelab_install.errors import InstallError
 
@@ -96,15 +95,9 @@ GROUPS = (
 
 def os_release() -> tuple[str, str]:
     """`(ID, VERSION_CODENAME)`, refusing when either is missing."""
-    path = Path(OS_RELEASE)
-    if not path.is_file():
+    if not Path(OS_RELEASE).is_file():
         raise InstallError(f"cannot read {OS_RELEASE}")
-    values: dict[str, str] = {}
-    for line in path.read_text(encoding="utf-8").splitlines():
-        key, sep, raw = line.partition("=")
-        if sep and key.strip():
-            tokens = shlex.split(raw, comments=True)
-            values[key.strip()] = tokens[0] if tokens else ""
+    values = osinfo.os_release(OS_RELEASE)
     os_id, codename = values.get("ID", ""), values.get("VERSION_CODENAME", "")
     if not os_id or not codename:
         raise InstallError(f"ID/VERSION_CODENAME missing from {OS_RELEASE}")

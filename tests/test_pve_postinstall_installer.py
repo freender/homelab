@@ -22,6 +22,7 @@ from homelab_install import files, systemd
 from homelab_install.context import InstallContext
 from homelab_install.errors import InstallError
 from homelab_install.main import _parse_env_file
+from homelab_install.packages import APT_GET
 
 ROOT = Path(__file__).resolve().parents[1]
 INSTALLER_PATH = ROOT / "pve-postinstall" / "scripts" / "install.py"
@@ -36,6 +37,7 @@ REBOUND = (
     "TIMEZONE_FILE",
     "STORAGE_CFG",
     "COROSYNC_CONF",
+    "LOCAL_COROSYNC_CONF",
     "INTERFACES",
     "FSTAB",
     "ALIASES",
@@ -174,6 +176,7 @@ class Harness:
         self.binaries = {"pveversion", "zpool", "pvesm", "newaliases"}
         self.host = FakeHost()
         self.hostname = "ace"
+        self.pve_mounted = True
         self.force = False
         self.converge_host_files()
 
@@ -214,6 +217,7 @@ class Harness:
             self.installer, "_which", lambda name: name if name in self.binaries else None
         )
         self.monkeypatch.setattr(self.installer, "_short_hostname", lambda: self.hostname)
+        self.monkeypatch.setattr(self.installer, "_ismount", lambda _path: self.pve_mounted)
         self.monkeypatch.setattr(self.installer, "_fetch_certificate", self._certificate)
         ctx = InstallContext(
             host="ace",
@@ -350,7 +354,7 @@ def test_changed_nag_file_backs_up_and_reinstalls_toolkit(harness: Harness) -> N
 
     backups = list(Path(harness.installer.BACKUP_DIR).glob("no-nag-script.*"))
     assert [path.read_text(encoding="utf-8") for path in backups] == ["old hook\n"]
-    assert harness.host.ran("apt-get", "install", "--reinstall")
+    assert harness.host.ran(*APT_GET, "install", "--reinstall")
 
 
 def test_new_nag_script_reinstalls_toolkit_even_when_hook_unchanged(harness: Harness) -> None:
@@ -358,12 +362,12 @@ def test_new_nag_script_reinstalls_toolkit_even_when_hook_unchanged(harness: Har
 
     harness.run()
 
-    assert len(harness.host.ran("apt-get", "install", "--reinstall")) == 1
+    assert len(harness.host.ran(*APT_GET, "install", "--reinstall")) == 1
 
 
 def test_failed_toolkit_reinstall_only_warns(harness: Harness, capsys) -> None:
     harness.dest("no-nag-script").unlink()
-    harness.host.failing.add("apt-get install --reinstall")
+    harness.host.failing.add(" ".join([*APT_GET, "install", "--reinstall"]))
 
     harness.run()
 
@@ -699,6 +703,39 @@ def test_failed_peer_cleanup_tries_each_peer_once_and_skips_itself(
     assert "homelab-pve-cluster-rejoin-helper bray ace.freender.internal" in out
     assert "fingerprint unavailable" in out
     assert "pvecm add ace.freender.internal --link0 10.0.0.20" in out
+
+
+def test_restarting_cluster_stack_never_triggers_peer_cleanup(harness: Harness, capsys) -> None:
+    """pmxcfs/corosync mid-restart: /etc/pve/corosync.conf is gone and pvecm status
+    fails, but the node is a live member. The peer helper would delnode it."""
+    Path(harness.installer.COROSYNC_CONF).unlink()
+    harness.write(harness.installer.LOCAL_COROSYNC_CONF, "totem {}\n")
+    harness.host.clustered = False
+
+    harness.run()
+
+    assert not harness.host.ran("ssh")
+    assert "leaving cluster state alone" in capsys.readouterr().out
+
+
+def test_failing_pvecm_status_with_cluster_config_never_triggers_peer_cleanup(
+    harness: Harness,
+) -> None:
+    harness.host.clustered = False
+
+    harness.run()
+
+    assert not harness.host.ran("ssh")
+
+
+def test_unmounted_pve_filesystem_never_triggers_peer_cleanup(harness: Harness, capsys) -> None:
+    Path(harness.installer.COROSYNC_CONF).unlink()
+    harness.pve_mounted = False
+
+    harness.run()
+
+    assert not harness.host.ran("ssh")
+    assert "cannot tell standalone from clustered" in capsys.readouterr().out
 
 
 def test_cluster_config_appearing_after_cleanup_skips_manual_join(harness: Harness, capsys) -> None:

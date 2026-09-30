@@ -27,6 +27,7 @@ from homelab.modules import ubuntu_setup
 from homelab_install import files, packages, systemd
 from homelab_install.context import InstallContext
 from homelab_install.errors import InstallError
+from homelab_install.packages import APT_GET
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 INSTALLER_PATH = REPO_ROOT / "ubuntu-setup" / "scripts" / "install.py"
@@ -713,7 +714,7 @@ def test_wireguard_installs_packages_sysctl_and_starts_every_tunnel(host: Host) 
 
     with pytest.raises(InstallError, match="still missing"):
         host.install()
-    assert ["apt-get", "install", "-y", "-q", "wireguard", "wireguard-tools"] in host.run.calls
+    assert [*APT_GET, "install", "-y", "-q", "wireguard", "wireguard-tools"] in host.run.calls
 
     host.run.answer("dpkg-query", stdout="install ok installed")
     host.install()

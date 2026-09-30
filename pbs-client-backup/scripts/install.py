@@ -39,12 +39,11 @@ that file on every host.
 
 from __future__ import annotations
 
-import shlex
 import shutil
 import subprocess
 from pathlib import Path
 
-from homelab_install import env, files, log, packages, run, systemd
+from homelab_install import env, files, log, osinfo, packages, run, systemd
 from homelab_install.context import InstallContext
 from homelab_install.errors import InstallError
 
@@ -83,22 +82,9 @@ SUITE_BY_VERSION = {"26.04": "trixie", "24.04": "bookworm"}
 SUITE_BY_CODENAME = {"resolute": "trixie", "noble": "bookworm"}
 
 
-def _os_release() -> dict[str, str]:
-    values: dict[str, str] = {}
-    path = Path(OS_RELEASE)
-    if not path.is_file():
-        return values
-    for line in path.read_text(encoding="utf-8").splitlines():
-        key, sep, raw = line.partition("=")
-        if sep and key.strip():
-            tokens = shlex.split(raw, comments=True)
-            values[key.strip()] = tokens[0] if tokens else ""
-    return values
-
-
 def ubuntu_suite() -> str:
     """The Proxmox pbs-client suite for this Ubuntu release."""
-    release = _os_release()
+    release = osinfo.os_release(OS_RELEASE)
     suite = SUITE_BY_VERSION.get(release.get("VERSION_ID", "")) or SUITE_BY_CODENAME.get(
         release.get("VERSION_CODENAME", "")
     )

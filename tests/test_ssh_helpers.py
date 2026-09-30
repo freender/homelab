@@ -298,6 +298,34 @@ def test_prepare_remote_dir_quotes_a_root_containing_metacharacters(monkeypatch)
     assert "/tmp/a b; rm -rf //lib" in tokens
 
 
+def test_cleanup_remote_dir_shreds_files_then_removes_the_root(monkeypatch) -> None:
+    dummy = DummyConnection("test-host")
+    connection = _connection(monkeypatch, dummy)
+
+    connection.cleanup_remote_dir("/tmp/homelab-build")
+
+    command, kwargs = dummy.run_calls[0]
+    assert command == (
+        "if [ -d /tmp/homelab-build ]; then "
+        "find /tmp/homelab-build -type f -exec shred -u {} + 2>/dev/null; "
+        "rm -rf /tmp/homelab-build; fi"
+    )
+    assert kwargs == {"hide": True, "warn": True}
+
+
+@pytest.mark.parametrize(
+    "path", ["/", "/tmp", "/etc/homelab-x", "/tmp/homelab-x/../../etc", "tmp/homelab-x"]
+)
+def test_cleanup_remote_dir_refuses_anything_but_a_staging_dir(monkeypatch, path: str) -> None:
+    dummy = DummyConnection("test-host")
+    connection = _connection(monkeypatch, dummy)
+
+    with pytest.raises(ValueError, match="refusing"):
+        connection.cleanup_remote_dir(path)
+
+    assert dummy.run_calls == []
+
+
 def test_upload_sends_a_single_file_without_running_anything(
     monkeypatch, tmp_path: Path
 ) -> None:

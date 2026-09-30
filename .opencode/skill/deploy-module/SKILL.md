@@ -59,7 +59,8 @@ genuinely different shape, not an oversight.
 
 `simple_root_installer_deploy` (below) is a thin wrapper around this for modules
 that have no per-host build directory to render — it only stages `scripts/` and
-runs `install.sh`.
+runs the installer (`install.py` for `base-packages`/`pve-upgrade`, `install.sh` for
+the three `pve-*-patch` modules).
 
 ## hosts.conf access
 
@@ -85,8 +86,9 @@ From `src/homelab/module_support.py` and `src/homelab/deploy.py`:
 - `simple_root_installer_deploy(...)` — for a module with no per-host build dir:
   just stages `scripts/` and runs the installer as root. Built on top of
   `run_module_deploy`; prefer it over hand-rolling when there's nothing to render.
-  Defaults to `installer="scripts/install.sh"`, `interpreter=None`; a ported
-  module passes `installer="scripts/install.py", interpreter="python3"`.
+  Defaults to `installer="scripts/install.sh"`, `interpreter=None` (the
+  `pve-*-patch` modules); a Python installer passes
+  `installer="scripts/install.py", interpreter="python3"`.
 
 ## Module boundary
 
@@ -96,7 +98,7 @@ when it needs to inspect or mutate live host state (systemd units, installed
 packages, device nodes).
 
 Do not split one decision across both — a module that renders a value in Python and
-then re-derives it in Bash will drift. Render once, pass it down.
+then re-derives it in the installer will drift. Render once, pass it down.
 
 ## Remote execution and SSH staging
 
@@ -104,12 +106,17 @@ then re-derives it in Bash will drift. Render once, pass it down.
 
 - `prepare_remote_dir(...)` — create/clean the staging dir
 - `upload_paths(...)` — push the module bundle
-- `upload_shared_libs(...)` — push `lib/utils.sh` + `lib/print.sh`, plus
-  `lib/py/homelab_install/` when `include_python=True`
+- `upload_python_lib(...)` — push `lib/py/homelab_install/`; called by
+  `stage_and_run_remote_installer` for Python installers only (the `pve-*-patch`
+  bash installers source no shared library)
 - `run_remote_installer(...)` — execute the installer on the host
+- `cleanup_remote_dir(...)` — shred and remove the staging dir;
+  `stage_and_run_remote_installer` calls it in a `finally`, so a module never
+  cleans up its own bundle
 
 Rules:
-- Stage module bundles in `/tmp/homelab-<module>/`
+- Stage module bundles in `/tmp/homelab-<module>/` — the cleanup refuses any other
+  prefix, and the bundle is gone after the run (never reference it from a unit)
 - Preserve root-user checks where needed
 - Never hardcode host lists — derive from `hosts list --feature ...`
 
@@ -121,13 +128,13 @@ uploads `lib/py/homelab_install/` and prepends `{remote_root}/lib/py` to `PYTHON
 There is no second flag; a Python installer named without the suffix is staged without
 its library. The module must also pass `interpreter="python3"`.
 
-`lib/py/homelab_install/` is the stdlib-only shared library that replaces
-`lib/utils.sh` for ported modules (`homelab-ops#30`/`#31`). Hermetic in one direction:
+`lib/py/homelab_install/` is the stdlib-only shared installer library — the only one;
+the bash `lib/utils.sh`/`lib/print.sh` are gone (`homelab-ops#38`). Hermetic in one direction:
 it must never import from `src/homelab/`, while `src/homelab/` and `tests/` may import
 it. `./validate` compiles and Ruff-lints `lib/py` and every `*/scripts/install.py`
 (`python_lint_targets` in `cli.py`), and coverage/CRAP score it like any other
-package. Porting rule: `install.py` added and `install.sh` deleted in the **same
-commit** — never both present.
+package. Every module is on `install.py` except the three `pve-*-patch` modules,
+whose standalone `install.sh` stays (homelab-ops#35); a module never ships both.
 
 ## Implementing `paused`
 
@@ -135,18 +142,18 @@ Orchestrator reads `feature_paused(...)` and passes `PAUSED` down; the installer
 branches on it. **The silent trap:** `env.flag` reads `build/<host>/env` and
 `env.deploy_flag` reads the process environment — pick the wrong one and a module
 with no env file gets the default forever, so a paused host keeps acting. Full
-steps, both installer flavors, and the `deploy:`-vs-`enabled:` gate rationale:
+steps and the `deploy:`-vs-`enabled:` gate rationale:
 `reference/implementing-paused.md`.
 
 ## Clearing systemd failed-unit state
 
-Installers that manage systemd units should use the shared `lib/utils.sh` helpers
-rather than hand-rolling `systemctl reset-failed`. Pick by what the redeploy did:
-changed content -> `homelab_reload_and_clear_failed`; unchanged content but a
-transient fault -> `homelab_recover_failed_units`; a unit that should never run
-here -> `homelab_mask_unwanted_service`; a unit going away -> `retire_systemd_unit`.
+Installers that manage systemd units should use the `homelab_install.systemd`
+helpers rather than hand-rolling `systemctl reset-failed`. Pick by what the redeploy
+did: changed content -> `daemon_reload` + `reset_failed`, gated on the change;
+unchanged content but a transient fault -> `recover_failed`; a unit that should never
+run here -> `mask`; a unit going away -> `retire_unit`.
 
-Full semantics, the load-bearing gate, return-code conventions, and which modules
+Full semantics, the load-bearing gate, return values, and which modules
 deliberately opt out: `reference/systemd-failed-state.md`.
 
 ## Tests

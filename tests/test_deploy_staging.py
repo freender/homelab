@@ -30,6 +30,14 @@ class RecordingConnection:
         self.uploaded: list[list[tuple[Path, str]]] = []
         self.python_libs: list[tuple[Path, str]] = []
         self.installer_calls: list[dict[str, Any]] = []
+        self.cleaned: list[str] = []
+        self.installer_error: Exception | None = None
+        self.cleanup_error: Exception | None = None
+
+    def cleanup_remote_dir(self, remote_root: str) -> None:
+        self.cleaned.append(remote_root)
+        if self.cleanup_error is not None:
+            raise self.cleanup_error
 
     def prepare_remote_dir(self, remote_root: str, *subdirs: str) -> None:
         self.prepared.append((remote_root, subdirs))
@@ -44,6 +52,8 @@ class RecordingConnection:
         self.installer_calls.append(
             {"remote_dir": remote_dir, "installer": installer, "args": args, **kwargs}
         )
+        if self.installer_error is not None:
+            raise self.installer_error
 
 
 def _stage(connection: RecordingConnection, installer: str, **kwargs) -> None:
@@ -188,3 +198,65 @@ def test_staging_prepares_the_remote_dir_before_uploading_anything() -> None:
     # would be silently deleted.
     assert connection.prepared == [("/tmp/homelab-demo", ("build", "lib"))]
     assert connection.uploaded == [[(Path("/repo/demo/scripts"), "/tmp/homelab-demo/scripts")]]
+
+
+# ---------------------------------------------------------------------------
+# Remote cleanup: bundles carry rendered secrets and must not outlive the run.
+# ---------------------------------------------------------------------------
+
+
+def test_staging_dir_is_cleaned_up_after_a_successful_run() -> None:
+    connection = RecordingConnection()
+
+    _stage(connection, "scripts/install.py", interpreter="python3")
+
+    assert connection.cleaned == ["/tmp/homelab-demo"]
+
+
+def test_staging_dir_is_cleaned_up_when_the_installer_fails() -> None:
+    connection = RecordingConnection()
+    connection.installer_error = RuntimeError("installer exited 1")
+
+    with pytest.raises(RuntimeError, match="installer exited 1"):
+        _stage(connection, "scripts/install.py", interpreter="python3")
+
+    assert connection.cleaned == ["/tmp/homelab-demo"]
+
+
+def test_a_failed_cleanup_warns_instead_of_failing_the_deploy(capsys) -> None:
+    connection = RecordingConnection()
+    connection.cleanup_error = OSError("connection reset")
+
+    _stage(connection, "scripts/install.py", interpreter="python3")  # must not raise
+
+    assert "could not confirm remote cleanup of /tmp/homelab-demo" in capsys.readouterr().out
+
+
+def test_a_failed_cleanup_does_not_mask_the_installer_error() -> None:
+    connection = RecordingConnection()
+    connection.installer_error = RuntimeError("installer exited 1")
+    connection.cleanup_error = OSError("connection reset")
+
+    with pytest.raises(RuntimeError, match="installer exited 1"):
+        _stage(connection, "scripts/install.py", interpreter="python3")
+
+
+def test_every_module_remote_root_passes_the_cleanup_prefix_guard() -> None:
+    """cleanup_remote_dir refuses anything else, so a module with an off-pattern
+    REMOTE_ROOT would silently keep its secrets on the host."""
+    import importlib
+    import pkgutil
+
+    from homelab import modules
+    from homelab.ssh import REMOTE_STAGING_PREFIX
+
+    roots = {}
+    for info in pkgutil.walk_packages(modules.__path__, "homelab.modules."):
+        module = importlib.import_module(info.name)
+        if isinstance(getattr(module, "REMOTE_ROOT", None), str):
+            roots[info.name] = module.REMOTE_ROOT
+    assert roots
+    off_pattern = {
+        name: root for name, root in roots.items() if not root.startswith(REMOTE_STAGING_PREFIX)
+    }
+    assert off_pattern == {}

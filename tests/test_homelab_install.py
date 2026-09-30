@@ -31,10 +31,11 @@ from pathlib import Path
 
 import pytest
 
-from homelab_install import env, files, log, main, packages, systemd
+from homelab_install import env, files, log, main, osinfo, packages, systemd
 from homelab_install.changes import ChangeSet
 from homelab_install.context import InstallContext
 from homelab_install.errors import InstallError
+from homelab_install.packages import APT_GET
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -117,10 +118,10 @@ class FakeApt:
                 return subprocess.CompletedProcess(command, 1, stdout="")
             return subprocess.CompletedProcess(command, 0, stdout=self.known[package])
 
-        if command[:2] == ["apt-get", "update"]:
+        if command[:4] == [*APT_GET, "update"]:
             return subprocess.CompletedProcess(command, self.update_code)
 
-        if command[:2] == ["apt-get", "install"]:
+        if command[:4] == [*APT_GET, "install"]:
             if self.installs and self.install_code == 0:
                 for package in command[4:]:
                     self.known[package] = self.INSTALLED
@@ -362,7 +363,7 @@ def test_ensure_installs_only_the_packages_that_are_missing(
 
     packages.ensure(_ctx(tmp_path), "keepalived", "curl")
 
-    assert ["apt-get", "install", "-y", "-q", "curl"] in fake.calls
+    assert [*APT_GET, "install", "-y", "-q", "curl"] in fake.calls
 
 
 def test_ensure_runs_apt_get_update_before_installing(
@@ -373,8 +374,8 @@ def test_ensure_runs_apt_get_update_before_installing(
     packages.ensure(_ctx(tmp_path), "ripgrep")
 
     assert fake.apt_calls == [
-        ["apt-get", "update", "-qq"],
-        ["apt-get", "install", "-y", "-q", "ripgrep"],
+        [*APT_GET, "update", "-qq"],
+        [*APT_GET, "install", "-y", "-q", "ripgrep"],
     ]
 
 
@@ -389,7 +390,7 @@ def test_apt_get_update_runs_at_most_once_per_process(
     packages.ensure(ctx, "mbuffer")
     packages.ensure(ctx, "ripgrep")
 
-    assert fake.calls.count(["apt-get", "update", "-qq"]) == 1
+    assert fake.calls.count([*APT_GET, "update", "-qq"]) == 1
 
 
 def test_a_new_apt_source_makes_the_next_install_refresh_the_lists_again(
@@ -406,10 +407,10 @@ def test_a_new_apt_source_makes_the_next_install_refresh_the_lists_again(
     packages.ensure(ctx, "proxmox-auto-install-assistant")
 
     assert fake.apt_calls == [
-        ["apt-get", "update", "-qq"],
-        ["apt-get", "install", "-y", "-q", "curl"],
-        ["apt-get", "update", "-qq"],
-        ["apt-get", "install", "-y", "-q", "proxmox-auto-install-assistant"],
+        [*APT_GET, "update", "-qq"],
+        [*APT_GET, "install", "-y", "-q", "curl"],
+        [*APT_GET, "update", "-qq"],
+        [*APT_GET, "install", "-y", "-q", "proxmox-auto-install-assistant"],
     ]
 
 
@@ -435,7 +436,7 @@ def test_ensure_sets_debian_frontend_without_dropping_the_parent_environment(
 
     packages.ensure(_ctx(tmp_path), "mc")
 
-    install_env = fake.env[fake.calls.index(["apt-get", "install", "-y", "-q", "mc"])]
+    install_env = fake.env[fake.calls.index([*APT_GET, "install", "-y", "-q", "mc"])]
     assert install_env["DEBIAN_FRONTEND"] == "noninteractive"
     assert install_env["PATH"] == "/sentinel/bin"
 
@@ -459,7 +460,7 @@ def test_ensure_raises_when_apt_get_update_fails(
     with pytest.raises(InstallError, match="apt-get update failed"):
         packages.ensure(_ctx(tmp_path), "mbuffer")
 
-    assert ["apt-get", "install", "-y", "-q", "mbuffer"] not in fake.calls
+    assert [*APT_GET, "install", "-y", "-q", "mbuffer"] not in fake.calls
 
 
 def test_ensure_raises_when_a_package_is_still_missing_after_a_successful_install(
@@ -498,7 +499,7 @@ def test_a_removed_but_not_purged_package_counts_as_missing(
 
     packages.ensure(_ctx(tmp_path), "ripgrep")
 
-    assert ["apt-get", "install", "-y", "-q", "ripgrep"] in fake.calls
+    assert [*APT_GET, "install", "-y", "-q", "ripgrep"] in fake.calls
 
 
 def test_a_held_package_counts_as_installed(
@@ -521,7 +522,7 @@ def test_an_unknown_package_counts_as_missing(
 
     packages.ensure(_ctx(tmp_path), "mc")
 
-    assert ["apt-get", "install", "-y", "-q", "mc"] in fake.calls
+    assert [*APT_GET, "install", "-y", "-q", "mc"] in fake.calls
 
 
 def test_ensure_passes_a_target_release_to_the_install_only(
@@ -535,8 +536,8 @@ def test_ensure_passes_a_target_release_to_the_install_only(
     )
 
     assert fake.apt_calls == [
-        ["apt-get", "update", "-qq"],
-        ["apt-get", "install", "-y", "-q"]
+        [*APT_GET, "update", "-qq"],
+        [*APT_GET, "install", "-y", "-q"]
         + ["-t", "trixie-backports", "prometheus-smartctl-exporter"],
     ]
 
@@ -1487,8 +1488,8 @@ def test_dist_upgrade_updates_before_upgrading(tmp_path: Path, monkeypatch) -> N
     packages.dist_upgrade(_ctx(tmp_path))
 
     assert fake.apt_calls == [
-        ["apt-get", "update", "-qq"],
-        ["apt-get", "-y", "dist-upgrade"],
+        [*APT_GET, "update", "-qq"],
+        [*APT_GET, "-y", "dist-upgrade"],
     ]
 
 
@@ -1854,3 +1855,60 @@ def test_mask_fails_when_masking_itself_fails(
 
     with pytest.raises(subprocess.CalledProcessError):
         systemd.mask(_ctx(tmp_path), "openipmi.service")
+
+
+def test_apt_get_waits_for_the_dpkg_lock_instead_of_failing() -> None:
+    """A deploy landing on apt-daily or the apt-upgrade timer must wait, not fail."""
+    assert APT_GET == ("apt-get", "-o", "DPkg::Lock::Timeout=600")
+
+
+# --- files.destroy_secret / osinfo.os_release ---------------------------------------
+
+
+def test_destroy_secret_shreds_then_unlinks(monkeypatch, tmp_path: Path) -> None:
+    calls: list[list[str]] = []
+    monkeypatch.setattr(files, "_which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(files, "_run", lambda argv, **_kw: calls.append(argv))
+    secret = tmp_path / "token.env"
+    secret.write_text("x\n", encoding="utf-8")
+
+    files.destroy_secret(secret)
+
+    assert calls == [["shred", "-u", "-n", "1", str(secret)]]
+    assert not secret.exists()  # removed even though the fake shred did nothing
+
+
+def test_destroy_secret_without_shred_still_unlinks(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(files, "_which", lambda _name: None)
+    monkeypatch.setattr(files, "_run", lambda *_a, **_kw: pytest.fail("no shred to run"))
+    secret = tmp_path / "token.env"
+    secret.write_text("x\n", encoding="utf-8")
+
+    files.destroy_secret(secret)
+
+    assert not secret.exists()
+
+
+def test_destroy_secret_ignores_a_missing_file(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(files, "_run", lambda *_a, **_kw: pytest.fail("nothing to shred"))
+
+    files.destroy_secret(tmp_path / "absent")
+
+
+def test_os_release_unquotes_and_drops_comments(tmp_path: Path) -> None:
+    release = tmp_path / "os-release"
+    release.write_text(
+        'ID=ubuntu\nVERSION_ID="26.04"\nVERSION_CODENAME=resolute # c\nEMPTY=\nnoise\n',
+        encoding="utf-8",
+    )
+
+    assert osinfo.os_release(release) == {
+        "ID": "ubuntu",
+        "VERSION_ID": "26.04",
+        "VERSION_CODENAME": "resolute",
+        "EMPTY": "",
+    }
+
+
+def test_os_release_is_empty_when_the_file_is_absent(tmp_path: Path) -> None:
+    assert osinfo.os_release(tmp_path / "absent") == {}

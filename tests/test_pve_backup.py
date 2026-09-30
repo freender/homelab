@@ -129,8 +129,8 @@ def test_osiris_config_restore_plan_uses_encryption_key(tmp_path: Path) -> None:
 
     text = (tmp_path / "restore-plan.conf").read_text(encoding="utf-8")
     assert "ENCRYPT='true'" in text
-    assert "KEYFILE='/etc/homelab/pbs-encryption.key'" in text
-    assert "ARCHIVE_NAME='etc-pve'" in text
+    assert "KEYFILE=/etc/homelab/pbs-encryption.key" in text
+    assert "ARCHIVE_NAME=etc-pve" in text
 
 
 # --------------------------------------------------------------------------------------

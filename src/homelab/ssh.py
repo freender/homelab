@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import shlex
 import tempfile
 from pathlib import Path
@@ -9,6 +8,9 @@ from fabric import Connection
 from invoke.exceptions import UnexpectedExit
 
 from homelab.hosts import HostLookupError, default_registry
+from homelab.op_secrets import offline_mode
+
+REMOTE_STAGING_PREFIX = "/tmp/homelab-"
 
 
 class HostConnection:
@@ -62,6 +64,23 @@ class HostConnection:
         joined = " ".join(directories)
         self.connection.run(
             f"rm -rf {shlex.quote(remote_root)} && mkdir -p {joined}", hide=True
+        )
+
+    def cleanup_remote_dir(self, remote_root: str) -> None:
+        """Shred and remove a staging dir once its installer has run.
+
+        Bundles carry rendered secrets (PBS keys, API tokens, SSH private keys), so
+        the dir must not outlive the run. The prefix guard keeps a bad constant
+        from turning this into `rm -rf` of something that is not a staging dir.
+        """
+        if not remote_root.startswith(REMOTE_STAGING_PREFIX) or "/.." in remote_root:
+            raise ValueError(f"refusing to clean non-staging path: {remote_root}")
+        quoted = shlex.quote(remote_root)
+        self.connection.run(
+            f"if [ -d {quoted} ]; then "
+            f"find {quoted} -type f -exec shred -u {{}} + 2>/dev/null; rm -rf {quoted}; fi",
+            hide=True,
+            warn=True,
         )
 
     def upload(self, local_path: Path, remote_path: str) -> None:
@@ -146,10 +165,6 @@ def diff_many(connection: HostConnection, file_pairs: list[tuple[Path, str]]) ->
         _, message = connection.remote_diff(local_path, remote_path)
         messages.append(message)
     return messages
-
-
-def offline_mode() -> bool:
-    return os.environ.get("HOMELAB_OFFLINE", "").lower() in {"1", "true", "yes"}
 
 
 def offline_diff(remote_path: str) -> tuple[int, str]:

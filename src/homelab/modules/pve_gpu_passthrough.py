@@ -7,7 +7,7 @@ from invoke.exceptions import UnexpectedExit
 from ..build import copy_files, render_file
 from ..deploy import DeploySession, force_env, prepare_build_dir, stage_and_run_remote_installer
 from ..hosts import default_registry
-from ..module_support import normalize_bool, run_module_deploy
+from ..module_support import connection_for_host, normalize_bool, run_module_deploy
 from ..output import print_sub
 from ..ssh import HostConnection, build_files, offline_mode
 
@@ -102,7 +102,7 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool = False) -> No
     isolate_host_gpu = normalize_isolate_host_gpu(registry, host)
     pci_ids = str(registry.get(host, "pve-gpu-passthrough.pci_ids", "")).strip()
 
-    connection = HostConnection(host)
+    connection = connection_for_host(root, host)
     require_root_dataset(connection, host, root_dataset, dry_run)
     build_gpu_configs(configs_dir, build_dir, isolate_host_gpu, pci_ids)
 

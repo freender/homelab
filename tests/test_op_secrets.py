@@ -258,7 +258,7 @@ def test_clear_cache_falls_back_to_unlink_when_shred_is_absent(
 
 
 # ---------------------------------------------------------------------------
-# _remove_secret_file
+# remove_secret_file
 # ---------------------------------------------------------------------------
 
 
@@ -269,7 +269,7 @@ def test_remove_secret_file_shreds_in_place(monkeypatch, tmp_path: Path) -> None
     target = tmp_path / "stale.env"
     target.write_text("secret\n", encoding="utf-8")
 
-    op_secrets._remove_secret_file(target)
+    op_secrets.remove_secret_file(target)
 
     recorder.assert_shredded(target)
     assert recorder.names == ["shred"]
@@ -281,7 +281,7 @@ def test_remove_secret_file_falls_back_to_unlink(monkeypatch, tmp_path: Path) ->
     target = tmp_path / "stale.env"
     target.write_text("secret\n", encoding="utf-8")
 
-    op_secrets._remove_secret_file(target)
+    op_secrets.remove_secret_file(target)
 
     assert recorder.calls == []
     assert not target.exists()
@@ -294,7 +294,7 @@ def test_remove_secret_file_tolerates_an_already_absent_file(
     are cleaning up may already be gone."""
     ShredRecorder(path=None).install(monkeypatch)
 
-    op_secrets._remove_secret_file(tmp_path / "never-existed.env")  # must not raise
+    op_secrets.remove_secret_file(tmp_path / "never-existed.env")  # must not raise
 
 
 def test_remove_secret_file_swallows_an_oserror_from_shred(
@@ -311,7 +311,27 @@ def test_remove_secret_file_swallows_an_oserror_from_shred(
     target = tmp_path / "stale.env"
     target.write_text("secret\n", encoding="utf-8")
 
-    op_secrets._remove_secret_file(target)  # must not raise
+    op_secrets.remove_secret_file(target)  # must not raise
+
+    assert not target.exists()  # the unlink fallback still removes it
+
+
+def test_remove_secret_file_unlinks_when_shred_fails_without_removing(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """A shred that exits non-zero leaves the file; the secret must not survive."""
+    import subprocess
+
+    monkeypatch.setattr(op_secrets.shutil, "which", lambda name: "/usr/bin/shred")
+    monkeypatch.setattr(
+        op_secrets.subprocess, "run", lambda cmd, **_kw: subprocess.CompletedProcess(cmd, 1)
+    )
+    target = tmp_path / "stale.env"
+    target.write_text("secret\n", encoding="utf-8")
+
+    op_secrets.remove_secret_file(target)
+
+    assert not target.exists()
 
 
 # ---------------------------------------------------------------------------

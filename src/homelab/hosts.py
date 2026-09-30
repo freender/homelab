@@ -214,7 +214,7 @@ def validate_host_features(host: str, features: object) -> None:
     #
     # Individual modules can (and where the blast radius warrants it, should)
     # add their own targeted validation instead of waiting for a generic
-    # framework here -- see disk_spindown's `command_type` check, which
+    # framework here -- see pve_notifications' `target` check, which
     # validates a single key against an explicit allowed set, as the pattern
     # to follow for other high-risk single keys.
     if features is not None and not isinstance(features, dict):

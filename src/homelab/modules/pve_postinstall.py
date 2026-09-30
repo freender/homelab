@@ -7,7 +7,13 @@ from typing import Protocol
 from ..build import copy_files, render_file, write_env_file
 from ..deploy import DeploySession, force_env, prepare_build_dir, stage_and_run_remote_installer
 from ..hosts import HostLookupError, default_registry
-from ..module_support import FileSpec, normalize_bool, run_module_deploy, write_file_map
+from ..module_support import (
+    FileSpec,
+    connection_for_host,
+    normalize_bool,
+    run_module_deploy,
+    write_file_map,
+)
 from ..output import print_sub
 from ..ssh import HostConnection, build_files, diff_many
 
@@ -104,7 +110,7 @@ def _pve_host_type(registry: _Registry, host: str) -> str:
 
 
 def _import_pools(registry: _Registry, host: str) -> str:
-    """Pools to `zpool import` at boot, as the space-separated list install.sh reads."""
+    """Pools to `zpool import` at boot, as the space-separated list install.py reads."""
     raw = registry.get(host, "pve-postinstall.import_pools", [])
     if not isinstance(raw, list):
         raise ValueError(f"pve-postinstall.import_pools must be a list for {host}")
@@ -210,7 +216,7 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
     write_installer_env(build_dir / "env", settings)
     build_network_interfaces_bundle(root, host, build_dir)
 
-    connection = HostConnection(host)
+    connection = connection_for_host(root, host)
     print_sub("Comparing with remote configs...")
     for message in diff_many(
         connection,
@@ -342,6 +348,25 @@ def build_cluster_rejoin_helper(root: Path, build_dir: Path) -> None:
             "",
             "if [[ -z \"$cluster_peer\" ]]; then",
             "    cluster_peer=$local_node.freender.internal",
+            "fi",
+            "",
+            "# Never delnode a live member: a node still online in the corosync",
+            "# membership is not stale, whatever made the caller think so.",
+            "member_state=$(python3 - \"$node\" <<'PY' 2>/dev/null || true",
+            "import json, sys",
+            "with open('/etc/pve/.members', encoding='utf-8') as handle:",
+            "    entry = json.load(handle).get('nodelist', {}).get(sys.argv[1])",
+            "if entry is None:",
+            "    print('absent')",
+            "else:",
+            "    print('online' if entry.get('online') else 'offline')",
+            "PY",
+            ")",
+            "if [[ \"$member_state\" != \"offline\" && \"$member_state\" != \"absent\" ]]; then",
+            "    echo \"Refusing to clean up $node: membership state is\" \\",
+            "        \"'${member_state:-unknown}'.\" >&2",
+            "    echo \"Only an offline or absent node can be removed.\" >&2",
+            "    exit 1",
             "fi",
             "",
             "echo \"==> Cleaning stale cluster state for $node\"",

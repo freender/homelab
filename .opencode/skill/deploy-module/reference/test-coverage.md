@@ -4,8 +4,9 @@ Read this when adding or updating tests, or when judging whether an area is
 actually covered. Not needed for a routine module edit.
 
 **Read coverage numbers carefully.** A large share of the headline `--cov` number
-comes from `test_dry_run_all_modules.py`, which asserts only `exit_code == 0` — a
-module can be "covered" by it and still render semantically wrong output. Judge an
+comes from `test_dry_run_all_modules.py`, which asserts only that each module exits 0
+and visits exactly the hosts `hosts.conf` enables it on — a module can be "covered"
+by it and still render semantically wrong output. Judge an
 area by the assertion-backed number, and measure it rather than trusting any figure
 written down here:
 
@@ -23,25 +24,26 @@ the smoke test look like it contributes nothing.
 
 | Test | Covers |
 | --- | --- |
-| `tests/test_dry_run_all_modules.py` | Parametrized offline dry-run of every registered module against the real `hosts.conf` (`execute_module(name, "all", True, False)` under `HOMELAB_OFFLINE=1`). This is what `homelab validate` relies on for its per-module dry-run gate — it no longer has its own for-loop. A new module is covered automatically via `MODULES`/`ordered_modules()`; no per-module addition needed. **Smoke only** — it proves a module does not raise, never that its output is correct. Do not treat a module as tested because this passes. |
+| `tests/test_dry_run_all_modules.py` | Parametrized offline dry-run of every registered module against the real `hosts.conf` (`execute_module(name, "all", True, False)` under `HOMELAB_OFFLINE=1`). This is what `homelab validate` relies on for its per-module dry-run gate — it no longer has its own for-loop. A new module is covered automatically via `MODULES`/`ordered_modules()`; no per-module addition needed. Beyond `exit_code == 0` it asserts each module dry-runs exactly the hosts `hosts.conf` enables it on (killing an inverted applicability guard that silently skips every host), plus single-host, non-enabled-host and unknown-host targeting. **Still close to smoke** — it proves a module does not raise and targets the right hosts, never that its output is correct. Do not treat a module as tested because this passes. |
 | `tests/test_render_golden.py` | Golden renders for the **network-critical** modules — `pve-postinstall`, `pve-interface-pinning`, `pve-gpu-passthrough`, `pve-autoinstall`, `keepalived`. A bad render is only discovered after a reboot on a host you can no longer reach. Renders against the real `hosts.conf`, so it also catches inventory drift, and asserts no unsubstituted Jinja placeholders survive. The `keepalived` block is different in kind: its assertions are **cross-host invariants** (shared VRID, unique priorities, symmetric self-excluding unicast peer lists, agreed VIP, `dev` matching `interface`, agreed `advert_int`, per-host healthcheck), because a split-brain VIP is invisible to any single host's own validation. |
 | `tests/test_hosts.py`, `tests/test_cli_validate.py` | Inventory parsing and the validate command. |
 | `tests/test_build_and_templates.py`, `tests/test_module_fallbacks.py` | Build/render plumbing and module fallback (offline `.example` secret) behavior. |
 | `tests/test_leak_check.py`, `tests/test_env_example_check.py` | The public-repo leak check and `.env.example` placeholder check (see `AGENTS.md` § Public Repo Boundary). |
 | `tests/test_ssh_helpers.py` | `HostConnection` / staging helpers. |
 
-## `lib/utils.sh` — runs as root on every host
+## `lib/py/homelab_install/` — runs as root on every host
 
 | Test | Covers |
 | --- | --- |
-| `tests/test_safety_regressions.py` | The **systemd** helpers: `retire_systemd_unit`, `homelab_apply_pause`, `homelab_reload_and_clear_failed`, `homelab_recover_failed_units`, `homelab_mask_unwanted_service`, plus assorted footgun regressions (strict boolean normalizers, unknown-host rejection, tmpfs staging). Harness: `run_utils_snippet` (bash function stub) and `run_recover_snippet` (real on-PATH stub, needed because `timeout` execs the binary and bypasses a shell function). |
-| `tests/test_utils_file_helpers.py` | The **file-installation** helpers: `file_needs_update`, `copy_if_changed`, `install_if_changed`, the `backup_and_*` variants, `backup_config`, `prune_backup_history`, `load_file_map`/`mapped_dest`/`mapped_mode`, `install_file_map`, `install_build_file_validated`, `require_env`/`require_file`/`require_dir`, `ensure_timer_state`. Includes a cross-language contract test pinning `module_support.write_file_map` (Python writer) to `load_file_map` (bash reader) — they share no schema, and a delimiter change on either side breaks every module at deploy time. Also holds the regression for the 0=changed / 2=error distinction: these helpers must never report a failed `cp`/`install` as a successful change, because installers feed that status into `homelab_reload_and_clear_failed`. |
+| `tests/test_homelab_install.py` | The shared installer library: `ChangeSet`, `files.*` (install / install_all / install_validated / remove, backups), `packages.ensure` and dpkg-status parsing, the `systemd.*` ladders and helpers (`ensure_running`, `pause`, `retire_unit`, `run_once`, `daemon_reload`, `recover_failed`, `mask`), `main._parse_file_map`/`_parse_env_file`, the `main.run` harness, `env.*` flag strictness, `log` prefixes, and the hermetic-import rule against `src/homelab/`. `systemd`/`packages` are driven through their `_run` indirection point. |
+| `tests/test_safety_regressions.py` | Assorted footgun regressions: strict boolean normalizers reading their own key, unknown-host rejection before module dispatch, the `ssh-config` installer (copy failure, non-root, `~/.ssh` lockdown, backup), and `keepalived` tmpfs staging / single-installer shape. |
 
 ## Module-specific
 
 | Test | Covers |
 | --- | --- |
 | `tests/test_zfs_normalize.py` | `zfs_automation/normalize.py` — validators, dataset-path helpers, snapshot plans and templates, migratable-LXC groups, dynamic-LXC source resolution, `source_private_keys` path confinement, `known_host_refresh` validation. Uses a real `HostRegistry` over a temp `hosts.conf`. This is where to add coverage for anything that turns `hosts.conf` into typed plans. |
+| `tests/test_zfs_access.py`, `tests/test_zfs_staging.py` | `zfs_automation/access.py` (pool resolution, push-target `authorized_keys` restriction validators) and `zfs_automation/staging.py` (diff/upload/dry-run helpers — private keys uploaded from their tmpfs path, never diffed or uploaded on a dry run). |
 | `tests/test_zfs_replication_pause.py` | Pause semantics — per-job `paused` vs `enabled: false` in `zfs-automation`. Imports `normalize_replication_config` from the package's `__init__.py` re-export, not `.replication` directly — keep that export if you touch it. |
 | `tests/test_docker_stacks.py`, `tests/test_docker_stacks_installer.py`, `tests/test_docker_start.py` | `docker-stacks` orchestration and its remote installer, and the `docker` module's `start.sh`. |
 | `tests/test_docker.py` | The `docker` module's file map and ported installer: helper-script modes, update-timer on/off, failed-run recovery on redeploy. |
@@ -60,13 +62,12 @@ a cross-host quorum, VIP, or failover group — it belongs in the golden-render 
 
 ## Known thin spots
 
-Modules with no dedicated test, carried only by the dry-run smoke test:
-`disk_spindown` and the three `pve_*_patch` wrappers. Porting a module to Python is
-currently the main way coverage arrives, so re-check this list against a fresh
-assertion-backed run rather than trusting it. `wsl_conf` has installer tests in
-`test_homelab_install.py` but still no dedicated file, and
-`zfs_automation/{access,render,staging}.py` are largely unasserted. Prefer adding to
-these over re-covering well-tested areas.
+Modules with no dedicated test, carried only by the dry-run test: the three
+`pve_*_patch` wrappers (`tests/test_pve_patch_hooks.py` only greps their
+`install.sh` text). Re-check this list against a fresh assertion-backed run rather
+than trusting it. `wsl_conf` has installer tests in `test_homelab_install.py` but
+still no dedicated file, and `zfs_automation/render.py` has no direct test. Prefer
+adding to these over re-covering well-tested areas.
 The three `pve-*-patch` modules' `install.sh` (~610 lines, never ported per
 homelab-ops#35) have no execution coverage at all — ShellCheck only. A port moves a module's installer into
 in-process tests that assert behaviour rather than grepping the script for a

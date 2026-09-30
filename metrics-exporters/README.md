@@ -494,7 +494,7 @@ takes no arguments, so the module installs a drop-in at
 it needs — notably `--smartctl.interval=10s` (matching the `pve-smartctl`
 `scrape_interval` in `vmagent/scrape.yml` on `helm`) and
 `--smartctl.powermode-check=standby`, which keeps the exporter from waking disks
-that the `disk-spindown` module has parked. `--smartctl.path` is per-host: hosts
+that have spun down. `--smartctl.path` is per-host: hosts
 setting `metrics-exporters.smartctl_wrapper: true` get
 `/usr/local/bin/homelab-smartctl-wrapper` instead of `smartctl` itself.
 

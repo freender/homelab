@@ -17,6 +17,7 @@ import pytest
 from homelab_install import packages, systemd
 from homelab_install.context import InstallContext
 from homelab_install.errors import InstallError
+from homelab_install.packages import APT_GET
 
 ROOT = Path(__file__).resolve().parents[1]
 INSTALLER_PATH = ROOT / "zfs-automation" / "scripts" / "install.py"
@@ -71,7 +72,7 @@ class FakeApt:
             return subprocess.CompletedProcess(
                 command, 0 if ok else 1, stdout="install ok installed"
             )
-        if command[:2] == ["apt-get", "install"]:
+        if command[:4] == [*APT_GET, "install"]:
             self.missing -= set(command[4:])
         return subprocess.CompletedProcess(command, 0)
 
@@ -385,7 +386,7 @@ def test_missing_packages_are_installed(harness: Harness) -> None:
 
     harness.run()
 
-    assert harness.apt.apt_calls[-1][:5] == ["apt-get", "install", "-y", "-q", "mbuffer"]
+    assert harness.apt.apt_calls[-1][:7] == [*APT_GET, "install", "-y", "-q", "mbuffer"]
 
 
 # --------------------------------------------------------------------------

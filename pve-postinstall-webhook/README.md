@@ -223,7 +223,7 @@ ssh arc "/root/.local/bin/addhomelabkeys"   # force an immediate reload
 - `scripts/op-ssh-agent.conf` (deploys as `/root/.config/op-ssh-agent.env` on `arc` — named `.conf` here only because `.gitignore` blanket-excludes `**/*.env`; carries no secrets)
 - `scripts/homelab-ssh-agent.service`
 - `scripts/homelab-op-ssh-load.{service,timer}`
-- `scripts/install.sh`
+- `scripts/install.py`
 
 See also the `pve-autoinstall` module, which owns the prepared-answer content
 (including `post-hook-base-url`) that this module's flow depends on.

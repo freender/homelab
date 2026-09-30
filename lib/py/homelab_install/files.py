@@ -24,6 +24,7 @@ looked up in either.
 from __future__ import annotations
 
 import filecmp
+import shutil
 import subprocess
 import time
 from pathlib import Path
@@ -41,6 +42,7 @@ BACKUP_KEEP_COUNT = 3
 
 # Indirection point for tests, same pattern as `homelab_install.systemd._run`.
 _run = subprocess.run
+_which = shutil.which
 
 
 def _backup(dest: Path) -> None:
@@ -246,3 +248,16 @@ def install_all(ctx: InstallContext, exclude: tuple[str, ...] = ()) -> bool:
         if install(ctx, name):
             changed = True
     return changed
+
+
+def destroy_secret(path: Path) -> None:
+    """Shred a staged secret, then unlink it whether or not shred could run.
+
+    The unlink is unconditional so a missing or failing `shred` never leaves the
+    plaintext behind.
+    """
+    if not path.exists():
+        return
+    if _which("shred"):
+        _run(["shred", "-u", "-n", "1", str(path)], check=False)
+    path.unlink(missing_ok=True)

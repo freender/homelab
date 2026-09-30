@@ -28,6 +28,7 @@ import pytest
 
 from homelab_install.context import InstallContext
 from homelab_install.errors import InstallError
+from homelab_install.packages import APT_GET
 
 ROOT = Path(__file__).resolve().parents[1]
 INSTALLER_PATH = ROOT / "pve-upgrade" / "scripts" / "install.py"
@@ -203,8 +204,8 @@ def test_unpaused_host_runs_update_then_dist_upgrade(
     installer.install(make_ctx(tmp_path, {"PAUSED": "false"}))
 
     assert calls == [
-        ["apt-get", "update", "-qq"],
-        ["apt-get", "-y", "dist-upgrade"],
+        [*APT_GET, "update", "-qq"],
+        [*APT_GET, "-y", "dist-upgrade"],
     ]
 
 
@@ -233,7 +234,7 @@ def test_missing_paused_defaults_to_running_the_upgrade(
 
     installer.install(make_ctx(tmp_path))
 
-    assert ["apt-get", "-y", "dist-upgrade"] in calls
+    assert [*APT_GET, "-y", "dist-upgrade"] in calls
 
 
 def test_installer_warns_but_never_reboots(

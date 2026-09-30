@@ -58,7 +58,7 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
-from homelab_install import log, run
+from homelab_install import files, log, run
 from homelab_install.context import InstallContext
 from homelab_install.errors import InstallError
 
@@ -164,7 +164,7 @@ class Restore:
 def read_env(path: Path) -> dict[str, str]:
     """Parse a `KEY=value` file the way bash `source` read these, without running it.
 
-    One parser for all three shapes staged here: the orchestrator's single-quoted
+    One parser for all three shapes staged here: the orchestrator's shlex-quoted
     plans, its commented tokens file, and `op inject`'s double-quoted credentials.
     Values are never echoed in an error -- two of the three hold passwords.
     """
@@ -360,21 +360,13 @@ def check_restore_keyfile(ctx: InstallContext, restore: Restore) -> None:
 # --- secrets ------------------------------------------------------------------
 
 
-def destroy(path: Path) -> None:
-    if not path.exists():
-        return
-    if _which("shred"):
-        _run(["shred", "-u", "-n", "1", str(path)], check=False)
-    path.unlink(missing_ok=True)
-
-
 def destroy_staged_secrets(ctx: InstallContext) -> None:
     for path in [
         ctx.build_dir / STAGED_TOKENS,
         ctx.build_dir / STAGED_KEYFILE,
         *sorted(ctx.build_dir.glob("pbs-*.env")),
     ]:
-        destroy(path)
+        files.destroy_secret(path)
 
 
 def install_keyfile(ctx: InstallContext) -> None:

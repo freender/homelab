@@ -9,13 +9,14 @@ from ..hosts import HostLookupError, default_registry
 from ..module_support import (
     FileSpec,
     HostArtifacts,
+    connection_for_host,
     normalize_bool,
     require_text,
     run_module_deploy,
     write_file_map,
 )
 from ..output import print_sub
-from ..ssh import HostConnection, build_files, diff_many
+from ..ssh import build_files, diff_many
 
 REMOTE_ROOT = "/tmp/homelab-pve-interface-pinning"
 INSTALLER = "scripts/install.py"
@@ -131,7 +132,7 @@ def _require_role_matches_iface(
 
 def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
     artifacts = build_host_artifacts(root, host)
-    connection = HostConnection(host)
+    connection = connection_for_host(root, host)
 
     print_sub("Comparing with remote configs...")
     for message in diff_many(

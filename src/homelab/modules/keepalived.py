@@ -225,26 +225,10 @@ def load_keepalived_env(root: Path) -> dict[str, str]:
     path = keepalived_env_path(root)
     if not path.is_file():
         raise ValueError(f"missing keepalived env file: {path}")
-
-    values: dict[str, str] = {}
-    for line_number, raw_line in enumerate(
-        path.read_text(encoding="utf-8").splitlines(),
-        start=1,
-    ):
-        line = raw_line.strip()
-        if not line or line.startswith("#"):
-            continue
-        if line.startswith("export "):
-            line = line.removeprefix("export ").strip()
-        key, separator, value = line.partition("=")
-        if not separator:
-            raise ValueError(f"invalid env line in {path}:{line_number}")
-        key = key.strip()
-        value = value.strip()
-        if len(value) >= 2 and value[0] == value[-1] and value[0] in {'\"', "'"}:
-            value = value[1:-1]
-        values[key] = value
-    return values
+    try:
+        return op_secrets.parse_env_file(path)
+    except op_secrets.OpSecretsError as exc:
+        raise ValueError(str(exc)) from exc
 
 
 def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:

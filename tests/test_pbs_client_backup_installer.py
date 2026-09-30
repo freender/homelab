@@ -16,6 +16,7 @@ import pytest
 from homelab_install import packages, systemd
 from homelab_install.context import InstallContext
 from homelab_install.errors import InstallError
+from homelab_install.packages import APT_GET
 
 ROOT = Path(__file__).resolve().parents[1]
 INSTALLER_PATH = ROOT / "pbs-client-backup" / "scripts" / "install.py"
@@ -61,7 +62,7 @@ class FakeApt:
             if command[-1] in self.missing:
                 return subprocess.CompletedProcess(command, 1, stdout="")
             return subprocess.CompletedProcess(command, 0, stdout="install ok installed")
-        if command[:2] == ["apt-get", "install"] and not self.broken:
+        if command[:4] == [*APT_GET, "install"] and not self.broken:
             self.missing -= set(command[4:])
         return subprocess.CompletedProcess(command, 0, stdout="")
 
@@ -370,8 +371,8 @@ def test_a_fresh_ubuntu_host_gets_the_repo_then_the_client(harness: Harness) -> 
     source = Path(harness.installer.PBS_CLIENT_SOURCE)
     assert source.read_text(encoding="utf-8") == SOURCE.format(keyring=keyring)
     assert source.stat().st_mode & 0o777 == 0o644
-    assert harness.apt.apt_calls[0][:2] == ["apt-get", "update"]
-    assert harness.apt.apt_calls[1][:2] == ["apt-get", "install"]
+    assert harness.apt.apt_calls[0][:4] == [*APT_GET, "update"]
+    assert harness.apt.apt_calls[1][:4] == [*APT_GET, "install"]
 
 
 def test_a_changed_source_refreshes_lists_fetched_before_it(harness: Harness) -> None:
@@ -381,7 +382,7 @@ def test_a_changed_source_refreshes_lists_fetched_before_it(harness: Harness) ->
 
     harness.run(lists_fresh=True)
 
-    assert ["apt-get", "update", "-qq"] in harness.apt.apt_calls
+    assert [*APT_GET, "update", "-qq"] in harness.apt.apt_calls
 
 
 def test_a_client_missing_after_install_fails(harness: Harness) -> None:

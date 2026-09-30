@@ -18,6 +18,7 @@ from homelab.modules import metrics_exporters
 from homelab_install import packages, systemd
 from homelab_install.context import InstallContext
 from homelab_install.errors import InstallError
+from homelab_install.packages import APT_GET
 
 ROOT = Path(__file__).resolve().parents[1]
 INSTALLER_PATH = ROOT / "metrics-exporters" / "scripts" / "install.py"
@@ -88,7 +89,7 @@ class FakeApt:
             return subprocess.CompletedProcess(
                 command, 0 if ok else 1, stdout="install ok installed"
             )
-        if command[:2] == ["apt-get", "install"]:
+        if command[:4] == [*APT_GET, "install"]:
             self.missing -= set(command)
         return subprocess.CompletedProcess(command, 0)
 
@@ -335,8 +336,8 @@ def test_debian_installs_smartctl_exporter_from_backports(harness: Harness) -> N
     source = Path(harness.installer.BACKPORTS_SOURCE).read_text(encoding="utf-8")
     assert "Suites: trixie-backports\n" in source
     assert harness.apt.apt_calls == [
-        ["apt-get", "update", "-qq"],
-        ["apt-get", "install", "-y", "-q", "-t", "trixie-backports", SMART],
+        [*APT_GET, "update", "-qq"],
+        [*APT_GET, "install", "-y", "-q", "-t", "trixie-backports", SMART],
     ]
 
 
@@ -355,7 +356,7 @@ def test_ubuntu_installs_smartctl_exporter_from_its_own_archive(harness: Harness
     harness.run()
 
     assert not Path(harness.installer.BACKPORTS_SOURCE).exists()
-    assert ["apt-get", "install", "-y", "-q", SMART] in harness.apt.apt_calls
+    assert [*APT_GET, "install", "-y", "-q", SMART] in harness.apt.apt_calls
 
 
 def test_a_guest_never_installs_smartctl_exporter_or_gpu_tools(harness: Harness) -> None:
@@ -364,7 +365,7 @@ def test_a_guest_never_installs_smartctl_exporter_or_gpu_tools(harness: Harness)
 
     harness.run()
 
-    assert harness.apt.apt_calls[-1] == ["apt-get", "install", "-y", "-q", NODE]
+    assert harness.apt.apt_calls[-1] == [*APT_GET, "install", "-y", "-q", NODE]
     assert not Path(harness.installer.BACKPORTS_SOURCE).exists()
 
 
@@ -374,7 +375,7 @@ def test_intel_gpu_tools_come_with_the_gpu_exporter(harness: Harness) -> None:
 
     harness.run()
 
-    assert ["apt-get", "install", "-y", "-q", "intel-gpu-tools"] in harness.apt.apt_calls
+    assert [*APT_GET, "install", "-y", "-q", "intel-gpu-tools"] in harness.apt.apt_calls
 
 
 # --------------------------------------------------------------------------

@@ -9,8 +9,8 @@
 #   --smartctl.interval=10s        matches the 10s scrape_interval of the
 #                                  pve-smartctl job in vmagent/scrape.yml on
 #                                  helm (upstream default is 60s).
-#   --smartctl.powermode-check     load-bearing next to the disk-spindown
-#                                  module: "standby" makes the exporter skip
+#   --smartctl.powermode-check     load-bearing on hosts whose disks spin
+#                                  down: "standby" makes the exporter skip
 #                                  (not wake) a spun-down disk.
 #   --web.listen-address=:9633     the port vmagent scrapes.
 #   --smartctl.path                normally /usr/sbin/smartctl; hosts setting

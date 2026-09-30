@@ -102,7 +102,7 @@ def _configured_leak_domains() -> list[str]:
     return [line.strip().lower() for line in raw.translate(separators).splitlines() if line.strip()]
 
 
-def _tracked_files(root: Path) -> list[Path]:
+def tracked_files(root: Path) -> list[Path]:
     """Files that are, or are about to be, published.
 
     `--others --exclude-standard` includes untracked-but-not-ignored files. Without
@@ -165,7 +165,7 @@ def check_public_repo_leaks(root: Path) -> None:
     banned = _configured_leak_domains()
     findings: list[str] = []
 
-    tracked = _tracked_files(root)
+    tracked = tracked_files(root)
     if not tracked:
         print_warn("git not available; skipping leak check")
         return
@@ -277,7 +277,7 @@ def _non_placeholder_assignments(rel: Path, text: str) -> list[str]:
 def check_env_example_placeholders(root: Path) -> None:
     """Fail the build if any `.env.example` assigns something other than a placeholder."""
     findings: list[str] = []
-    examples = [path for path in _tracked_files(root) if path.name.endswith(".env.example")]
+    examples = [path for path in tracked_files(root) if path.name.endswith(".env.example")]
 
     for path in examples:
         try:

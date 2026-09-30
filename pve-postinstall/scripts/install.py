@@ -60,13 +60,14 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from homelab_install import env, files, log, run, systemd
+from homelab_install import env, files, log, packages, run, systemd
 from homelab_install.context import InstallContext
 from homelab_install.errors import InstallError
 
 # Indirection points for tests, same pattern as `homelab_install.systemd._run`.
 _run = subprocess.run
 _which = shutil.which
+_ismount = os.path.ismount
 
 REPO_SOURCES = ("proxmox.sources", "pve-test.sources")
 NAG_FILES = ("pve-remove-nag.sh", "no-nag-script")
@@ -94,6 +95,8 @@ TIMEZONE_FILE = "/etc/timezone"
 
 STORAGE_CFG = "/etc/pve/storage.cfg"
 COROSYNC_CONF = "/etc/pve/corosync.conf"
+LOCAL_COROSYNC_CONF = "/etc/corosync/corosync.conf"
+PVE_MOUNT = "/etc/pve"
 LOCAL_STORAGE_POOLS = ("vm-disks", "vm-flash", "vault-disks", "vault-hdd")
 
 INTERFACES = "/etc/network/interfaces"
@@ -235,7 +238,7 @@ def refresh_widget_toolkit(ctx: InstallContext) -> None:
     """
     log.sub("Refreshing proxmox widget toolkit...")
     result = _run(
-        ["apt-get", "install", "--reinstall", "-y", "-q", "proxmox-widget-toolkit"],
+        [*packages.APT_GET, "install", "--reinstall", "-y", "-q", "proxmox-widget-toolkit"],
         check=False,
         capture_output=True,
         env={**os.environ, "DEBIAN_FRONTEND": "noninteractive"},
@@ -506,11 +509,19 @@ def report_cluster_join(ctx: InstallContext, settings: Settings) -> None:
     the join command. Never joins: `pvecm add` stays a manual step."""
     if not settings.expected_clustered:
         return
-    if (
-        Path(COROSYNC_CONF).is_file()
-        and _run(["pvecm", "status"], check=False, capture_output=True).returncode == 0
-    ):
-        log.sub("Cluster membership detected")
+    # The peer-side cleanup runs `pvecm delnode`, so "standalone" has to mean a
+    # rebuilt node, not a clustered one whose pmxcfs or corosync is mid-restart:
+    # in that window /etc/pve/corosync.conf vanishes and `pvecm status` fails.
+    # The local /etc/corosync copy survives both, and an unmounted /etc/pve means
+    # the question cannot be answered at all.
+    if Path(COROSYNC_CONF).is_file() or Path(LOCAL_COROSYNC_CONF).is_file():
+        if _run(["pvecm", "status"], check=False, capture_output=True).returncode == 0:
+            log.sub("Cluster membership detected")
+        else:
+            log.warn("Cluster config present but pvecm status failed; leaving cluster state alone")
+        return
+    if not _ismount(PVE_MOUNT):
+        log.warn(f"{PVE_MOUNT} is not mounted; cannot tell standalone from clustered, skipping")
         return
 
     node = _short_hostname()

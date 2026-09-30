@@ -99,17 +99,29 @@ def stage_and_run_remote_installer(
 
     print_sub("Staging bundle...")
     connection.prepare_remote_dir(remote_root, *remote_subdirs)
-    connection.upload_paths(upload_paths)
-    if python_installer:
-        connection.upload_python_lib(root, remote_root)
-        env = python_lib_env(remote_root, env)
+    try:
+        connection.upload_paths(upload_paths)
+        if python_installer:
+            connection.upload_python_lib(root, remote_root)
+            env = python_lib_env(remote_root, env)
 
-    print_sub("Running installer...")
-    connection.run_remote_installer(
-        remote_root,
-        installer,
-        *args,
-        env=env,
-        require_root=require_root,
-        interpreter=interpreter,
-    )
+        print_sub("Running installer...")
+        connection.run_remote_installer(
+            remote_root,
+            installer,
+            *args,
+            env=env,
+            require_root=require_root,
+            interpreter=interpreter,
+        )
+    finally:
+        _cleanup_staging(connection, remote_root)
+
+
+def _cleanup_staging(connection: HostConnection, remote_root: str) -> None:
+    """Best-effort: a dropped connection here must not fail (or mask the error of)
+    an installer run that already finished."""
+    try:
+        connection.cleanup_remote_dir(remote_root)
+    except Exception as exc:  # noqa: BLE001 - cleanup must never replace the real outcome
+        print_warn(f"could not confirm remote cleanup of {remote_root}: {exc}")

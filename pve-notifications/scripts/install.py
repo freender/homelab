@@ -61,7 +61,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from homelab_install import env, log, run
+from homelab_install import env, files, log, run
 from homelab_install.context import InstallContext
 from homelab_install.errors import InstallError
 
@@ -141,14 +141,6 @@ def read_secret(path: Path) -> dict[str, str]:
             value = value[1:-1]
         values[key.strip()] = value
     return values
-
-
-def destroy_secret(path: Path) -> None:
-    if not path.exists():
-        return
-    if _which("shred"):
-        _run(["shred", "-u", "-n", "1", str(path)], check=False)
-    path.unlink(missing_ok=True)
 
 
 def alertmanager_endpoint(ctx: InstallContext) -> dict[str, object]:
@@ -316,7 +308,7 @@ def install(ctx: InstallContext) -> None:
     try:
         configure(ctx)
     finally:
-        destroy_secret(ctx.build_dir / TELEGRAM_SECRET_NAME)
+        files.destroy_secret(ctx.build_dir / TELEGRAM_SECRET_NAME)
 
 
 def configure(ctx: InstallContext) -> None:

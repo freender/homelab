@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import subprocess
+
 import pytest
 
 from homelab.hosts import HostLookupError
@@ -136,3 +138,51 @@ def test_host_settings_rejects_invalid_standalone_value() -> None:
 
     with pytest.raises(ValueError, match="config.standalone must be true or false"):
         pp._host_settings(registry, "ace")
+
+
+# --- cluster rejoin helper: the delnode guard --------------------------------------
+
+
+def _rejoin_guard(tmp_path, members: str) -> subprocess.CompletedProcess:
+    """Run only the helper's membership guard, against a fake /etc/pve/.members."""
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    pp.build_cluster_rejoin_helper(root, tmp_path)
+    script = (tmp_path / "homelab-pve-cluster-rejoin-helper").read_text(encoding="utf-8")
+    start = script.index("# Never delnode a live member")
+    end = script.index('echo "==> Cleaning stale cluster state')
+    members_file = tmp_path / "members.json"
+    members_file.write_text(members, encoding="utf-8")
+    guard = script[start:end].replace("/etc/pve/.members", str(members_file))
+    return subprocess.run(
+        ["bash", "-c", f"set -euo pipefail\nnode=ace\n{guard}\necho PROCEED"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+@pytest.mark.parametrize(
+    "members",
+    ['{"nodelist": {"ace": {"online": 1}}}', "not json", ""],
+    ids=["online", "unreadable", "empty"],
+)
+def test_rejoin_helper_refuses_to_delnode_a_live_or_unknown_member(tmp_path, members) -> None:
+    result = _rejoin_guard(tmp_path, members)
+
+    assert result.returncode == 1
+    assert "PROCEED" not in result.stdout
+    assert "Refusing to clean up ace" in result.stderr
+
+
+@pytest.mark.parametrize(
+    "members",
+    ['{"nodelist": {"ace": {"online": 0}}}', '{"nodelist": {"bray": {"online": 1}}}'],
+    ids=["offline", "absent"],
+)
+def test_rejoin_helper_proceeds_for_an_offline_or_absent_node(tmp_path, members) -> None:
+    result = _rejoin_guard(tmp_path, members)
+
+    assert result.returncode == 0
+    assert "PROCEED" in result.stdout
