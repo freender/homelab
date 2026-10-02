@@ -1,18 +1,9 @@
 ---
 name: deploy-module
-description: Create, modify, or invoke Python deployment modules in the homelab repo — the ./deploy CLI (dry-run and live), hosts.conf, and remote install scripts
+description: Create, modify, retire, or invoke Python deployment modules in the homelab repo — src/homelab/modules/, remote scripts/install.py, hosts.conf, and the ./deploy CLI (dry-run and live). Use when adding or changing a module, debugging a deploy or dry-run failure, running ./deploy for one module/host or all all, running or troubleshooting /ship, or retiring a module. Repo layout, build/test commands, and shipping rails are in AGENTS.md.
 ---
 
-## When to use
-
-Load this skill when the user asks to:
-- Create a new deployment module in the homelab repo
-- Modify an existing Python module in `src/homelab/modules/` or a remote `scripts/install.py`
-- Debug deployment issues or dry-run failures
-- Work with `hosts.conf`, `src/homelab/`, or the deployment framework
-- Invoke `./deploy` itself — dry-run or live, for one module/host or `all all`
-- Run or troubleshoot `/ship` — success predicates, verification, stop reasons
-- Retire a module (`reference/module-retirement.md`)
+## Scope
 
 This skill lives in the repo it describes. `AGENTS.md` is loaded automatically
 alongside it and owns repo layout, build/test commands, the three off-switches, the
