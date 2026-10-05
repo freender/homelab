@@ -107,6 +107,26 @@ route:
         - datastore
       repeat_interval: 24h
       continue: false
+    # The daily probe report from riven: one plain-text alert per run, read by a
+    # human, not a condition that recovers. It must sit above the plex/seerr route
+    # so nothing in it can ever reach the external channel.
+    #
+    # Each run carries its own `run` label (the date), and `run` is in group_by,
+    # so every day's report is a new group and sends at group_wait. Without that,
+    # consecutive reports share one label set, Alertmanager does not re-notify on
+    # an annotation change, and the 24h repeat can tick just before the next run
+    # updates the text -- re-sending yesterday's report and holding today's back a
+    # full day. The 24h repeat only stops a second send of the same report.
+    #
+    # The `probe` receiver has send_resolved off: a report expiring is not news.
+    - receiver: probe
+      matchers:
+        - source="probe"
+      group_by:
+        - alertname
+        - run
+      repeat_interval: 24h
+      continue: false
     # The Proxmox update digest, not an alert. Proxmox packages are upgraded by
     # hand during the monthly window, so ProxmoxUpdatesAvailable is true nearly
     # all the time by design -- at the parent's 4h repeat that would page six
@@ -430,6 +450,22 @@ receivers:
           {{ if .Labels.jobid }}Job: {{ .Labels.jobid }}{{ end }}
           {{ .Annotations.summary }}
           {{ if .Annotations.description }}{{ reReplaceAll "(?s)(.{700}).*" "$1 [...]" .Annotations.description }}{{ end }}
+          {{ end }}
+
+  # The report text is the whole message, multi-line, so it is rendered as-is
+  # rather than through the mwbot receiver's summary/description layout, which
+  # would print its first line twice. The sender escapes &, < and > because
+  # Telegram parses this as HTML and rejects a message with a bare one. The cap
+  # keeps an overlong report inside Telegram's 4096-character limit instead of
+  # having it dropped.
+  - name: probe
+    telegram_configs:
+      - bot_token_file: /tmp/telegram_token
+        chat_id: __TELEGRAM_CHATID__
+        send_resolved: false
+        message: |-
+          {{ range .Alerts }}&#128269; [PROBE] {{ .Labels.host }} {{ .Labels.run }}
+          {{ reReplaceAll "(?s)(.{3500}).*" "$1 [...]" .Annotations.description }}
           {{ end }}
 
   # The ping URL is a capability: anyone holding it can report the homelab as

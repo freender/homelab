@@ -65,7 +65,32 @@ groups:
           summary: "PVE replication {{ $labels.job_id }} into {{ $labels.host }} is failing"
           description: "Replication job {{ $labels.job_id }} (guest {{ $labels.guest }}) from {{ $labels.source_node }} to {{ $labels.host }} has failed {{ $value }} consecutive times over at least 45 minutes, and {{ $labels.host }} has been up throughout, so this is not a reboot. The guest is still running on {{ $labels.source_node }}, but its replica on {{ $labels.host }} is stale and an HA failover would lose everything since the last successful sync. Run `pvesr status` on {{ $labels.source_node }} for the error text; check the target pool with `zpool status -x` on {{ $labels.host }}."
 
-      # Without this the alert above is silently dead. node_exporter's textfile
+      # The case PveReplicationFailing cannot see: a job that is not failing but
+      # not running either -- pvescheduler stuck or stopped, a job disabled by
+      # hand -- leaves fail_count at 0 while the replica ages. Jobs here run
+      # every 15 minutes or hourly (14-day worst observed lag: 20 and 64
+      # minutes), so 2h is at least one missed hourly run and eight missed
+      # 15-minute ones.
+      #
+      # Same label surgery and target-up gate as the rule above, for the same
+      # reasons. `unless` hands a job that is also failing to
+      # PveReplicationFailing, so one broken job is one alert.
+      - alert: PveReplicationStale
+        expr: |
+          label_replace(
+            time() - homelab_pve_replication_last_sync_timestamp_seconds > 7200,
+            "host", "$1", "target", "(.*)"
+          )
+          unless on(job_id, source_node) (homelab_pve_replication_fail_count > 0)
+          and on(host) (min_over_time(up{job="pve-node"}[30m]) == 1)
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "PVE replication {{ $labels.job_id }} into {{ $labels.host }} has not synced in 2h"
+          description: "Replication job {{ $labels.job_id }} (guest {{ $labels.guest }}) from {{ $labels.source_node }} to {{ $labels.host }} last synced {{ $value | humanizeDuration }} ago without reporting a failure, so it is not running rather than failing. Check `pvesr status` and `systemctl status pvescheduler` on {{ $labels.source_node }}, and whether the job was disabled."
+
+      # Without this both alerts above are silently dead. node_exporter's textfile
       # collector keeps serving whatever is already in its directory, so a
       # stopped pve-replication-textfile-exporter.timer leaves every
       # homelab_pve_replication_* series present and frozen at its last value --

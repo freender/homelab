@@ -20,6 +20,7 @@ RULE_FILES = (
     "nic-link.yml",
     "node-down.yml",
     "node-resources.yml",
+    "probe-report.yml",
     "pve-patches.yml",
     "pve-replication.yml",
     "reboot.yml",

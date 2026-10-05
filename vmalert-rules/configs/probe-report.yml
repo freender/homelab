@@ -1,0 +1,32 @@
+groups:
+  - name: probe-report
+    interval: 5m
+    rules:
+      # Heartbeat for the daily probe report on riven. The job pushes
+      # homelab_probe_report_last_success_timestamp_seconds into VictoriaMetrics
+      # after every successful run, all-clear runs included, so silence here
+      # means it did not run or did not finish -- an all-clear sends no alert,
+      # which is otherwise indistinguishable from a job that never ran. It is a
+      # user unit, so a failure is also invisible to SystemdUnitFailed.
+      #
+      # One sample a day, so the window is the whole rule: 26h is one daily run
+      # plus slack for its randomized start and runtime.
+      #
+      # `count_over_time(...[30d]) > 0` keeps the rule silent until the first
+      # heartbeat has ever landed, so it can be deployed before the job is
+      # scheduled. The cost is that it falls silent again after 30 days of total
+      # silence; by then it has paged for four.
+      #
+      # The host-up gate keeps a riven outage owned by NodeDown, same as every
+      # absence rule here.
+      - alert: ProbeReportStale
+        expr: |
+          absent_over_time(homelab_probe_report_last_success_timestamp_seconds{host="riven"}[26h])
+          and on() (count_over_time(homelab_probe_report_last_success_timestamp_seconds{host="riven"}[30d]) > 0)
+          and on(host) (min_over_time(up{job="pve-node", host="riven"}[30m]) == 1)
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "riven daily probe report has not completed in 26h"
+          description: "No successful probe report run on riven has been recorded in 26 hours, so problems it would have reported are going unseen. Check the report's user timer and its journal on riven."
