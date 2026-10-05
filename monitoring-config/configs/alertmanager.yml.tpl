@@ -455,9 +455,12 @@ receivers:
   # The report text is the whole message, multi-line, so it is rendered as-is
   # rather than through the mwbot receiver's summary/description layout, which
   # would print its first line twice. The sender escapes &, < and > because
-  # Telegram parses this as HTML and rejects a message with a bare one. The cap
-  # keeps an overlong report inside Telegram's 4096-character limit instead of
-  # having it dropped.
+  # Telegram parses this as HTML and rejects a message with a bare one.
+  #
+  # No reReplaceAll length cap here: Go's regexp rejects a repeat count over
+  # 1000, and a 3500-character cap failed at render time, silently delivering the
+  # header with no report (2026-10-05). Alertmanager's Telegram notifier
+  # already truncates to the 4096-character limit itself.
   - name: probe
     telegram_configs:
       - bot_token_file: /tmp/telegram_token
@@ -465,7 +468,7 @@ receivers:
         send_resolved: false
         message: |-
           {{ range .Alerts }}&#128269; [PROBE] {{ .Labels.host }} {{ .Labels.run }}
-          {{ reReplaceAll "(?s)(.{3500}).*" "$1 [...]" .Annotations.description }}
+          {{ .Annotations.description }}
           {{ end }}
 
   # The ping URL is a capability: anyone holding it can report the homelab as

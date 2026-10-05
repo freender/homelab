@@ -453,3 +453,19 @@ def test_compose_output_is_not_captured(
     installer.recreate_alertmanager(live(tmp_path, "compose.yml", "services: {}\n"))
 
     assert captured == [False, True]
+
+
+def test_template_regex_repeat_counts_fit_go_regexp() -> None:
+    """Go's regexp rejects a repeat count over 1000, and only at render time:
+    amtool config check passes, and Alertmanager sends whatever rendered before
+    the failing call. A 3500-character cap delivered the probe report as a bare
+    header.
+    """
+    import re
+
+    configs = Path(__file__).resolve().parents[1] / "monitoring-config" / "configs"
+    template = (configs / "alertmanager.yml.tpl").read_text(encoding="utf-8")
+    counts = [int(n) for n in re.findall(r"\{(\d+)(?:,\d*)?\}", template)]
+    assert counts, "no regex repeat counts found; the pattern no longer matches the template"
+    too_big = [n for n in counts if n > 1000]
+    assert not too_big, f"repeat count(s) over Go's 1000 limit: {too_big}"
