@@ -1,0 +1,40 @@
+networks:
+  net.internal:
+    external: true
+
+services:
+  mosquitto:
+    container_name: mosquitto
+    image: eclipse-mosquitto:2.1.2-alpine
+    user: 1000:1000
+    env_file:
+      - /mnt/cache/appdata/mosquitto/.env
+    entrypoint:
+      - /bin/sh
+      - -ec
+    command:
+      - |
+        : "$${MQTT_HA_PASSWORD:?MQTT_HA_PASSWORD is required}"
+        : "$${MQTT_Z2M_PASSWORD:?MQTT_Z2M_PASSWORD is required}"
+        umask 077
+        rm -f /tmp/passwd
+        mosquitto_passwd -c -b /tmp/passwd homeassistant "$${MQTT_HA_PASSWORD}" >/dev/null
+        mosquitto_passwd -b /tmp/passwd zigbee2mqtt "$${MQTT_Z2M_PASSWORD}" >/dev/null
+        unset MQTT_HA_PASSWORD MQTT_Z2M_PASSWORD
+        printf '%s\n' \
+          'listener 1883' \
+          'allow_anonymous false' \
+          'plugin /usr/lib/mosquitto_password_file.so' \
+          'plugin_opt_password_file /tmp/passwd' \
+          'persistence true' \
+          'persistence_location /mosquitto/data/' \
+          'log_dest stdout' \
+          'log_timestamp_format %Y-%m-%dT%H:%M:%S' \
+          > /tmp/mosquitto.conf
+        exec mosquitto -c /tmp/mosquitto.conf
+    volumes:
+      - /mnt/cache/appdata/mosquitto/data:/mosquitto/data
+    restart: always
+    mem_limit: 128m
+    networks:
+      - net.internal
