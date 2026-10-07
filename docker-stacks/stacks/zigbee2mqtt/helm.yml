@@ -1,0 +1,27 @@
+networks:
+  net.internal:
+    external: true
+  net_overlay:
+    external: true
+
+services:
+  zigbee2mqtt:
+    container_name: zigbee2mqtt
+    image: koenkk/zigbee2mqtt:2.14.2
+    user: 1000:1000
+    environment:
+      TZ: 'America/New_York'
+    env_file:
+      - /mnt/cache/appdata/zigbee2mqtt/.env
+    labels:
+      traefik.enable: true
+      traefik.http.routers.zigbee2mqtt.entryPoints: https
+      traefik.http.routers.zigbee2mqtt.middlewares: allow-local@file
+      traefik.http.services.zigbee2mqtt.loadbalancer.server.port: 8080
+    volumes:
+      - /mnt/cache/appdata/zigbee2mqtt/data:/app/data
+    restart: always
+    mem_limit: 512m
+    networks:
+      - net.internal
+      - net_overlay

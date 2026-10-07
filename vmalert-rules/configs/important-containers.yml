@@ -153,6 +153,10 @@ groups:
         labels: {severity: warning, category: docker, site: home, host: helm, name: victoria-logs}
         annotations: {summary: "helm / victoria-logs is missing", description: "Important app container has not been seen by cAdvisor for 5 minutes."}
       - alert: ImportantContainerMissing
+        expr: absent_over_time(container_last_seen{job="cadvisor", host="helm", name="zigbee2mqtt"}[5m]) and on(host) (min_over_time(up{job="pve-node"}[10m]) == 1)
+        labels: {severity: warning, category: docker, site: home, host: helm, name: zigbee2mqtt}
+        annotations: {summary: "helm / zigbee2mqtt is missing", description: "Important app container has not been seen by cAdvisor for 5 minutes."}
+      - alert: ImportantContainerMissing
         expr: absent_over_time(container_last_seen{job="cadvisor", host="neo", name="alloy-neo"}[5m]) and on(host) (min_over_time(up{job="pve-node"}[10m]) == 1)
         labels: {severity: warning, category: docker, site: home, host: neo, name: alloy-neo}
         annotations: {summary: "neo / alloy-neo is missing", description: "Important app container has not been seen by cAdvisor for 5 minutes."}
