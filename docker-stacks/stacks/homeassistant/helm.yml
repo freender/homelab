@@ -31,8 +31,8 @@ services:
       traefik.http.routers.homeassistant.entryPoints: https
       traefik.http.routers.homeassistant.middlewares: allow-local@file
       traefik.http.services.homeassistant.loadbalancer.server.port: 8123
-      traefik.http.routers.homeassistant.rule: Host(`homeassistant.${DOMAIN}`)
-      traefik.http.routers.homeassistant-cdn.rule: Host(`homeassistant-cdn.${DOMAIN}`)
+      traefik.http.routers.homeassistant.rule: Host(`homeassistant.${DOMAIN}`) || Host(`ha.${DOMAIN}`)
+      traefik.http.routers.homeassistant-cdn.rule: Host(`homeassistant-cdn.${DOMAIN}`) || Host(`ha-api.${DOMAIN}`)
       traefik.http.routers.homeassistant-cdn.entryPoints: https
       traefik.http.routers.homeassistant-cdn.middlewares: allow-cdn-and-local@file
       traefik.http.services.homeassistant-cdn.loadbalancer.server.port: 8123
