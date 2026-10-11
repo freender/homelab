@@ -463,7 +463,7 @@ def test_stage_requires_root_and_makes_the_three_remote_subdirs(
     assert call["installer"] == apt_upgrade.INSTALLER
     assert call["interpreter"] == apt_upgrade.INTERPRETER
     assert call["require_root"] is True  # the installer writes to /etc and systemd
-    assert call["remote_subdirs"] == ("build", "lib", "scripts")
+    assert call["remote_subdirs"] == ("build", "src", "scripts")
 
 
 def test_stage_passes_force_through_to_the_installer_env(

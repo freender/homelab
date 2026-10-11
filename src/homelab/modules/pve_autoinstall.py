@@ -249,7 +249,7 @@ def _run_on_pdm_host(
             "sync-answers.py",
             *(["--force"] if force else []),
             interpreter="python3",
-            remote_subdirs=("lib",),
+            remote_subdirs=("src",),
         )
         print_ok("PDM answers synced")
 

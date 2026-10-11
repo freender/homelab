@@ -304,8 +304,17 @@ class TestMutmutConfig:
         # Narrowing source_paths broke `homelab.modules.*` imports outright:
         # unwalked files are absent from the copy rather than copied verbatim.
         config = self.config()
-        assert config["source_paths"] == ["src/homelab"]
+        assert config["source_paths"] == ["src/homelab", "src/homelab_install"]
         assert config["only_mutate"]
+
+    def test_every_mutated_path_is_under_src(self) -> None:
+        # mutmut keys a mutant by its file path with only a literal `src.` prefix
+        # stripped. Anywhere else (the library used to be `lib/py/`) the key never
+        # matches the runtime `__module__`, so every mutant there is reported as
+        # untested and nothing warns (freender/homelab-ops#37).
+        config = self.config()
+        for path in [*config["source_paths"], *config["only_mutate"]]:
+            assert path.startswith("src/"), path
 
     def test_scoped_files_exist(self) -> None:
         # A renamed or split module would otherwise silently drop out of scope
@@ -425,28 +434,73 @@ class TestCliReport:
 
 
 class TestMutmutInvocation:
-    def test_sweep_is_offline_and_uncovered(self, monkeypatch) -> None:
+    def test_sweep_is_offline_and_uncovered(self, monkeypatch, tmp_path: Path) -> None:
         monkeypatch.delenv("PYTEST_ADDOPTS", raising=False)
         monkeypatch.setenv("HOMELAB_OFFLINE", "0")
 
-        env = cli.mutmut_env()
+        env = cli.mutmut_env(tmp_path)
 
         assert env["HOMELAB_OFFLINE"] == "1"
         assert "--no-cov" in env["PYTEST_ADDOPTS"]
 
     def test_pythonpath_is_dropped_so_real_source_cannot_shadow_the_mutants(
-        self, monkeypatch
+        self, monkeypatch, tmp_path: Path
     ) -> None:
         # The ./validate and ./deploy launchers set PYTHONPATH to the real src.
         # Leaving it set makes every mutant look like a survivor.
         monkeypatch.setenv("PYTHONPATH", str(ROOT / "src"))
 
-        assert "PYTHONPATH" not in cli.mutmut_env()
+        assert "PYTHONPATH" not in cli.mutmut_env(tmp_path)
 
-    def test_existing_addopts_are_preserved(self, monkeypatch) -> None:
+    def test_existing_addopts_are_preserved(self, monkeypatch, tmp_path: Path) -> None:
         monkeypatch.setenv("PYTEST_ADDOPTS", "-k something")
 
-        assert cli.mutmut_env()["PYTEST_ADDOPTS"].startswith("-k something")
+        assert cli.mutmut_env(tmp_path)["PYTEST_ADDOPTS"].startswith("-k something")
+
+    def test_a_serial_sweep_reuses_one_basetemp_off_the_default_temp_root(
+        self, monkeypatch, tmp_path: Path
+    ) -> None:
+        # Each mutant is a pytest session in a child that skips atexit, so pytest's
+        # numbered-dir rotation never deletes anything; on riven's tmpfs /tmp that
+        # exhausted inodes (ENOSPC scored as kills) and memory (homelab-ops#37).
+        monkeypatch.delenv("PYTEST_ADDOPTS", raising=False)
+
+        env = cli.mutmut_env(tmp_path, max_children=1)
+
+        assert env["PYTEST_DEBUG_TEMPROOT"] == str(tmp_path)
+        assert f"--basetemp={tmp_path / 'basetemp'}" in env["PYTEST_ADDOPTS"].split()
+
+    def test_parallel_children_never_share_a_basetemp(self, monkeypatch, tmp_path: Path) -> None:
+        # pytest wipes a given basetemp at session start: shared, children would
+        # delete each other's files mid-test and score that as a kill.
+        monkeypatch.delenv("PYTEST_ADDOPTS", raising=False)
+
+        env = cli.mutmut_env(tmp_path, max_children=4)
+
+        assert env["PYTEST_DEBUG_TEMPROOT"] == str(tmp_path)
+        assert "--basetemp" not in env["PYTEST_ADDOPTS"]
+
+    def test_sweep_tmp_is_emptied_and_sits_outside_the_mutants_tree(self, tmp_path: Path) -> None:
+        stale = tmp_path / cli.SWEEP_TMP_DIRNAME / "pytest-of-x" / "pytest-1"
+        stale.mkdir(parents=True)
+
+        tmp_dir = cli.prepare_sweep_tmp(tmp_path)
+
+        assert tmp_dir == tmp_path / cli.SWEEP_TMP_DIRNAME
+        assert list(tmp_dir.iterdir()) == []
+        assert mutants.MUTANTS_DIRNAME not in tmp_dir.parts
+
+    def test_sweep_tmp_clears_a_dir_a_mutant_locked_down(self, tmp_path: Path) -> None:
+        # A mutated mode left `d-----x---` under basetemp; ignore_errors hid the
+        # failed delete and the next sweep died on mkdir.
+        locked = tmp_path / cli.SWEEP_TMP_DIRNAME / "basetemp" / "t0" / ".ssh"
+        locked.mkdir(parents=True)
+        (locked / "key").write_text("x", encoding="utf-8")
+        locked.chmod(0o010)
+
+        tmp_dir = cli.prepare_sweep_tmp(tmp_path)
+
+        assert list(tmp_dir.iterdir()) == []
 
     def test_command_passes_targets_and_parallelism(self, monkeypatch, tmp_path: Path) -> None:
         seen: dict = {}
@@ -456,14 +510,20 @@ class TestMutmutInvocation:
 
         def fake_run(command, cwd, env, check):
             seen["command"] = command
+            seen["env"] = env
             return Result()
 
+        # A sweep runs this test with its own --basetemp already in PYTEST_ADDOPTS.
+        monkeypatch.delenv("PYTEST_ADDOPTS", raising=False)
         monkeypatch.setattr(cli.subprocess, "run", fake_run)
         cli.run_mutmut(tmp_path, ("homelab.crap.*",), 6)
 
         assert seen["command"][1:5] == ["-m", "mutmut", "run", "--max-children"]
         assert seen["command"][5] == "6"
         assert seen["command"][-1] == "homelab.crap.*"
+        # The same parallelism reaches the env, so 6 children get no shared basetemp.
+        assert "--basetemp" not in seen["env"]["PYTEST_ADDOPTS"]
+        assert seen["env"]["PYTEST_DEBUG_TEMPROOT"] == str(tmp_path / cli.SWEEP_TMP_DIRNAME)
 
     def test_a_tooling_failure_is_not_reported_as_a_verdict(
         self, monkeypatch, tmp_path: Path

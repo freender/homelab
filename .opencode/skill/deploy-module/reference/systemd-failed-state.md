@@ -6,7 +6,7 @@ recover, or retire failed state. Not needed for modules that only render config.
 A unit left in `systemctl --failed` after a fix is redeployed stays "failed" until
 its next successful run or an explicit `reset-failed` — that gap is what
 homelab-alerting/vmalert failed-unit checks see. The `homelab_install.systemd`
-helpers (`lib/py/homelab_install/systemd.py`) cover this; reach for them before
+helpers (`src/homelab_install/systemd.py`) cover this; reach for them before
 running `systemctl reset-failed` by hand. `SKILL.md` carries the
 pick-by-what-changed mapping; this file is the semantics of each helper once you
 have chosen one.

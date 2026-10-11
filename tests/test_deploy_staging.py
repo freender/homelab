@@ -7,7 +7,7 @@ tolerable while it did three unconditional things; it stopped being tolerable on
 started *deciding* something (freender/homelab-ops#34).
 
 The decision is worth pinning precisely because it is implicit: a module declares
-`scripts/install.py` and never asks for `lib/py/` or `PYTHONPATH`. If either half of
+`scripts/install.py` and never asks for `homelab_install` or `PYTHONPATH`. If either half of
 that inference broke, the symptom would be a `ModuleNotFoundError` raised as root on
 the target, mid-deploy, with the bundle already staged.
 """
@@ -95,7 +95,7 @@ def test_is_python_installer_keys_on_the_suffix_only(installer: str, expected: b
 
 def test_python_lib_env_sets_pythonpath_when_there_is_no_env() -> None:
     assert deploy.python_lib_env("/tmp/homelab-demo", None) == {
-        "PYTHONPATH": "/tmp/homelab-demo/lib/py"
+        "PYTHONPATH": "/tmp/homelab-demo/src"
     }
 
 
@@ -104,7 +104,7 @@ def test_python_lib_env_keeps_the_callers_other_variables() -> None:
 
     assert env == {
         "FORCE_UPDATE": "true",
-        "PYTHONPATH": "/tmp/homelab-demo/lib/py",
+        "PYTHONPATH": "/tmp/homelab-demo/src",
     }
 
 
@@ -113,7 +113,7 @@ def test_python_lib_env_prepends_rather_than_replacing_an_existing_pythonpath() 
     module already on the path, and the caller's entry must survive."""
     env = deploy.python_lib_env("/tmp/homelab-demo", {"PYTHONPATH": "/opt/vendor"})
 
-    assert env["PYTHONPATH"] == "/tmp/homelab-demo/lib/py:/opt/vendor"
+    assert env["PYTHONPATH"] == "/tmp/homelab-demo/src:/opt/vendor"
 
 
 def test_python_lib_env_does_not_mutate_the_callers_dict() -> None:
@@ -132,7 +132,7 @@ def test_python_lib_env_does_not_mutate_the_callers_dict() -> None:
 def test_staging_a_bash_installer_uploads_no_library_at_all() -> None:
     """The three `pve-*-patch` modules are the only bash installers left, and they
     source nothing — so their bundle is now their own files and nothing else. They
-    must not gain a `PYTHONPATH` or a `lib/py/` upload either."""
+    must not gain a `PYTHONPATH` or a `homelab_install` upload either."""
     connection = RecordingConnection()
 
     _stage(connection, "scripts/install.sh", env={"FORCE_UPDATE": "false"})
@@ -164,7 +164,7 @@ def test_staging_a_python_installer_sets_pythonpath_alongside_force_update() -> 
 
     assert connection.installer_calls[0]["env"] == {
         "FORCE_UPDATE": "true",
-        "PYTHONPATH": "/tmp/homelab-demo/lib/py",
+        "PYTHONPATH": "/tmp/homelab-demo/src",
     }
 
 
@@ -173,7 +173,7 @@ def test_staging_a_python_installer_sets_pythonpath_even_without_a_caller_env() 
 
     _stage(connection, "scripts/install.py", interpreter="python3")
 
-    assert connection.installer_calls[0]["env"] == {"PYTHONPATH": "/tmp/homelab-demo/lib/py"}
+    assert connection.installer_calls[0]["env"] == {"PYTHONPATH": "/tmp/homelab-demo/src"}
 
 
 def test_staging_passes_the_interpreter_and_installer_through_untouched() -> None:
@@ -196,7 +196,7 @@ def test_staging_prepares_the_remote_dir_before_uploading_anything() -> None:
 
     # prepare_remote_dir does `rm -rf` on the root; an upload ordered before it
     # would be silently deleted.
-    assert connection.prepared == [("/tmp/homelab-demo", ("build", "lib"))]
+    assert connection.prepared == [("/tmp/homelab-demo", ("build", "src"))]
     assert connection.uploaded == [[(Path("/repo/demo/scripts"), "/tmp/homelab-demo/scripts")]]
 
 

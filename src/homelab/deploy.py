@@ -25,7 +25,7 @@ def force_env(force: bool) -> dict[str, str]:
 # Where `upload_python_lib` puts `homelab_install`, relative to a module's remote
 # staging root. Stated once here; `ssh.py` builds the same path from its own two
 # components and nothing else may hardcode it.
-PYTHON_LIB_SUBDIR = "lib/py"
+PYTHON_LIB_SUBDIR = "src"
 
 
 def is_python_installer(installer: str) -> bool:
@@ -33,14 +33,14 @@ def is_python_installer(installer: str) -> bool:
 
     The suffix is the whole signal, and it is deliberately the only one: a module
     declares `scripts/install.py` and everything downstream — uploading
-    `lib/py/`, setting `PYTHONPATH` — follows from that, with no second flag for
+    `homelab_install`, setting `PYTHONPATH` — follows from that, with no second flag for
     a module to set inconsistently.
     """
     return installer.endswith(".py")
 
 
 def python_lib_env(remote_root: str, env: dict[str, str] | None) -> dict[str, str]:
-    """Add the staged `lib/py` to `PYTHONPATH` without dropping a caller's own.
+    """Add the staged `src` to `PYTHONPATH` without dropping a caller's own.
 
     Prepending rather than overwriting keeps `homelab_install` winning against a
     same-named module elsewhere on the path, which is the failure that would be
@@ -93,7 +93,7 @@ def stage_and_run_remote_installer(
     env: dict[str, str] | None = None,
     require_root: bool = False,
     interpreter: str | None = None,
-    remote_subdirs: tuple[str, ...] = ("build", "lib"),
+    remote_subdirs: tuple[str, ...] = ("build", "src"),
 ) -> None:
     python_installer = is_python_installer(installer)
 

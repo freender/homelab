@@ -6,8 +6,12 @@
     "src/homelab/crap.py": 46,
     "src/homelab/hosts.py": 38,
     "src/homelab/leakcheck.py": 44,
-    "src/homelab/module_support.py": 38,
+    "src/homelab/module_support.py": 9,
     "src/homelab/modules/zfs_automation/normalize.py": 70,
-    "src/homelab/op_secrets.py": 51
+    "src/homelab/op_secrets.py": 51,
+    "src/homelab_install/env.py": 4,
+    "src/homelab_install/main.py": 15,
+    "src/homelab_install/packages.py": 15,
+    "src/homelab_install/systemd.py": 32
   }
 }

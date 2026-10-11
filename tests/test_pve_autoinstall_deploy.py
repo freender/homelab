@@ -497,7 +497,7 @@ class TestRunOnPdmHost:
         call = pdm_run["installer"]
         assert call["installer"] == "sync-answers.py"
         assert call["interpreter"] == "python3"
-        assert call["remote_subdirs"] == ("lib",)
+        assert call["remote_subdirs"] == ("src",)
 
     def test_force_flag_is_only_passed_when_requested(
         self, tmp_path: Path, pdm_run: dict[str, Any]

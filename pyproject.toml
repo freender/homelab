@@ -36,14 +36,14 @@ package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
+# `homelab_install` also lives under src/ (so mutmut keys it correctly), but it is the
+# remote installer library: staged onto targets from the repo tree, never imported by
+# the `homelab` CLI. Listed exactly — a `homelab*` glob would match it too.
+include = ["homelab", "homelab.*"]
 
 [tool.ruff]
 target-version = "py313"
 line-length = 100
-# Ruff's default is [".", "src"], which makes `homelab` first-party but leaves
-# `homelab_install` looking like a third-party package — isort would then sort it in
-# beside pytest. Both are ours; both sort together.
-src = [".", "src", "lib/py"]
 
 [tool.ruff.lint]
 select = [
@@ -67,11 +67,9 @@ testpaths = ["tests"]
 addopts = "--cov=homelab --cov=homelab_install --cov-report=term-missing"
 
 [tool.coverage.run]
-# `homelab_install` (lib/py/) is measured from day one, not from whenever the port
-# finishes. It is not in `only_mutate` yet — that is a #35 decision — but leaving it
-# out of coverage too would mean the CRAP gate silently scored none of it, and a
-# green `./validate` would cover less of the tree than it did before the library
-# existed. `tests/conftest.py` is what puts `lib/py` on `sys.path` for this.
+# `homelab_install` (src/homelab_install/) is the remote installer library. It is not
+# an installed package (see [tool.setuptools.packages.find]); `tests/conftest.py` is
+# what puts `src` on `sys.path` so it is importable and measured here.
 source = ["homelab", "homelab_install"]
 branch = true
 
@@ -84,14 +82,16 @@ skip_empty = true
 # to be walked or `homelab.modules.*` stops being importable. Files outside
 # `only_mutate` are copied verbatim instead of mutated, which is what makes a
 # narrow, honest scope possible without breaking the copy.
-source_paths = ["src/homelab"]
+source_paths = ["src/homelab", "src/homelab_install"]
 
 # Scope, and the single owner of that fact — `homelab mutants` adds no default
 # of its own. These are the pure-logic paths where a wrong answer is *silent*:
 # inventory parsing, staging plans, and the quality gate itself return a value
 # rather than touching a host, so a subtly wrong result propagates into a deploy
 # instead of raising. The Fabric and subprocess surfaces fail loudly and are
-# better served by the tests that already exist.
+# better served by the tests that already exist. `homelab_install` is the
+# exception that proves the rule: it runs as root on every target, and a wrong
+# mode, path or "changed" verdict there is silent too (freender/homelab-ops#37).
 only_mutate = [
     "src/homelab/crap.py",
     "src/homelab/hosts.py",
@@ -99,6 +99,17 @@ only_mutate = [
     "src/homelab/module_support.py",
     "src/homelab/modules/zfs_automation/normalize.py",
     "src/homelab/op_secrets.py",
+    "src/homelab_install/__init__.py",
+    "src/homelab_install/changes.py",
+    "src/homelab_install/context.py",
+    "src/homelab_install/env.py",
+    "src/homelab_install/errors.py",
+    "src/homelab_install/files.py",
+    "src/homelab_install/log.py",
+    "src/homelab_install/main.py",
+    "src/homelab_install/osinfo.py",
+    "src/homelab_install/packages.py",
+    "src/homelab_install/systemd.py",
 ]
 
 timeout_multiplier = 60.0
@@ -109,9 +120,9 @@ timeout_multiplier = 60.0
 # that check a newly added module would silently break the sweep.
 also_copy = [
     "hosts.conf",
+    "constraints.txt",
     "crap-baseline.json",
     "mutation-baseline.json",
-    "lib",
     "backup-excludes",
     "apcupsd",
     "apt-upgrade",

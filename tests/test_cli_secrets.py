@@ -118,7 +118,9 @@ class TestSecretsRender:
         result = _run("secrets", "render")
 
         assert result.exit_code == 0
-        assert str(tmp_path / "cache") in result.output
+        # Rich wraps at the console width, which can split a long path mid-word;
+        # the path itself never contains whitespace.
+        assert str(tmp_path / "cache") in "".join(result.output.split())
         assert "tmpfs until cache expiry" in result.output
 
     def test_render_failure_becomes_a_click_error(

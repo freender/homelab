@@ -8,7 +8,7 @@ whole body is the four statements below; everything the bash version spent lines
 restart-if-changed / start-if-dead ladder — is in the library.
 
 `homelab_install` is imported off `PYTHONPATH`, which `stage_and_run_remote_installer`
-sets to the staged `{remote_root}/lib/py` because this file's name ends in `.py`. It
+sets to the staged `{remote_root}/src` because this file's name ends in `.py`. It
 is never run outside that staging, so there is no `sys.path` fallback here.
 
 Note the ordering: `files.install_all(ctx)` must run before `ensure_running`, and

@@ -1,4 +1,4 @@
-"""Tests for `lib/py/homelab_install`, the shared remote-installer library.
+"""Tests for `src/homelab_install`, the shared remote-installer library.
 
 The prototype (freender/homelab-ops#33) was verified by a throwaway script that was
 never committed. This file is that verification made permanent, and it is what makes
@@ -7,7 +7,7 @@ way to book 0% as covered.
 
 Imported in-process, which #31 decision 4 permits in this direction only —
 `tests/` may import `homelab_install`, never the reverse. `tests/conftest.py` puts
-`lib/py` on `sys.path`; nothing here goes through SSH, a real `/etc`, a real
+`src` on `sys.path`; nothing here goes through SSH, a real `/etc`, a real
 `systemctl`, or a real `apt-get`.
 
 The assertions are deliberately exact on two things the bash original got wrong or
@@ -955,10 +955,14 @@ def test_the_library_imports_nothing_outside_the_standard_library() -> None:
     """The hard rule: `homelab_install` runs on every target, where Fabric, click and
     rich do not exist. Checked on the source rather than by importing, so an import
     added inside a function body is caught too.
+
+    Under a `homelab mutants` sweep this reads the mutated copy, into which mutmut
+    injects one import of its trampoline. That exact module is exempt — never the
+    `mutmut` package, which would wave through any other import from it.
     """
     import ast
 
-    package = REPO_ROOT / "lib" / "py" / "homelab_install"
+    package = REPO_ROOT / "src" / "homelab_install"
     offenders: list[str] = []
 
     for source_file in sorted(package.glob("*.py")):
@@ -966,6 +970,8 @@ def test_the_library_imports_nothing_outside_the_standard_library() -> None:
         for node in ast.walk(tree):
             if isinstance(node, ast.ImportFrom):
                 module = node.module or ""
+                if module == _MUTMUT_TRAMPOLINE:
+                    continue
                 if node.level == 0 and module.split(".")[0] not in _STDLIB:
                     offenders.append(f"{source_file.name}: from {module}")
             elif isinstance(node, ast.Import):
@@ -977,6 +983,7 @@ def test_the_library_imports_nothing_outside_the_standard_library() -> None:
 
 
 _STDLIB = sys.stdlib_module_names
+_MUTMUT_TRAMPOLINE = "mutmut.mutation.trampoline"
 
 
 # ---------------------------------------------------------------------------
@@ -1425,6 +1432,27 @@ def test_install_from_without_a_mode_keeps_the_destination_mode(tmp_path: Path) 
     assert dest.stat().st_mode & 0o777 == 0o664
 
 
+def test_same_content_is_not_fooled_by_a_same_size_rewrite_in_one_mtime_tick(
+    tmp_path: Path,
+) -> None:
+    """`filecmp.cmp` caches on (type, size, mtime) even with `shallow=False`, so
+    on ZFS's coarse clock a file this process just rewrote read as still
+    differing. Pinning the mtime makes that collision deterministic."""
+    a = tmp_path / "a"
+    b = tmp_path / "b"
+    a.write_text("new\n", encoding="utf-8")
+    b.write_text("old\n", encoding="utf-8")
+    stamp = (1_700_000_000, 1_700_000_000)
+    os.utime(b, stamp)
+
+    assert files.same_content(a, b) is False
+
+    b.write_text("new\n", encoding="utf-8")
+    os.utime(b, stamp)
+
+    assert files.same_content(a, b) is True
+
+
 def test_install_from_raises_on_a_missing_source(tmp_path: Path) -> None:
     ctx = _ctx(tmp_path)
 
@@ -1539,7 +1567,7 @@ def test_run_line_buffers_stdout_so_child_output_stays_in_order(tmp_path: Path) 
     script.parent.mkdir(parents=True)
     script.write_text(
         "import subprocess, sys\n"
-        f"sys.path.insert(0, {str(REPO_ROOT / 'lib' / 'py')!r})\n"
+        f"sys.path.insert(0, {str(REPO_ROOT / 'src')!r})\n"
         "from homelab_install import log, run\n"
         "def install(ctx):\n"
         "    log.action('before child')\n"
@@ -1552,9 +1580,10 @@ def test_run_line_buffers_stdout_so_child_output_stays_in_order(tmp_path: Path) 
     )
 
     # Same reasoning as test_safety_regressions.py: pytest-cov's .pth would start
-    # un-branched coverage in this child and break the end-of-session combine.
+    # un-branched coverage in this child and break the end-of-session combine, and
+    # an inherited MUTANT_UNDER_TEST crashes it during a mutmut sweep.
     child_env = {key: value for key, value in os.environ.items() if "COV_CORE" not in key}
-    for name in ("COVERAGE_PROCESS_START", "COVERAGE_PROCESS_CONFIG"):
+    for name in ("COVERAGE_PROCESS_START", "COVERAGE_PROCESS_CONFIG", "MUTANT_UNDER_TEST"):
         child_env.pop(name, None)
 
     result = subprocess.run(

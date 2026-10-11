@@ -136,7 +136,7 @@ def _run_ssh_config_installer(scripts_dir: Path, module_dir: Path, home: Path):
     child_env = {
         **os.environ,
         "HOME": str(home),
-        "PYTHONPATH": str(ROOT / "lib" / "py"),
+        "PYTHONPATH": str(ROOT / "src"),
     }
     # Do not instrument the installer subprocess.
     #
@@ -157,6 +157,12 @@ def _run_ssh_config_installer(scripts_dir: Path, module_dir: Path, home: Path):
         child_env.pop(name, None)
     for name in ("COVERAGE_PROCESS_START", "COVERAGE_PROCESS_CONFIG"):
         child_env.pop(name, None)
+    # Nor let mutmut follow it. Under a `homelab mutants` sweep the child imports
+    # the mutated `homelab_install`, and during mutmut's `stats` pass the inherited
+    # MUTANT_UNDER_TEST makes every trampoline load mutmut's config -- from this
+    # cwd, where there is none -- so the child dies and the sweep aborts. The child
+    # could not report coverage back to mutmut anyway; in-process tests own that.
+    child_env.pop("MUTANT_UNDER_TEST", None)
 
     return subprocess.run(
         [sys.executable, str(scripts_dir / "install.py"), "ace"],
@@ -286,7 +292,7 @@ def test_keepalived_stages_the_python_installer_under_python3(
     Two things have to hold together or the deploy fails as root on the host: the
     installer name must be the `.py` one that exists in the bundle, and `interpreter`
     must be `python3`. The suffix is also what makes the staging step upload
-    `lib/py/` and set `PYTHONPATH`, so a name reverted to `install.sh` would take the
+    `homelab_install` and set `PYTHONPATH`, so a name reverted to `install.sh` would take the
     library with it silently.
 
     Asserted here rather than in a keepalived-specific file because this is the

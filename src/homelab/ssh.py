@@ -94,7 +94,7 @@ class HostConnection:
         self.connection.run(f"mkdir -p {shlex.quote(remote_root)}", hide=True)
         for path in sorted(local_dir.rglob("*")):
             # Bytecode caches are local build residue, not part of the bundle. They
-            # matter now that `lib/py/` and `scripts/install.py` are staged: a
+            # matter now that `src/homelab_install/` and `scripts/install.py` are staged: a
             # `__pycache__` written by riven's interpreter has no business on a
             # target that may run a different Python minor version.
             if "__pycache__" in path.parts:
@@ -109,7 +109,7 @@ class HostConnection:
                 self.connection.put(str(path), remote=target_path)
 
     def upload_python_lib(self, root: Path, remote_root: str) -> None:
-        """Stage `lib/py/homelab_install/` — the stdlib-only installer library.
+        """Stage `src/homelab_install/` — the stdlib-only installer library.
 
         This was `upload_shared_libs`, which also pushed `lib/print.sh` and
         `lib/utils.sh` into every bundle so that a half-ported tree could run
@@ -120,8 +120,8 @@ class HostConnection:
         them, rather than a flag on a function that would otherwise do nothing.
         """
         self.upload(
-            root / "lib" / "py" / "homelab_install",
-            f"{remote_root}/lib/py/homelab_install",
+            root / "src" / "homelab_install",
+            f"{remote_root}/src/homelab_install",
         )
 
     def upload_paths(self, paths: list[tuple[Path, str]]) -> None:

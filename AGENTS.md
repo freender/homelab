@@ -2,7 +2,7 @@
 
 Python-orchestrated automation for a Proxmox homelab. Python + Bash + YAML; inventory in
 `hosts.conf`; local orchestration in `src/homelab/`; shared remote library in
-`lib/py/homelab_install/`. Pattern: a Python module builds and stages files, then runs a
+`src/homelab_install/`. Pattern: a Python module builds and stages files, then runs a
 remote `scripts/install.py` (the three `pve-*-patch` modules keep a bash `install.sh`).
 
 - **Repo work** (edit `src/homelab/`, add/modify a module, `./validate`, or `./deploy`
@@ -194,7 +194,7 @@ go through a command:
 - Python 3.13; local orchestration should be Python.
 - Reuse `HostRegistry`, `HostConnection`, `DeploySession`, and the helpers in
   `src/homelab/module_support.py`; don't invent parallel deployment frameworks.
-- Remote installers are Python on `lib/py/homelab_install/` and reuse its file, package
+- Remote installers are Python on `src/homelab_install/` and reuse its file, package
   and systemd helpers instead of reimplementing them.
 - Bash: portable where shared, quote variables, `$(...)`, localized ShellCheck
   suppressions.

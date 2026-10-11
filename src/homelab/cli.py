@@ -34,23 +34,15 @@ def _module_available(name: str) -> bool:
 def python_lint_targets(root: Path) -> list[str]:
     """Every Python path `validate` compiles and lints, beyond `src` and `tests`.
 
-    `lib/py` is the shared installer library; `*/scripts/install.py` are the remote
-    installers that import it. Both live outside `src/` and were invisible to
-    `compileall` and Ruff, which are scoped to `src`/`tests` — a syntax error in an
-    installer would have been found by the target host, mid-deploy, as root.
+    `*/scripts/install.py` are the remote installers. They live outside `src/` and
+    were invisible to `compileall` and Ruff, which are scoped to `src`/`tests` — a
+    syntax error in an installer would have been found by the target host,
+    mid-deploy, as root. The library they import, `src/homelab_install`, is already
+    inside that scope.
 
-    Returned relative to `root` because both tools run with `cwd=root`, and only if
-    present: the list is empty in a tree with no ported module yet, and passing a
-    nonexistent path to `compileall` is a hard error.
+    Returned relative to `root` because both tools run with `cwd=root`.
     """
-    targets: list[str] = []
-    library = root / "lib" / "py"
-    if library.is_dir():
-        targets.append("lib/py")
-    targets.extend(
-        str(path.relative_to(root)) for path in sorted(root.glob("*/scripts/install.py"))
-    )
-    return targets
+    return [str(path.relative_to(root)) for path in sorted(root.glob("*/scripts/install.py"))]
 
 
 def check_feature_registry(root: Path) -> None:
@@ -433,7 +425,44 @@ def run_crap_report(root: Path, update_baseline: bool, top: int, threshold: floa
 MUTANT_TOP_N = 20
 
 
-def mutmut_env() -> dict[str, str]:
+# Disk-backed scratch for the sweep's pytest runs, beside `mutants/` rather than in it
+# (tests resolve ROOT as `mutants/` and walk it).
+SWEEP_TMP_DIRNAME = ".mutmut-tmp"
+
+
+def prepare_sweep_tmp(root: Path) -> Path:
+    """Empty the sweep's scratch dir and return it.
+
+    Every mutant is a fresh pytest session in a forked child that exits without
+    running atexit, so pytest's own `pytest-of-<user>/pytest-N` rotation never
+    releases its locks and never deletes anything. Left on the default temp root
+    that is thousands of dirs per sweep: on riven `/tmp` is a RAM-backed tmpfs,
+    so it ran out of inodes -- every later mutant then failed with ENOSPC and was
+    scored *killed* -- and its pages counted against the container's memory until
+    the OOM killer took the host down (freender/homelab-ops#37).
+    """
+    tmp_dir = root / SWEEP_TMP_DIRNAME
+    if tmp_dir.exists():
+        _unlock_tree(tmp_dir)
+        shutil.rmtree(tmp_dir)
+    tmp_dir.mkdir()
+    return tmp_dir
+
+
+def _unlock_tree(top: Path) -> None:
+    """Give the owner full access to every dir under `top` before deleting it.
+
+    A mutated mode (`ensure_dir(..., 0o010)`) leaves dirs nobody can list or
+    empty, and `rmtree(ignore_errors=True)` hid that until the next sweep died on
+    `mkdir`. Top-down, each child is unlocked before the walk descends into it.
+    """
+    os.chmod(top, 0o700)
+    for dirpath, dirnames, _filenames in os.walk(top):
+        for name in dirnames:
+            os.chmod(os.path.join(dirpath, name), 0o700)
+
+
+def mutmut_env(tmp_dir: Path, max_children: int = 1) -> dict[str, str]:
     """Environment for a sweep.
 
     `--no-cov` matters for more than speed: the repo's pytest addopts turn on
@@ -446,11 +475,20 @@ def mutmut_env() -> dict[str, str]:
     `./deploy` launchers set it to the real `src`, and a sweep that imported the
     unmutated package from there would report every mutant as surviving while
     looking like a clean run.
+
+    Temp space (see `prepare_sweep_tmp`): a serial sweep pins one `--basetemp`,
+    which pytest wipes at the start of every session, so the whole sweep reuses a
+    single dir. Parallel children cannot share one -- each would wipe the other's
+    mid-test -- so they only get the disk-backed temp root, which still grows but
+    is emptied before the next sweep.
     """
     env = dict(os.environ)
     env.pop("PYTHONPATH", None)
     env["HOMELAB_OFFLINE"] = "1"
+    env["PYTEST_DEBUG_TEMPROOT"] = str(tmp_dir)
     addopts = f"{env.get('PYTEST_ADDOPTS', '')} --no-cov -p no:cacheprovider"
+    if max_children == 1:
+        addopts += f" --basetemp={tmp_dir / 'basetemp'}"
     env["PYTEST_ADDOPTS"] = addopts.strip()
     return env
 
@@ -501,7 +539,8 @@ def run_mutmut(root: Path, targets: tuple[str, ...], max_children: int) -> None:
         str(max_children),
         *targets,
     ]
-    result = subprocess.run(command, cwd=root, env=mutmut_env(), check=False)
+    env = mutmut_env(prepare_sweep_tmp(root), max_children)
+    result = subprocess.run(command, cwd=root, env=env, check=False)
     if result.returncode != 0:
         # mutmut exits 0 even when mutants survive, so a non-zero code here is a
         # tooling fault rather than a verdict, and must not read as a clean gate.

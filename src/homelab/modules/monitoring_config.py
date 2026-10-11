@@ -120,5 +120,5 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
         env=force_env(force),
         require_root=True,
         interpreter="python3",
-        remote_subdirs=("build", "configs", "scripts", "lib"),
+        remote_subdirs=("build", "configs", "scripts", "src"),
     )

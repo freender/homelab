@@ -10,7 +10,7 @@ FEATURE = "base-packages"
 REMOTE_ROOT = "/tmp/homelab-base-packages"
 
 # Ported to `homelab_install` (freender/homelab-ops#30). The `.py` suffix is what
-# makes the staging step upload `lib/py/` and set `PYTHONPATH`, so the two must
+# makes the staging step upload `homelab_install` and set `PYTHONPATH`, so the two must
 # agree; unlike keepalived there is only one call site, because
 # `simple_root_installer_deploy` validates the installer path it is given.
 INSTALLER = "scripts/install.py"

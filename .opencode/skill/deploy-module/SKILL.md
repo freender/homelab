@@ -97,7 +97,7 @@ then re-derives it in the installer will drift. Render once, pass it down.
 
 - `prepare_remote_dir(...)` — create/clean the staging dir
 - `upload_paths(...)` — push the module bundle
-- `upload_python_lib(...)` — push `lib/py/homelab_install/`; called by
+- `upload_python_lib(...)` — push `src/homelab_install/`; called by
   `stage_and_run_remote_installer` for Python installers only (the `pve-*-patch`
   bash installers source no shared library)
 - `run_remote_installer(...)` — execute the installer on the host
@@ -115,15 +115,17 @@ Rules:
 
 A module declares one installer and **the `.py` suffix is the entire switch.**
 `stage_and_run_remote_installer` reads it (`is_python_installer`) and from that alone
-uploads `lib/py/homelab_install/` and prepends `{remote_root}/lib/py` to `PYTHONPATH`.
+uploads `src/homelab_install/` and prepends `{remote_root}/src` to `PYTHONPATH`.
 There is no second flag; a Python installer named without the suffix is staged without
 its library. The module must also pass `interpreter="python3"`.
 
-`lib/py/homelab_install/` is the stdlib-only shared installer library — the only one;
+`src/homelab_install/` is the stdlib-only shared installer library — the only one;
 the bash `lib/utils.sh`/`lib/print.sh` are gone (`homelab-ops#38`). Hermetic in one direction:
 it must never import from `src/homelab/`, while `src/homelab/` and `tests/` may import
-it. `./validate` compiles and Ruff-lints `lib/py` and every `*/scripts/install.py`
-(`python_lint_targets` in `cli.py`), and coverage/CRAP score it like any other
+it. It lives under `src/` so mutmut keys its mutants correctly (homelab-ops#37), but
+it is not part of the installed wheel (`[tool.setuptools.packages.find]`). `./validate`
+compiles and Ruff-lints it with `src`, plus every `*/scripts/install.py`
+(`python_lint_targets` in `cli.py`), and coverage/CRAP/mutmut score it like any other
 package. Every module is on `install.py` except the three `pve-*-patch` modules,
 whose standalone `install.sh` stays (homelab-ops#35); a module never ships both.
 

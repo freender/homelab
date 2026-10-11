@@ -113,7 +113,7 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
             env=force_env(force),
             require_root=True,
             interpreter="python3",
-            remote_subdirs=("build", "lib", "scripts"),
+            remote_subdirs=("build", "src", "scripts"),
         )
         return
 
@@ -133,7 +133,7 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
             env=force_env(force),
             require_root=True,
             interpreter="python3",
-            remote_subdirs=("build", "lib", "scripts"),
+            remote_subdirs=("build", "src", "scripts"),
         )
 
 

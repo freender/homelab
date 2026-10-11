@@ -275,12 +275,12 @@ def test_prepare_remote_dir_wipes_then_recreates_root_and_subdirs(monkeypatch) -
     dummy = DummyConnection("test-host")
     connection = _connection(monkeypatch, dummy)
 
-    connection.prepare_remote_dir("/tmp/homelab-build", "lib", "scripts")
+    connection.prepare_remote_dir("/tmp/homelab-build", "src", "scripts")
 
     command, kwargs = dummy.run_calls[0]
     assert command == (
         "rm -rf /tmp/homelab-build && mkdir -p /tmp/homelab-build "
-        "/tmp/homelab-build/lib /tmp/homelab-build/scripts"
+        "/tmp/homelab-build/src /tmp/homelab-build/scripts"
     )
     assert kwargs == {"hide": True}
 
@@ -290,12 +290,12 @@ def test_prepare_remote_dir_quotes_a_root_containing_metacharacters(monkeypatch)
     dummy = DummyConnection("test-host")
     connection = _connection(monkeypatch, dummy)
 
-    connection.prepare_remote_dir("/tmp/a b; rm -rf /", "lib")
+    connection.prepare_remote_dir("/tmp/a b; rm -rf /", "src")
 
     command, _ = dummy.run_calls[0]
     tokens = shlex.split(command)
     assert tokens[:3] == ["rm", "-rf", "/tmp/a b; rm -rf /"]  # one literal argument
-    assert "/tmp/a b; rm -rf //lib" in tokens
+    assert "/tmp/a b; rm -rf //src" in tokens
 
 
 def test_cleanup_remote_dir_shreds_files_then_removes_the_root(monkeypatch) -> None:
@@ -443,7 +443,7 @@ def test_upload_dir_on_an_empty_directory_only_creates_the_root(
 def test_upload_dir_skips_bytecode_caches(monkeypatch, tmp_path: Path) -> None:
     """`__pycache__` is local build residue and must never reach a target.
 
-    Now that `lib/py/` and `scripts/install.py` are staged, `./validate`'s own
+    Now that `homelab_install` and `scripts/install.py` are staged, `./validate`'s own
     `compileall` run leaves caches next to the sources it just linted.
     """
     dummy = DummyConnection("test-host")
@@ -453,16 +453,16 @@ def test_upload_dir_skips_bytecode_caches(monkeypatch, tmp_path: Path) -> None:
     (local_dir / "homelab_install" / "files.py").write_text("x\n", encoding="utf-8")
     (local_dir / "homelab_install" / "__pycache__" / "files.cpython-313.pyc").write_bytes(b"\x00")
 
-    connection.upload_dir(local_dir, "/tmp/build/lib/py")
+    connection.upload_dir(local_dir, "/tmp/build/src")
 
     assert [remote for _local, remote in dummy.put_calls] == [
-        "/tmp/build/lib/py/homelab_install/files.py"
+        "/tmp/build/src/homelab_install/files.py"
     ]
     assert all("__pycache__" not in command for command, _kwargs in dummy.run_calls)
 
 
 def _lib_tree(root: Path) -> None:
-    package = root / "lib" / "py" / "homelab_install"
+    package = root / "src" / "homelab_install"
     package.mkdir(parents=True)
     (package / "__init__.py").write_text("x\n", encoding="utf-8")
     (package / "files.py").write_text("x\n", encoding="utf-8")
@@ -476,8 +476,8 @@ def test_upload_python_lib_sends_the_whole_package(monkeypatch, tmp_path: Path) 
     connection.upload_python_lib(tmp_path, "/tmp/build")
 
     assert [remote for _local, remote in dummy.put_calls] == [
-        "/tmp/build/lib/py/homelab_install/__init__.py",
-        "/tmp/build/lib/py/homelab_install/files.py",
+        "/tmp/build/src/homelab_install/__init__.py",
+        "/tmp/build/src/homelab_install/files.py",
     ]
 
 

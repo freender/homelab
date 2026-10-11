@@ -48,7 +48,6 @@ cluster-join report that follow them are the parts worth getting through.
 from __future__ import annotations
 
 import difflib
-import filecmp
 import hashlib
 import os
 import shlex
@@ -167,7 +166,7 @@ def preflight(ctx: InstallContext, settings: Settings) -> None:
 
 def _differs(src: Path, dest: str) -> bool:
     dest_path = Path(dest)
-    return not dest_path.is_file() or not filecmp.cmp(src, dest_path, shallow=False)
+    return not dest_path.is_file() or not files.same_content(src, dest_path)
 
 
 def back_up_apt_state(ctx: InstallContext) -> None:

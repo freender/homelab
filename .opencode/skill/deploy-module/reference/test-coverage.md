@@ -31,7 +31,7 @@ the smoke test look like it contributes nothing.
 | `tests/test_leak_check.py`, `tests/test_env_example_check.py` | The public-repo leak check and `.env.example` placeholder check (see `AGENTS.md` § Public Repo Boundary). |
 | `tests/test_ssh_helpers.py` | `HostConnection` / staging helpers. |
 
-## `lib/py/homelab_install/` — runs as root on every host
+## `src/homelab_install/` — runs as root on every host
 
 | Test | Covers |
 | --- | --- |

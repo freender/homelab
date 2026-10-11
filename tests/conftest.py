@@ -8,16 +8,15 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
-SRC = ROOT / "src"
-# The shared remote-installer library. On a target it is imported off PYTHONPATH,
-# set by `stage_and_run_remote_installer`; here it is imported in-process, which
+# Both packages: `homelab` and the shared remote-installer library `homelab_install`.
+# On a target the library is imported off PYTHONPATH, set by
+# `stage_and_run_remote_installer`; here it is imported in-process, which
 # freender/homelab-ops#31 decision 4 permits in this direction only (`src/homelab/`
 # and `tests/` may import `homelab_install`, never the reverse).
-PY_LIB = ROOT / "lib" / "py"
+SRC = ROOT / "src"
 
-for path in (SRC, PY_LIB):
-    if str(path) not in sys.path:
-        sys.path.insert(0, str(path))
+if str(SRC) not in sys.path:
+    sys.path.insert(0, str(SRC))
 
 
 @pytest.fixture(autouse=True)
@@ -50,6 +49,21 @@ def isolate_homelab_offline() -> Iterator[None]:
             os.environ.pop("HOMELAB_OFFLINE", None)
         else:
             os.environ["HOMELAB_OFFLINE"] = str(previous)
+
+
+@pytest.fixture(autouse=True)
+def fresh_apt_lists(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Start every test with `packages._apt_updated` False.
+
+    The flag coalesces `apt-get update` across one installer process, so in the
+    pytest process it leaks from whichever test last ran an `ensure()`. Files that
+    reset it themselves passed; `test_pve_upgrade_installer` did not, and only held
+    because of collection order -- the narrowed suite mutmut runs for
+    `homelab_install` reordered it and the clean run failed (freender/homelab-ops#37).
+    """
+    from homelab_install import packages
+
+    monkeypatch.setattr(packages, "_apt_updated", False)
 
 
 @pytest.fixture

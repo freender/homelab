@@ -259,7 +259,7 @@ def simple_root_installer_deploy(
     the command it runs under — `("scripts/install.py", "python3")` for a ported
     module. They default to the bash pair so no existing caller changes. Note the
     two must agree: the `.py` suffix is what makes `stage_and_run_remote_installer`
-    upload `lib/py/` and set `PYTHONPATH`, so a Python installer named without it
+    upload `homelab_install` and set `PYTHONPATH`, so a Python installer named without it
     would be staged without its library.
     """
     from .deploy import stage_and_run_remote_installer
@@ -290,7 +290,7 @@ def simple_root_installer_deploy(
             env=env,
             require_root=True,
             interpreter=interpreter,
-            remote_subdirs=("lib",),
+            remote_subdirs=("src",),
         )
 
     return run_module_deploy(

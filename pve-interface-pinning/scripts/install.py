@@ -37,7 +37,6 @@ Worth knowing before reading:
 
 from __future__ import annotations
 
-import filecmp
 import subprocess
 from pathlib import Path
 
@@ -143,7 +142,7 @@ def warn_competing_rules(ctx: InstallContext, links: list[str]) -> None:
 def _differs(ctx: InstallContext, name: str) -> bool:
     src = ctx.build_dir / name
     dest = Path(ctx.file_map[name][0])
-    return not (src.is_file() and dest.is_file() and filecmp.cmp(src, dest, shallow=False))
+    return not (src.is_file() and dest.is_file() and files.same_content(src, dest))
 
 
 def install(ctx: InstallContext) -> None:

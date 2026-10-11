@@ -287,7 +287,7 @@ def test_simple_root_installer_deploy_stages_the_expected_bundle(
         "env": {"TARGET": "beta"},
         "require_root": True,
         "interpreter": None,
-        "remote_subdirs": ("lib",),
+        "remote_subdirs": ("src",),
     }
 
 

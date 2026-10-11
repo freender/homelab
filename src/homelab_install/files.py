@@ -23,7 +23,6 @@ looked up in either.
 
 from __future__ import annotations
 
-import filecmp
 import shutil
 import subprocess
 import time
@@ -87,6 +86,18 @@ def ensure_dir(ctx: InstallContext, path: str, mode: str) -> None:
     target.chmod(int(mode, 8))
 
 
+def same_content(a: Path, b: Path) -> bool:
+    """Whether two existing files hold identical bytes.
+
+    Not `filecmp.cmp`: even with `shallow=False` it caches verdicts on
+    (type, size, mtime), so a same-size rewrite within one mtime tick -- coarse
+    on ZFS -- returns the stale answer and a file this process just installed
+    reads as still differing (freender/homelab-ops#37). Every file compared here
+    is a small config, so reading both is cheaper than being wrong.
+    """
+    return a.read_bytes() == b.read_bytes()
+
+
 def install_from(
     ctx: InstallContext,
     src: Path,
@@ -126,7 +137,7 @@ def install_from(
     unchanged = (
         not ctx.force_update
         and dest_path.is_file()
-        and filecmp.cmp(src, dest_path, shallow=False)
+        and same_content(src, dest_path)
     )
 
     if unchanged:

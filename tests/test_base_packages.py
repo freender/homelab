@@ -124,7 +124,7 @@ def test_ships_exactly_one_installer() -> None:
 
 def test_declares_the_python_installer_pair() -> None:
     """The two must agree: the `.py` suffix is what makes the staging step upload
-    `lib/py/` and set `PYTHONPATH`, so a name reverted to `install.sh` would take
+    `homelab_install` and set `PYTHONPATH`, so a name reverted to `install.sh` would take
     the library with it silently and the installer would fail to import on the
     target."""
     assert base_packages.INSTALLER == "scripts/install.py"

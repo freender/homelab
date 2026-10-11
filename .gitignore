@@ -47,3 +47,4 @@ Thumbs.db
 
 # Mutation testing: mutmut's copied+mutated working tree and its stats cache
 mutants/
+.mutmut-tmp/

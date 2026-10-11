@@ -97,5 +97,5 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
         env={**force_env(force), "VMALERT_RULES": " ".join(RULE_FILES)},
         require_root=True,
         interpreter="python3",
-        remote_subdirs=("rules", "scripts", "lib"),
+        remote_subdirs=("rules", "scripts", "src"),
     )

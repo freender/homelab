@@ -57,10 +57,7 @@ def test_validate_runs_ruff_and_pytest_when_available(monkeypatch, tmp_path: Pat
     assert any("pytest" in command for command in commands)
 
 
-def test_python_lint_targets_finds_the_library_and_every_ported_installer(
-    tmp_path: Path,
-) -> None:
-    (tmp_path / "lib" / "py" / "homelab_install").mkdir(parents=True)
+def test_python_lint_targets_finds_every_ported_installer(tmp_path: Path) -> None:
     for feature in ("zeta", "alpha"):
         scripts = tmp_path / feature / "scripts"
         scripts.mkdir(parents=True)
@@ -72,24 +69,23 @@ def test_python_lint_targets_finds_the_library_and_every_ported_installer(
     (tmp_path / "alpha" / "scripts" / "helper.py").touch()
 
     assert cli.python_lint_targets(tmp_path) == [
-        "lib/py",
         "alpha/scripts/install.py",
         "zeta/scripts/install.py",
     ]
 
 
-def test_python_lint_targets_omits_paths_that_do_not_exist(tmp_path: Path) -> None:
-    """`compileall` hard-fails on a missing path, so an unconditional 'lib/py' would
-    break `validate` in any tree without the library."""
+def test_python_lint_targets_is_empty_in_a_tree_with_no_installer(tmp_path: Path) -> None:
     assert cli.python_lint_targets(tmp_path) == []
 
 
-def test_python_lint_targets_covers_the_live_repo_library() -> None:
-    assert "lib/py" in cli.python_lint_targets(ROOT)
+def test_the_installer_library_is_inside_the_src_lint_scope() -> None:
+    """`validate` compiles and lints `src` unconditionally; the library is only
+    covered because it lives there. Moving it back out would drop it silently."""
+    assert (ROOT / "src" / "homelab_install" / "__init__.py").is_file()
 
 
 def test_validate_compiles_and_lints_the_installer_library(monkeypatch, tmp_path: Path) -> None:
-    """A syntax error in `lib/py/` or a `scripts/install.py` was previously invisible
+    """A syntax error in a `scripts/install.py` was previously invisible
     to both gates — the target host would have found it, mid-deploy, as root."""
     commands: list[list[str]] = []
 
@@ -98,7 +94,6 @@ def test_validate_compiles_and_lints_the_installer_library(monkeypatch, tmp_path
     monkeypatch.setattr(cli.shutil, "which", lambda name: None)
 
     (tmp_path / "hosts.conf").write_text("{}\n", encoding="utf-8")
-    (tmp_path / "lib" / "py" / "homelab_install").mkdir(parents=True)
     scripts = tmp_path / "demo" / "scripts"
     scripts.mkdir(parents=True)
     (scripts / "install.py").touch()
@@ -108,9 +103,9 @@ def test_validate_compiles_and_lints_the_installer_library(monkeypatch, tmp_path
     compileall = next(command for command in commands if "compileall" in command)
     ruff = next(command for command in commands if "ruff" in command)
     for command in (compileall, ruff):
-        assert "lib/py" in command
+        assert "src" in command
         assert "demo/scripts/install.py" in command
-    assert ruff[-3:] == ["tests", "lib/py", "demo/scripts/install.py"]
+    assert ruff[-3:] == ["src", "tests", "demo/scripts/install.py"]
 
 
 def test_validate_warns_when_pytest_missing(monkeypatch, tmp_path: Path) -> None:

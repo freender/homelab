@@ -226,6 +226,6 @@ def stage_and_install(
         host,
         env=force_env(force),
         require_root=False,
-        remote_subdirs=("build", "lib"),
+        remote_subdirs=("build", "src"),
         interpreter=INTERPRETER,
     )
