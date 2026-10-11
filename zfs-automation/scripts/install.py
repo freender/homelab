@@ -38,9 +38,9 @@ Behaviour changes from `install.sh`:
 clovis, osiris, cinci, cottonwood): the legacy single replication unit, the retired
 `homelab-zfs-health-check` units and script, the legacy
 `$HOMELAB_STATE_DIR/zfs-automation` rebuild bundle, and the pull-source access files
-(datasets conf, `homelab-zfs-send-only`, `authorized_keys`). The `zfs-pull` user and
-its empty home still exist on bray, clovis and cottonwood; the bash never removed
-those either.
+(datasets conf, `homelab-zfs-send-only`, `authorized_keys`). The `zfs-pull` user, its
+home and its `zfs allow` grants were removed by hand from bray, clovis and cottonwood
+(freender/homelab-ops#39).
 """
 
 from __future__ import annotations

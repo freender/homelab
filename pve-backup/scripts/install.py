@@ -6,7 +6,7 @@ Three independent steps, each switched on by the presence of its rendered plan:
 * `storage-plan.conf` -- PBS storage definitions in `/etc/pve/storage.cfg`, their
   passwords, and client-side encryption.
 * `restore-plan.conf` -- on a rebuilt standalone node, fetch `/etc/pve` from PBS and
-  put back the notification config and the listed LXC configs.
+  put back the listed LXC configs.
 * `jobs-plan.conf` -- vzdump jobs in `/etc/pve/jobs.cfg`.
 
 Replaces `install.sh` and its three sub-installers (815 lines of bash). The plans
@@ -40,6 +40,11 @@ Behaviour changes from the bash:
   nothing read, and the `/etc/homelab/pbs-tokens.env` fallback -- the orchestrator
   has staged every password since the 1Password move, so the fallback could only
   ever supply a stale one.
+* **The restore no longer writes `/etc/pve/notifications.cfg`** (freender/homelab-ops#39).
+  `pve-notifications` is its only writer; the snapshot's copy would bring back
+  whatever matchers it held, and `MODULE_ORDER` runs `pve-notifications` first, so
+  the restore would overwrite it. The fetched copy stays under
+  `RESTORE_OUTPUT/latest` for manual reference.
 
 Kept deliberately: an existing `encryption-key` is never replaced (that would
 orphan every encrypted snapshot), a storage that cannot be reached yet is a warning
@@ -776,18 +781,6 @@ def pve_copy(source: Path, dest: Path, mode: int) -> None:
     dest.chmod(mode)
 
 
-def apply_notifications(restored: Path) -> None:
-    public, private = restored / "notifications.cfg", restored / "priv" / "notifications.cfg"
-    for path in (public, private):
-        if not path.is_file():
-            log.sub(f"No restored {path.relative_to(restored)} found; skipping auto-apply")
-            return
-    (Path(PVE_DIR) / "priv").mkdir(parents=True, exist_ok=True)
-    pve_copy(public, Path(PVE_DIR) / "notifications.cfg", 0o640)
-    pve_copy(private, Path(PVE_DIR) / "priv" / "notifications.cfg", 0o600)
-    log.sub("Auto-applied restored notifications config")
-
-
 def prepared_config(source: Path, autostart: bool) -> str:
     text = source.read_text(encoding="utf-8")
     if autostart:
@@ -856,7 +849,6 @@ def restore_config(ctx: InstallContext, restore: Restore) -> None:
         log.sub("All requested LXC configs already exist; skipping PBS config restore")
         return
     restored = fetch(ctx, restore)
-    apply_notifications(restored)
     restore_lxc(ctx, restore, restored)
     log.ok("PBS config restore completed")
 

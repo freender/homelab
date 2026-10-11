@@ -654,7 +654,7 @@ def test_restore_fetches_the_newest_snapshot_that_holds_the_archive(node: Node) 
     assert node.envs[-1]["PBS_PASSWORD"] == "pw0"
     live = (node.pve / "nodes" / "osiris" / "lxc" / "105.conf").read_text()
     assert "onboot: 0" in live
-    assert (node.pve / "notifications.cfg").read_text() == "webhook: Alertmanager\n"
+    assert not (node.pve / "notifications.cfg").exists()
     assert (Path(node.m.RESTORE_OUTPUT) / "latest" / "priv" / "notifications.cfg").is_file()
     assert not Path(node.m.RESTORE_ROOT).exists()
     assert not (node.build / "lxc-105.conf").exists()
@@ -805,12 +805,18 @@ def test_an_unencrypted_restore_needs_no_keyfile(node: Node) -> None:
     assert node.writes == []
 
 
-def test_a_forced_restore_without_lxc_restore_applies_notifications_only(node: Node) -> None:
+def test_a_restore_leaves_the_live_notifications_config_to_pve_notifications(
+    node: Node,
+) -> None:
     restore_node(node, enabled=False)
+    (node.pve / "notifications.cfg").write_text("webhook: live\n")
+    (node.pve / "priv" / "notifications.cfg").write_text("webhook: live\n")
 
     node.deploy(force=True)
 
-    assert (node.pve / "priv" / "notifications.cfg").is_file()
+    assert (node.pve / "notifications.cfg").read_text() == "webhook: live\n"
+    assert (node.pve / "priv" / "notifications.cfg").read_text() == "webhook: live\n"
+    assert (Path(node.m.RESTORE_OUTPUT) / "latest" / "notifications.cfg").is_file()
     assert not (node.pve / "nodes" / "osiris" / "lxc").exists()
 
 
