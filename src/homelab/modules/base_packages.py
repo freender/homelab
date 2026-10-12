@@ -4,7 +4,11 @@ from pathlib import Path
 
 from ..deploy import DeploySession
 from ..hosts import default_registry
-from ..module_support import normalize_string_list, simple_root_installer_deploy
+from ..module_support import (
+    normalize_bool,
+    normalize_string_list,
+    simple_root_installer_deploy,
+)
 
 FEATURE = "base-packages"
 REMOTE_ROOT = "/tmp/homelab-base-packages"
@@ -41,11 +45,17 @@ def deploy(
     session: DeploySession,
 ) -> int:
     def env_for_host(host: str) -> dict[str, str]:
-        return {"BASE_PACKAGES": " ".join(packages_for_host(root, host))}
+        return {
+            "BASE_PACKAGES": " ".join(packages_for_host(root, host)),
+            "BACKPORTS_KERNEL": "true" if backports_kernel(root, host) else "false",
+        }
 
     def dry_run_details(host: str) -> list[str]:
         packages = " ".join(packages_for_host(root, host))
-        return [f"[DRY-RUN] Would ensure packages installed on {host}: {packages}"]
+        details = [f"[DRY-RUN] Would ensure packages installed on {host}: {packages}"]
+        if backports_kernel(root, host):
+            details.append(f"[DRY-RUN] Would move {host}'s kernel to <codename>-backports")
+        return details
 
     return simple_root_installer_deploy(
         root,
@@ -78,3 +88,17 @@ def packages_for_host(root: Path, host: str) -> list[str]:
         if package not in packages:
             packages.append(package)
     return packages
+
+
+def backports_kernel(root: Path, host: str) -> bool:
+    """Whether the host runs Debian's backports kernel instead of the stable one.
+
+    Only for VMs, which boot their own kernel. PVE nodes run Proxmox's kernel and
+    LXCs share their node's, so the flag means nothing there.
+    """
+    registry = default_registry(root)
+    return normalize_bool(
+        registry.get(host, f"{FEATURE}.backports_kernel", None),
+        False,
+        f"{FEATURE}.backports_kernel must be true or false for {host}",
+    )

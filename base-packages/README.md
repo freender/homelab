@@ -46,6 +46,27 @@ tower:
         - smartmontools
 ```
 
+## Backports kernel
+
+A Debian VM boots its own kernel, and stable's is older than the Proxmox kernel
+the PVE nodes and LXCs run. `backports_kernel: true` moves the VM to
+`<codename>-backports`:
+
+```yaml
+riven:
+  features:
+    base-packages:
+      backports_kernel: true
+```
+
+The installer runs `apt-get install -t <codename>-backports linux-image-amd64`
+once, when the installed kernel metapackage is not already a `~bpo` version.
+After that, `apt-upgrade`'s dist-upgrade keeps it current, because backports is
+`ButAutomaticUpgrades`. The module never reboots: `RebootRequired` reports the
+pending kernel. Setting the flag back to false does not downgrade, and
+the kernel keeps following backports; going back to stable is a manual
+`apt-get install linux-image-amd64/<codename>`.
+
 ## Why this module exists
 
 `mbuffer`, `vim` and `mc` used to be installed by `pve-postinstall`, which
