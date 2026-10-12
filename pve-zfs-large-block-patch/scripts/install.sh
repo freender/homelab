@@ -13,6 +13,12 @@ fi
 
 mkdir -p "${STATE_DIR}" "${BACKUP_DIR}"
 
+# Checksums used to live in one flat dir keyed by target basename, so two patches
+# of the same file shared a record: whichever reapplied first made the other
+# skip as "unchanged" and stay unpatched. Each patch now owns a subdirectory.
+LEGACY_CHECKSUM_DIR=/var/lib/homelab/pve-patches/target-checksums
+rm -f "${LEGACY_CHECKSUM_DIR}/ZFSPoolPlugin.pm.checksum"
+
 cat > "${PATCH_SCRIPT}" <<'SCRIPT'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -35,7 +41,7 @@ done
 TARGET=/usr/share/perl5/PVE/Storage/ZFSPoolPlugin.pm
 STATE_DIR=/var/lib/homelab/pve-zfs-large-block-patch
 BACKUP_DIR=/var/backups/homelab/pve-zfs-large-block-patch
-TARGET_CHECKSUM_DIR=/var/lib/homelab/pve-patches/target-checksums
+TARGET_CHECKSUM_DIR=/var/lib/homelab/pve-patches/target-checksums/pve-zfs-large-block-patch
 STATUS_FILE=${STATE_DIR}/status
 LOCK_FILE=/run/lock/homelab-pve-patches.lock
 

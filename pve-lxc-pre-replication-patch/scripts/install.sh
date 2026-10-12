@@ -13,6 +13,12 @@ fi
 
 mkdir -p "${STATE_DIR}" "${BACKUP_DIR}"
 
+# Checksums used to live in one flat dir keyed by target basename, so two patches
+# of the same file shared a record: whichever reapplied first made the other
+# skip as "unchanged" and stay unpatched. Each patch now owns a subdirectory.
+LEGACY_CHECKSUM_DIR=/var/lib/homelab/pve-patches/target-checksums
+rm -f "${LEGACY_CHECKSUM_DIR}/Migrate.pm.checksum" "${LEGACY_CHECKSUM_DIR}/PVECT.pm.checksum"
+
 cat > "${PATCH_SCRIPT}" <<'SCRIPT'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -40,7 +46,7 @@ LXC_MIGRATE_TARGET=/usr/share/perl5/PVE/LXC/Migrate.pm
 HA_PVECT_TARGET=/usr/share/perl5/PVE/HA/Resources/PVECT.pm
 STATE_DIR=/var/lib/homelab/pve-lxc-pre-replication-patch
 BACKUP_DIR=/var/backups/homelab/pve-lxc-pre-replication-patch
-TARGET_CHECKSUM_DIR=/var/lib/homelab/pve-patches/target-checksums
+TARGET_CHECKSUM_DIR=/var/lib/homelab/pve-patches/target-checksums/pve-lxc-pre-replication-patch
 STATUS_FILE=${STATE_DIR}/status
 LOCK_FILE=/run/lock/homelab-pve-patches.lock
 
