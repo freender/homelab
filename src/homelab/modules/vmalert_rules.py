@@ -16,6 +16,7 @@ RULE_FILES = (
     "critical-containers.yml",
     "disk-labels.yml",
     "docker.yml",
+    "home-assistant.yml",
     "important-containers.yml",
     "nic-link.yml",
     "node-down.yml",

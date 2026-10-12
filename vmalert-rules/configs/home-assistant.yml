@@ -1,0 +1,22 @@
+groups:
+  - name: home-assistant
+    interval: 1m
+    rules:
+      # zion (HAOS VM 109) runs no node_exporter, so NodeDown cannot see it.
+      # Home Assistant's own /api/prometheus scrape (job home-assistant in
+      # scrape.yml) is the reachability signal instead: it replaces the helm
+      # container-missing alerts retired in homelab-ops#120.
+      #
+      # for: 10m matches NodeDown. Labelled host=zion, so ace's NodeDown does
+      # not inhibit it -- PVE HA may restart the VM on clovis, and a zion that
+      # stays down is worth naming even while ace is down.
+      #
+      # A rejected token (401) also reads as up == 0; the description says so.
+      - alert: HomeAssistantDown
+        expr: up{job="home-assistant"} == 0
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Home Assistant on {{ $labels.host }} is down"
+          description: "vmagent has been unable to scrape Home Assistant's Prometheus endpoint ({{ $labels.endpoint }}) for 10 minutes. Either HA core or the zion VM (VM 109, ace, replica on clovis) is down, or the scrape token in /mnt/cache/appdata/vmagent/ha_token was rejected -- check `ha-ctl status` first."

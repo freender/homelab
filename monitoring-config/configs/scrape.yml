@@ -150,6 +150,25 @@ scrape_configs:
         labels:
           host: clovis
 
+  # HAOS VM zion has no node_exporter; Home Assistant's own Prometheus endpoint
+  # is the reachability signal for HomeAssistantDown. The token file is
+  # host-local on helm and neo (vmagent compose mounts it), not in this repo.
+  - job_name: home-assistant
+    scrape_interval: 30s
+    scrape_timeout: 10s
+    metrics_path: /api/prometheus
+    authorization:
+      credentials_file: /etc/vmagent/ha_token
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: endpoint
+      - source_labels: [host]
+        target_label: instance
+    static_configs:
+      - targets: ["zion.freender.internal:8123"]
+        labels:
+          host: zion
+
   - job_name: victoria-logs
     scrape_interval: 10s
     scrape_timeout: 8s
