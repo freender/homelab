@@ -335,3 +335,61 @@ You do not need to poll for it:
   achieving anything on that host, which is a bug in the automation, not a
   reason to run this runbook. The faster signal for a hard failure is
   `SystemdUnitFailed` on `homelab-apt-dist-upgrade.service`.
+
+---
+
+# Rebooting riven
+
+`riven` (VM 110) boots its own kernel, and `apt-upgrade` installs new ones
+there daily at 08:03 without rebooting. A bray reboot **live-migrates** riven
+and does not reboot it, so the rolling runbook above never clears a pending
+riven kernel. riven reports `homelab_reboot_required` like a bare-metal node
+(`metrics-exporters.own_kernel`), so `RebootRequired` names it in the same
+Saturday digest (freender/homelab-ops#134).
+
+riven is the OpenCode server and holds the shared SSH agent, so rebooting it
+ends the session that issues the reboot. The procedure is built around that.
+
+**Who:** the agent, only after the human approves it through the `question`
+tool. Asking is separate from any `/pve-reboot` plan. If a roll is also due,
+finish the roll first, because riven's reboot ends the session that drives it.
+Never inside the 02:00 or 08:00 maintenance windows.
+
+### Pre-flight
+
+```bash
+cat /var/lib/prometheus/node-exporter/reboot.prom   # homelab_reboot_required 1
+systemctl --user is-active github-runner github-runner-apply
+gh run list --repo freender/homelab-ops --status in_progress --limit 5
+```
+
+**Stop if** a workflow is running on a riven runner. Wait for it to finish,
+because the reboot would kill the job.
+
+### Reboot (detached, delayed)
+
+freender has no passwordless sudo, so the reboot goes through root SSH. It is
+also scheduled a minute out, so the agent can finish its reply first:
+
+```bash
+ssh riven-root 'systemd-run --on-active=1min --unit=riven-reboot systemctl reboot'
+# cancel within the minute: ssh riven-root 'systemctl stop riven-reboot.timer'
+```
+
+Reboot from inside the guest, not with `qm reboot` or `ha-manager`. The QEMU
+process keeps running, so HA sees nothing and does not move the VM.
+
+### After the reboot
+
+The human reconnects and re-runs `addhomelabkeys`, because the agent is gone.
+The next session then verifies:
+
+```bash
+uname -r                                            # the newest installed kernel
+cat /var/lib/prometheus/node-exporter/reboot.prom   # homelab_reboot_required 0
+systemctl is-active ssh-agent-freender syncthing-riven
+systemctl --user is-active opencode github-runner github-runner-apply
+systemctl --failed --no-legend; systemctl --user --failed --no-legend
+```
+
+**Stop and report if** any of these is not active or the kernel did not change.

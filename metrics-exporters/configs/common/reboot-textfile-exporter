@@ -126,7 +126,8 @@ trap cleanup EXIT
 # series like proxmox-kernel-7.0 or linux-image-generic) keeps this working
 # across a Proxmox or Ubuntu major upgrade. Meta and helper packages whose names
 # carry no release -- linux-image-generic, linux-image-amd64,
-# proxmox-kernel-helper, proxmox-kernel-7.0 -- fail the release regex and are
+# linux-image-cloud-amd64, proxmox-kernel-helper, proxmox-kernel-7.0 -- fail
+# the release regex and are
 # skipped, which is what stops a version sort from ranking, say,
 # proxmox-kernel-helper 9.2.0 above a real kernel.
 newest_installed_kernel_release() {
@@ -139,7 +140,10 @@ newest_installed_kernel_release() {
         release="${release#unsigned-}"
         release="${release#proxmox-kernel-}"
         release="${release%-signed}"
-        [[ "$release" =~ ^[0-9]+\.[0-9]+\.[0-9]+-[0-9]+ ]] || continue
+        release="${release%-unsigned}"
+        # `-N` after the version on PVE, Ubuntu and Debian <= 12; `+debN` on
+        # Debian 13's stock kernels (riven: 6.12.111+deb13-amd64).
+        [[ "$release" =~ ^[0-9]+\.[0-9]+\.[0-9]+[-+][0-9a-z] ]] || continue
         if [[ -z "$best_version" ]] || dpkg --compare-versions "$version" gt "$best_version"; then
             best_version="$version"
             best_release="$release"

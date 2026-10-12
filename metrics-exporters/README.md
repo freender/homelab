@@ -11,6 +11,10 @@ Bare metal (`node-exporter` + `smartctl_exporter` + ZFS textfile exporter):
 LXC guests, `metrics-exporters.lxc_guest: true` (`node-exporter` only):
 - helm (on clovis), neo (on bray), tower (on ace)
 
+Guests that boot their own kernel, `lxc_guest: true` plus `own_kernel: true`
+(`node-exporter` + pending-reboot exporter):
+- riven (VM 110; `lxc_guest` only selects the reduced collector set here)
+
 Every host runs host-native exporters; there is no per-host runtime mode. Only
 `cadvisor` remains containerised, in the host-managed compose stack under
 `/mnt/cache/appdata/.../compose.yml`, which this module never reads or writes.
@@ -189,11 +193,14 @@ turns that into `homelab_reboot_required` (0/1) plus `homelab_kernel_info`,
 which carries the running and newest-installed kernel release as labels.
 `vmalert-rules/configs/reboot.yml` alerts on it after 24h.
 
-Bare metal only, via the same `baremetal` gate as the ZFS exporter. An LXC guest
-runs the PVE host's kernel, reports it in `uname -r`, and has no kernel packages
-of its own, so it has nothing to reboot into. `ghost` is flagged `lxc_guest` and
-is excluded by the same gate, which is also correct for a different reason — WSL
-takes its kernel from Windows, not from apt.
+Installed on bare metal and on guests flagged `own_kernel` (riven, a VM: the
+reduced profile without its own kernel coverage would leave apt-upgrade's kernel
+installs unreported). An LXC guest runs the PVE host's kernel, reports it in
+`uname -r`, and has no kernel packages of its own, so it has nothing to reboot
+into. `ghost` is flagged `lxc_guest` without `own_kernel`, which is also correct
+for a different reason — WSL takes its kernel from Windows, not from apt. The
+script's own `systemd-detect-virt --container` guard is a second line of defence
+against the flag being set on a container.
 
 It compares the running kernel against the newest **installed** kernel package
 rather than reading `/var/run/reboot-required`. That file comes from an apt hook

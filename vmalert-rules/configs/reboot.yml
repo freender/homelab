@@ -7,10 +7,11 @@ groups:
       # emitted during a deploy run, so a host could sit on a superseded kernel
       # for weeks with nothing reporting it.
       #
-      # Bare metal only, by construction rather than by a host filter here: the
-      # series comes from reboot-textfile-exporter, which metrics-exporters gates
-      # on `baremetal`, so LXC guests never produce it. A guest runs the PVE
-      # host's kernel and has none of its own to boot into.
+      # Hosts that own their kernel only, by construction rather than by a host
+      # filter here: the series comes from reboot-textfile-exporter, which
+      # metrics-exporters installs on bare metal and on guests flagged
+      # `own_kernel` (riven, a VM). LXC guests never produce it -- they run the
+      # PVE host's kernel and have none of their own to boot into.
       #
       # Note the deliberate use of homelab_reboot_required and NOT the
       # node_reboot_required that apt.prom already publishes on every host: that
@@ -46,13 +47,17 @@ groups:
           severity: warning
         annotations:
           summary: "{{ $labels.host }} needs a reboot"
-          description: "{{ $labels.host }} has a reboot pending: it is running an older kernel than the newest one installed, or a package update set the reboot-required flag. Check homelab_kernel_info{host=\"{{ $labels.host }}\"} for the running vs installed kernel release, then schedule a reboot. Nothing reboots these hosts automatically. On the PVE nodes select the three waves from tower's current HA placement as documented in pve-upgrade/README.md, then wait for every node and HA migration to settle between waves."
+          description: "{{ $labels.host }} has a reboot pending: it is running an older kernel than the newest one installed, or a package update set the reboot-required flag. Check homelab_kernel_info{host=\"{{ $labels.host }}\"} for the running vs installed kernel release, then schedule a reboot. Nothing reboots these hosts automatically. On the PVE nodes select the three waves from tower's current HA placement as documented in pve-upgrade/README.md, then wait for every node and HA migration to settle between waves. riven, the OpenCode host, has its own procedure in the same README (Rebooting riven)."
 
       # Absence, per the pattern established by ZfsPoolMetricsMissing: one
       # absent_over_time() per exact host, because a regex matcher only detects
       # full-vector absence and so stays silent unless every listed host goes
-      # dark at once. These are exactly the hosts whose metrics-exporters config
-      # has no lxc_guest flag.
+      # dark at once. These are exactly the on-prem hosts whose metrics-exporters
+      # config has no lxc_guest flag, plus riven (lxc_guest with own_kernel).
+      #
+      # riven's own reboot is not a false positive here: it is back in well
+      # under a minute, far inside the 1h window. A riven that does not come
+      # back is NodeDown's job.
       #
       # This also covers the case where the exporter runs but cannot identify an
       # installed kernel package: it emits homelab_kernel_info with an empty
@@ -64,6 +69,7 @@ groups:
           or absent_over_time(homelab_reboot_required{host="bray"}[1h])
           or absent_over_time(homelab_reboot_required{host="clovis"}[1h])
           or absent_over_time(homelab_reboot_required{host="osiris"}[1h])
+          or absent_over_time(homelab_reboot_required{host="riven"}[1h])
         for: 15m
         labels:
           severity: warning

@@ -200,25 +200,26 @@ FILE_SPECS = (
         feature="disk_label_overrides",
     ),
     # Pending-reboot reporting: whether the running kernel is older than the
-    # newest installed one. Bare metal only -- an LXC guest runs the PVE host's
-    # kernel and has no kernel packages of its own, so there is nothing it could
-    # reboot into. Same `baremetal` gate as the ZFS exporter, which also covers
-    # ghost (WSL, flagged lxc_guest) whose kernel comes from Windows, not apt.
+    # newest installed one. Every bare-metal host, plus any guest flagged
+    # `own_kernel` -- a VM on the reduced profile (riven) boots its own kernel
+    # from apt. An LXC guest runs the PVE host's kernel and has no kernel
+    # packages of its own, and ghost (WSL, flagged lxc_guest) takes its kernel
+    # from Windows, so neither gets it.
     FileSpec(
         "reboot-textfile-exporter",
         "/usr/local/bin/reboot-textfile-exporter",
         mode="755",
-        feature="baremetal",
+        feature="reboot",
     ),
     FileSpec(
         "reboot-textfile-exporter.service",
         "/etc/systemd/system/reboot-textfile-exporter.service",
-        feature="baremetal",
+        feature="reboot",
     ),
     FileSpec(
         "reboot-textfile-exporter.timer",
         "/etc/systemd/system/reboot-textfile-exporter.timer",
-        feature="baremetal",
+        feature="reboot",
     ),
     # UEFI boot-entry health: whether the entry the firmware would actually try
     # can load anything. Same `baremetal` gate as the pending-reboot exporter,
@@ -391,6 +392,21 @@ def is_lxc_guest(root: Path, host: str) -> bool:
     )
 
 
+def has_own_kernel(root: Path, host: str) -> bool:
+    """Whether a reduced-profile guest boots its own apt-managed kernel (a VM).
+
+    Bare metal always does, so this only matters alongside lxc_guest: it adds
+    the pending-reboot exporter without the ZFS and disk exporters the
+    bare-metal profile would also bring.
+    """
+    registry = default_registry(root)
+    return normalize_bool(
+        registry.get(host, "metrics-exporters.own_kernel", None),
+        False,
+        f"metrics-exporters.own_kernel must be true or false for {host}",
+    )
+
+
 def node_exporter_args(*, lxc_guest: bool) -> str:
     extra = _NODE_EXPORTER_LXC_ARGS if lxc_guest else _NODE_EXPORTER_BAREMETAL_ARGS
     return " ".join((*_NODE_EXPORTER_COMMON_ARGS, *extra))
@@ -535,9 +551,11 @@ def build_file_specs(
     has_pve_replication: bool,
     has_wrapper: bool,
     lxc_guest: bool,
+    own_kernel: bool,
 ) -> tuple[FileSpec, ...]:
     enabled_features = {
         "baremetal": not lxc_guest,
+        "reboot": own_kernel,
         "apcupsd": has_apcupsd,
         "igpu": has_igpu,
         "hba": has_hba and not lxc_guest,
@@ -558,9 +576,6 @@ BARE_METAL_COMMON_FILES = [
     "zfs-pool-textfile-exporter",
     "zfs-pool-textfile-exporter.service",
     "zfs-pool-textfile-exporter.timer",
-    "reboot-textfile-exporter",
-    "reboot-textfile-exporter.service",
-    "reboot-textfile-exporter.timer",
     "boot-entry-textfile-exporter",
     "boot-entry-textfile-exporter.service",
     "boot-entry-textfile-exporter.timer",
@@ -568,6 +583,12 @@ BARE_METAL_COMMON_FILES = [
     "disk-label-textfile-exporter.service",
     "disk-label-textfile-exporter.timer",
     "smartctl-exporter-wait-devices",
+]
+
+REBOOT_EXPORTER_FILES = [
+    "reboot-textfile-exporter",
+    "reboot-textfile-exporter.service",
+    "reboot-textfile-exporter.timer",
 ]
 
 HBA_EXPORTER_FILES = [
@@ -593,6 +614,7 @@ class ExporterFlags:
     """Which optional exporters this host gets."""
 
     lxc_guest: bool
+    own_kernel: bool
     has_wrapper: bool
     has_apcupsd: bool
     has_igpu: bool
@@ -607,10 +629,13 @@ def exporter_flags(root: Path, host: str) -> ExporterFlags:
     ever enabled inside an LXC guest regardless of what inventory says. The
     replication exporter carries the same guard for a different reason: a guest
     has no pvesh, and inventory could still call it type pve by mistake.
+    `own_kernel` is the one switch that adds to a guest rather than taking away:
+    bare metal owns its kernel by definition.
     """
     lxc_guest = is_lxc_guest(root, host)
     return ExporterFlags(
         lxc_guest=lxc_guest,
+        own_kernel=has_own_kernel(root, host) or not lxc_guest,
         has_wrapper=has_smartctl_wrapper(root, host) and not lxc_guest,
         has_apcupsd=has_apcupsd_exporter(root, host),
         has_igpu=has_igpu_exporter(root, host),
@@ -642,7 +667,12 @@ def bare_metal_data(root: Path, host: str, lxc_guest: bool) -> BareMetalData:
 def build_bare_metal_exporters(
     root: Path, common_dir: Path, build_dir: Path, flags: ExporterFlags
 ) -> None:
-    """The textfile exporters and smartctl override every bare-metal host gets."""
+    """The textfile exporters and smartctl override every bare-metal host gets.
+
+    The pending-reboot exporter alone also goes to a guest that owns its kernel.
+    """
+    if flags.own_kernel:
+        copy_files(common_dir, build_dir, REBOOT_EXPORTER_FILES)
     if flags.lxc_guest:
         return
     copy_files(common_dir, build_dir, BARE_METAL_COMMON_FILES)
@@ -772,6 +802,7 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
         has_pve_replication=flags.has_pve_replication,
         has_wrapper=flags.has_wrapper,
         lxc_guest=flags.lxc_guest,
+        own_kernel=flags.own_kernel,
     )
     write_file_map(build_dir, file_specs)
 

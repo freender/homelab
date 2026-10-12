@@ -61,6 +61,8 @@ def specs(**flags: bool):
         "lxc_guest": False,
     }
     options.update(flags)
+    # Resolved as exporter_flags does: bare metal always owns its kernel.
+    options.setdefault("own_kernel", not options["lxc_guest"])
     return metrics_exporters.build_file_specs(**options)
 
 
@@ -235,8 +237,8 @@ def harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Harness:
 
 @pytest.mark.parametrize(
     "file_specs",
-    [specs(), everything(), specs(lxc_guest=True)],
-    ids=["bare-metal", "every-exporter", "lxc-guest"],
+    [specs(), everything(), specs(lxc_guest=True), specs(lxc_guest=True, own_kernel=True)],
+    ids=["bare-metal", "every-exporter", "lxc-guest", "own-kernel-guest"],
 )
 def test_a_converged_redeploy_changes_nothing(harness: Harness, file_specs) -> None:
     harness.use(file_specs)
@@ -646,3 +648,55 @@ def test_a_container_with_zfs_keeps_the_zfs_units(harness: Harness) -> None:
     harness.run()
 
     assert harness.systemctl.masked == {"nvmf-autoconnect.service"}
+
+
+# --------------------------------------------------------------------------
+# a guest that owns its kernel (riven, a VM on the reduced profile)
+# --------------------------------------------------------------------------
+
+REBOOT_FILES = set(metrics_exporters.REBOOT_EXPORTER_FILES)
+
+
+def test_an_own_kernel_guest_maps_the_reboot_exporter_and_nothing_bare_metal() -> None:
+    names = {spec.build_name for spec in specs(lxc_guest=True, own_kernel=True)}
+
+    assert names == {"node-exporter.defaults", *REBOOT_FILES}
+    assert not REBOOT_FILES & {spec.build_name for spec in specs(lxc_guest=True)}
+    assert REBOOT_FILES <= {spec.build_name for spec in specs()}
+
+
+@pytest.mark.parametrize(
+    ("lxc_guest", "own_kernel", "staged"),
+    [(True, True, REBOOT_FILES), (True, False, set())],
+    ids=["own-kernel-guest", "container-guest"],
+)
+def test_a_guest_stages_only_the_reboot_exporter_it_owns(
+    tmp_path: Path, lxc_guest: bool, own_kernel: bool, staged: set[str]
+) -> None:
+    flags = metrics_exporters.ExporterFlags(
+        lxc_guest=lxc_guest,
+        own_kernel=own_kernel,
+        has_wrapper=False,
+        has_apcupsd=False,
+        has_igpu=False,
+        has_hba=False,
+        has_pve_replication=False,
+    )
+    common_dir = ROOT / "metrics-exporters" / "configs" / "common"
+
+    metrics_exporters.build_bare_metal_exporters(ROOT, common_dir, tmp_path, flags)
+
+    assert {path.name for path in tmp_path.iterdir()} == staged
+
+
+@pytest.mark.parametrize(
+    ("host", "lxc_guest", "own_kernel"),
+    [("riven", True, True), ("deepstone", True, False), ("ace", False, True)],
+)
+def test_inventory_owns_kernels_exactly_where_one_boots(
+    host: str, lxc_guest: bool, own_kernel: bool
+) -> None:
+    """riven is a VM on the reduced profile; deepstone is a container; ace is bare metal."""
+    flags = metrics_exporters.exporter_flags(ROOT, host)
+
+    assert (flags.lxc_guest, flags.own_kernel) == (lxc_guest, own_kernel)

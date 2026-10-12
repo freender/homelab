@@ -40,6 +40,13 @@ ii  linux-image-7.0.0-29-generic 7.0.0-29.29
 ii  linux-image-generic 7.0.0-29.29
 """
 
+# riven, 2026-10: Debian 13 stock kernels name the release `+debN`, not `-N`,
+# beside the linux-image-amd64 meta-package (freender/homelab-ops#134).
+DEBIAN13_ROWS = """\
+ii  linux-image-6.12.111+deb13-amd64 6.12.111-1
+ii  linux-image-amd64 6.12.111-1
+"""
+
 
 def _write_exec(path: Path, body: str) -> None:
     path.write_text(body, encoding="utf-8")
@@ -155,6 +162,28 @@ def test_pve_pending_kernel_reports_one(tmp_path: Path) -> None:
     labels = metric_labels(text, "homelab_kernel_info")
     assert 'running="7.0.14-8-pve"' in labels
     assert 'installed="7.0.15-1-pve"' in labels
+
+
+@pytest.mark.parametrize(
+    ("extra_rows", "installed", "pending"),
+    [
+        ("", "6.12.111+deb13-amd64", "0"),
+        ("ii  linux-image-6.12.111+deb13-amd64-unsigned 6.12.111-1\n", "6.12.111+deb13-amd64", "0"),
+        ("ii  linux-image-6.12.112+deb13-amd64 6.12.112-1\n", "6.12.112+deb13-amd64", "1"),
+    ],
+    ids=["up-to-date", "unsigned-twin", "pending"],
+)
+def test_debian13_kernel_release_is_recognised(
+    tmp_path: Path, extra_rows: str, installed: str, pending: str
+) -> None:
+    _result, prom = run_exporter(
+        tmp_path,
+        running_kernel="6.12.111+deb13-amd64",
+        linux_image_rows=DEBIAN13_ROWS + extra_rows,
+    )
+    text = prom.read_text(encoding="utf-8")
+    assert metric_value(text, "homelab_reboot_required") == pending
+    assert f'installed="{installed}"' in metric_labels(text, "homelab_kernel_info")
 
 
 def test_helper_package_never_becomes_the_installed_kernel(tmp_path: Path) -> None:
