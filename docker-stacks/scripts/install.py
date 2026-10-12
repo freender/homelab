@@ -24,8 +24,8 @@ stacks still sync, and the deploy fails at the end. Refused, in order:
 * **A definition `docker compose config` rejects.** See below.
 * **A renamed or removed service with a container still present.** `up -d`
   creates the new container and leaves the old one running. For crowdsec that is
-  two LAPI instances on one SQLite database; for cloudflared, two connectors on
-  one tunnel.
+  two LAPI instances on one SQLite database; for cloudflared, an orphaned extra
+  connector on the tunnel that nothing manages.
 
 Behaviour changes from the bash, worth knowing before reading:
 

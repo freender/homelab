@@ -174,8 +174,8 @@ their unsuffixed names.
 identifies containers by the `com.docker.compose.service` label, so the old
 container becomes an orphan of the project — and `docker compose up -d` does not
 remove orphans, it starts the new container *alongside* the old one. Two crowdsec
-LAPI instances would share one SQLite database; two cloudflared connectors would
-serve one tunnel.
+LAPI instances would share one SQLite database; an orphaned cloudflared would
+keep serving the tunnel as an unmanaged extra connector.
 
 The installer refuses to let this happen: before copying anything it compares the
 running containers' service labels against the incoming definition, and if any
