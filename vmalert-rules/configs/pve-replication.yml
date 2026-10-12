@@ -12,9 +12,10 @@ groups:
       #
       # Two deliberate pieces of label surgery, both load-bearing:
       #
-      # `host` is rewritten to the replication *target*. Every job in this
-      # cluster targets ace (`/etc/pve/replication.cfg`: 101-0, 107-1 from
-      # clovis; 104-0, 106-2, 108-1 from bray), and the notification was emitted
+      # `host` is rewritten to the replication *target*. When this rule was
+      # written every job in the cluster targeted ace (101-0, 107-1 from
+      # clovis; 104-0, 106-2, 108-1 from bray; the live list is
+      # `/etc/pve/replication.cfg`), and the notification was emitted
       # by the surviving *source* node -- so the alert arrived labelled
       # host=bray/host=clovis while the node at fault was ace. That is precisely
       # why Alertmanager's `equal: [host]` inhibit rule never suppressed it
