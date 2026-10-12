@@ -186,8 +186,9 @@ go through a command:
   approved plan — but survey first and ask for that approval once, covering the whole
   roll, rather than re-confirming each node. Never take two *cluster* nodes
   (`ace`/`bray`/`clovis`) down at once. Refuse inside the 02:00 and 08:00 maintenance
-  windows. `bray` hosts `riven`, a VM that live-migrates when bray reboots. If that
-  migration fails, the session and the shared SSH agent are lost, so bray goes last.
+  windows. `bray` hosts `riven`, a VM that live-migrates when bray reboots (proven,
+  homelab-ops#123). A failed migration would still lose the session and the shared SSH
+  agent, so bray goes last by preference, not as a hard rule.
 
 ## Coding Style
 

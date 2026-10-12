@@ -38,9 +38,10 @@ there would hide problems a reboot causes.
    selected order. osiris is standalone and holds no corosync vote, so pairing it with
    either ace or clovis is one cluster node down, not two — never take two *cluster*
    nodes (`ace`/`bray`/`clovis`) at once. This leaves the node currently carrying tower
-   alone. **`bray` is last because `riven` lives there:** rebooting it live-migrates
-   riven to ace, and if that one migration fails, the agent session and the shared SSH
-   agent are lost, so take that risk when nothing is left to orchestrate. Drop any node whose `homelab_reboot_required` is `0`; an emptied wave
+   alone. **`bray` is last by preference because `riven` lives there:** rebooting it
+   live-migrates riven to ace (proven, homelab-ops#123), but if a migration ever fails
+   the agent session and the shared SSH agent are lost, so take that residual risk when
+   nothing is left to orchestrate. It is a default, not a hard rule. Drop any node whose `homelab_reboot_required` is `0`; an emptied wave
    disappears rather than being "skipped" later.
 3. **One confirmation authorizes the whole roll.** If nothing is pending, say so and
    stop — no question, no reboot. Otherwise use the question tool (`AskUserQuestion`

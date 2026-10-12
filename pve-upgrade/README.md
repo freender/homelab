@@ -122,21 +122,22 @@ ssh ace 'ha-manager status | grep "ct:101"' # ct:101 is tower
 | --- | --- | --- | --- |
 | 1 | `osiris` **+** the non-tower node (`ace` or `clovis`) | xur (PBS), deepstone / HA guests on that selected node | osiris holds no vote, so this is one cluster node down, not two — cluster stays 2/3. Pair osiris with the node that does **not** currently carry tower, leaving tower's node for wave 2. |
 | 2 | Tower's current node (`ace` or `clovis`) | tower / other guests on that selected node | Only after wave 1 is fully back and HA has finished rebalancing. If this is clovis, accept the monitoring blind window. |
-| 3 | `bray` | arc, riven, neo | **Last, and this is the point of the order.** |
+| 3 | `bray` | arc, riven, neo | **Last by preference** (see below). |
 
 Concretely: tower on **ace** means `osiris` + `clovis`, then `ace`, then
 `bray`; tower on **clovis** means `osiris` + `ace`, then `clovis`, then `bray`.
-If tower is already on bray, retain the latter order: bray stays last because
-it hosts riven and the OpenCode session.
+If tower is already on bray, retain the latter order: bray stays last by
+preference because it hosts riven and the OpenCode session.
 
-**Why bray is last.** `riven` runs on bray, and riven is the OpenCode server *and*
-the shared SSH agent. Rebooting bray live-migrates riven to ace, so the session
-driving this runbook and the agent are expected to survive. Expected is not
-guaranteed: if that one migration fails, HA restarts riven from its replica and
-the session and agent are gone. Doing bray last means every other node is
-already verified when that risk is taken, so losing your tooling costs nothing —
-you reconnect, re-run `addhomelabkeys`, and the roll is already done. An order
-that put bray in the middle would bet the remaining waves on that migration.
+**Why bray is last — preferred, not required.** `riven` runs on bray, and riven
+is the OpenCode server *and* the shared SSH agent. Rebooting bray live-migrates
+riven to ace, and that is proven: on 2026-10-12 an HA round trip bray -> ace ->
+bray took 96 ms and 76 ms of downtime with the session, agent, Syncthing and both runners
+intact (homelab-ops#123). Proven is still not guaranteed: if a migration fails,
+HA restarts riven from its replica and the session and agent are gone. Doing
+bray last means every other node is already verified when that residual risk is
+taken, so it stays the default order. When the roll has a reason to put bray
+earlier, that is acceptable now; it is no longer a hard rule.
 
 By the same logic, clovis (wave 2) comes *before* bray, not last: helm is the
 whole monitoring stack, and finishing it in wave 2 means observability is back
