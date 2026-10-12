@@ -58,7 +58,7 @@ groups:
       #
       #   cinci, cottonwood, riven -- / is ext4, not ZFS at all, so no zpool
       #     metric covers it. On cinci and cottonwood it is a plain partition
-      #     (501 GB and 1006 GB); on riven it sits inside VM 110's 64 GB zvol,
+      #     (501 GB and 1006 GB); on riven it sits inside VM 110's 32 GB zvol,
       #     which the host pool cannot see into. /boot is on that same
       #     filesystem, so accumulated old kernels land here too.
       #
