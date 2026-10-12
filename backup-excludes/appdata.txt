@@ -15,8 +15,6 @@
 /victoria-metrics/tmp
 /victoria-logs/data
 /grafana/plugins
-/homeassistant/.cache
-/homeassistant/tts
 /traefik/logs
 /traefik/plugins-storage
 /scripts/logs

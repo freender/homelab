@@ -43,8 +43,8 @@ SECURITY_UPDATES_SPEC = FileSpec("security-updates.conf", SECURITY_UPDATES_PATH,
 # on the nodes. That module is now archived and this one is the single apt
 # mechanism for the whole fleet.
 #
-# An allow-list rather than a deny-list, even though it now covers all but two
-# types: exo (macos) and pi-kvm (pikvm) have no apt at all, and a typo'd
+# An allow-list rather than a deny-list, even though it now covers all but three
+# types: exo (macos), pi-kvm (pikvm) and zion (haos) have no apt at all, and a typo'd
 # `type:` should skip loudly rather than run apt-get on something that cannot
 # take it. Neither declares the feature, so this only ever fires on a mistake.
 SUPPORTED_TYPES = ("ubuntu", "pve", "pbs", "lxc")
