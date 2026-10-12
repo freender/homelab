@@ -45,8 +45,9 @@ across runs — and never sweeps, so it is instant and safe to rerun.
   else. Children share one `mutants/` tree, so a mutant that writes under it fails a
   *different* child's test and is recorded as killed. Parallel figures are biased **low** —
   use `--max-children 8` to explore, never to judge.
-- **Cap the sweep on riven.** It shares a small LXC with the GitHub runner, and an
-  uncapped sweep alongside a runner job OOM-killed the container (homelab-ops#37).
+- **Cap the sweep on riven.** It shares a small VM with the GitHub runner, and an
+  uncapped sweep alongside a runner job OOM-killed riven when it was an LXC
+  (homelab-ops#37).
   Run it as its own capped unit, which also survives an opencode restart:
   `systemd-run --user --unit=mutmut-sweep --collect -p MemoryMax=2500M -p MemorySwapMax=0 -p CPUQuota=150% -p WorkingDirectory=$PWD -E PYTHONPATH=src .venv/bin/python -m homelab.cli mutants ...`
 - **Never hand-edit `mutation-baseline.json`.** It may only shrink. Regenerate with

@@ -106,9 +106,9 @@ def installed_packages(installer, present: tuple[str, ...]) -> Iterator[None]:
 # server. A reboot flag landing on any of these is the regression to catch.
 #
 # The four PVE nodes joined this list when they moved onto this module. They are
-# the most important entries: their guests are all LXC and cannot live-migrate,
-# so with ha shutdown_policy=migrate an unattended reboot restarts every guest
-# on the node. arc and xur are here for a different reason -- both are LXC
+# the most important entries: most of their guests are LXC and cannot
+# live-migrate, so with ha shutdown_policy=migrate an unattended reboot restarts
+# every LXC on the node. arc and xur are here for a different reason -- both are LXC
 # guests on bray's kernel, so a reboot of *them* is meaningless, but xur is the
 # primary PBS and arc is the PDM host, and neither should ever acquire the flag
 # by a copy-paste from an offsite block.

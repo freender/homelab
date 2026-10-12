@@ -40,10 +40,10 @@ mid-week. `arc` and `xur` are on the same module, daily at 04:05 and 04:00.
 | **Reboot into a new kernel** | **Manual** — this runbook |
 
 What was never automated, and still is not, is the reboot. Installing a kernel
-is cheap and reversible; booting into it on a node whose guests are all LXC and
-cannot live-migrate is neither. With `ha shutdown_policy=migrate`, entering HA
-maintenance restarts every guest on the node twice. That decision — *when*, and
-in *what order* — is the judgement this runbook exists to hold.
+is cheap and reversible; booting into it on a node whose guests are mostly LXC,
+which cannot live-migrate, is neither. With `ha shutdown_policy=migrate`,
+entering HA maintenance restarts every LXC on the node twice. That decision —
+*when*, and in *what order* — is the judgement this runbook exists to hold.
 
 The prompt to run it is the Saturday 09:00 `RebootRequired` Telegram digest.
 Nothing else will tell you.
@@ -82,14 +82,18 @@ Verified 2026-08-16. Re-check rather than trust if anything looks different.
 - **Cluster:** `ace`, `bray`, `clovis` — 3 nodes, expected votes 3. `osiris` is
   **standalone** and not part of it.
 - **HA is armed:** fencing active, CRM + LRM watchdogs active. HA-managed
-  guests are `ct:101` (tower, ace), `ct:104` (arc, bray), `ct:106` (riven,
-  bray), `ct:107` (helm, clovis), `ct:108` (neo, bray).
+  guests are `ct:101` (tower, ace), `ct:104` (arc, bray), `ct:107` (helm,
+  clovis), `ct:108` (neo, bray), and the VMs `vm:109` (zion, ace) and
+  `vm:110` (riven, bray).
 - **`xur` (105) and `deepstone` (111) are not HA-managed** — they live on
   standalone osiris and simply go down with it.
 - **`ha: shutdown_policy=migrate`** in `/etc/pve/datacenter.cfg`. Rebooting a
   cluster node **moves its HA guests to another node**; they do not just come
-  back locally. All guests are LXC, which cannot live-migrate, so each move is
-  a shutdown and restart elsewhere.
+  back locally. LXC guests cannot live-migrate, so each LXC move is a shutdown
+  and restart elsewhere. The two VMs, zion and riven, **live-migrate**: their
+  replica on the target is topped up incrementally and RAM is copied with
+  ~100 ms downtime (~13 s end to end for zion), so the OpenCode session and the
+  shared SSH agent on riven survive the move (freender/homelab-ops#125).
 - **`crs: ha-rebalance-on-start=1`** — placement may change again after the
   node returns.
 - Migration and replication run over VLAN 60 (`10.0.60.0/24`).
@@ -122,20 +126,21 @@ ssh ace 'ha-manager status | grep "ct:101"' # ct:101 is tower
 
 Concretely: tower on **ace** means `osiris` + `clovis`, then `ace`, then
 `bray`; tower on **clovis** means `osiris` + `ace`, then `clovis`, then `bray`.
-If tower is already on bray, retain the latter order: bray cannot move earlier
-because it hosts riven and the OpenCode session.
+If tower is already on bray, retain the latter order: bray stays last because
+it hosts riven and the OpenCode session.
 
 **Why bray is last.** `riven` runs on bray, and riven is the OpenCode server *and*
-the shared SSH agent. Rebooting bray kills the session driving this runbook and
-empties the agent. Doing it last means every other node is already verified, so
-losing your tooling costs nothing — you reconnect, re-run `addhomelabkeys`, and
-the roll is already done. An order that put bray in the middle would drop the
-agent with two nodes still to go, which is why the earlier
-`osiris, bray, ace, clovis` ordering was wrong for a delegated run.
+the shared SSH agent. Rebooting bray live-migrates riven to ace, so the session
+driving this runbook and the agent are expected to survive. Expected is not
+guaranteed: if that one migration fails, HA restarts riven from its replica and
+the session and agent are gone. Doing bray last means every other node is
+already verified when that risk is taken, so losing your tooling costs nothing —
+you reconnect, re-run `addhomelabkeys`, and the roll is already done. An order
+that put bray in the middle would bet the remaining waves on that migration.
 
 By the same logic, clovis (wave 2) comes *before* bray, not last: helm is the
 whole monitoring stack, and finishing it in wave 2 means observability is back
-up before the one reboot you take with no agent. Accept the blind window during
+up before the one reboot that risks the agent. Accept the blind window during
 clovis itself — VictoriaMetrics, vmalert, Alertmanager and Grafana are all down,
 so no alert can fire, including one about clovis. The `Watchdog` dead-man's
 switch going quiet is expected, not an incident.
@@ -146,7 +151,7 @@ switch going quiet is expected, not an incident.
   deepstone simply go down with it and come back on boot — nothing migrates.
   Confirm no backup or sync is running before you take it.
 - **`void` on clovis is not an HA resource** (`ha-manager status` lists only
-  ct:101, 104, 106, 107, 108). It will not migrate; it stops with clovis and
+  ct:101, 104, 107, 108 and vm:109, 110). It will not migrate; it stops with clovis and
   returns on boot.
 
 ## Per-wave procedure
@@ -231,13 +236,13 @@ the human has approved the plan through the `question` tool** — a single appro
 covering the full roll, raised once after every node has been surveyed, not one
 per wave. The prompt must name each node needing a reboot in wave order, the
 guests it moves or stops, running vs installed kernels, and that the run ends on
-`bray`, which kills the session. Approval is the authorization for every reboot
+`bray`, which live-migrates riven and puts the session at risk. Approval is the authorization for every reboot
 listed; a green pre-flight is not, and no persistent auto-reboot setting exists.
 
 **Do not enter HA maintenance.** Cluster nodes have
 `ha: shutdown_policy=migrate`, so a direct reboot hands HA services off on its
-own. Entering maintenance is worse here: all HA guests are LXC and cannot
-live-migrate, so it restarts every one during the drain and, with
+own. Entering maintenance is worse here: most HA guests are LXC and cannot
+live-migrate, so it restarts every one of them during the drain and, with
 `crs: ha-rebalance-on-start=1`, restarts them again when the node returns.
 
 #### 3a. Reboot after confirmation
@@ -251,9 +256,11 @@ osiris is standalone, so only one of the three cluster votes is down. Do not sen
 the tower node or bray reboot until this wave is fully recovered — the sequencing
 is enforced by step 4's verification, not by asking again. If clovis is either
 selected node, accept the monitoring blind window and wait for helm to return
-before continuing. For bray, the reboot terminates the OpenCode session running
-this workflow; stop after issuing it and have the human open a new session for
-verification.
+before continuing. For bray, the reboot live-migrates riven, and with it the
+OpenCode session running this workflow, to ace. Verify the migration first
+(`ssh ace 'ha-manager status | grep vm:110'` shows it started on ace), then run
+step 4 for bray as for any other node. If the session does not survive, the
+human opens a new session, re-runs `addhomelabkeys`, and verifies from there.
 
 ### 4. Verify before touching the next node
 
@@ -262,7 +269,7 @@ ssh <node> 'uptime; uname -r'
 ssh <node> 'zpool status -x'
 ssh <node> 'pvecm status | grep -E "Quorate|Total votes"'     # cluster nodes
 ssh <node> 'ha-manager status'
-ssh <node> 'pct list'
+ssh <node> 'pct list; qm list'
 ssh <node> 'systemctl is-active prometheus-node-exporter'
 
 # Pending reboot cleared, and the node is being scraped again

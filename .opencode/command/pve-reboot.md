@@ -38,16 +38,17 @@ there would hide problems a reboot causes.
    selected order. osiris is standalone and holds no corosync vote, so pairing it with
    either ace or clovis is one cluster node down, not two — never take two *cluster*
    nodes (`ace`/`bray`/`clovis`) at once. This leaves the node currently carrying tower
-   alone. **`bray` is last because `riven` lives there:** rebooting it kills the agent
-   session and empties the shared SSH agent, so it must happen when nothing is left to
-   orchestrate. Drop any node whose `homelab_reboot_required` is `0`; an emptied wave
+   alone. **`bray` is last because `riven` lives there:** rebooting it live-migrates
+   riven to ace, and if that one migration fails, the agent session and the shared SSH
+   agent are lost, so take that risk when nothing is left to orchestrate. Drop any node whose `homelab_reboot_required` is `0`; an emptied wave
    disappears rather than being "skipped" later.
 3. **One confirmation authorizes the whole roll.** If nothing is pending, say so and
    stop — no question, no reboot. Otherwise use the question tool (`AskUserQuestion`
    under Claude Code) **once**, presenting: the nodes that need a reboot in wave order,
    the guests each one moves or stops, running vs installed kernels, any pre-flight
    warning that did not rise to a stop condition, and that the run ends with `bray`,
-   terminating this agent session and emptying the shared SSH agent. Offer approving
+   which live-migrates riven and with it this agent session and the shared SSH agent.
+   Offer approving
    the full roll, and — when more than one wave is pending — approving only the earlier
    waves. Declining stops everything. That single approval is the authorization for
    every `systemctl reboot` in the plan; a green pre-flight is not. If the survey found
@@ -57,7 +58,7 @@ there would hide problems a reboot causes.
    and continue straight into the next wave. Report progress as you go, but do not ask
    again. Do **not** enter HA maintenance: `ha: shutdown_policy=migrate` handles HA
    services during a direct reboot, and maintenance would restart every LXC twice
-   because none can live-migrate. `clovis` runs the monitoring stack, so the blind
+   because LXC cannot live-migrate. `clovis` runs the monitoring stack, so the blind
    window during its reboot is expected, not an incident.
 
    **Stop and report** — do not silently adapt — on any failed recovery check, a node
@@ -66,9 +67,11 @@ there would hide problems a reboot causes.
    deviate from what was approved (a node newly needing a reboot, tower having moved
    such that the wave order is now wrong, or a recovered-but-degraded state where
    continuing is a judgement call). Stopping outranks finishing the task.
-5. **bray, last.** Its reboot terminates this session, so issue it only after every
-   earlier wave has verified clean, then stop — the human starts a new session to
-   verify bray. No extra confirmation: step 3 already covered it.
+5. **bray, last.** Its reboot live-migrates riven, and this session with it, so issue
+   it only after every earlier wave has verified clean. Then confirm `vm:110` is started
+   on ace and verify bray like any other wave. If the session does not survive, the
+   human starts a new session to verify bray. No extra confirmation: step 3 already
+   covered it.
 
 Report per node: whether a reboot was pending, the running vs installed kernel, and the
 verification result, plus which waves ran. If nothing was pending, say so rather than

@@ -50,15 +50,17 @@ groups:
       #
       # What is genuinely uncovered is:
       #
-      #   arc, xur, deepstone, riven -- LXC rootfs and data volumes. These are
+      #   arc, xur, deepstone -- LXC rootfs and data volumes. These are
       #     vm-flash/subvol-* datasets with their own refquota, so they fill
       #     independently of the host pool and the pool rule cannot see it.
       #     Several are small (xur / and deepstone / are 8.6 GB) and can fill
       #     from logs alone while the underlying vm-flash pool sits at ~30%.
       #
-      #   cinci, cottonwood -- / is ext4 on a plain partition (501 GB and
-      #     1006 GB), not ZFS at all, so no zpool metric covers it. /boot is on
-      #     that same filesystem, so accumulated old kernels land here too.
+      #   cinci, cottonwood, riven -- / is ext4, not ZFS at all, so no zpool
+      #     metric covers it. On cinci and cottonwood it is a plain partition
+      #     (501 GB and 1006 GB); on riven it sits inside VM 110's 64 GB zvol,
+      #     which the host pool cannot see into. /boot is on that same
+      #     filesystem, so accumulated old kernels land here too.
       #
       # /boot/efi is deliberately not included: 1.1 GB vfat that holds no
       # kernels on these two hosts and does not grow.
@@ -68,16 +70,16 @@ groups:
       - alert: NodeFilesystemLowSpace
         expr: |
           (
-            node_filesystem_avail_bytes{job="pve-node", host=~"arc|xur|deepstone|riven", fstype="zfs"}
+            node_filesystem_avail_bytes{job="pve-node", host=~"arc|xur|deepstone", fstype="zfs"}
             /
-            node_filesystem_size_bytes{job="pve-node", host=~"arc|xur|deepstone|riven", fstype="zfs"}
+            node_filesystem_size_bytes{job="pve-node", host=~"arc|xur|deepstone", fstype="zfs"}
             < 0.10
           )
           or
           (
-            node_filesystem_avail_bytes{job="pve-node", host=~"cinci|cottonwood", fstype="ext4", mountpoint="/"}
+            node_filesystem_avail_bytes{job="pve-node", host=~"cinci|cottonwood|riven", fstype="ext4", mountpoint="/"}
             /
-            node_filesystem_size_bytes{job="pve-node", host=~"cinci|cottonwood", fstype="ext4", mountpoint="/"}
+            node_filesystem_size_bytes{job="pve-node", host=~"cinci|cottonwood|riven", fstype="ext4", mountpoint="/"}
             < 0.10
           )
         for: 10m
@@ -90,16 +92,16 @@ groups:
       - alert: NodeFilesystemAlmostFull
         expr: |
           (
-            node_filesystem_avail_bytes{job="pve-node", host=~"arc|xur|deepstone|riven", fstype="zfs"}
+            node_filesystem_avail_bytes{job="pve-node", host=~"arc|xur|deepstone", fstype="zfs"}
             /
-            node_filesystem_size_bytes{job="pve-node", host=~"arc|xur|deepstone|riven", fstype="zfs"}
+            node_filesystem_size_bytes{job="pve-node", host=~"arc|xur|deepstone", fstype="zfs"}
             < 0.05
           )
           or
           (
-            node_filesystem_avail_bytes{job="pve-node", host=~"cinci|cottonwood", fstype="ext4", mountpoint="/"}
+            node_filesystem_avail_bytes{job="pve-node", host=~"cinci|cottonwood|riven", fstype="ext4", mountpoint="/"}
             /
-            node_filesystem_size_bytes{job="pve-node", host=~"cinci|cottonwood", fstype="ext4", mountpoint="/"}
+            node_filesystem_size_bytes{job="pve-node", host=~"cinci|cottonwood|riven", fstype="ext4", mountpoint="/"}
             < 0.05
           )
         for: 5m
@@ -127,20 +129,20 @@ groups:
       - alert: NodeFilesystemFillingUp
         expr: |
           (
-            predict_linear(node_filesystem_avail_bytes{job="pve-node", host=~"arc|xur|deepstone|riven", fstype="zfs"}[24h], 7 * 24 * 3600) < 0
+            predict_linear(node_filesystem_avail_bytes{job="pve-node", host=~"arc|xur|deepstone", fstype="zfs"}[24h], 7 * 24 * 3600) < 0
             and
-            node_filesystem_avail_bytes{job="pve-node", host=~"arc|xur|deepstone|riven", fstype="zfs"}
+            node_filesystem_avail_bytes{job="pve-node", host=~"arc|xur|deepstone", fstype="zfs"}
             /
-            node_filesystem_size_bytes{job="pve-node", host=~"arc|xur|deepstone|riven", fstype="zfs"}
+            node_filesystem_size_bytes{job="pve-node", host=~"arc|xur|deepstone", fstype="zfs"}
             > 0.10 < 0.30
           )
           or
           (
-            predict_linear(node_filesystem_avail_bytes{job="pve-node", host=~"cinci|cottonwood", fstype="ext4", mountpoint="/"}[24h], 7 * 24 * 3600) < 0
+            predict_linear(node_filesystem_avail_bytes{job="pve-node", host=~"cinci|cottonwood|riven", fstype="ext4", mountpoint="/"}[24h], 7 * 24 * 3600) < 0
             and
-            node_filesystem_avail_bytes{job="pve-node", host=~"cinci|cottonwood", fstype="ext4", mountpoint="/"}
+            node_filesystem_avail_bytes{job="pve-node", host=~"cinci|cottonwood|riven", fstype="ext4", mountpoint="/"}
             /
-            node_filesystem_size_bytes{job="pve-node", host=~"cinci|cottonwood", fstype="ext4", mountpoint="/"}
+            node_filesystem_size_bytes{job="pve-node", host=~"cinci|cottonwood|riven", fstype="ext4", mountpoint="/"}
             > 0.10 < 0.30
           )
         for: 6h

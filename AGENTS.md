@@ -186,8 +186,8 @@ go through a command:
   approved plan — but survey first and ask for that approval once, covering the whole
   roll, rather than re-confirming each node. Never take two *cluster* nodes
   (`ace`/`bray`/`clovis`) down at once. Refuse inside the 02:00 and 08:00 maintenance
-  windows. `bray` hosts `riven`, so rebooting it ends the session and empties the shared
-  SSH agent — it goes last.
+  windows. `bray` hosts `riven`, a VM that live-migrates when bray reboots. If that
+  migration fails, the session and the shared SSH agent are lost, so bray goes last.
 
 ## Coding Style
 
