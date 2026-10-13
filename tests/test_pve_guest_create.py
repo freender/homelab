@@ -441,14 +441,45 @@ def test_lxc_create_runs_in_order_and_cleans_up(tmp_path: Path, no_report: list)
     )
 
 
-def test_dry_run_only_reads(tmp_path: Path, no_report: list) -> None:
-    for block in (VM_BLOCK, CT_BLOCK):
+def test_protection_is_the_last_step_and_never_a_create_argument(
+    tmp_path: Path, no_report: list
+) -> None:
+    for block, tool, vmid in ((VM_BLOCK, "qm", 900), (CT_BLOCK, "pct", 901)):
         node = Node()
-        create.create_guest(write_root(tmp_path, block), "wftest", True, node, FakeClock())
-        assert [short(cmd) for cmd in node.writes()] in (
-            ["curl"],
-            ["pveam available --section system"],
-        )
+        (tmp_path / tool).mkdir()
+        root = write_root(tmp_path / tool, {**block, "protection": True})
+        create.create_guest(root, "wftest", False, node, FakeClock())
+        writes = node.writes()
+        # A VM's create still has to delete its cloud-init drive, which protection refuses.
+        assert writes[-2] == f"{tool} set {vmid} --protection 1"
+        assert writes[-1].startswith("rm -f ")
+        assert not any("--protection" in cmd for cmd in writes[:-2])
+
+
+def test_protection_off_or_undeclared_adds_no_step() -> None:
+    assert build.protect(spec_of(CT_BLOCK)) is None
+    assert build.protect(spec_of({**CT_BLOCK, "protection": False})) is None
+    assert "--protection" not in build.lxc_create(spec_of({**CT_BLOCK, "protection": False}), "t")
+
+
+def test_a_failed_create_is_left_unprotected(tmp_path: Path, no_report: list) -> None:
+    node = Node(cloud_init=1)
+    root = write_root(tmp_path, {**VM_BLOCK, "protection": True})
+    with pytest.raises(create.CreateError):
+        create.create_guest(root, "wftest", False, node, FakeClock())
+    assert not any("--protection" in cmd for cmd in node.writes())
+
+
+def test_dry_run_only_reads(tmp_path: Path, no_report: list) -> None:
+    blocks = (VM_BLOCK, CT_BLOCK, {**CT_BLOCK, "protection": True})
+    reads = (["curl"], ["pveam available --section system"], ["pveam available --section system"])
+    # default_registry caches per root, so each block needs its own.
+    for index, (block, expected) in enumerate(zip(blocks, reads, strict=True)):
+        (tmp_path / str(index)).mkdir()
+        node = Node()
+        root = write_root(tmp_path / str(index), block)
+        create.create_guest(root, "wftest", True, node, FakeClock())
+        assert [short(cmd) for cmd in node.writes()] == expected
     assert no_report == []
 
 

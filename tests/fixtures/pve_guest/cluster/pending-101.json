@@ -52,6 +52,10 @@
   "value": "debian"
  },
  {
+  "key": "protection",
+  "value": 1
+ },
+ {
   "key": "rootfs",
   "value": "vm-flash:subvol-101-disk-0,size=60G"
  },

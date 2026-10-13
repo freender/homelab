@@ -166,9 +166,11 @@ def create_guest(
     build_guest = create_vm if spec.kind == "qemu" else create_lxc
     if dry_run:
         build_guest(steps, target)
+        protect(steps, spec)
         return
     try:
         build_guest(steps, target)
+        protect(steps, spec)
     except Exception:
         print_warn(
             f"create stopped part-way; anything already built under vmid {spec.vmid} "
@@ -230,6 +232,12 @@ def create_lxc(steps: Steps, target: Target) -> None:
     volid = f"local:vztmpl/{template}"
     steps.run(f"create CT {spec.vmid}", build.command(build.lxc_create(spec, volid)))
     steps.run("start it", f"pct start {spec.vmid}")
+
+
+def protect(steps: Steps, spec: GuestSpec) -> None:
+    argv = build.protect(spec)
+    if argv is not None:
+        steps.run("turn protection on", build.command(argv))
 
 
 def remove_scratch(runner: Runner, spec: GuestSpec) -> None:

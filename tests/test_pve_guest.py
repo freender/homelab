@@ -182,6 +182,27 @@ def test_lxc_scalar_labels_and_unmanaged_defaults() -> None:
     assert keys["replication"] == drift.CLUSTER
 
 
+def test_protection_drift_applies_live_and_is_unmanaged_when_undeclared() -> None:
+    xur = real_specs()["xur"]
+    current = fixture_live("osiris", 105)
+    del current["protection"]  # missing compares as the PVE default, off
+    assert _rows(drift.guest_drift(xur, current, None, [])) == [
+        ("protection", "1", "0", drift.LIVE)
+    ]
+    current["protection"] = "0"
+    assert _rows(drift.guest_drift(xur, current, None, [])) == [
+        ("protection", "1", "0", drift.LIVE)
+    ]
+
+    zion = real_specs()["zion"]
+    vm = fixture_live("cluster", 109)
+    vm["protection"] = "1"
+    assert _rows(drift.unmanaged_diffs(zion, vm)) == [("protection", "-", "1", drift.UNMANAGED)]
+    declared = parse_guest("zion", {**default_registry(ROOT).get("zion", "pve-guest"),
+                                    "protection": False}, NODES)
+    assert _rows(drift.scalar_diffs(declared, vm)) == [("protection", "0", "1", drift.LIVE)]
+
+
 def test_vm_identity_and_efidisk_and_model() -> None:
     spec = real_specs()["zion"]
     current = fixture_live("cluster", 109)
@@ -737,6 +758,46 @@ def test_spec_rejects(base, path: str, value, message: str | None) -> None:
         parse_guest("g", raw, NODES)
 
 
+P = f"{V}.protection must be true: an in-place restore would destroy backup: false data on"
+UNBACKED = {"role": "data", "mount": "/d", "backup": False}
+
+
+@pytest.mark.parametrize(
+    ("base", "disks", "protection", "message"),
+    [
+        (base_ct, {"mp0": UNBACKED}, _DELETE, f"{P} mp0"),
+        (base_ct, {"mp0": UNBACKED}, False, f"{P} mp0"),
+        (base_ct, {"mp0": UNBACKED, "mp2": {**UNBACKED, "mount": "/e"}}, _DELETE, f"{P} mp0, mp2"),
+        (base_ct, {"mp0": UNBACKED}, True, None),
+        (base_ct, {"mp0": UNBACKED}, "yes", f"{V}.protection must be true or false"),
+        # A host path is not the CT's volume, so a restore never destroys it.
+        (base_ct, {"mp0": {**UNBACKED, "source": "/srv/d"}}, _DELETE, None),
+        (base_ct, {"mp0": {"role": "data", "mount": "/d"}}, _DELETE, None),
+        (base_ct, {"mp0": {"role": "scratch"}}, _DELETE, None),
+        # An in-place qmrestore keeps excluded disks as unusedN (homelab-ops#160).
+        (base_vm, {"scsi1": {**UNBACKED, "size": "1G"}}, _DELETE, None),
+    ],
+)
+def test_protection_is_required_on_cts_with_unbacked_data(
+    base, disks: dict, protection, message: str | None
+) -> None:
+    raw = base()
+    raw["disks"] |= disks
+    if protection is not _DELETE:
+        raw["protection"] = protection
+    if message is None:
+        parse_guest("g", raw, NODES)
+        return
+    with pytest.raises(ValueError, match="^" + re.escape(message) + "$"):
+        parse_guest("g", raw, NODES)
+
+
+def test_protection_is_managed_only_where_declared() -> None:
+    assert "protection" not in parse_guest("g", base_ct(), NODES).scalars
+    assert parse_guest("g", base_ct() | {"protection": True}, NODES).scalars["protection"] == "1"
+    assert parse_guest("g", base_vm() | {"protection": False}, NODES).scalars["protection"] == "0"
+
+
 def test_unknown_keys_are_all_listed() -> None:
     raw = base_vm() | {"b": 1, "a": 2}
     with pytest.raises(ValueError, match=re.escape(f"{V}: unknown key(s) a, b")):
@@ -763,7 +824,8 @@ def test_a_bad_gateway_names_the_gw_field() -> None:
 
 
 def test_parsed_fields_carry_their_values() -> None:
-    raw = base_ct() | {"home_node": "bray", "replication": {"target": "ace", "schedule": "*/5"}}
+    raw = base_ct() | {"home_node": "bray", "replication": {"target": "ace", "schedule": "*/5"},
+                       "protection": True}
     raw["ha"] = {"nodes": {"bray": 2, "ace": 1}, "strict": False, "failback": False}
     raw["net"]["net0"] |= {"bridge": "vmbr1", "tag": 10, "firewall": False,
                            "ip": "10.0.0.5/24", "gw": "10.0.0.1"}

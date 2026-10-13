@@ -106,6 +106,7 @@ TYPED_KEYS = frozenset(
         "cores",
         "memory",
         "balloon",
+        "protection",
         "disks",
         "net",
         "ha",
@@ -236,13 +237,15 @@ def parse_guest(host: str, raw: object, nodes: dict[str, bool]) -> GuestSpec:
     replication = parse_replication(where, raw.get("replication"))
     check_placement(where, home_node, ha, replication, nodes)
     check_ha_disks(where, ha, disks)
+    scalars = build_scalars(host, where, raw, profile, disks)
+    check_protection(where, kind, scalars, disks)
     return GuestSpec(
         host=host,
         vmid=_positive_int(raw.get("vmid"), f"{where}.vmid"),
         kind=kind,
         home_node=home_node,
         profile=profile_name,
-        scalars=build_scalars(host, where, raw, profile, disks),
+        scalars=scalars,
         efidisk=dict(profile.efidisk),
         disk_opts=dict(profile.disk_opts),
         net_model=profile.net_model,
@@ -275,6 +278,9 @@ def build_scalars(
         scalars.update(_qemu_scalars(where, raw, memory, disks))
     elif "balloon" in raw:
         raise ValueError(f"{where}.balloon is a qemu-only key")
+    # Managed only where declared, so a guest without the key is left as it is.
+    if "protection" in raw:
+        scalars["protection"] = to_pve(_flag(raw["protection"], False, f"{where}.protection"))
     scalars.update(parse_extra(where, raw.get("extra")))
     return scalars
 
@@ -517,6 +523,26 @@ def _check_ha_placement(
         raise ValueError(f"{where}.ha.nodes must be cluster nodes including {home_node}")
     if replication.target not in ha.nodes:
         raise ValueError(f"{where}.replication.target must be one of ha.nodes")
+
+
+def check_protection(
+    where: str, kind: str, scalars: dict[str, str], disks: tuple[DiskSpec, ...]
+) -> None:
+    """An in-place `pct restore --force` destroys every volume a CT owns, backup=0
+    and unusedN included; `protection` is the only thing that refuses it
+    (homelab-ops#160). A host bind mount is not owned, so a restore never takes it."""
+    if kind != "lxc" or scalars.get("protection") == "1":
+        return
+    exposed = [
+        disk.key
+        for disk in disks
+        if disk.role == "data" and not disk.backup and disk.source is None
+    ]
+    if exposed:
+        raise ValueError(
+            f"{where}.protection must be true: an in-place restore would destroy "
+            f"backup: false data on {', '.join(exposed)}"
+        )
 
 
 def check_ha_disks(where: str, ha: HaSpec | None, disks: tuple[DiskSpec, ...]) -> None:

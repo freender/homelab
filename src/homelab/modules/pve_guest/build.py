@@ -184,8 +184,18 @@ def _os_disk(spec: GuestSpec) -> DiskSpec:
 def _scalar_args(spec: GuestSpec) -> list[str]:
     args: list[str] = []
     for key, value in spec.scalars.items():
-        args += [f"--{key}", value]
+        # Set last (protect): it would refuse create's own drive removal, and the
+        # destroy of a guest that failed half-way.
+        if key != "protection":
+            args += [f"--{key}", value]
     return args
+
+
+def protect(spec: GuestSpec) -> list[str] | None:
+    if spec.scalars.get("protection") != "1":
+        return None
+    tool = "qm" if spec.kind == "qemu" else "pct"
+    return [tool, "set", str(spec.vmid), "--protection", "1"]
 
 
 def vm_create(spec: GuestSpec, image_volid: str) -> list[str]:

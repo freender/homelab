@@ -38,11 +38,18 @@ IDENTITY = frozenset({"digest", "meta", "smbios1", "vmgenid", "lock", "parent"})
 
 # What a missing key means.
 DEFAULTS: dict[str, dict[str, str]] = {
-    "qemu": {"sockets": "1", "numa": "0", "onboot": "0", "tablet": "1", "agent": "0"},
-    "lxc": {"onboot": "0", "unprivileged": "0", "swap": "512", "arch": "amd64"},
+    "qemu": {
+        "sockets": "1",
+        "numa": "0",
+        "onboot": "0",
+        "tablet": "1",
+        "agent": "0",
+        "protection": "0",
+    },
+    "lxc": {"onboot": "0", "unprivileged": "0", "swap": "512", "arch": "amd64", "protection": "0"},
 }
 
-QEMU_LIVE = frozenset({"balloon", "onboot", "name", "tablet", "startup", "tags"})
+QEMU_LIVE = frozenset({"balloon", "onboot", "name", "tablet", "startup", "tags", "protection"})
 LXC_REBOOT = frozenset({"features", "ostype", "hostname"})
 LXC_REFUSED = frozenset({"arch", "unprivileged"})
 UNUSED_RE = re.compile(r"^unused\d+$")
