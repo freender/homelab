@@ -1,0 +1,50 @@
+[
+ {
+  "key": "arch",
+  "value": "amd64"
+ },
+ {
+  "key": "cores",
+  "value": 4
+ },
+ {
+  "key": "features",
+  "value": "nesting=1"
+ },
+ {
+  "key": "hostname",
+  "value": "xur"
+ },
+ {
+  "key": "memory",
+  "value": 2048
+ },
+ {
+  "key": "mp0",
+  "value": "vm-flash:subvol-105-disk-1,mp=/backup,backup=0,size=1T"
+ },
+ {
+  "key": "net0",
+  "value": "name=nic0,bridge=vmbr0,gw=10.0.0.1,hwaddr=BC:24:11:D8:F0:7F,ip=10.0.0.85/24,type=veth"
+ },
+ {
+  "key": "onboot",
+  "value": 1
+ },
+ {
+  "key": "ostype",
+  "value": "debian"
+ },
+ {
+  "key": "rootfs",
+  "value": "vm-flash:subvol-105-disk-0,size=8G"
+ },
+ {
+  "key": "swap",
+  "value": 0
+ },
+ {
+  "key": "unprivileged",
+  "value": 1
+ }
+]

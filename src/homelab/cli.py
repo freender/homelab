@@ -198,6 +198,22 @@ def check_node_down_coverage(root: Path) -> None:
     print_ok(f"{len(scraped)} pve-node target(s) have NodeDown coverage ({len(excluded)} excluded)")
 
 
+def check_pve_guests(root: Path) -> None:
+    """Validate every `pve-guest` block, and every vmid hosts.conf writes by hand.
+
+    Validated as a whole rather than per deploy target: vmid uniqueness and the
+    cross-references (zfs-automation migratable LXC plans, pve-backup restore list
+    and job filters) are properties of the inventory, not of one guest.
+    """
+    from .modules.pve_guest.inventory import validate_inventory
+
+    try:
+        guests, references = validate_inventory(default_registry(root))
+    except ValueError as error:
+        raise click.ClickException(str(error)) from error
+    print_ok(f"{guests} pve-guest spec(s) valid; {references} hand-written vmid(s) match")
+
+
 
 @click.group()
 def main() -> None:
@@ -696,6 +712,7 @@ def validate() -> None:
     check_feature_registry(root)
     check_stack_placement(root)
     check_node_down_coverage(root)
+    check_pve_guests(root)
 
     print_action("Leak Check")
     check_public_repo_leaks(root)

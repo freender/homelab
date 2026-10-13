@@ -1,0 +1,64 @@
+[
+ {
+  "hastate": "started",
+  "id": "lxc/101",
+  "name": "tower",
+  "node": "ace",
+  "status": "running",
+  "type": "lxc",
+  "vmid": 101
+ },
+ {
+  "id": "qemu/102",
+  "name": "void",
+  "node": "clovis",
+  "status": "stopped",
+  "type": "qemu",
+  "vmid": 102
+ },
+ {
+  "hastate": "started",
+  "id": "lxc/104",
+  "name": "arc",
+  "node": "bray",
+  "status": "running",
+  "type": "lxc",
+  "vmid": 104
+ },
+ {
+  "hastate": "started",
+  "id": "lxc/108",
+  "name": "neo",
+  "node": "bray",
+  "status": "running",
+  "type": "lxc",
+  "vmid": 108
+ },
+ {
+  "hastate": "started",
+  "id": "qemu/109",
+  "name": "zion",
+  "node": "ace",
+  "status": "running",
+  "type": "qemu",
+  "vmid": 109
+ },
+ {
+  "hastate": "started",
+  "id": "qemu/110",
+  "name": "riven",
+  "node": "bray",
+  "status": "running",
+  "type": "qemu",
+  "vmid": 110
+ },
+ {
+  "hastate": "started",
+  "id": "qemu/112",
+  "name": "helm",
+  "node": "clovis",
+  "status": "running",
+  "type": "qemu",
+  "vmid": 112
+ }
+]

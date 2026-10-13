@@ -17,6 +17,7 @@ from .pbs_client_backup import deploy as deploy_pbs_client_backup
 from .pve_autoinstall import deploy as deploy_pve_autoinstall
 from .pve_backup import deploy as deploy_pve_backup
 from .pve_gpu_passthrough import deploy as deploy_pve_gpu_passthrough
+from .pve_guest import deploy as deploy_pve_guest
 from .pve_http_boot import deploy as deploy_pve_http_boot
 from .pve_interface_pinning import deploy as deploy_pve_interface_pinning
 from .pve_lxc_pre_replication_patch import deploy as deploy_pve_lxc_pre_replication_patch
@@ -115,6 +116,10 @@ MODULES: dict[str, ModuleDefinition] = {
         # preflight the runbook requires. Explicit target + --confirm-upgrade.
         include_in_all=False,
     ),
+    "pve-guest": ModuleDefinition(
+        name="PVE Guest Spec (read-only drift)",
+        deploy=deploy_pve_guest,
+    ),
     "pve-interface-pinning": ModuleDefinition(
         name="PVE Interface Pinning",
         deploy=deploy_pve_interface_pinning,
@@ -153,6 +158,8 @@ MODULE_ORDER = [
     "pve-postinstall-webhook",
     "pve-autoinstall",
     "pve-http-boot",
+    # Read-only: reports the guest's Proxmox config drift and changes nothing.
+    "pve-guest",
     # Install the host archive/key before its restore consumer. pve-backup also
     # persists its own staged key so a direct module deploy remains rebuild-safe.
     "pbs-client-backup",

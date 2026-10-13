@@ -1,0 +1,70 @@
+[
+ {
+  "key": "agent",
+  "value": "enabled=1"
+ },
+ {
+  "key": "bios",
+  "value": "ovmf"
+ },
+ {
+  "key": "boot",
+  "value": "order=scsi0"
+ },
+ {
+  "key": "cores",
+  "value": 2
+ },
+ {
+  "key": "cpu",
+  "value": "x86-64-v3"
+ },
+ {
+  "key": "efidisk0",
+  "value": "vm-flash:vm-109-disk-0,efitype=4m,pre-enrolled-keys=0,size=528K"
+ },
+ {
+  "key": "machine",
+  "value": "q35"
+ },
+ {
+  "key": "memory",
+  "value": "4096"
+ },
+ {
+  "key": "name",
+  "value": "zion"
+ },
+ {
+  "key": "net0",
+  "value": "virtio=BC:24:11:0D:E3:B4,bridge=vmbr0,firewall=1,tag=40"
+ },
+ {
+  "key": "numa",
+  "value": 0
+ },
+ {
+  "key": "onboot",
+  "value": 1
+ },
+ {
+  "key": "ostype",
+  "value": "l26"
+ },
+ {
+  "key": "scsi0",
+  "value": "vm-flash:vm-109-disk-1,discard=on,iothread=1,size=32G,ssd=1"
+ },
+ {
+  "key": "scsihw",
+  "value": "virtio-scsi-single"
+ },
+ {
+  "key": "sockets",
+  "value": 1
+ },
+ {
+  "key": "tablet",
+  "value": 0
+ }
+]

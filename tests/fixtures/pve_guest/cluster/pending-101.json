@@ -1,0 +1,70 @@
+[
+ {
+  "key": "arch",
+  "value": "amd64"
+ },
+ {
+  "key": "cores",
+  "value": 8
+ },
+ {
+  "key": "dev1",
+  "value": "/dev/dri/renderD128,gid=1000,mode=0660,uid=1000"
+ },
+ {
+  "key": "features",
+  "value": "keyctl=1,nesting=1"
+ },
+ {
+  "key": "hostname",
+  "value": "tower"
+ },
+ {
+  "key": "memory",
+  "value": 10240
+ },
+ {
+  "key": "mp1",
+  "value": "vm-flash:subvol-101-disk-1,mp=/mnt/cache/appdata,backup=1,size=0T"
+ },
+ {
+  "key": "mp2",
+  "value": "vm-flash:subvol-101-disk-3,mp=/mnt/cache/downloads,backup=0,size=0T"
+ },
+ {
+  "key": "mp3",
+  "value": "vault-hdd:subvol-101-disk-4,mp=/mnt/tank/media,backup=0,replicate=1,size=0T"
+ },
+ {
+  "key": "net0",
+  "value": "name=nic0,bridge=vmbr0,firewall=1,hwaddr=BC:24:11:E1:2F:71,ip=dhcp,tag=40,type=veth"
+ },
+ {
+  "key": "net1",
+  "value": "name=nic1,bridge=vmbr0,firewall=1,hwaddr=BC:24:11:7D:28:96,ip=dhcp,tag=10,type=veth"
+ },
+ {
+  "key": "onboot",
+  "value": 1
+ },
+ {
+  "key": "ostype",
+  "value": "debian"
+ },
+ {
+  "key": "rootfs",
+  "value": "vm-flash:subvol-101-disk-0,size=60G"
+ },
+ {
+  "key": "startup",
+  "value": "order=10,up=30,down=300"
+ },
+ {
+  "key": "swap",
+  "value": 0
+ },
+ {
+  "key": "unprivileged",
+  "value": 1
+ }
+]

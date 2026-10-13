@@ -1,0 +1,82 @@
+[
+ {
+  "key": "arch",
+  "value": "amd64"
+ },
+ {
+  "key": "cores",
+  "value": 8
+ },
+ {
+  "key": "dev1",
+  "value": "/dev/dri/renderD128,uid=1000,gid=1000,mode=0660"
+ },
+ {
+  "key": "features",
+  "value": "keyctl=1,nesting=1"
+ },
+ {
+  "key": "hostname",
+  "value": "neo"
+ },
+ {
+  "key": "memory",
+  "value": 10240
+ },
+ {
+  "key": "mp0",
+  "value": "vm-flash:subvol-108-disk-1,mp=/mnt/cache/appdata,backup=1,size=200G"
+ },
+ {
+  "key": "mp1",
+  "value": "vm-flash:subvol-108-disk-2,mp=/mnt/cache/pictures,size=0T"
+ },
+ {
+  "key": "mp2",
+  "value": "vm-flash:subvol-108-disk-3,mp=/mnt/cache/documents,size=0T"
+ },
+ {
+  "key": "mp3",
+  "value": "vm-flash:subvol-108-disk-4,mp=/mnt/cache/obsidian,backup=1,size=0T"
+ },
+ {
+  "key": "mp4",
+  "value": "vm-flash:subvol-108-disk-5,mp=/mnt/cache/logseq,backup=1,size=0T"
+ },
+ {
+  "key": "mp5",
+  "value": "vm-flash:subvol-108-disk-6,mp=/mnt/cache/games,size=0T"
+ },
+ {
+  "key": "net0",
+  "value": "name=nic0,bridge=vmbr0,firewall=1,hwaddr=BC:24:11:1B:3F:B9,ip=dhcp,tag=40,type=veth"
+ },
+ {
+  "key": "net1",
+  "value": "name=nic1,bridge=vmbr0,firewall=1,hwaddr=BC:24:11:CC:A6:41,ip=dhcp,tag=10,type=veth"
+ },
+ {
+  "key": "onboot",
+  "value": 1
+ },
+ {
+  "key": "ostype",
+  "value": "debian"
+ },
+ {
+  "key": "rootfs",
+  "value": "vm-flash:subvol-108-disk-0,size=60G"
+ },
+ {
+  "key": "startup",
+  "value": "order=30,up=30,down=300"
+ },
+ {
+  "key": "swap",
+  "value": 0
+ },
+ {
+  "key": "unprivileged",
+  "value": 1
+ }
+]

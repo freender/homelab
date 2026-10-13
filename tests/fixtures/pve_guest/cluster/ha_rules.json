@@ -1,0 +1,29 @@
+[
+ {
+  "affinity": "positive",
+  "nodes": "ace:2,clovis:3",
+  "order": 1,
+  "resources": "vm:112",
+  "rule": "ha-rule-d9d6e797-22ea",
+  "strict": 1,
+  "type": "node-affinity"
+ },
+ {
+  "affinity": "positive",
+  "nodes": "ace:2,bray:3",
+  "order": 2,
+  "resources": "ct:104,ct:108,vm:110",
+  "rule": "ha-rule-7025fad3-d42b",
+  "strict": 1,
+  "type": "node-affinity"
+ },
+ {
+  "affinity": "positive",
+  "nodes": "ace:3,clovis:2",
+  "order": 3,
+  "resources": "ct:101,vm:109",
+  "rule": "ha-rule-0caad0a3-f056",
+  "strict": 1,
+  "type": "node-affinity"
+ }
+]
