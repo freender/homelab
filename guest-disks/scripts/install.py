@@ -22,6 +22,13 @@ What it will do, per disk:
   onto a path where something else is already mounted, or a disk that is already
   mounted somewhere else. Moving off a hand-made mount is migration work
   (homelab-ops#158/#159), not something a deploy does by itself.
+* **Hold Docker back until every disk is mounted.** A `docker.service` drop-in
+  sets `RequiresMountsFor=` on every managed mount (homelab-ops#174). Scratch is
+  `nofail`, so the guest still boots without it, but Docker then fails its
+  dependency. Otherwise stacks would write into the empty mount point on the OS
+  disk, and that is exactly what makes the next deploy refuse. The drop-in is
+  written only once every mount is verified. Docker is never restarted for it:
+  it applies from Docker's next start.
 """
 
 from __future__ import annotations
@@ -42,6 +49,7 @@ MARKER_PREFIX = "# homelab guest-disks: "
 # Module-level so tests can rebind them under tmp_path.
 BY_ID_DIR = "/dev/disk/by-id"
 FSTAB = "/etc/fstab"
+DOCKER_DROPIN = "/etc/systemd/system/docker.service.d/10-guest-disks.conf"
 
 # Indirection point for tests, same pattern as `homelab_install.systemd._run`.
 _run = subprocess.run
@@ -120,6 +128,9 @@ def parse_disks(text: str) -> list[Wanted]:
         key, role, mount, options = parts
         if not mount.startswith("/") or mount == "/":
             raise InstallError(f"{DISKS_FILE}: {key} mount must be an absolute path below /")
+        # fstab and RequiresMountsFor= both split on whitespace.
+        if any(char.isspace() for char in mount):
+            raise InstallError(f"{DISKS_FILE}: {key} mount path must not contain whitespace")
         wanted.append(Wanted(key, role, mount, options))
     if not wanted:
         raise InstallError(f"{DISKS_FILE} lists no disks; refusing to run on an empty render")
@@ -204,6 +215,16 @@ def _check_mounts(plan: Plan) -> None:
     elif probe.target_state == "not-a-dir":
         plan.refusals.append(f"{wanted.mount} exists and is not a directory")
     plan.mount = True
+
+
+def docker_dropin(wanted: list[Wanted]) -> str:
+    mounts = " ".join(item.mount for item in wanted)
+    return (
+        "# Managed by homelab guest-disks (homelab-ops#174): Docker starts only once\n"
+        "# every role disk is mounted, so no stack writes into an empty mount point.\n"
+        "[Unit]\n"
+        f"RequiresMountsFor={mounts}\n"
+    )
 
 
 def render_fstab(text: str, lines: dict[str, str]) -> str:
@@ -303,6 +324,24 @@ def make_filesystem(plan: Plan) -> str:
     return uuid
 
 
+def dropin_current(wanted: list[Wanted]) -> bool:
+    path = Path(DOCKER_DROPIN)
+    return path.is_file() and path.read_text(encoding="utf-8") == docker_dropin(wanted)
+
+
+def write_dropin(wanted: list[Wanted]) -> bool:
+    """Write the docker.service drop-in; True when it changed."""
+    if dropin_current(wanted):
+        return False
+    path = Path(DOCKER_DROPIN)
+    path.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
+    path.write_text(docker_dropin(wanted), encoding="utf-8")
+    path.chmod(0o644)
+    log.ok(f"{DOCKER_DROPIN}: Docker waits for {', '.join(item.mount for item in wanted)}")
+    log.sub("not restarting Docker; the drop-in applies from its next start")
+    return True
+
+
 def apply(ctx: InstallContext, plans: list[Plan]) -> None:
     lines: dict[str, str] = {}
     for plan in plans:
@@ -325,6 +364,8 @@ def apply(ctx: InstallContext, plans: list[Plan]) -> None:
         if plan.wanted.mount not in mounted_targets(device):
             raise InstallError(f"{plan.wanted.label}: not mounted after deploy")
         log.ok(f"{plan.wanted.label}: mounted")
+    if write_dropin([plan.wanted for plan in plans]):
+        systemd.daemon_reload(ctx)
 
 
 def install(ctx: InstallContext) -> None:
@@ -338,6 +379,7 @@ def install(ctx: InstallContext) -> None:
     plans = [decide(item, probe(item), fstab) for item in wanted]
     for plan in plans:
         log.sub(plan.summary())
+    log.sub(f"docker.service drop-in: {'in place' if dropin_current(wanted) else 'write'}")
     known = {item.key for item in wanted}
     for entry in fstab:
         if entry.managed_key and entry.managed_key not in known:

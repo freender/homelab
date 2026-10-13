@@ -359,6 +359,9 @@ def test_disks_conf_is_parsed_and_malformed_lines_are_refused() -> None:
     for mount in ("mnt/scratch", "/"):
         with pytest.raises(InstallError, match="absolute path below /"):
             inst.parse_disks(f"scsi1|scratch|{mount}|defaults")
+    for mount in ("/mnt/my scratch", "/mnt/tab\there"):
+        with pytest.raises(InstallError, match="scsi1 mount path must not contain whitespace"):
+            inst.parse_disks(f"scsi1|scratch|{mount}|defaults")
     with pytest.raises(InstallError, match="lists no disks"):
         inst.parse_disks("\n")
 
@@ -522,6 +525,8 @@ class Guest:
         self.build.mkdir(parents=True)
         monkeypatch.setattr(self.installer, "BY_ID_DIR", str(self.by_id))
         monkeypatch.setattr(self.installer, "FSTAB", str(self.fstab))
+        self.dropin = self.root / "etc/systemd/system/docker.service.d/10-guest-disks.conf"
+        monkeypatch.setattr(self.installer, "DOCKER_DROPIN", str(self.dropin))
         monkeypatch.setattr(files, "BACKUP_KEEP_COUNT", 3)
         # device -> {"TYPE":..., "UUID":...}; device -> set of mount targets
         self.blk: dict[str, dict[str, str]] = {}
@@ -607,21 +612,46 @@ def test_a_blank_disk_is_formatted_listed_and_mounted_on_a_live_run(vm: Guest) -
         f"{vm.installer.MARKER_PREFIX}scsi1\n"
         f"UUID={vm.mkfs_uuid} {mount} ext4 defaults,noatime,nofail 0 2\n"
     )
-    assert ["systemctl", "daemon-reload"] in vm.calls
+    assert vm.ran("systemctl") == [["systemctl", "daemon-reload"]] * 2  # fstab, then drop-in
     assert vm.ran("mount") == [["mount", mount]]
     assert vm.mounts[device] == {mount}
     assert list(vm.fstab.parent.glob("fstab.bak.*"))
+    assert vm.dropin.read_text() == (
+        "# Managed by homelab guest-disks (homelab-ops#174): Docker starts only once\n"
+        "# every role disk is mounted, so no stack writes into an empty mount point.\n"
+        "[Unit]\n"
+        f"RequiresMountsFor={mount}\n"
+    )
+    assert vm.dropin.stat().st_mode & 0o777 == 0o644
 
 
-def test_a_converged_guest_is_not_touched(vm: Guest) -> None:
-    mount = vm.mount_path("mnt/scratch")
+def test_docker_waits_for_every_managed_mount_in_mount_order() -> None:
+    wanted = [
+        inst.Wanted("scsi2", "appdata", "/mnt/cache/appdata", "d"),
+        inst.Wanted("scsi1", "scratch", "/mnt/scratch", "d,nofail"),
+    ]
+    assert inst.docker_dropin(wanted).splitlines()[-2:] == [
+        "[Unit]",
+        "RequiresMountsFor=/mnt/cache/appdata /mnt/scratch",
+    ]
+
+
+def converge(vm: Guest, mount: str) -> str:
     device = vm.add_disk("scsi1", "ext4", UUID)
     vm.mounts[device].add(mount)
     vm.fstab.write_text(
         f"{vm.installer.MARKER_PREFIX}scsi1\nUUID={UUID} {mount} ext4 defaults 0 2\n"
     )
-    before = vm.fstab.read_text()
     vm.want(f"scsi1|scratch|{mount}|defaults")
+    return vm.fstab.read_text()
+
+
+def test_a_converged_guest_is_not_touched(vm: Guest) -> None:
+    mount = vm.mount_path("mnt/scratch")
+    before = converge(vm, mount)
+    wanted = vm.installer.parse_disks((vm.build / "disks.conf").read_text())
+    vm.dropin.parent.mkdir(parents=True)
+    vm.dropin.write_text(vm.installer.docker_dropin(wanted))
 
     vm.install()
 
@@ -629,6 +659,27 @@ def test_a_converged_guest_is_not_touched(vm: Guest) -> None:
     for tool in ("mkfs.ext4", "mount", "systemctl"):
         assert vm.ran(tool) == []
     assert not list(vm.fstab.parent.glob("fstab.bak.*"))
+
+
+@pytest.mark.parametrize("old", [None, "[Unit]\nRequiresMountsFor=/mnt/gone\n"])
+def test_mounted_disks_with_a_missing_or_stale_dropin_only_rewrite_it(
+    vm: Guest, old: str | None
+) -> None:
+    """helm-style upgrade: disks already converged before the drop-in existed."""
+    mount = vm.mount_path("mnt/scratch")
+    before = converge(vm, mount)
+    if old is not None:
+        vm.dropin.parent.mkdir(parents=True)
+        vm.dropin.write_text(old)
+
+    vm.install()
+
+    assert vm.fstab.read_text() == before
+    assert vm.ran("mkfs.ext4") == vm.ran("mount") == []
+    assert vm.ran("systemctl") == [["systemctl", "daemon-reload"]]
+    assert vm.dropin.read_text().endswith(f"RequiresMountsFor={mount}\n")
+    # Never restarted: it applies from Docker's next start.
+    assert not any("docker" in " ".join(call) for call in vm.calls)
 
 
 def test_plan_only_writes_nothing(vm: Guest, capsys: pytest.CaptureFixture[str]) -> None:
@@ -643,8 +694,10 @@ def test_plan_only_writes_nothing(vm: Guest, capsys: pytest.CaptureFixture[str])
     assert vm.ran("mkfs.ext4") == vm.ran("mount") == []
     assert vm.mounts[device] == set()
     assert not Path(mount).exists()
+    assert not vm.dropin.exists()
     out = capsys.readouterr().out
     assert "mkfs ext4, write fstab entry, mount" in out
+    assert "docker.service drop-in: write" in out
     assert "PLAN_ONLY: nothing written" in out
 
 
@@ -667,6 +720,7 @@ def test_one_refused_disk_stops_every_disk(vm: Guest, plan_only: bool) -> None:
 
     assert vm.fstab.read_text() == before
     assert vm.ran("mkfs.ext4") == vm.ran("mount") == []
+    assert not vm.dropin.exists()
 
 
 def test_a_non_empty_target_is_refused(vm: Guest) -> None:
@@ -697,6 +751,7 @@ def test_a_mount_that_does_not_take_fails_the_deploy(
 
     with pytest.raises(InstallError, match="not mounted after deploy"):
         vm.install()
+    assert not vm.dropin.exists()
 
 
 def test_mkfs_that_leaves_no_uuid_fails_before_fstab(vm: Guest) -> None:
