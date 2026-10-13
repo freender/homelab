@@ -5,6 +5,7 @@ from pathlib import Path
 from ..deploy import DeploySession
 from ..hosts import default_registry
 from ..module_support import (
+    is_qemu_guest,
     normalize_bool,
     normalize_string_list,
     simple_root_installer_deploy,
@@ -34,6 +35,25 @@ BASE_PACKAGES = (
     "vim",
     "mc",
     "ripgrep",
+)
+
+# Added on every VM (`pve-guest.kind: qemu`). The Debian cloud image a VM is
+# built from lacks tools the LXC template had (freender/homelab-ops#129, #163).
+# iproute2, fdisk and locales do ship in the image; listing them keeps them
+# guaranteed once cloud-init is purged. guest-baseline refuses to run without
+# `locale-gen`, and replication's fs-freeze on live migration needs the guest
+# agent (freender/homelab-ops#125).
+VM_BASE_PACKAGES = (
+    "qemu-guest-agent",
+    "locales",
+    "iproute2",
+    "fdisk",
+    "dbus-user-session",
+    "logrotate",
+    "rsync",
+    "lsof",
+    "bind9-dnsutils",
+    "netcat-traditional",
 )
 
 
@@ -73,7 +93,7 @@ def deploy(
 
 
 def packages_for_host(root: Path, host: str) -> list[str]:
-    """Baseline packages plus any host-specific `base-packages.extra` entries.
+    """Baseline packages, the VM baseline on VMs, then `base-packages.extra`.
 
     The baseline is defined once here and passed down to the installer, so the
     package set is never re-derived in bash.
@@ -84,6 +104,8 @@ def packages_for_host(root: Path, host: str) -> list[str]:
         f"{FEATURE}.extra must be a list of package names for {host}",
     )
     packages = list(BASE_PACKAGES)
+    if is_qemu_guest(registry, host):
+        packages.extend(VM_BASE_PACKAGES)
     for package in extra:
         if package not in packages:
             packages.append(package)

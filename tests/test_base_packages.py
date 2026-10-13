@@ -104,6 +104,44 @@ def test_bare_feature_gets_the_baseline(tmp_path: Path) -> None:
     assert base_packages.packages_for_host(root, "tower") == list(base_packages.BASE_PACKAGES)
 
 
+def test_vm_gets_the_vm_baseline_before_extra(tmp_path: Path) -> None:
+    root = write_hosts(
+        tmp_path,
+        HOSTS_HEADER.format(host="vm")
+        + "    pve-guest:\n      kind: qemu\n"
+        + "    base-packages:\n      extra:\n        - rsync\n        - yq\n",
+    )
+    expected = [*base_packages.BASE_PACKAGES, *base_packages.VM_BASE_PACKAGES, "yq"]
+    assert base_packages.packages_for_host(root, "vm") == expected
+
+
+def test_lxc_and_bare_hosts_skip_the_vm_baseline(tmp_path: Path) -> None:
+    root = write_hosts(
+        tmp_path,
+        HOSTS_HEADER.format(host="ct")
+        + "    pve-guest:\n      kind: lxc\n    base-packages:\n",
+    )
+    assert base_packages.packages_for_host(root, "ct") == list(base_packages.BASE_PACKAGES)
+
+
+def test_vm_baseline_carries_what_other_modules_need() -> None:
+    # guest-baseline refuses without locale-gen (#162); replication's fs-freeze
+    # on live migration needs the guest agent (#125).
+    assert "locales" in base_packages.VM_BASE_PACKAGES
+    assert "qemu-guest-agent" in base_packages.VM_BASE_PACKAGES
+
+
+def test_vm_extra_does_not_repeat_the_vm_baseline() -> None:
+    """A package in both lists is dead config that drifts: the VM baseline owns it."""
+    registry = default_registry(ROOT)
+    for host in registry.list_hosts(feature="base-packages"):
+        if registry.get(host, "pve-guest.kind", None) != "qemu":
+            continue
+        extra = registry.get(host, "base-packages.extra", None) or []
+        repeated = set(extra) & set(base_packages.VM_BASE_PACKAGES)
+        assert not repeated, f"{host}: drop {sorted(repeated)} from base-packages.extra"
+
+
 def test_bad_extra_type_is_rejected(tmp_path: Path) -> None:
     root = write_hosts(
         tmp_path,

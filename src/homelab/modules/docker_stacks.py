@@ -10,7 +10,7 @@ from .. import backup_excludes
 from ..build import write_env_file
 from ..deploy import DeploySession, force_env, prepare_build_dir, stage_and_run_remote_installer
 from ..hosts import default_registry
-from ..module_support import run_module_deploy
+from ..module_support import is_qemu_guest, run_module_deploy
 from ..output import print_sub, print_warn
 from ..ssh import HostConnection, diff_many
 from ..templates import render_template, render_template_text
@@ -265,7 +265,7 @@ def appdata_root_for(root: Path, host: str) -> str:
 
 
 def is_vm(root: Path, host: str) -> bool:
-    return default_registry(root).get(host, "pve-guest.kind", None) == "qemu"
+    return is_qemu_guest(default_registry(root), host)
 
 
 def compose_document(root: Path, host: str, stack: str) -> dict:

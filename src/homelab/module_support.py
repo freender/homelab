@@ -65,6 +65,11 @@ def feature_paused(registry, host: str, feature: str, default: bool = False) -> 
     )
 
 
+def is_qemu_guest(registry, host: str) -> bool:
+    """Whether the host is a VM, judged by its `pve-guest.kind`."""
+    return registry.get(host, "pve-guest.kind", None) == "qemu"
+
+
 def normalize_string_list(value: object, message: str) -> list[str]:
     if value in (None, ""):
         return []

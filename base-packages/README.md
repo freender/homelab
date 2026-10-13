@@ -34,6 +34,20 @@ back to recursive `grep`, which is precisely what the scan-boundary rules
 prohibit on the multi-TB storage paths. Having it everywhere makes the fast,
 bounded tool the default one.
 
+## VM baseline
+
+Every VM (`pve-guest.kind: qemu`) also gets `VM_BASE_PACKAGES`: tools the Debian
+cloud image lacks but the LXC template had, so a new VM needs no per-host list.
+
+| Package | Why |
+| --- | --- |
+| `qemu-guest-agent` | Replication's fs-freeze on live migration |
+| `locales` | `guest-baseline` refuses to run without `locale-gen` |
+| `iproute2`, `fdisk` | In the image today; listed so they stay after cloud-init is purged |
+| `dbus-user-session`, `logrotate`, `rsync`, `lsof`, `bind9-dnsutils`, `netcat-traditional` | Operator tools the LXC template shipped |
+
+Do not repeat these in a VM's `extra`; a test fails if you do.
+
 ## Per-host additions
 
 Extra packages go in `hosts.conf`, appended to the baseline:
