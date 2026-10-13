@@ -24,7 +24,7 @@ from types import SimpleNamespace
 import pytest
 
 from homelab.modules import ubuntu_setup
-from homelab_install import files, packages, systemd
+from homelab_install import files, packages, sshd, sudoers, systemd
 from homelab_install.context import InstallContext
 from homelab_install.errors import InstallError
 from homelab_install.packages import APT_GET
@@ -105,7 +105,7 @@ class Host:
         self.paths = paths
 
         self.run = FakeRun()
-        for target in (self.installer, files, systemd, packages):
+        for target in (self.installer, files, systemd, packages, sshd, sudoers):
             monkeypatch.setattr(target, "_run", self.run)
         self.binaries: set[str] = set()
         monkeypatch.setattr(
@@ -159,6 +159,7 @@ class Host:
         self.run.answer("systemctl", "is-enabled", "openipmi.service", stdout="masked\n")
         self.run.answer("systemctl", "is-active", "--quiet", "NetworkManager", code=3)
         self.run.answer("sshd", "-T", stdout=SSHD_EFFECTIVE)
+        self.run.answer("systemctl", "is-active", "--quiet", "ssh.socket", code=3)
         self.run.answer("dpkg-query", stdout="install ok installed")
         self.script_dir = tmp_path / "stage"
 
@@ -563,7 +564,7 @@ def test_an_earlier_drop_in_overriding_ours_fails_the_deploy(host: Host) -> None
 
 
 def test_the_deprecated_challenge_response_keyword_is_checked_as_kbdinteractive(host: Host) -> None:
-    expected = host.installer.expected_sshd_settings(host.build / "sshd-hardening.conf")
+    expected = sshd.expected_settings(host.build / "sshd-hardening.conf")
 
     assert "challengeresponseauthentication" not in expected
     assert expected["kbdinteractiveauthentication"] == "no"

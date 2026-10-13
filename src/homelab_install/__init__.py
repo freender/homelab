@@ -14,7 +14,7 @@ may import this package.
 
 from __future__ import annotations
 
-from . import env, files, log, packages, systemd
+from . import env, files, log, packages, sshd, sudoers, systemd
 from .changes import ChangeSet
 from .context import InstallContext
 from .errors import InstallError
@@ -29,5 +29,7 @@ __all__ = [
     "log",
     "packages",
     "run",
+    "sshd",
+    "sudoers",
     "systemd",
 ]

@@ -113,6 +113,8 @@ only_mutate = [
     "src/homelab_install/main.py",
     "src/homelab_install/osinfo.py",
     "src/homelab_install/packages.py",
+    "src/homelab_install/sshd.py",
+    "src/homelab_install/sudoers.py",
     "src/homelab_install/systemd.py",
 ]
 
@@ -133,6 +135,7 @@ also_copy = [
     "base-packages",
     "docker",
     "docker-stacks",
+    "guest-baseline",
     "guest-disks",
     "keepalived",
     "metrics-exporters",

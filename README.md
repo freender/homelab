@@ -180,6 +180,15 @@ Ubuntu OS setup for the offsite hosts (cinci, cottonwood)
 ./deploy ubuntu-setup all
 ```
 
+### [guest-baseline](guest-baseline/)
+Login and locale baseline for Debian guests (VMs and LXCs)
+- Creates `freender` if missing, password sudo, key-only sshd verified with `sshd -T`
+- Timezone and `en_US.UTF-8` locale; a dry run prints the live plan
+
+```bash
+./deploy guest-baseline all
+```
+
 ### [keepalived](keepalived/)
 VRRP virtual IP for the Traefik HA frontend
 

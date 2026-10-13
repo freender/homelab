@@ -18,7 +18,8 @@ Worth knowing before reading:
   writes `50-cloud-init.conf`, which sorts ahead of our `99-` drop-in. Both hosts
   carry one today (it says `PasswordAuthentication no`). If it is ever
   regenerated with `yes`, the bash would have reported a hardened host that
-  accepts passwords.
+  accepts passwords. The check and the `visudo` preflight are shared with
+  `guest-baseline` in `homelab_install.sshd`/`.sudoers` (homelab-ops#162).
 * **Converged files are not rewritten.** The bash rewrote `/etc/timezone`, the
   `/etc/localtime` link and the udev rule on every deploy, so their mtimes only
   ever recorded the last deploy.
@@ -43,7 +44,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from homelab_install import env, files, log, packages, run, systemd
+from homelab_install import env, files, log, packages, run, sshd, sudoers, systemd
 from homelab_install.context import InstallContext
 from homelab_install.errors import InstallError
 
@@ -52,8 +53,6 @@ SSHD_HARDENING = "sshd-hardening.conf"
 REQUIRED_BUILD_FILES = ("sudoers", NIC_RULE, SSHD_HARDENING, "zfs.conf", "99-inotify.conf")
 WIREGUARD_SYSCTL = "99-wireguard.conf"
 UNWANTED_UNITS = {"openipmi.service": "no BMC/IPMI device"}
-# sshd -T prints the canonical keyword; the drop-in may use a deprecated alias.
-SSHD_KEYWORD_ALIASES = {"challengeresponseauthentication": "kbdinteractiveauthentication"}
 
 # Module-level so tests can rebind them under tmp_path.
 ZONEINFO = "/usr/share/zoneinfo"
@@ -125,11 +124,7 @@ def preflight(ctx: InstallContext) -> bool:
     except KeyError as exc:
         raise InstallError(f"deploy user {ctx.env['DEPLOY_USER']} does not exist") from exc
 
-    # An invalid file in /etc/sudoers.d breaks sudo host-wide the instant it lands.
-    if _run(
-        ["visudo", "-cf", str(ctx.build_dir / "sudoers")], check=False, stdout=subprocess.DEVNULL
-    ).returncode:
-        raise InstallError("staged sudoers file is invalid; refusing to install")
+    sudoers.check_staged(ctx.build_dir / "sudoers")
     return wireguard
 
 
@@ -299,54 +294,6 @@ def pin_primary_nic(ctx: InstallContext) -> None:
 
 
 # ---------------------------------------------------------------------------
-# sshd
-# ---------------------------------------------------------------------------
-
-
-def expected_sshd_settings(path: Path) -> dict[str, str]:
-    """`keyword value` pairs from the hardening drop-in, keyed as `sshd -T` prints them."""
-    settings: dict[str, str] = {}
-    for line in path.read_text(encoding="utf-8").splitlines():
-        words = line.split()
-        if len(words) >= 2 and not words[0].startswith("#"):
-            key = words[0].lower()
-            settings[SSHD_KEYWORD_ALIASES.get(key, key)] = " ".join(words[1:]).lower()
-    return settings
-
-
-def verify_effective_sshd(ctx: InstallContext) -> None:
-    """Fail unless the running config really says what the drop-in says.
-
-    The file being on disk proves nothing: sshd keeps the first value it reads,
-    so any earlier `sshd_config.d` file or `sshd_config` line wins over ours.
-    """
-    effective: dict[str, str] = {}
-    for line in _output(["sshd", "-T"]).splitlines():
-        key, _, value = line.partition(" ")
-        effective[key.lower()] = value.strip().lower()
-
-    dest = ctx.file_map[SSHD_HARDENING][0]
-    wrong = [
-        f"{key} is {effective.get(key, '(unset)')}, expected {value}"
-        for key, value in expected_sshd_settings(ctx.build_dir / SSHD_HARDENING).items()
-        if effective.get(key) != value
-    ]
-    if wrong:
-        raise InstallError(
-            f"effective sshd config overrides {dest}: {'; '.join(wrong)}. sshd keeps the first "
-            "value it reads, so an earlier file in /etc/ssh/sshd_config.d or sshd_config wins"
-        )
-    log.ok("Effective sshd config matches the hardening drop-in")
-
-
-def harden_sshd(ctx: InstallContext) -> None:
-    if files.install_validated(ctx, SSHD_HARDENING, ["sshd", "-t"]):
-        _check(["systemctl", "reload", "ssh"])
-        log.ok("SSH reloaded")
-    verify_effective_sshd(ctx)
-
-
-# ---------------------------------------------------------------------------
 # Kernel tunables and WireGuard
 # ---------------------------------------------------------------------------
 
@@ -403,7 +350,7 @@ def install(ctx: InstallContext) -> None:
     files.install(ctx, "sudoers")
 
     log.action("SSH hardening")
-    harden_sshd(ctx)
+    sshd.harden(ctx, SSHD_HARDENING)
 
     log.action("ZFS ARC limit")
     apply_zfs_arc(ctx)

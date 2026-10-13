@@ -1,0 +1,3 @@
+# Managed by homelab
+Defaults:freender timestamp_timeout=1440
+freender ALL=(ALL:ALL) ALL
