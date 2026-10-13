@@ -40,7 +40,7 @@ mid-week. `arc` and `xur` are on the same module, daily at 04:05 and 04:00.
 | **Reboot into a new kernel** | **Manual** — this runbook |
 
 What was never automated, and still is not, is the reboot. Installing a kernel
-is cheap and reversible; booting into it on a node whose guests are mostly LXC,
+is cheap and reversible; booting into it on a node that carries LXC guests,
 which cannot live-migrate, is neither. With `ha shutdown_policy=migrate`,
 entering HA maintenance restarts every LXC on the node twice. That decision —
 *when*, and in *what order* — is the judgement this runbook exists to hold.
@@ -82,15 +82,15 @@ Verified 2026-08-16. Re-check rather than trust if anything looks different.
 - **Cluster:** `ace`, `bray`, `clovis` — 3 nodes, expected votes 3. `osiris` is
   **standalone** and not part of it.
 - **HA is armed:** fencing active, CRM + LRM watchdogs active. HA-managed
-  guests are `ct:101` (tower, ace), `ct:104` (arc, bray), `ct:107` (helm,
-  clovis), `ct:108` (neo, bray), and the VMs `vm:109` (zion, ace) and
-  `vm:110` (riven, bray).
+  guests are `ct:101` (tower, ace), `ct:104` (arc, bray), `ct:108` (neo,
+  bray), and the VMs `vm:109` (zion, ace), `vm:110` (riven, bray) and
+  `vm:112` (helm, clovis).
 - **`xur` (105) and `deepstone` (111) are not HA-managed** — they live on
   standalone osiris and simply go down with it.
 - **`ha: shutdown_policy=migrate`** in `/etc/pve/datacenter.cfg`. Rebooting a
   cluster node **moves its HA guests to another node**; they do not just come
   back locally. LXC guests cannot live-migrate, so each LXC move is a shutdown
-  and restart elsewhere. The two VMs, zion and riven, **live-migrate**: their
+  and restart elsewhere. The three VMs, zion, riven and helm, **live-migrate**: their
   replica on the target is topped up incrementally and RAM is copied with
   ~100 ms downtime (~13 s end to end for zion), so the OpenCode session and the
   shared SSH agent on riven survive the move (freender/homelab-ops#125).
@@ -121,7 +121,7 @@ ssh ace 'ha-manager status | grep "ct:101"' # ct:101 is tower
 | Wave | Node(s) | Guests | Why here |
 | --- | --- | --- | --- |
 | 1 | `osiris` **+** the non-tower node (`ace` or `clovis`) | xur (PBS), deepstone / HA guests on that selected node | osiris holds no vote, so this is one cluster node down, not two — cluster stays 2/3. Pair osiris with the node that does **not** currently carry tower, leaving tower's node for wave 2. |
-| 2 | Tower's current node (`ace` or `clovis`) | tower / other guests on that selected node | Only after wave 1 is fully back and HA has finished rebalancing. If this is clovis, accept the monitoring blind window. |
+| 2 | Tower's current node (`ace` or `clovis`) | tower / other guests on that selected node | Only after wave 1 is fully back and HA has finished rebalancing. If this is clovis, helm live-migrates with it. |
 | 3 | `bray` | arc, riven, neo | **Last by preference** (see below). |
 
 Concretely: tower on **ace** means `osiris` + `clovis`, then `ace`, then
@@ -139,12 +139,14 @@ bray last means every other node is already verified when that residual risk is
 taken, so it stays the default order. When the roll has a reason to put bray
 earlier, that is acceptable now; it is no longer a hard rule.
 
-By the same logic, clovis (wave 2) comes *before* bray, not last: helm is the
-whole monitoring stack, and finishing it in wave 2 means observability is back
-up before the one reboot that risks the agent. Accept the blind window during
-clovis itself — VictoriaMetrics, vmalert, Alertmanager and Grafana are all down,
-so no alert can fire, including one about clovis. The `Watchdog` dead-man's
-switch going quiet is expected, not an incident.
+By the same logic, clovis comes *before* bray, not last. helm (VM 112) is the
+whole monitoring stack, and a clovis reboot live-migrates it to ace, so
+monitoring normally sees only a sub-second pause. If that migration fails, HA
+restarts helm from its replica and VictoriaMetrics, vmalert, Alertmanager and
+Grafana are down until it is back: no alert can fire, including one about
+clovis, and the `Watchdog` dead-man's switch goes quiet. Taking clovis before
+bray means that failure, if it happens, is found and recovered before the one
+reboot that risks the agent.
 
 **Two things HA does not cover:**
 
@@ -152,7 +154,7 @@ switch going quiet is expected, not an incident.
   deepstone simply go down with it and come back on boot — nothing migrates.
   Confirm no backup or sync is running before you take it.
 - **`void` on clovis is not an HA resource** (`ha-manager status` lists only
-  ct:101, 104, 107, 108 and vm:109, 110). It will not migrate; it stops with clovis and
+  ct:101, 104, 108 and vm:109, 110, 112). It will not migrate; it stops with clovis and
   returns on boot.
 
 ## Per-wave procedure
@@ -242,8 +244,8 @@ listed; a green pre-flight is not, and no persistent auto-reboot setting exists.
 
 **Do not enter HA maintenance.** Cluster nodes have
 `ha: shutdown_policy=migrate`, so a direct reboot hands HA services off on its
-own. Entering maintenance is worse here: most HA guests are LXC and cannot
-live-migrate, so it restarts every one of them during the drain and, with
+own. Entering maintenance is worse here: tower, arc and neo are LXC and cannot
+live-migrate, so it restarts each of them during the drain and, with
 `crs: ha-rebalance-on-start=1`, restarts them again when the node returns.
 
 #### 3a. Reboot after confirmation
@@ -255,12 +257,13 @@ ssh <node> 'systemctl reboot'
 For wave 1, issue the reboots for `osiris` and the selected non-tower node;
 osiris is standalone, so only one of the three cluster votes is down. Do not send
 the tower node or bray reboot until this wave is fully recovered — the sequencing
-is enforced by step 4's verification, not by asking again. If clovis is either
-selected node, accept the monitoring blind window and wait for helm to return
-before continuing. For bray, the reboot live-migrates riven, and with it the
-OpenCode session running this workflow, to ace. Verify the migration first
-(`ssh ace 'ha-manager status | grep vm:110'` shows it started on ace), then run
-step 4 for bray as for any other node. If the session does not survive, the
+is enforced by step 4's verification, not by asking again. If clovis is a
+selected node, its reboot live-migrates helm to ace: confirm
+`ssh ace 'ha-manager status | grep vm:112'` shows it started on ace, and that
+the step 4 queries against helm answer, before continuing. For bray, the reboot
+live-migrates riven, and with it the OpenCode session running this workflow, to
+ace. Verify the migration first (`ssh ace 'ha-manager status | grep vm:110'`
+shows it started on ace), then run step 4 for bray as for any other node. If the session does not survive, the
 human opens a new session, re-runs `addhomelabkeys`, and verifies from there.
 
 ### 4. Verify before touching the next node
@@ -394,3 +397,58 @@ systemctl --failed --no-legend; systemctl --user --failed --no-legend
 ```
 
 **Stop and report if** any of these is not active or the kernel did not change.
+
+---
+
+# Rebooting helm
+
+`helm` (VM 112) boots its own kernel, and `apt-upgrade` installs new ones there
+daily at 08:01 without rebooting. A clovis reboot **live-migrates** helm and
+does not reboot it, so the rolling runbook above never clears a pending helm
+kernel. helm reports `homelab_reboot_required` (`metrics-exporters.own_kernel`),
+so `RebootRequired` names it in the Saturday digest like riven.
+
+helm is the whole monitoring stack (VictoriaMetrics, vmalert, Alertmanager,
+Grafana), the secondary keepalived node for the Traefik VIP `10.0.40.15`, and
+one of the three Docker Swarm managers. Rebooting it opens a monitoring blind
+window of a minute or two: no alert can fire, and the `Watchdog` heartbeat
+pauses. Unlike riven, it does not end the session that issues it.
+
+**Who:** the agent, only after the human approves it through the `question`
+tool. Never during a `/pve-reboot` roll (finish the roll first) and never inside
+the 02:00 or 08:00 maintenance windows.
+
+### Pre-flight
+
+```bash
+ssh helm 'cat /var/lib/prometheus/node-exporter/reboot.prom'   # homelab_reboot_required 1
+ssh tower 'docker node ls'           # the other two managers Ready / Reachable
+ssh helm 'ip -br addr show nic0'     # whether helm holds the VIP right now
+```
+
+**Stop if** tower or neo is not a healthy manager: with helm down, swarm
+quorum needs both. If helm holds `10.0.40.15`, the VIP fails over to tower
+(priority 101) or neo; that is expected, not a reason to stop.
+
+### Reboot
+
+Reboot from inside the guest, not with `qm reboot` or `ha-manager`, so HA sees
+nothing and does not move the VM:
+
+```bash
+ssh helm-root 'systemctl reboot'
+```
+
+### After the reboot
+
+```bash
+ssh helm 'uname -r'                                            # the newest installed kernel
+ssh helm 'cat /var/lib/prometheus/node-exporter/reboot.prom'   # homelab_reboot_required 0
+ssh helm 'systemctl --failed --no-legend'
+ssh helm 'docker ps --format "{{.Names}} {{.Status}}" | grep -v " Up " || true'
+ssh helm 'curl -sf localhost:9093/-/ready && curl -sf localhost:8428/health'
+ssh tower 'docker node ls'           # helm back as a Reachable or Leader manager
+```
+
+**Stop and report if** a container is not up, Alertmanager or VictoriaMetrics
+is not ready, helm has not rejoined the swarm, or the kernel did not change.

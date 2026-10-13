@@ -59,8 +59,11 @@ there would hide problems a reboot causes.
    and continue straight into the next wave. Report progress as you go, but do not ask
    again. Do **not** enter HA maintenance: `ha: shutdown_policy=migrate` handles HA
    services during a direct reboot, and maintenance would restart every LXC twice
-   because LXC cannot live-migrate. `clovis` runs the monitoring stack, so the blind
-   window during its reboot is expected, not an incident.
+   because LXC cannot live-migrate. A `clovis` reboot live-migrates helm (`vm:112`),
+   the monitoring stack, to ace: confirm it started there and answers the README's
+   step-4 queries before the next wave. If that migration fails, HA restarts helm from
+   its replica, and the monitoring blind window until it returns is expected, not an
+   incident.
 
    **Stop and report** — do not silently adapt — on any failed recovery check, a node
    that does not return, a pool that comes back degraded, quorum not restored, or a

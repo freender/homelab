@@ -52,11 +52,14 @@ groups:
           summary: "{{ $labels.host }} memory pressure is high"
           description: "Available memory has stayed below 10 percent for 15 minutes."
 
+      # /mnt/vmdata is helm's backup=0 data disk (VictoriaMetrics and
+      # VictoriaLogs). Its bind mounts under /mnt/cache/appdata are deliberately
+      # not listed, or one disk filling would fire three alerts.
       - alert: DockerHostFilesystemLowSpace
         expr: |
-          node_filesystem_avail_bytes{job="pve-node", host=~"tower|helm|neo", fstype!="tmpfs", mountpoint=~"/|/mnt/cache/appdata|/mnt/cache/downloads|/mnt/cache/pictures|/mnt/cache/documents|/mnt/cache/obsidian|/mnt/cache/logseq|/mnt/cache/games|/mnt/tank/media"}
+          node_filesystem_avail_bytes{job="pve-node", host=~"tower|helm|neo", fstype!="tmpfs", mountpoint=~"/|/mnt/cache/appdata|/mnt/vmdata|/mnt/cache/downloads|/mnt/cache/pictures|/mnt/cache/documents|/mnt/cache/obsidian|/mnt/cache/logseq|/mnt/cache/games|/mnt/tank/media"}
           /
-          node_filesystem_size_bytes{job="pve-node", host=~"tower|helm|neo", fstype!="tmpfs", mountpoint=~"/|/mnt/cache/appdata|/mnt/cache/downloads|/mnt/cache/pictures|/mnt/cache/documents|/mnt/cache/obsidian|/mnt/cache/logseq|/mnt/cache/games|/mnt/tank/media"}
+          node_filesystem_size_bytes{job="pve-node", host=~"tower|helm|neo", fstype!="tmpfs", mountpoint=~"/|/mnt/cache/appdata|/mnt/vmdata|/mnt/cache/downloads|/mnt/cache/pictures|/mnt/cache/documents|/mnt/cache/obsidian|/mnt/cache/logseq|/mnt/cache/games|/mnt/tank/media"}
           < 0.10
         for: 10m
         labels:
@@ -67,9 +70,9 @@ groups:
 
       - alert: DockerHostFilesystemAlmostFull
         expr: |
-          node_filesystem_avail_bytes{job="pve-node", host=~"tower|helm|neo", fstype!="tmpfs", mountpoint=~"/|/mnt/cache/appdata|/mnt/cache/downloads|/mnt/cache/pictures|/mnt/cache/documents|/mnt/cache/obsidian|/mnt/cache/logseq|/mnt/cache/games|/mnt/tank/media"}
+          node_filesystem_avail_bytes{job="pve-node", host=~"tower|helm|neo", fstype!="tmpfs", mountpoint=~"/|/mnt/cache/appdata|/mnt/vmdata|/mnt/cache/downloads|/mnt/cache/pictures|/mnt/cache/documents|/mnt/cache/obsidian|/mnt/cache/logseq|/mnt/cache/games|/mnt/tank/media"}
           /
-          node_filesystem_size_bytes{job="pve-node", host=~"tower|helm|neo", fstype!="tmpfs", mountpoint=~"/|/mnt/cache/appdata|/mnt/cache/downloads|/mnt/cache/pictures|/mnt/cache/documents|/mnt/cache/obsidian|/mnt/cache/logseq|/mnt/cache/games|/mnt/tank/media"}
+          node_filesystem_size_bytes{job="pve-node", host=~"tower|helm|neo", fstype!="tmpfs", mountpoint=~"/|/mnt/cache/appdata|/mnt/vmdata|/mnt/cache/downloads|/mnt/cache/pictures|/mnt/cache/documents|/mnt/cache/obsidian|/mnt/cache/logseq|/mnt/cache/games|/mnt/tank/media"}
           < 0.05
         for: 5m
         labels:
@@ -89,11 +92,11 @@ groups:
       # rate. A projection states the remaining time directly.
       - alert: DockerHostFilesystemFillingUp
         expr: |
-          predict_linear(node_filesystem_avail_bytes{job="pve-node", host=~"tower|helm|neo", fstype!="tmpfs", mountpoint=~"/|/mnt/cache/appdata|/mnt/cache/downloads|/mnt/cache/pictures|/mnt/cache/documents|/mnt/cache/obsidian|/mnt/cache/logseq|/mnt/cache/games|/mnt/tank/media"}[24h], 7 * 24 * 3600) < 0
+          predict_linear(node_filesystem_avail_bytes{job="pve-node", host=~"tower|helm|neo", fstype!="tmpfs", mountpoint=~"/|/mnt/cache/appdata|/mnt/vmdata|/mnt/cache/downloads|/mnt/cache/pictures|/mnt/cache/documents|/mnt/cache/obsidian|/mnt/cache/logseq|/mnt/cache/games|/mnt/tank/media"}[24h], 7 * 24 * 3600) < 0
           and
-          node_filesystem_avail_bytes{job="pve-node", host=~"tower|helm|neo", fstype!="tmpfs", mountpoint=~"/|/mnt/cache/appdata|/mnt/cache/downloads|/mnt/cache/pictures|/mnt/cache/documents|/mnt/cache/obsidian|/mnt/cache/logseq|/mnt/cache/games|/mnt/tank/media"}
+          node_filesystem_avail_bytes{job="pve-node", host=~"tower|helm|neo", fstype!="tmpfs", mountpoint=~"/|/mnt/cache/appdata|/mnt/vmdata|/mnt/cache/downloads|/mnt/cache/pictures|/mnt/cache/documents|/mnt/cache/obsidian|/mnt/cache/logseq|/mnt/cache/games|/mnt/tank/media"}
           /
-          node_filesystem_size_bytes{job="pve-node", host=~"tower|helm|neo", fstype!="tmpfs", mountpoint=~"/|/mnt/cache/appdata|/mnt/cache/downloads|/mnt/cache/pictures|/mnt/cache/documents|/mnt/cache/obsidian|/mnt/cache/logseq|/mnt/cache/games|/mnt/tank/media"}
+          node_filesystem_size_bytes{job="pve-node", host=~"tower|helm|neo", fstype!="tmpfs", mountpoint=~"/|/mnt/cache/appdata|/mnt/vmdata|/mnt/cache/downloads|/mnt/cache/pictures|/mnt/cache/documents|/mnt/cache/obsidian|/mnt/cache/logseq|/mnt/cache/games|/mnt/tank/media"}
           > 0.10 < 0.30
         for: 6h
         labels:
