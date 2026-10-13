@@ -298,7 +298,7 @@ def test_report_for_missing_moved_and_mistyped_guests() -> None:
     missing = live.ClusterView("clovis", {}, view.ha, view.replication)
     assert live.guest_report(spec, missing, FixtureRunner()) == [
         "MISSING: no guest 112 on clovis's cluster; it would be created on clovis "
-        "(no create path yet)"
+        "by `./guest create helm`"
     ]
 
     resources[112] = {**resources[112], "type": "lxc"}

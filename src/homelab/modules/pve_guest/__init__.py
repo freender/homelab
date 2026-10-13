@@ -5,13 +5,16 @@ homelab-ops#148). `./validate` checks every block and every vmid written by hand
 elsewhere in hosts.conf; `./deploy [--dry-run] pve-guest <guest>` compares the
 block with the guest's current config and labels each difference by what applying
 it would take. There is no apply path: a live run reports exactly what a dry run
-does and changes nothing.
+does and changes nothing. A guest that does not exist yet is built once, from
+the same block, by `./guest create <host>` (outside `./deploy`).
 
     pveconf    - parse/normalize Proxmox output (pure)
     spec       - schema, profiles, roles, per-guest validation (pure)
     inventory  - checks across guests and against hand-written vmids
     drift      - spec vs live, impact labels (pure)
     live       - pvesh reads over SSH, the per-guest report
+    build      - create's command lines and cloud-init documents (pure)
+    create     - `./guest create`: runs them on the home node
 """
 
 from __future__ import annotations

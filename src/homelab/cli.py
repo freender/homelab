@@ -259,6 +259,25 @@ def _stack_placements(
     return rows
 
 
+@main.group()
+def guest() -> None:
+    """Proxmox guest commands."""
+
+
+@guest.command("create")
+@click.option("--dry-run", is_flag=True, default=False, help="Print the plan; change nothing.")
+@click.argument("host")
+def guest_create(dry_run: bool, host: str) -> None:
+    """Create a new VM or LXC from its pve-guest spec. Refuses an existing vmid."""
+    from .modules.pve_guest.create import CreateError, create_guest
+    from .modules.pve_guest.live import NodeUnreachable
+
+    try:
+        create_guest(repo_root(), host, dry_run)
+    except (HostLookupError, ValueError, CreateError, NodeUnreachable) as error:
+        raise click.ClickException(str(error)) from error
+
+
 @hosts.command("stacks")
 @click.option("--host", help="Only show stacks for this host.")
 @click.option("--stack", help="Only show hosts running this stack.")

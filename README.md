@@ -25,7 +25,19 @@ Flags supported by `./deploy`:
 - `--dry-run`, `-n`: preview actions only
 - `--force`, `--force-update`: overwrite managed files even when content matches
 
-Run `./deploy` and `./validate` from the repo root. The wrappers prefer repo `.venv`, then `uv run`, then plain `python3`, so the same commands work on both `exo` and `riven`.
+Run `./deploy`, `./validate` and `./guest` from the repo root. The wrappers prefer repo `.venv`, then `uv run`, then plain `python3`, so the same commands work on both `exo` and `riven`.
+
+## New Guests
+
+```bash
+./guest create --dry-run <host>   # print the plan: commands, cloud-init snippets
+./guest create <host>             # build the VM or LXC from its pve-guest block
+./deploy all <host>               # then everything inside it
+```
+
+`./guest create` refuses a vmid that exists on any PVE node and never touches a
+running guest. It stops once the guest boots and takes root's infra key. HA and
+replication are not created; `./deploy pve-guest <host>` lists them as drift.
 
 ## Modules
 

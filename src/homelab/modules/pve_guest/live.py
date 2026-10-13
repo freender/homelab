@@ -101,7 +101,7 @@ def guest_report(spec: GuestSpec, view: ClusterView, runner: Runner) -> list[str
     if resource is None:
         return [
             f"MISSING: no guest {spec.vmid} on {view.node}'s cluster; it would be created "
-            f"on {spec.home_node} (no create path yet)"
+            f"on {spec.home_node} by `./guest create {spec.host}`"
         ]
     if resource.get("type") != spec.kind:
         return [f"{REFUSED}: vmid {spec.vmid} is {resource.get('type')}, the spec says {spec.kind}"]
