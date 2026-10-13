@@ -105,15 +105,27 @@ class LiveDisk:
     opts: dict[str, str] = field(default_factory=dict)
 
 
+def volume_of(raw: str) -> str:
+    """The volume id (or bind path) a disk property string starts with."""
+    return split_prop(raw, "volume").get("volume", "")
+
+
+def storage_of(volume: str) -> str | None:
+    """`vm-flash:vm-1-disk-0` -> `vm-flash`; a host bind path has none."""
+    if volume.startswith("/"):
+        return None
+    return volume.partition(":")[0] or None
+
+
 def parse_disk(kind: str, key: str, raw: str) -> LiveDisk:
-    parts = split_prop(raw, "volume")
-    volume = parts.get("volume", "")
+    parts = split_prop(raw)
+    volume = volume_of(raw)
     bind = volume.startswith("/")
     # PVE defaults: CT mount points are excluded from backup unless asked;
     # everything else is included.
     backup_default = not (kind == "lxc" and key != "rootfs")
     return LiveDisk(
-        storage=None if bind else volume.partition(":")[0] or None,
+        storage=storage_of(volume),
         source=volume if bind else None,
         size=parse_size(parts.get("size")),
         backup=to_bool(parts["backup"]) if "backup" in parts else backup_default,

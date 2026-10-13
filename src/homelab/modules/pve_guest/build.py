@@ -137,19 +137,37 @@ def _flag(value: bool, default: bool) -> str | None:
     return None if value == default else ("1" if value else "0")
 
 
+def disk_prop(spec: GuestSpec, disk: DiskSpec, volume: str) -> str:
+    """The `qm`/`pct` property string that puts `volume` at `disk.key`."""
+    if spec.kind == "qemu":
+        items: list[tuple[str, object]] = [
+            ("backup", _flag(disk.backup, True)),
+            ("replicate", _flag(disk.replicate, True)),
+            *spec.disk_opts.items(),
+        ]
+    else:
+        # A CT mount point is left out of backups unless it says backup=1.
+        items = [
+            ("mp", disk.mount),
+            ("backup", _flag(disk.backup, disk.key == "rootfs")),
+            ("replicate", _flag(disk.replicate, True)),
+            ("shared", "1" if disk.shared else None),
+        ]
+    return _prop(volume, items)
+
+
+def reattach(spec: GuestSpec, disk: DiskSpec, volid: str) -> list[str]:
+    """Put an existing volume (a guest's `unusedN`) back at `disk.key`, data intact."""
+    tool = "qm" if spec.kind == "qemu" else "pct"
+    return [tool, "set", str(spec.vmid), f"--{disk.key}", disk_prop(spec, disk, volid)]
+
+
 def vm_disk(spec: GuestSpec, disk: DiskSpec, image_volid: str) -> str:
     if disk.role == "os":
         volume = f"{disk.storage}:0,import-from={image_volid}"
     else:
         volume = f"{disk.storage}:{gib(spec, disk)}"
-    return _prop(
-        volume,
-        [
-            ("backup", _flag(disk.backup, True)),
-            ("replicate", _flag(disk.replicate, True)),
-            *spec.disk_opts.items(),
-        ],
-    )
+    return disk_prop(spec, disk, volume)
 
 
 def vm_net(spec: GuestSpec, net: NetSpec) -> str:
@@ -194,17 +212,7 @@ def vm_resize(spec: GuestSpec) -> list[str]:
 
 
 def lxc_disk(spec: GuestSpec, disk: DiskSpec) -> str:
-    volume = disk.source or f"{disk.storage}:{gib(spec, disk)}"
-    # A CT mount point is left out of backups unless it says backup=1.
-    return _prop(
-        volume,
-        [
-            ("mp", disk.mount),
-            ("backup", _flag(disk.backup, disk.key == "rootfs")),
-            ("replicate", _flag(disk.replicate, True)),
-            ("shared", "1" if disk.shared else None),
-        ],
-    )
+    return disk_prop(spec, disk, disk.source or f"{disk.storage}:{gib(spec, disk)}")
 
 
 def lxc_net(net: NetSpec) -> str:

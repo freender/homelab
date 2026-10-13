@@ -118,7 +118,10 @@ def guest_report(spec: GuestSpec, view: ClusterView, runner: Runner) -> list[str
     if node != spec.home_node:
         header += f" (home node {spec.home_node})"
     lines = [f"{header}: {f'{len(rows)} diff(s)' if rows else 'in sync'}"]
-    lines += [f"  {format_diff(row)}" for row in rows]
+    for row in rows:
+        lines.append(f"  {format_diff(row)}")
+        if row.fix:
+            lines.append(f"    $ {row.fix}")
     lines += [
         f"  pending {change.key}: {change.current or '-'} -> "
         f"{'(delete)' if change.delete else change.pending}"

@@ -1027,6 +1027,104 @@ def test_vm_disk_options_and_sizes() -> None:
     ]
 
 
+def test_a_restored_vm_points_at_its_unused_disk_not_a_new_one() -> None:
+    """The shape an in-place qmrestore leaves (#160): scsi1 gone, its data in unused0."""
+    raw = copy.deepcopy(default_registry(ROOT).get("helm", "pve-guest"))
+    raw["disks"]["scsi2"] = {"role": "data", "size": "8G", "storage": "other", "mount": "/d"}
+    spec = parse_guest("helm", raw, NODES)
+    current = fixture_live("cluster", 112)
+    del current["scsi1"]
+    current["unused0"] = "vm-flash:vm-112-disk-2"
+
+    rows = drift.disk_diffs(spec, current)
+
+    assert _rows(rows) == [
+        ("scsi1", "reattach unused0", "-", drift.CONFIG),
+        ("scsi2", "new data disk", "-", drift.LIVE),
+    ]
+    assert [row.fix for row in rows] == [
+        "qm set 112 --scsi1 vm-flash:vm-112-disk-2,backup=0,discard=on,iothread=1,ssd=1",
+        None,
+    ]
+    unmanaged = drift.unmanaged_diffs(spec, current)
+    assert _rows(unmanaged) == [("unused0", "-", "vm-flash:vm-112-disk-2", drift.UNMANAGED)]
+
+
+def test_an_unused_disk_on_another_storage_is_not_offered() -> None:
+    spec = real_specs()["helm"]
+    current = fixture_live("cluster", 112)
+    del current["scsi1"]
+    current["unused0"] = "other:vm-112-disk-2"
+    (row,) = drift.disk_diffs(spec, current)
+    assert (row.key, row.want, row.impact, row.fix) == (
+        "scsi1",
+        "new scratch disk",
+        drift.LIVE,
+        None,
+    )
+
+
+def test_an_ambiguous_reattach_names_every_candidate_and_no_command() -> None:
+    spec = real_specs()["helm"]
+    current = fixture_live("cluster", 112)
+    del current["scsi1"]
+    current["unused10"] = "vm-flash:vm-112-disk-9"
+    current["unused2"] = "vm-flash:vm-112-disk-2"
+    (row,) = drift.disk_diffs(spec, current)
+    assert (row.want, row.impact, row.fix) == (
+        "reattach one of unused2, unused10",
+        drift.CONFIG,
+        None,
+    )
+
+
+def test_a_ct_mount_point_reattaches_with_pct_unless_two_disks_compete() -> None:
+    spec = real_specs()["neo"]
+    current = fixture_live("cluster", 108)
+    del current["mp1"]
+    current["unused0"] = "vm-flash:subvol-108-disk-2"
+    (row,) = drift.disk_diffs(spec, current)
+    assert (row.key, row.want, row.impact) == ("mp1", "reattach unused0", drift.CONFIG)
+    assert row.fix == "pct set 108 --mp1 vm-flash:subvol-108-disk-2,mp=/mnt/cache/pictures"
+
+    del current["mp2"]
+    rows = drift.disk_diffs(spec, current)
+    assert [(r.key, r.want, r.fix) for r in rows] == [
+        ("mp1", "reattach one of unused0", None),
+        ("mp2", "reattach one of unused0", None),
+    ]
+
+
+def test_a_missing_bind_mount_is_never_offered_an_unused_volume() -> None:
+    raw = copy.deepcopy(default_registry(ROOT).get("neo", "pve-guest"))
+    raw["disks"]["mp6"] = {"role": "data", "source": "/srv/x", "mount": "/mnt/x", "shared": True}
+    spec = parse_guest("neo", raw, NODES)
+    current = fixture_live("cluster", 108)
+    current["unused0"] = "vm-flash:subvol-108-disk-9"
+    (row,) = drift.disk_diffs(spec, current)
+    assert (row.key, row.want, row.fix) == ("mp6", "new data disk", None)
+
+
+def test_report_prints_the_reattach_command_under_its_row() -> None:
+    spec = real_specs()["helm"]
+    view = live.read_cluster(FixtureRunner(), ["clovis"])
+    entries = [
+        entry
+        for entry in json.loads((FIXTURES / "cluster" / "pending-112.json").read_text())
+        if entry["key"] != "scsi1"
+    ]
+    entries.append({"key": "unused0", "value": "vm-flash:vm-112-disk-2"})
+
+    report = live.guest_report(spec, view, lambda _node, _command: json.dumps(entries))
+
+    assert report[1:] == [
+        "  " + drift.format_diff(drift.diff("scsi1", "reattach unused0", None, drift.CONFIG)),
+        "    $ qm set 112 --scsi1 vm-flash:vm-112-disk-2,backup=0,discard=on,iothread=1,ssd=1",
+        "  "
+        + drift.format_diff(drift.diff("unused0", None, "vm-flash:vm-112-disk-2", drift.UNMANAGED)),
+    ]
+
+
 def test_ha_rows_are_exact() -> None:
     arc = real_specs()["arc"]
     xur = real_specs()["xur"]

@@ -7,8 +7,10 @@ the spec does not manage is reported as unmanaged and left alone).
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
+from .build import command, reattach
 from .pveconf import (
     LiveDisk,
     LiveHa,
@@ -19,6 +21,8 @@ from .pveconf import (
     parse_net,
     same_value,
     split_prop,
+    storage_of,
+    volume_of,
 )
 from .spec import DiskSpec, GuestSpec, NetSpec
 
@@ -41,6 +45,7 @@ DEFAULTS: dict[str, dict[str, str]] = {
 QEMU_LIVE = frozenset({"balloon", "onboot", "name", "tablet", "startup", "tags"})
 LXC_REBOOT = frozenset({"features", "ostype", "hostname"})
 LXC_REFUSED = frozenset({"arch", "unprivileged"})
+UNUSED_RE = re.compile(r"^unused\d+$")
 
 
 @dataclass(frozen=True)
@@ -49,6 +54,8 @@ class Diff:
     want: str
     have: str
     impact: str
+    # The command that settles this row, shown under it; still report-only.
+    fix: str | None = None
 
 
 def _show(value: object) -> str:
@@ -96,14 +103,45 @@ def efidisk_diffs(spec: GuestSpec, live: dict[str, str]) -> list[Diff]:
 
 def disk_diffs(spec: GuestSpec, live: dict[str, str]) -> list[Diff]:
     rows: list[Diff] = []
+    missing = [disk for disk in spec.disks if disk.key not in live]
     for disk in spec.disks:
-        if disk.key not in live:
-            impact = LIVE if spec.kind == "qemu" else REBOOT
-            rows.append(diff(disk.key, f"new {disk.role} disk", None, impact))
+        if disk in missing:
+            rows.append(_missing_disk(spec, disk, missing, live))
             continue
         have = parse_disk(spec.kind, disk.key, live[disk.key])
         rows += _disk_field_diffs(spec, disk, have)
     return rows
+
+
+def _unused_on(disk: DiskSpec, live: dict[str, str]) -> list[str]:
+    """`unusedN` keys on the disk's storage, in N order (unused10 after unused2).
+
+    A bind mount has no storage and an unused volume always has one, so a missing
+    bind mount is never offered one."""
+    found = [
+        key
+        for key, value in live.items()
+        if UNUSED_RE.match(key) and storage_of(volume_of(value)) == disk.storage
+    ]
+    return sorted(found, key=lambda key: int(key.removeprefix("unused")))
+
+
+def _missing_disk(
+    spec: GuestSpec, disk: DiskSpec, missing: list[DiskSpec], live: dict[str, str]
+) -> Diff:
+    """A spec disk with no key. After an in-place qmrestore (or a detach) its data
+    may sit in an `unusedN` volume: point at that, never at a blank new disk."""
+    unused = _unused_on(disk, live)
+    if not unused:
+        impact = LIVE if spec.kind == "qemu" else REBOOT
+        return diff(disk.key, f"new {disk.role} disk", None, impact)
+    rivals = [other for other in missing if other.storage == disk.storage]
+    if len(unused) > 1 or len(rivals) > 1:
+        # Which volume holds which disk's data is not knowable from the config.
+        return diff(disk.key, f"reattach one of {', '.join(unused)}", None, CONFIG)
+    (key,) = unused
+    fix = command(reattach(spec, disk, volume_of(live[key])))
+    return Diff(disk.key, f"reattach {key}", _show(None), CONFIG, fix)
 
 
 def _disk_field_diffs(spec: GuestSpec, disk: DiskSpec, have: LiveDisk) -> list[Diff]:
