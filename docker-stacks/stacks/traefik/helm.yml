@@ -56,7 +56,7 @@ services:
     volumes:
       - /mnt/cache/appdata/crowdsec/data:/var/lib/crowdsec/data
       - /mnt/cache/appdata/crowdsec:/etc/crowdsec
-      - /mnt/cache/appdata/traefik/logs:/var/log/traefik:ro
+      - /mnt/scratch/traefik/logs:/var/log/traefik:ro
     # The `crowdsec` alias keeps the bouncer endpoint in fileConfig.yml working
     # now that the container is host-suffixed like every other service.
     networks:
@@ -188,8 +188,8 @@ services:
       - /mnt/cache/appdata/traefik/traefik.yml:/etc/traefik/traefik.yml:ro
       - /mnt/cache/appdata/traefik/acme.json:/etc/traefik/acme.json:ro
       - /mnt/cache/appdata/traefik/fileConfig.yml:/etc/traefik/fileConfig.yml:ro
-      - /mnt/cache/appdata/traefik/logs:/etc/traefik/logs:rw
-      - /mnt/cache/appdata/traefik/plugins-storage:/plugins-storage:rw
+      - /mnt/scratch/traefik/logs:/etc/traefik/logs:rw
+      - /mnt/scratch/traefik/plugins-storage:/plugins-storage:rw
     networks:
       net.internal: {}
       net_overlay: {}

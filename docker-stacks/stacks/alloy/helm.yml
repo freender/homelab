@@ -23,12 +23,12 @@ services:
       - '/etc/alloy/config.alloy'
     volumes:
       - /var/log:/var/log
-      - /mnt/cache/appdata/traefik/logs:/traefik/logs
-      - /mnt/cache/appdata/geoipupdate:/etc/alloy/geoip
+      - /mnt/scratch/traefik/logs:/traefik/logs
+      - /mnt/scratch/geoipupdate:/etc/alloy/geoip
       - /var/run/docker.sock:/var/run/docker.sock
       - /mnt/cache/appdata/alloy/config.alloy:/etc/alloy/config.alloy
       - /mnt/cache/appdata/alloy/endpoints.json:/etc/alloy/endpoints.json
-      - /mnt/cache/appdata/alloy/data:/var/lib/alloy/data
+      - /mnt/scratch/alloy:/var/lib/alloy/data
     networks:
       net.internal: {}
       net_overlay: {}

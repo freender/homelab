@@ -72,16 +72,18 @@ def spec_of(disks: dict, kind: str = "qemu"):
     return parse_guest("vm", vm_block(disks), {"ace": False})
 
 
-def test_helm_scratch_disk_renders_with_nofail() -> None:
+def test_helm_renders_scratch_with_nofail_and_appdata_without() -> None:
     registry = default_registry(ROOT)
     spec = parse_guest("helm", registry.get("helm", "pve-guest"), pve_nodes(registry))
 
     mounts = guest_disks.plan_mounts(spec)
 
     assert mounts == (
+        guest_disks.DiskMount("scsi2", "appdata", "/mnt/cache/appdata", "defaults,noatime"),
         guest_disks.DiskMount("scsi1", "scratch", "/mnt/scratch", "defaults,noatime,nofail"),
     )
     assert guest_disks.render_disks_conf(mounts) == (
+        "scsi2|appdata|/mnt/cache/appdata|defaults,noatime\n"
         "scsi1|scratch|/mnt/scratch|defaults,noatime,nofail\n"
     )
 
@@ -821,5 +823,6 @@ def test_the_real_orchestrator_render_parses_on_the_guest() -> None:
     text = guest_disks.render_disks_conf(guest_disks.plan_mounts(spec))
 
     assert inst.parse_disks(text) == [
-        inst.Wanted("scsi1", "scratch", "/mnt/scratch", "defaults,noatime,nofail")
+        inst.Wanted("scsi2", "appdata", "/mnt/cache/appdata", "defaults,noatime"),
+        inst.Wanted("scsi1", "scratch", "/mnt/scratch", "defaults,noatime,nofail"),
     ]

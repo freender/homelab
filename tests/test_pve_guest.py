@@ -112,7 +112,7 @@ def test_every_impact_label_on_a_changed_helm_spec() -> None:
     raw["disks"]["scsi0"]["size"] = "40G"  # grow: applies live
     raw["disks"]["scsi1"]["size"] = "32G"  # shrink: refused
     raw["disks"]["scsi1"]["backup"] = True  # config only
-    raw["disks"]["scsi2"] = {"role": "data", "size": "10G", "mount": "/mnt/data"}  # new disk
+    raw["disks"]["scsi3"] = {"role": "data", "size": "10G", "mount": "/mnt/data"}  # new disk
     raw["net"]["net0"]["tag"] = 10  # applies live
     raw["net"]["net1"] = {"name": "nic1", "mac": "BC:24:11:00:00:01"}
     raw["ha"] = {"nodes": {"clovis": 3, "ace": 1}, "strict": False}
@@ -132,7 +132,7 @@ def test_every_impact_label_on_a_changed_helm_spec() -> None:
         ("scsi0.size", "40G", "32G", drift.LIVE),
         ("scsi1.size", "32G", "64G", "refused (shrink)"),
         ("scsi1.backup", "yes", "no", drift.CONFIG),
-        ("scsi2", "new data disk", "-", drift.LIVE),
+        ("scsi3", "new data disk", "-", drift.LIVE),
         ("net0.tag", "10", "40", drift.LIVE),
         ("net1", "new nic1 BC:24:11:00:00:01", "-", drift.LIVE),
         ("vga", "-", "serial0", drift.UNMANAGED),
@@ -1092,7 +1092,7 @@ def test_vm_disk_options_and_sizes() -> None:
 def test_a_restored_vm_points_at_its_unused_disk_not_a_new_one() -> None:
     """The shape an in-place qmrestore leaves (#160): scsi1 gone, its data in unused0."""
     raw = copy.deepcopy(default_registry(ROOT).get("helm", "pve-guest"))
-    raw["disks"]["scsi2"] = {"role": "data", "size": "8G", "storage": "other", "mount": "/d"}
+    raw["disks"]["scsi3"] = {"role": "data", "size": "8G", "storage": "other", "mount": "/d"}
     spec = parse_guest("helm", raw, NODES)
     current = fixture_live("cluster", 112)
     del current["scsi1"]
@@ -1102,7 +1102,7 @@ def test_a_restored_vm_points_at_its_unused_disk_not_a_new_one() -> None:
 
     assert _rows(rows) == [
         ("scsi1", "reattach unused0", "-", drift.CONFIG),
-        ("scsi2", "new data disk", "-", drift.LIVE),
+        ("scsi3", "new data disk", "-", drift.LIVE),
     ]
     assert [row.fix for row in rows] == [
         "qm set 112 --scsi1 vm-flash:vm-112-disk-2,backup=0,discard=on,iothread=1,ssd=1",

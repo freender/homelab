@@ -26,24 +26,6 @@ APPDATA_EXCLUDE_PROFILE = "appdata"
 # (host, stack, service, bind source)
 ScratchViolation = tuple[str, str, str, str]
 
-# helm's mounts from before check_vm_scratch_placement existed. May only shrink;
-# homelab-ops#158 moves them to /mnt/scratch and deletes the list. victoria-logs
-# is already on the backup=0 disk through a hand-made bind mount, but its compose
-# path is what the check reads.
-KNOWN_SCRATCH_VIOLATIONS: frozenset[ScratchViolation] = frozenset(
-    {
-        ("helm", "alloy", "alloy-helm", "/mnt/cache/appdata/alloy/data"),
-        ("helm", "alloy", "alloy-helm", "/mnt/cache/appdata/geoipupdate"),
-        ("helm", "alloy", "alloy-helm", "/mnt/cache/appdata/traefik/logs"),
-        ("helm", "geoipupdate", "geoipupdate-helm", "/mnt/cache/appdata/geoipupdate"),
-        ("helm", "traefik", "crowdsec-helm", "/mnt/cache/appdata/traefik/logs"),
-        ("helm", "traefik", "traefik-helm", "/mnt/cache/appdata/traefik/logs"),
-        ("helm", "traefik", "traefik-helm", "/mnt/cache/appdata/traefik/plugins-storage"),
-        ("helm", "victoria-logs", "victoria-logs", "/mnt/cache/appdata/victoria-logs/data"),
-        ("helm", "vmagent", "vmagent-helm", "/mnt/cache/appdata/vmagent/data"),
-    }
-)
-
 
 def deploy(
     root: Path,
@@ -329,18 +311,12 @@ def _describe(violations: set[ScratchViolation]) -> str:
     )
 
 
-def check_vm_scratch_placement(
-    root: Path,
-    hosts: list[str],
-    known: frozenset[ScratchViolation] = KNOWN_SCRATCH_VIOLATIONS,
-) -> None:
+def check_vm_scratch_placement(root: Path, hosts: list[str]) -> None:
     """On a VM, regenerable data belongs on the scratch disk, not under appdata.
 
     `exclude-path` is file-level and does nothing for a VM's block backup, so a
     path `appdata.txt` excludes on an LXC is backed up in full on a VM unless it
-    lives on the backup=0 scratch disk (homelab-ops#154). Fails on a violation
-    not in `known`, and on a `known` entry that no longer violates, so the list
-    only shrinks.
+    lives on the backup=0 scratch disk (homelab-ops#154).
     """
     vm_hosts = [host for host in hosts if is_vm(root, host)]
     if not vm_hosts:
@@ -350,22 +326,12 @@ def check_vm_scratch_placement(
     for host in vm_hosts:
         found |= scratch_violations(root, host, declared_stacks(root, host), entries)
 
-    new = found - known
-    if new:
+    if found:
         raise ValueError(
             f"VM stack volume(s) under appdata match {APPDATA_EXCLUDE_PROFILE}.txt, so a "
-            f"VM backup would include them: {_describe(new)}. "
+            f"VM backup would include them: {_describe(found)}. "
             "Mount them from /mnt/scratch/<stack>."
         )
-    fixed = {entry for entry in known - found if entry[0] in vm_hosts}
-    if fixed:
-        raise ValueError(
-            f"KNOWN_SCRATCH_VIOLATIONS lists mount(s) that no longer violate: "
-            f"{_describe(fixed)}. Remove them from the list."
-        )
-    pending = len(known & found)
-    if pending:
-        print_warn(f"{pending} known VM appdata-exclude mount(s) pending homelab-ops#158")
 
 
 def validate(root: Path, hosts: list[str]) -> None:

@@ -1,0 +1,30 @@
+networks:
+  net_overlay:
+    external: true
+
+services:
+  vmagent-neo:
+    image: victoriametrics/vmagent:v1.117.1
+    container_name: vmagent-neo
+    init: true
+    stop_grace_period: 20s
+    restart: always
+    mem_limit: 512m
+    user: '1000:1000'
+    environment:
+      TZ: 'America/New_York'
+    command:
+      - '-promscrape.config=/etc/vmagent/scrape.yml'
+      - '-promscrape.maxScrapeSize=64MB'
+      - '-promscrape.suppressScrapeErrors'
+      - '-remoteWrite.url=http://victoria-metrics:8428/api/v1/write'
+      - '-remoteWrite.tmpDataPath=/vmagent-data'
+      - '-remoteWrite.maxDiskUsagePerURL=5GB'
+    volumes:
+      - /mnt/cache/appdata/vmagent/scrape.yml:/etc/vmagent/scrape.yml:ro
+      # Host-local HA long-lived token for the home-assistant scrape job; source of
+      # record is 1Password. Must exist before `up`, or docker creates a directory.
+      - /mnt/cache/appdata/vmagent/ha_token:/etc/vmagent/ha_token:ro
+      - /mnt/cache/appdata/vmagent/data:/vmagent-data
+    networks:
+      net_overlay: {}

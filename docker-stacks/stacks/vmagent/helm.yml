@@ -1,14 +1,11 @@
-# Shared stack: rendered once per host that declares `vmagent` in hosts.conf.
-# Host-invariant by construction -- if a host ever needs to differ, move it to
-# stacks/<host>/vmagent/compose.yml rather than adding a conditional here.
 networks:
   net_overlay:
     external: true
 
 services:
-  vmagent-{{ HOST }}:
+  vmagent-helm:
     image: victoriametrics/vmagent:v1.117.1
-    container_name: vmagent-{{ HOST }}
+    container_name: vmagent-helm
     init: true
     stop_grace_period: 20s
     restart: always
@@ -28,6 +25,6 @@ services:
       # Host-local HA long-lived token for the home-assistant scrape job; source of
       # record is 1Password. Must exist before `up`, or docker creates a directory.
       - /mnt/cache/appdata/vmagent/ha_token:/etc/vmagent/ha_token:ro
-      - /mnt/cache/appdata/vmagent/data:/vmagent-data
+      - /mnt/scratch/vmagent:/vmagent-data
     networks:
       net_overlay: {}

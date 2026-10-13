@@ -331,7 +331,7 @@ def _add_volume(repo: Path, volume: str) -> None:
 
 
 def test_vm_scratch_clean_repo_passes(vm_repo: Path) -> None:
-    docker_stacks.check_vm_scratch_placement(vm_repo, ["vm", "ct"], known=frozenset())
+    docker_stacks.check_vm_scratch_placement(vm_repo, ["vm", "ct"])
 
 
 @pytest.mark.parametrize(
@@ -347,7 +347,7 @@ def test_vm_scratch_clean_repo_passes(vm_repo: Path) -> None:
 def test_vm_volume_inside_an_exclude_fails(vm_repo: Path, volume: str) -> None:
     _add_volume(vm_repo, volume)
     with pytest.raises(ValueError, match=r"vm web/web-vm: /mnt/cache/appdata/") as error:
-        docker_stacks.check_vm_scratch_placement(vm_repo, ["vm", "ct"], known=frozenset())
+        docker_stacks.check_vm_scratch_placement(vm_repo, ["vm", "ct"])
     assert "/mnt/scratch/<stack>" in str(error.value)
     assert "ct " not in str(error.value), "an LXC's exclude-path already covers it"
 
@@ -364,7 +364,7 @@ def test_vm_long_syntax_bind_is_checked(vm_repo: Path) -> None:
         encoding="utf-8",
     )
     with pytest.raises(ValueError, match="web/web-vm: /mnt/cache/appdata/web/logs"):
-        docker_stacks.check_vm_scratch_placement(vm_repo, ["vm"], known=frozenset())
+        docker_stacks.check_vm_scratch_placement(vm_repo, ["vm"])
 
 
 @pytest.mark.parametrize(
@@ -384,7 +384,7 @@ def test_vm_long_syntax_bind_is_checked(vm_repo: Path) -> None:
 )
 def test_vm_volume_not_inside_an_exclude_passes(vm_repo: Path, volume: str) -> None:
     _add_volume(vm_repo, volume)
-    docker_stacks.check_vm_scratch_placement(vm_repo, ["vm"], known=frozenset())
+    docker_stacks.check_vm_scratch_placement(vm_repo, ["vm"])
 
 
 def test_vm_scratch_honours_appdata_root(
@@ -393,36 +393,13 @@ def test_vm_scratch_honours_appdata_root(
     monkeypatch.setattr(docker_stacks, "appdata_root_for", lambda _root, _host: "/srv/appdata/")
     _add_volume(vm_repo, "/srv/appdata/web/logs:/logs")
     with pytest.raises(ValueError, match="web/web-vm: /srv/appdata/web/logs"):
-        docker_stacks.check_vm_scratch_placement(vm_repo, ["vm"], known=frozenset())
-
-
-def test_known_violation_passes_with_a_warning(
-    vm_repo: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    _add_volume(vm_repo, "/mnt/cache/appdata/web/logs:/logs")
-    known = frozenset({("vm", "web", "web-vm", "/mnt/cache/appdata/web/logs")})
-    docker_stacks.check_vm_scratch_placement(vm_repo, ["vm"], known=known)
-    assert "1 known VM appdata-exclude mount(s) pending" in capsys.readouterr().out
-
-
-def test_fixed_known_violation_fails_until_removed(vm_repo: Path) -> None:
-    """The list may only shrink: a stale entry would re-admit the mount silently."""
-    known = frozenset({("vm", "web", "web-vm", "/mnt/cache/appdata/web/logs")})
-    with pytest.raises(ValueError, match="no longer violate: vm web/web-vm"):
-        docker_stacks.check_vm_scratch_placement(vm_repo, ["vm"], known=known)
-
-
-def test_known_violation_for_an_unchecked_host_is_not_stale(vm_repo: Path) -> None:
-    """`./deploy docker-stacks ct` validates ct only; vm's entries are not judged."""
-    known = frozenset({("vm", "web", "web-vm", "/mnt/cache/appdata/web/logs")})
-    docker_stacks.check_vm_scratch_placement(vm_repo, ["ct"], known=known)
+        docker_stacks.check_vm_scratch_placement(vm_repo, ["vm"])
 
 
 def test_no_vm_host_skips_loading_the_profile(vm_repo: Path) -> None:
     (vm_repo / "backup-excludes" / "appdata.txt").unlink()
-    docker_stacks.check_vm_scratch_placement(vm_repo, ["ct"], known=frozenset())
+    docker_stacks.check_vm_scratch_placement(vm_repo, ["ct"])
 
 
-def test_real_repo_known_scratch_violations_are_exact() -> None:
-    """KNOWN_SCRATCH_VIOLATIONS matches the real tree in both directions."""
+def test_real_repo_has_no_vm_scratch_violations() -> None:
     docker_stacks.check_vm_scratch_placement(ROOT, list(STACK_HOSTS))

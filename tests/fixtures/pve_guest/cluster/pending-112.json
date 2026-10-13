@@ -60,6 +60,10 @@
   "value": "vm-flash:vm-112-disk-2,backup=0,discard=on,iothread=1,size=64G,ssd=1"
  },
  {
+  "key": "scsi2",
+  "value": "vm-flash:vm-112-disk-3,discard=on,iothread=1,size=16G,ssd=1"
+ },
+ {
   "key": "scsihw",
   "value": "virtio-scsi-single"
  },
