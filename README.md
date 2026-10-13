@@ -124,7 +124,7 @@ PVE post-install configuration
 ```
 
 ### [pve-interface-pinning](pve-interface-pinning/)
-PVE physical NIC naming and Wake-on-LAN configuration
+PVE physical NIC naming and Wake-on-LAN configuration (also used on the Debian VMs)
 - Installs systemd `.link` files for repo-owned `nicN` names by MAC address
 - Enables WOL on configured wired interfaces without modeling Wi-Fi devices
 

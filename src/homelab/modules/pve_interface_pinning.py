@@ -25,6 +25,9 @@ WOL_SERVICE = "homelab-interface-wol.service"
 WOL_CONFIG = "interface-wol.conf"
 MAC_RE = re.compile(r"^[0-9a-f]{2}(:[0-9a-f]{2}){5}$")
 IFACE_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,15}$")
+# `ubuntu` is the fleet's generic Debian-family type (the helm/riven VMs): plain
+# systemd-networkd/udev, so the same `.link` files apply unchanged.
+SUPPORTED_TYPES = ("pve", "ubuntu")
 
 
 @dataclass(frozen=True)
@@ -58,8 +61,16 @@ def validate(root: Path, hosts: list[str]) -> None:
     if not script.is_file():
         raise ValueError(f"missing installer: {script}")
     for host in hosts:
-        if str(registry.get(host, "config.type")) != "pve":
-            raise ValueError(f"pve-interface-pinning only supports PVE hosts: {host}")
+        if str(registry.get(host, "config.type")) not in SUPPORTED_TYPES:
+            raise ValueError(
+                f"pve-interface-pinning only supports {'/'.join(SUPPORTED_TYPES)} hosts: {host}"
+            )
+        if registry.has(host, "ubuntu-setup"):
+            # ubuntu-setup pins its own primary NIC with a udev rule; two owners
+            # of one name race at boot.
+            raise ValueError(
+                f"pve-interface-pinning conflicts with ubuntu-setup's NIC pin on {host}"
+            )
         pins = normalize_interface_pins(registry, host)
         validate_postinstall_alignment(registry, host, pins)
 

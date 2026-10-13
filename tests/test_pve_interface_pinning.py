@@ -111,6 +111,45 @@ def test_validate_requires_the_python_installer(
         pinning.validate(tmp_path, [])
 
 
+class TypedRegistry:
+    def __init__(self, host_type: str, features: tuple[str, ...] = ()) -> None:
+        self.host_type = host_type
+        self.features = features
+
+    def get(self, host: str, key: str, default=None):
+        if key == "config.type":
+            return self.host_type
+        if key == "pve-interface-pinning.interfaces":
+            return ACE
+        return default
+
+    def has(self, host: str, feature: str) -> bool:
+        return feature in self.features
+
+
+@pytest.mark.parametrize("host_type", ["pve", "ubuntu"])
+def test_validate_accepts_pve_and_debian_hosts(
+    monkeypatch: pytest.MonkeyPatch, host_type: str
+) -> None:
+    monkeypatch.setattr(pinning, "default_registry", lambda _root: TypedRegistry(host_type))
+    pinning.validate(REPO_ROOT, ["vm"])
+
+
+def test_validate_rejects_other_host_types(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(pinning, "default_registry", lambda _root: TypedRegistry("pbs"))
+    with pytest.raises(ValueError, match="only supports pve/ubuntu hosts: vm"):
+        pinning.validate(REPO_ROOT, ["vm"])
+
+
+def test_validate_rejects_a_host_ubuntu_setup_already_pins(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry = TypedRegistry("ubuntu", features=("ubuntu-setup",))
+    monkeypatch.setattr(pinning, "default_registry", lambda _root: registry)
+    with pytest.raises(ValueError, match="conflicts with ubuntu-setup"):
+        pinning.validate(REPO_ROOT, ["vm"])
+
+
 def test_orchestrator_stages_the_python_installer() -> None:
     assert pinning.INSTALLER == "scripts/install.py"
     assert pinning.INTERPRETER == "python3"
