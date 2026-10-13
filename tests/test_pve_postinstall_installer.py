@@ -203,7 +203,11 @@ class Harness:
             self.installer.INTERFACES, (self.build_dir / "interfaces").read_text(encoding="utf-8")
         )
         self.write(self.installer.COROSYNC_CONF, "totem {}\n")
-        self.write(self.installer.STORAGE_CFG, "zfspool: vm-flash\n\tpool vm-flash\n\tsparse 1\n")
+        self.write(
+            self.installer.STORAGE_CFG,
+            "dir: local\n\tpath /var/lib/vz\n\tcontent iso,vztmpl,import,snippets\n\n"
+            "zfspool: vm-flash\n\tpool vm-flash\n\tsparse 1\n",
+        )
         self.write(self.installer.FSTAB, "proc /proc proc defaults 0 0\n")
         self.write(self.installer.ALIASES, "postmaster: root\n")
         self.write(self.installer.ALIASES_DB, "db")
@@ -491,6 +495,67 @@ def test_storage_option_reads_one_key_of_the_named_section(tmp_path: Path) -> No
     assert installer.storage_option("vm-flash", "pool") == "vm-flash"
     assert installer.storage_option("vault-hdd", "sparse") is None
     assert installer.storage_option("local", "sparse") is None
+    assert installer.storage_option("local", "sparse", kind="dir") == "1"
+    assert installer.storage_option("vm-flash", "sparse", kind="dir") is None
+
+
+LOCAL_DIR = "dir: local\n\tpath /var/lib/vz\n\tcontent {}\n\n"
+VM_FLASH = "zfspool: vm-flash\n\tpool vm-flash\n\tsparse 1\n"
+
+
+@pytest.mark.parametrize(
+    ("content", "expected"),
+    [
+        ("snippets,images,vztmpl,iso", "snippets,images,vztmpl,iso,import"),
+        ("import,backup,iso,vztmpl", "import,backup,iso,vztmpl,snippets"),
+        ("iso", "iso,import,snippets"),
+    ],
+)
+def test_local_content_gains_only_the_missing_types(
+    harness: Harness, content: str, expected: str
+) -> None:
+    harness.write(harness.installer.STORAGE_CFG, LOCAL_DIR.format(content) + VM_FLASH)
+
+    ctx = harness.run()
+
+    assert harness.host.ran("pvesm", "set") == [["pvesm", "set", "local", "--content", expected]]
+    assert ctx.changes.touched("storage:local")
+
+
+def test_local_content_already_complete_is_left_alone(harness: Harness) -> None:
+    ctx = harness.run()
+
+    assert not harness.host.ran("pvesm", "set", "local")
+    assert not ctx.changes.touched("storage:local")
+
+
+def test_local_content_skipped_without_a_local_dir_storage(harness: Harness, capsys) -> None:
+    harness.write(harness.installer.STORAGE_CFG, VM_FLASH)
+
+    harness.run()
+
+    assert not harness.host.ran("pvesm", "set", "local")
+    assert "no content list for dir storage local" in capsys.readouterr().out
+
+
+def test_local_content_skipped_without_pvesm(harness: Harness, capsys) -> None:
+    harness.write(harness.installer.STORAGE_CFG, LOCAL_DIR.format("iso") + VM_FLASH)
+    harness.binaries.discard("pvesm")
+
+    harness.run()
+
+    assert not harness.host.ran("pvesm", "set", "local")
+    assert "pvesm not found; skipping local storage content" in capsys.readouterr().out
+
+
+def test_failed_local_content_update_warns(harness: Harness, capsys) -> None:
+    harness.write(harness.installer.STORAGE_CFG, LOCAL_DIR.format("iso") + VM_FLASH)
+    harness.host.failing.add("pvesm set local")
+
+    ctx = harness.run()
+
+    assert "failed to update local storage content" in capsys.readouterr().out
+    assert not ctx.changes.touched("storage:local")
 
 
 def test_node_missing_from_restricted_storage_is_appended(harness: Harness) -> None:

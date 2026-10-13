@@ -3,7 +3,8 @@
 
 Post-install convergence for the PVE nodes: the no-subscription and pve-test repo
 sources, the nag removal hook, the sshd hardening drop-in, the cluster rejoin helper,
-the timezone, ZFS pool import and local zfspool storage, native scrub timers, the
+the timezone, ZFS pool import and local zfspool storage, the `local` storage's
+`import` and `snippets` content types, native scrub timers, the
 `openipmi` mask, `/etc/network/interfaces`, declared disk mounts, local postfix, and a
 report of the manual `pvecm add` step on a node that should be clustered and is not.
 
@@ -97,6 +98,10 @@ COROSYNC_CONF = "/etc/pve/corosync.conf"
 LOCAL_COROSYNC_CONF = "/etc/corosync/corosync.conf"
 PVE_MOUNT = "/etc/pve"
 LOCAL_STORAGE_POOLS = ("vm-disks", "vm-flash", "vault-disks", "vault-hdd")
+# Guest creation downloads the cloud image into `import` and attaches cloud-init
+# user/network snippets from `snippets` (freender/homelab-ops#153).
+LOCAL_STORAGE = "local"
+LOCAL_CONTENT = ("import", "snippets")
 
 INTERFACES = "/etc/network/interfaces"
 FSTAB = "/etc/fstab"
@@ -275,10 +280,10 @@ def import_pools(ctx: InstallContext, pools: tuple[str, ...]) -> None:
             log.warn(f"Failed to import pool {pool}")
 
 
-def storage_option(storage: str, key: str) -> str | None:
-    """One option of a zfspool storage in `storage.cfg`, `None` when it is not set.
+def storage_option(storage: str, key: str, kind: str = "zfspool") -> str | None:
+    """One option of a `kind` storage in `storage.cfg`, `None` when it is not set.
 
-    A section runs from its `zfspool: <name>` header to the next line that does not
+    A section runs from its `<kind>: <name>` header to the next line that does not
     start with whitespace, blank lines included -- the same boundary the bash awk used.
     """
     try:
@@ -290,7 +295,7 @@ def storage_option(storage: str, key: str) -> str | None:
     for line in text.splitlines():
         fields = line.split()
         if not line[:1].isspace():
-            inside = fields[:2] == ["zfspool:", storage]
+            inside = fields[:2] == [f"{kind}:", storage]
             continue
         if inside and len(fields) > 1 and fields[0] == key:
             return fields[1]
@@ -370,6 +375,30 @@ def ensure_local_storage(ctx: InstallContext) -> None:
     node = _short_hostname()
     for pool in LOCAL_STORAGE_POOLS:
         ensure_zfspool_storage(ctx, pool, node)
+
+
+def ensure_local_content(ctx: InstallContext) -> None:
+    """Add the content types guest creation needs to the `local` dir storage.
+
+    Only ever adds: types already listed stay, in their order. On a cluster every
+    node shares one `storage.cfg`, so the first node deployed makes the change and
+    the rest find it in place; two nodes racing would both write the same union.
+    """
+    if not _which("pvesm"):
+        log.warn("pvesm not found; skipping local storage content")
+        return
+    content = storage_option(LOCAL_STORAGE, "content", kind="dir")
+    if content is None:
+        log.warn(f"no content list for dir storage {LOCAL_STORAGE}; skipping")
+        return
+
+    current = content.split(",")
+    missing = [kind for kind in LOCAL_CONTENT if kind not in current]
+    if not missing:
+        log.sub(f"{LOCAL_STORAGE} storage content already includes {', '.join(LOCAL_CONTENT)}")
+        return
+    log.sub(f"Adding {', '.join(missing)} to {LOCAL_STORAGE} storage content")
+    _set_storage(ctx, LOCAL_STORAGE, "content", ",".join([*current, *missing]), "content")
 
 
 def configure_scrub_timers(ctx: InstallContext) -> None:
@@ -604,6 +633,9 @@ def install(ctx: InstallContext) -> None:
 
     log.action("Reconciling local ZFS storage")
     ensure_local_storage(ctx)
+
+    log.action("Reconciling local storage content")
+    ensure_local_content(ctx)
 
     log.action("Configuring native ZFS scrub timers")
     configure_scrub_timers(ctx)
