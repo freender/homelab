@@ -43,8 +43,24 @@ REBOOT_FLAG_FILE="${REBOOT_FLAG_FILE:-/var/run/reboot-required}"
 PVE_PATCH_MANIFEST="${PVE_PATCH_MANIFEST:-/etc/homelab/pve-patch-statuses.conf}"
 PVE_PATCH_OUT_FILE="$OUT_DIR/pve-patches.prom"
 
+# Every `target|marker` pair after the third manifest field must hold: the live
+# target exists and contains the fixed-string marker. The status file alone is
+# not enough -- it records the patch script's last run, so it still says
+# "patched" after an apt upgrade replaces the target and the reapply is skipped.
+# A malformed (odd-length) pair list fails closed.
+pve_patch_markers_present() {
+    local pairs=() i
+    [[ -n "$1" ]] || return 0
+    IFS='|' read -r -a pairs <<< "$1"
+    (( ${#pairs[@]} % 2 == 0 )) || return 1
+    for (( i = 0; i < ${#pairs[@]}; i += 2 )); do
+        [[ "${pairs[i]}" == /* && -n "${pairs[i+1]}" ]] || return 1
+        grep -qF -- "${pairs[i+1]}" "${pairs[i]}" 2>/dev/null || return 1
+    done
+}
+
 export_pve_patch_statuses() {
-    local tmp_file patch status_file allowed_states state line healthy
+    local tmp_file patch status_file allowed_states markers state line healthy
 
     # The manifest is optional because only some PVE hosts carry source patches.
     # Removing the metric prevents a retired patch from retaining a false state.
@@ -59,7 +75,7 @@ export_pve_patch_statuses() {
         printf '# HELP homelab_pve_patch_healthy Whether a managed PVE source patch has an allowed status (1) or not (0).\n'
         printf '# TYPE homelab_pve_patch_healthy gauge\n'
 
-        while IFS='|' read -r patch status_file allowed_states; do
+        while IFS='|' read -r patch status_file allowed_states markers; do
             [[ "$patch" =~ ^[a-z0-9-]+$ ]] || continue
             [[ "$status_file" == /* ]] || continue
             [[ "$allowed_states" =~ ^[a-z0-9-]+(,[a-z0-9-]+)*$ ]] || continue
@@ -81,7 +97,8 @@ export_pve_patch_statuses() {
             fi
 
             healthy=0
-            if [[ -n "$state" && ",$allowed_states," == *",$state,"* ]]; then
+            if [[ -n "$state" && ",$allowed_states," == *",$state,"* ]] \
+                && pve_patch_markers_present "$markers"; then
                 healthy=1
             fi
             printf 'homelab_pve_patch_healthy{patch="%s"} %s\n' "$patch" "$healthy"

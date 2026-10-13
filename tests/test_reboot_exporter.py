@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pytest
 
-from homelab.modules.metrics_exporters import pve_patch_statuses
+from homelab.modules.metrics_exporters import PVE_PATCH_STATUSES, pve_patch_statuses
 
 ROOT = Path(__file__).resolve().parents[1]
 EXPORTER = ROOT / "metrics-exporters" / "configs" / "common" / "reboot-textfile-exporter"
@@ -288,14 +288,85 @@ def test_absent_pve_patch_manifest_removes_stale_metric(tmp_path: Path) -> None:
     assert not stale_metric.exists()
 
 
+def _marker_case(tmp_path: Path, markers: str, target_text: str) -> str:
+    target = tmp_path / "Target.pm"
+    target.write_text(target_text, encoding="utf-8")
+    manifest = f"p|{tmp_path}/status|patched{markers.replace('TARGET', str(target))}\n"
+    result, _prom = run_exporter(
+        tmp_path,
+        running_kernel="7.0.14-8-pve",
+        proxmox_kernel_rows=PVE_ROWS,
+        patch_manifest=manifest,
+        patch_statuses={"status": "state=patched\n"},
+    )
+    assert result.returncode == 0, result.stderr
+    text = (tmp_path / "textfile" / "pve-patches.prom").read_text(encoding="utf-8")
+    return metric_value(text, "homelab_pve_patch_healthy") or ""
+
+
+PATCHED_PERL = "        $unmount_received_subvol->();\n    my $cmd = ['zfs', 'send', '-RpvUL'];\n"
+
+
+@pytest.mark.parametrize(
+    ("markers", "target_text", "expected"),
+    [
+        # Status-only manifest line (pre-marker format) keeps the old behaviour.
+        ("", "", "1"),
+        ("|TARGET|$unmount_received_subvol->();", PATCHED_PERL, "1"),
+        (
+            "|TARGET|$unmount_received_subvol->();|TARGET|['zfs', 'send', '-RpvUL']",
+            PATCHED_PERL,
+            "1",
+        ),
+        # apt replaced the target and the reapply was skipped: the status file
+        # still says patched, but the live file has lost the marker.
+        ("|TARGET|$unmount_received_subvol->();", "    eval { zfs recv };\n", "0"),
+        # One of several targets unpatched fails the whole patch.
+        (
+            "|TARGET|$unmount_received_subvol->();|TARGET|['zfs', 'send', '-RpvUL']",
+            "        $unmount_received_subvol->();\n",
+            "0",
+        ),
+        ("|/nonexistent/Target.pm|$unmount_received_subvol->();", PATCHED_PERL, "0"),
+        ("|TARGET", PATCHED_PERL, "0"),
+        ("|relative/Target.pm|marker", PATCHED_PERL, "0"),
+        ("|TARGET|", PATCHED_PERL, "0"),
+    ],
+)
+def test_pve_patch_health_requires_marker_in_live_target(
+    tmp_path: Path, markers: str, target_text: str, expected: str
+) -> None:
+    assert _marker_case(tmp_path, markers, target_text) == expected
+
+
 def test_pve_patch_manifest_is_derived_from_enabled_features() -> None:
-    assert [patch for patch, _path, _states in pve_patch_statuses(ROOT, "ace")] == [
+    assert [entry[0] for entry in pve_patch_statuses(ROOT, "ace")] == [
         "zfs-migration-sync",
         "zfs-large-block",
         "lxc-pre-replication",
     ]
-    assert [patch for patch, _path, _states in pve_patch_statuses(ROOT, "bray")] == [
+    assert [entry[0] for entry in pve_patch_statuses(ROOT, "bray")] == [
         "zfs-migration-sync",
         "lxc-pre-replication",
     ]
     assert pve_patch_statuses(ROOT, "osiris") == []
+
+
+def test_pve_patch_manifest_renders_target_marker_pairs() -> None:
+    by_patch = {entry[0]: entry[3] for entry in pve_patch_statuses(ROOT, "ace")}
+    assert by_patch["lxc-pre-replication"] == (
+        "/usr/share/perl5/PVE/LXC/Migrate.pm|pre-stop replication before shutdown|"
+        "/usr/share/perl5/PVE/HA/Resources/PVECT.pm|can run pre-stop replication before shutdown"
+    )
+
+
+@pytest.mark.parametrize("entry", PVE_PATCH_STATUSES, ids=lambda entry: entry[1])
+def test_pve_patch_markers_match_installer(entry: tuple) -> None:
+    """A marker the installer never writes would report every host unhealthy."""
+    feature, _label, _status, _states, markers = entry
+    installer = (ROOT / feature / "scripts" / "install.sh").read_text(encoding="utf-8")
+    assert markers
+    for target, marker in markers:
+        assert "|" not in target + marker and "\n" not in target + marker
+        assert target in installer
+        assert marker in installer

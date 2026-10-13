@@ -30,4 +30,4 @@ groups:
           severity: warning
         annotations:
           summary: "{{ $labels.host }} PVE patch health is unhealthy or stale"
-          description: "A managed PVE source patch on {{ $labels.host }} is unhealthy, missing its health metric, or pve-patches.prom has not been rewritten for over 20 minutes. Check /etc/homelab/pve-patch-statuses.conf, the patch status files, and reboot-textfile-exporter.timer."
+          description: "A managed PVE source patch on {{ $labels.host }} is unhealthy (bad status, or the live Perl file no longer contains the patch marker, e.g. after an apt upgrade whose reapply was skipped), missing its health metric, or pve-patches.prom has not been rewritten for over 20 minutes. Check /etc/homelab/pve-patch-statuses.conf, the patch status files, and reboot-textfile-exporter.timer. Fix: run the matching /usr/local/sbin/homelab-pve-*-patch --restart-services."

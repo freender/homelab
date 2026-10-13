@@ -117,7 +117,11 @@ Then `./deploy metrics-exporters <host>` from the repo.
 - Pending-reboot state via node_exporter textfile collector
   (`homelab_reboot_required`, `homelab_kernel_info`) on bare metal
 - Managed PVE source-patch health via node_exporter textfile collector
-  (`homelab_pve_patch_healthy`) on patch-enabled PVE hosts
+  (`homelab_pve_patch_healthy`) on patch-enabled PVE hosts. Healthy needs both
+  an allowed `state=` in the patch's status file and every patched target still
+  containing its marker (`PVE_PATCH_STATUSES` in `metrics_exporters.py`), so an
+  apt upgrade that silently drops a patch reports 0 even though the status file
+  still says `patched`
 - Human-readable disk names via node_exporter textfile collector
   (`homelab_disk_label`, `homelab_smart_disk_label`) on bare metal
 

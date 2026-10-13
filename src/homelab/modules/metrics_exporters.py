@@ -24,24 +24,39 @@ SMARTCTL_WAIT_BIN = "/usr/local/bin/homelab-smartctl-wait-devices"
 
 TEXTFILE_DIR = "/var/lib/prometheus/node-exporter"
 
+# The status file only records the patch script's last run, so it stays
+# "patched" after an apt upgrade replaces the target and the reapply is skipped
+# (homelab-ops: tower containerd corruption, 2026-10-12). Each patch therefore
+# also lists (target, marker) pairs: the exporter reports unhealthy unless every
+# live target still contains its fixed-string marker. Markers must match the
+# patched text written by the module's install.sh (tests enforce this).
 PVE_PATCH_STATUSES = (
     (
         "pve-zfs-migration-sync-patch",
         "zfs-migration-sync",
         "/var/lib/homelab/pve-zfs-recv-cache-patch/status",
         "patched,already-patched,repaired-partial-patch",
+        (("/usr/share/perl5/PVE/Storage/ZFSPoolPlugin.pm", "$unmount_received_subvol->();"),),
     ),
     (
         "pve-zfs-large-block-patch",
         "zfs-large-block",
         "/var/lib/homelab/pve-zfs-large-block-patch/status",
         "patched,already-patched",
+        (("/usr/share/perl5/PVE/Storage/ZFSPoolPlugin.pm", "['zfs', 'send', '-RpvUL']"),),
     ),
     (
         "pve-lxc-pre-replication-patch",
         "lxc-pre-replication",
         "/var/lib/homelab/pve-lxc-pre-replication-patch/status",
         "patched,already-patched",
+        (
+            ("/usr/share/perl5/PVE/LXC/Migrate.pm", "pre-stop replication before shutdown"),
+            (
+                "/usr/share/perl5/PVE/HA/Resources/PVECT.pm",
+                "can run pre-stop replication before shutdown",
+            ),
+        ),
     ),
 )
 
@@ -528,14 +543,15 @@ def disk_label_overrides(root: Path, host: str) -> list[tuple[str, str]]:
     return overrides
 
 
-def pve_patch_statuses(root: Path, host: str) -> list[tuple[str, str, str]]:
-    """Enabled PVE patch status files, with stable metric labels and success states."""
+def pve_patch_statuses(root: Path, host: str) -> list[tuple[str, str, str, str]]:
+    """Enabled PVE patches: metric label, status file, success states, and the
+    `target|marker` pairs the exporter checks against the live files."""
     registry = default_registry(root)
     if str(registry.get(host, "config.type")) != "pve":
         return []
     return [
-        (label, status_path, successful_states)
-        for feature, label, status_path, successful_states in PVE_PATCH_STATUSES
+        (label, status_path, successful_states, "|".join(f"{t}|{m}" for t, m in markers))
+        for feature, label, status_path, successful_states, markers in PVE_PATCH_STATUSES
         if registry.has(host, feature)
     ]
 
