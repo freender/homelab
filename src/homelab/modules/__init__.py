@@ -10,6 +10,7 @@ from .apt_upgrade import deploy as deploy_apt_upgrade
 from .base_packages import deploy as deploy_base_packages
 from .docker import deploy as deploy_docker
 from .docker_stacks import deploy as deploy_docker_stacks
+from .guest_disks import deploy as deploy_guest_disks
 from .keepalived import deploy as deploy_keepalived
 from .metrics_exporters import deploy as deploy_metrics_exporters
 from .monitoring_config import deploy as deploy_monitoring_config
@@ -66,6 +67,10 @@ MODULES: dict[str, ModuleDefinition] = {
     "docker-stacks": ModuleDefinition(
         name="Docker Compose Stacks",
         deploy=deploy_docker_stacks,
+    ),
+    "guest-disks": ModuleDefinition(
+        name="Guest Disks",
+        deploy=deploy_guest_disks,
     ),
     "keepalived": ModuleDefinition(
         name="Keepalived",
@@ -176,6 +181,8 @@ MODULE_ORDER = [
     "ssh-config",
     "wsl-conf",
     "ubuntu-setup",
+    # Role disks mounted before anything (stacks, backups) writes under their paths.
+    "guest-disks",
     "zfs-automation",
     "docker",
     # Engine, swarm membership and the overlay must exist before any stack that
