@@ -275,8 +275,8 @@ def import_pools(ctx: InstallContext, pools: tuple[str, ...]) -> None:
             log.warn(f"Failed to import pool {pool}")
 
 
-def storage_nodes(storage: str) -> list[str]:
-    """The `nodes` list of a zfspool storage in `storage.cfg`, empty when unrestricted.
+def storage_option(storage: str, key: str) -> str | None:
+    """One option of a zfspool storage in `storage.cfg`, `None` when it is not set.
 
     A section runs from its `zfspool: <name>` header to the next line that does not
     start with whitespace, blank lines included -- the same boundary the bash awk used.
@@ -284,7 +284,7 @@ def storage_nodes(storage: str) -> list[str]:
     try:
         text = Path(STORAGE_CFG).read_text(encoding="utf-8")
     except OSError:
-        return []
+        return None
 
     inside = False
     for line in text.splitlines():
@@ -292,9 +292,37 @@ def storage_nodes(storage: str) -> list[str]:
         if not line[:1].isspace():
             inside = fields[:2] == ["zfspool:", storage]
             continue
-        if inside and len(fields) > 1 and fields[0] == "nodes":
-            return fields[1].split(",")
-    return []
+        if inside and len(fields) > 1 and fields[0] == key:
+            return fields[1]
+    return None
+
+
+def storage_nodes(storage: str) -> list[str]:
+    """The `nodes` list of a zfspool storage in `storage.cfg`, empty when unrestricted."""
+    nodes = storage_option(storage, "nodes")
+    return nodes.split(",") if nodes else []
+
+
+def _set_storage(ctx: InstallContext, pool: str, option: str, value: str, what: str) -> None:
+    if _run(["pvesm", "set", pool, f"--{option}", value], check=False).returncode != 0:
+        log.warn(f"failed to update {pool} storage {what}")
+    else:
+        ctx.changes.record(f"storage:{pool}")
+
+
+def converge_zfspool_storage(ctx: InstallContext, pool: str, node: str) -> None:
+    """Bring an existing storage to this node's membership and thin provisioning.
+
+    `sparse` only decides how *new* zvols are created; existing zvols keep their
+    refreservation until it is cleared by hand.
+    """
+    nodes = storage_nodes(pool)
+    if nodes and node not in nodes:
+        log.sub(f"Adding {node} to {pool} storage node list")
+        _set_storage(ctx, pool, "nodes", ",".join([*nodes, node]), "nodes")
+    if storage_option(pool, "sparse") != "1":
+        log.sub(f"Setting {pool} storage to thin provisioning (sparse 1)")
+        _set_storage(ctx, pool, "sparse", "1", "sparse")
 
 
 def ensure_zfspool_storage(ctx: InstallContext, pool: str, node: str) -> None:
@@ -306,14 +334,7 @@ def ensure_zfspool_storage(ctx: InstallContext, pool: str, node: str) -> None:
         == 0
     ):
         log.sub(f"{pool} storage already configured")
-        nodes = storage_nodes(pool)
-        if nodes and node not in nodes:
-            log.sub(f"Adding {node} to {pool} storage node list")
-            command = ["pvesm", "set", pool, "--nodes", ",".join([*nodes, node])]
-            if _run(command, check=False).returncode != 0:
-                log.warn(f"failed to update {pool} storage nodes")
-            else:
-                ctx.changes.record(f"storage:{pool}")
+        converge_zfspool_storage(ctx, pool, node)
         return
 
     log.sub(f"Creating {pool} storage on {pool}...")
@@ -327,7 +348,7 @@ def ensure_zfspool_storage(ctx: InstallContext, pool: str, node: str) -> None:
         "--content",
         "images,rootdir",
         "--sparse",
-        "0",
+        "1",
     ]
     if Path(COROSYNC_CONF).is_file():
         command += ["--nodes", node]

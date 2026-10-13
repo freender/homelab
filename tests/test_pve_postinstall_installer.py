@@ -203,6 +203,7 @@ class Harness:
             self.installer.INTERFACES, (self.build_dir / "interfaces").read_text(encoding="utf-8")
         )
         self.write(self.installer.COROSYNC_CONF, "totem {}\n")
+        self.write(self.installer.STORAGE_CFG, "zfspool: vm-flash\n\tpool vm-flash\n\tsparse 1\n")
         self.write(self.installer.FSTAB, "proc /proc proc defaults 0 0\n")
         self.write(self.installer.ALIASES, "postmaster: root\n")
         self.write(self.installer.ALIASES_DB, "db")
@@ -476,21 +477,59 @@ def test_storage_nodes_reads_only_the_named_section(tmp_path: Path) -> None:
     assert installer.storage_nodes("vm-flash") == []
 
 
+def test_storage_option_reads_one_key_of_the_named_section(tmp_path: Path) -> None:
+    installer = load_installer()
+    installer.STORAGE_CFG = str(tmp_path / "storage.cfg")
+    Path(installer.STORAGE_CFG).write_text(
+        "dir: local\n\tsparse 1\n\n"
+        "zfspool: vm-flash\n\tpool vm-flash\n\tsparse 0\n\n"
+        "zfspool: vault-hdd\n\tpool vault-hdd\n",
+        encoding="utf-8",
+    )
+
+    assert installer.storage_option("vm-flash", "sparse") == "0"
+    assert installer.storage_option("vm-flash", "pool") == "vm-flash"
+    assert installer.storage_option("vault-hdd", "sparse") is None
+    assert installer.storage_option("local", "sparse") is None
+
+
 def test_node_missing_from_restricted_storage_is_appended(harness: Harness) -> None:
-    harness.write(harness.installer.STORAGE_CFG, "zfspool: vm-flash\n\tnodes clovis,bray\n")
+    harness.write(
+        harness.installer.STORAGE_CFG, "zfspool: vm-flash\n\tnodes clovis,bray\n\tsparse 1\n"
+    )
 
     ctx = harness.run()
 
-    assert harness.host.ran("pvesm", "set", "vm-flash", "--nodes", "clovis,bray,ace")
+    assert harness.host.ran("pvesm", "set") == [
+        ["pvesm", "set", "vm-flash", "--nodes", "clovis,bray,ace"]
+    ]
     assert ctx.changes.touched("storage:vm-flash")
 
 
-def test_unrestricted_storage_is_left_alone(harness: Harness) -> None:
-    harness.write(harness.installer.STORAGE_CFG, "zfspool: vm-flash\n\tpool vm-flash\n")
-
+def test_unrestricted_thin_storage_is_left_alone(harness: Harness) -> None:
     harness.run()
 
     assert not harness.host.ran("pvesm", "set")
+
+
+@pytest.mark.parametrize("sparse", ["\tsparse 0\n", ""])
+def test_thick_storage_is_converged_to_sparse(harness: Harness, sparse: str) -> None:
+    harness.write(harness.installer.STORAGE_CFG, f"zfspool: vm-flash\n\tpool vm-flash\n{sparse}")
+
+    ctx = harness.run()
+
+    assert harness.host.ran("pvesm", "set") == [["pvesm", "set", "vm-flash", "--sparse", "1"]]
+    assert ctx.changes.touched("storage:vm-flash")
+
+
+def test_failed_sparse_update_warns(harness: Harness, capsys) -> None:
+    harness.write(harness.installer.STORAGE_CFG, "zfspool: vm-flash\n\tsparse 0\n")
+    harness.host.failing.add("pvesm set")
+
+    ctx = harness.run()
+
+    assert "failed to update vm-flash storage sparse" in capsys.readouterr().out
+    assert not ctx.changes.touched("storage:vm-flash")
 
 
 def test_missing_storage_is_created_for_this_node_on_a_cluster(harness: Harness) -> None:
@@ -498,7 +537,8 @@ def test_missing_storage_is_created_for_this_node_on_a_cluster(harness: Harness)
 
     harness.run()
 
-    assert harness.host.ran("pvesm", "add", "zfspool", "vm-flash")[0][-2:] == ["--nodes", "ace"]
+    command = harness.host.ran("pvesm", "add", "zfspool", "vm-flash")[0]
+    assert command[-4:] == ["--sparse", "1", "--nodes", "ace"]
 
 
 def test_missing_storage_on_standalone_node_is_unrestricted(harness: Harness) -> None:
