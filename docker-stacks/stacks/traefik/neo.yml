@@ -111,7 +111,7 @@ services:
       DOCKER_CONFIG: /config.yaml
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
-      - /mnt/cache/appdata/traefik-kop-neo/config.yaml:/config.yaml:ro
+      - /mnt/cache/appdata/traefik/kop/config.yaml:/config.yaml:ro
     networks:
       net.internal: {}
       net_overlay: {}
@@ -140,7 +140,7 @@ services:
       DOCKER_CONFIG: /config.yaml
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
-      - /mnt/cache/appdata/traefik-kop-neo/config.yaml:/config.yaml:ro
+      - /mnt/cache/appdata/traefik/kop/config.yaml:/config.yaml:ro
     networks:
       net.internal: {}
       net_overlay: {}
