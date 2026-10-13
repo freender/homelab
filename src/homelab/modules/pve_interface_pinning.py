@@ -4,12 +4,14 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
+from ..build import write_env_file
 from ..deploy import DeploySession, force_env, prepare_build_dir, stage_and_run_remote_installer
 from ..hosts import HostLookupError, default_registry
 from ..module_support import (
     FileSpec,
     HostArtifacts,
     connection_for_host,
+    is_qemu_guest,
     normalize_bool,
     require_text,
     run_module_deploy,
@@ -17,12 +19,26 @@ from ..module_support import (
 )
 from ..output import print_sub
 from ..ssh import build_files, diff_many
+from .pve_guest.spec import parse_nets
 
 REMOTE_ROOT = "/tmp/homelab-pve-interface-pinning"
 INSTALLER = "scripts/install.py"
 INTERPRETER = "python3"
 WOL_SERVICE = "homelab-interface-wol.service"
 WOL_CONFIG = "interface-wol.conf"
+# A VM's networking is owned here once cloud-init has named its NIC on first boot
+# (homelab-ops#153/#170): the `.network` next to each `.link`, then cloud-init and
+# netplan go. The packages are the ones the Debian cloud image installs; libnetplan1
+# is left to apt-upgrade's autoremove.
+CLOUD_PACKAGES = ("cloud-init", "netplan.io", "netplan-generator", "python3-netplan")
+CLOUD_PATHS = (
+    "/etc/cloud",
+    "/var/lib/cloud",
+    "/etc/netplan",
+    "/etc/ssh/sshd_config.d/50-cloud-init.conf",
+)
+# Hand-placed on riven and helm before this module owned the `.network` (#126, #140).
+RETIRED_NETWORK_FILES = ("/etc/systemd/network/10-lan.network",)
 MAC_RE = re.compile(r"^[0-9a-f]{2}(:[0-9a-f]{2}){5}$")
 IFACE_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,15}$")
 # `ubuntu` is the fleet's generic Debian-family type (the helm/riven VMs): plain
@@ -160,6 +176,12 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
         print_sub("Build files:")
         for file_name in build_files(artifacts.build_dir):
             print_sub(f"    {file_name}")
+        if is_qemu_guest(default_registry(root), host):
+            print_sub(
+                "[DRY-RUN] VM: once udev confirms every pin, would remove "
+                f"{', '.join(RETIRED_NETWORK_FILES)} and purge whichever of "
+                f"{', '.join(CLOUD_PACKAGES)} are installed"
+            )
         return
 
     stage_and_run_remote_installer(
@@ -194,6 +216,8 @@ def normalize_interface_name(value: object, message: str) -> str:
 
 
 def normalize_interface_pins(registry, host: str) -> tuple[InterfacePin, ...]:
+    if is_qemu_guest(registry, host):
+        return vm_interface_pins(registry, host)
     raw = registry.get(host, "pve-interface-pinning.interfaces", [])
     if not isinstance(raw, list) or not raw:
         raise ValueError(f"pve-interface-pinning.interfaces must be a non-empty list for {host}")
@@ -228,6 +252,46 @@ def normalize_interface_pins(registry, host: str) -> tuple[InterfacePin, ...]:
         seen_macs.add(mac)
         pins.append(InterfacePin(name=name, mac=mac, role=role, wake_on_lan=wake_on_lan))
     return tuple(pins)
+
+
+def vm_interface_pins(registry, host: str) -> tuple[InterfacePin, ...]:
+    """A VM's pins are its `pve-guest.net` NICs: each one is declared once (#148).
+
+    net0 keeps the `management` role the hand-written list gave it, so the
+    rendered `.link` (and its comment) is unchanged; other NICs are named by key.
+    """
+    if registry.get(host, "pve-interface-pinning.interfaces", None) is not None:
+        raise ValueError(
+            f"{host} is a VM: declare its NICs in pve-guest.net, not "
+            "pve-interface-pinning.interfaces (use `pve-interface-pinning: true`)"
+        )
+    nets = parse_nets(f"{host}.pve-guest", registry.get(host, "pve-guest.net", None), "qemu")
+    return tuple(
+        InterfacePin(
+            name=net.name,
+            mac=net.mac.lower(),
+            role="management" if net.key == "net0" else net.key,
+            wake_on_lan=False,
+        )
+        for net in nets
+    )
+
+
+def network_file(pin: InterfacePin, host: str) -> str:
+    return "\n".join(
+        [
+            f"# Managed by homelab pve-interface-pinning for {host}: {pin.role}",
+            "[Match]",
+            f"Name={pin.name}",
+            "",
+            "[Network]",
+            "DHCP=ipv4",
+            "",
+            "[DHCPv4]",
+            "ClientIdentifier=mac",
+            "",
+        ]
+    )
 
 
 def link_file(pin: InterfacePin, host: str) -> str:
@@ -322,11 +386,16 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
     build_dir = root / "pve-interface-pinning" / "build" / host
     prepare_build_dir(build_dir)
 
+    vm_guest = is_qemu_guest(registry, host)
     file_specs: list[FileSpec] = []
     for pin in pins:
         build_name = f"10-homelab-{pin.name}.link"
         (build_dir / build_name).write_text(link_file(pin, host), encoding="utf-8")
         file_specs.append(FileSpec(build_name, f"/etc/systemd/network/{build_name}"))
+        if vm_guest:
+            network_name = f"10-homelab-{pin.name}.network"
+            (build_dir / network_name).write_text(network_file(pin, host), encoding="utf-8")
+            file_specs.append(FileSpec(network_name, f"/etc/systemd/network/{network_name}"))
 
     wol_pins = [pin for pin in pins if pin.wake_on_lan]
     (build_dir / WOL_CONFIG).write_text(
@@ -347,4 +416,13 @@ def build_host_artifacts(root: Path, host: str) -> HostArtifacts:
         ]
     )
     write_file_map(build_dir, tuple(file_specs))
+    write_env_file(
+        build_dir / "env",
+        {
+            "VM_GUEST": "true" if vm_guest else "false",
+            "CLOUD_PACKAGES": " ".join(CLOUD_PACKAGES) if vm_guest else "",
+            "CLOUD_PATHS": " ".join(CLOUD_PATHS) if vm_guest else "",
+            "RETIRED_NETWORK_FILES": " ".join(RETIRED_NETWORK_FILES) if vm_guest else "",
+        },
+    )
     return HostArtifacts(build_dir=build_dir, file_specs=tuple(file_specs))

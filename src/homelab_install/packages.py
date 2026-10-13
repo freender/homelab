@@ -139,6 +139,33 @@ def dist_upgrade(ctx: InstallContext) -> None:
         raise InstallError(f"apt-get dist-upgrade failed (exit {result.returncode})")
 
 
+def purge(ctx: InstallContext, *packages: str) -> list[str]:
+    """Purge whichever of `packages` dpkg reports installed; return what was purged.
+
+    Arrives with `pve-interface-pinning` removing cloud-init and netplan from VMs
+    (homelab-ops#170). Never `--autoremove`: on helm, base packages such as
+    `iproute2` are apt-marked auto, and one purge must not take them along.
+    """
+    present = [package for package in packages if _installed(package)]
+    if not present:
+        return []
+
+    log.action(f"Purging packages: {' '.join(present)}")
+    result = _run(
+        [*APT_GET, "purge", "-y", "-q", *present],
+        check=False,
+        env={**os.environ, "DEBIAN_FRONTEND": "noninteractive"},
+    )
+    if result.returncode != 0:
+        raise InstallError(f"failed to purge packages: {', '.join(present)}")
+
+    still_present = [package for package in present if _installed(package)]
+    if still_present:
+        raise InstallError(f"packages still installed after purge: {', '.join(still_present)}")
+    log.ok(f"Purged: {' '.join(present)}")
+    return present
+
+
 def ensure(ctx: InstallContext, *packages: str, target_release: str | None = None) -> None:
     """Install whichever of `packages` dpkg does not already report installed.
 

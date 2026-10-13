@@ -24,6 +24,7 @@ import pytest
 
 from homelab.deploy import prepare_build_dir
 from homelab.hosts import default_registry
+from homelab.module_support import is_qemu_guest
 from homelab.modules import (
     keepalived,
     pve_autoinstall,
@@ -139,6 +140,33 @@ def test_link_files_match_on_mac_and_set_expected_name(host: str) -> None:
         assert pin.mac not in seen_macs, f"{host}: duplicate pinned MAC {pin.mac}"
         seen_names.add(pin.name)
         seen_macs.add(pin.mac)
+
+
+def _pinned_vms() -> list[str]:
+    registry = default_registry(ROOT)
+    return [host for host in _hosts_with("pve-interface-pinning") if is_qemu_guest(registry, host)]
+
+
+def test_there_are_pinned_vms_to_cover() -> None:
+    assert _pinned_vms(), "expected at least one VM with pve-interface-pinning"
+
+
+@pytest.mark.parametrize("host", _pinned_vms())
+def test_vm_network_files_follow_pve_guest_net(host: str) -> None:
+    """A VM's .network is the only network config left once cloud-init is purged;
+    one that names a NIC no .link creates leaves the VM off the network at boot."""
+    registry = default_registry(ROOT)
+    pins = pve_interface_pinning.normalize_interface_pins(registry, host)
+    nets = registry.get(host, "pve-guest.net")
+
+    assert {(pin.name, pin.mac) for pin in pins} == {
+        (net["name"], net["mac"].lower()) for net in nets.values()
+    }
+    for pin in pins:
+        rendered = pve_interface_pinning.network_file(pin, host)
+        assert f"[Match]\nName={pin.name}\n" in rendered
+        assert "DHCP=ipv4" in rendered and "ClientIdentifier=mac" in rendered
+        assert not UNRENDERED.search(rendered)
 
 
 # --------------------------------------------------------------------------------------

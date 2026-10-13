@@ -99,18 +99,24 @@ class FakeApt:
         update_code: int = 0,
         install_code: int = 0,
         dist_upgrade_code: int = 0,
+        purges: bool = True,
+        purge_code: int = 0,
     ) -> None:
         self.known = dict(known or {})
+        self.purges = purges
+        self.purge_code = purge_code
         self.installs = installs
         self.update_code = update_code
         self.install_code = install_code
         self.dist_upgrade_code = dist_upgrade_code
         self.calls: list[list[str]] = []
         self.env: list[dict[str, str] | None] = []
+        self.check: list[object] = []
 
     def __call__(self, command: list[str], **kwargs) -> subprocess.CompletedProcess:
         self.calls.append(list(command))
         self.env.append(kwargs.get("env"))
+        self.check.append(kwargs.get("check", "<unset>"))
 
         if command[0] == "dpkg-query":
             package = command[-1]
@@ -129,6 +135,12 @@ class FakeApt:
 
         if "dist-upgrade" in command:
             return subprocess.CompletedProcess(command, self.dist_upgrade_code)
+
+        if command[:4] == [*APT_GET, "purge"]:
+            if self.purges and self.purge_code == 0:
+                for package in command[6:]:
+                    self.known.pop(package, None)
+            return subprocess.CompletedProcess(command, self.purge_code)
 
         raise AssertionError(f"unexpected command: {command}")
 
@@ -1546,6 +1558,79 @@ def test_dist_upgrade_raises_when_the_update_fails(tmp_path: Path, monkeypatch) 
         packages.dist_upgrade(_ctx(tmp_path))
 
     assert not any("dist-upgrade" in call for call in fake.apt_calls)
+
+
+# ---------------------------------------------------------------------------
+# packages.purge (pve-interface-pinning decloud)
+# ---------------------------------------------------------------------------
+
+
+def test_purge_removes_only_what_dpkg_reports_installed(
+    tmp_path: Path, monkeypatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    fake = _apt(
+        monkeypatch,
+        FakeApt(
+            {
+                "cloud-init": FakeApt.INSTALLED,
+                "netplan.io": "deinstall ok config-files",
+                "python3-netplan": FakeApt.INSTALLED,
+            }
+        ),
+    )
+
+    purged = packages.purge(_ctx(tmp_path), "cloud-init", "netplan.io", "python3-netplan", "nope")
+
+    assert purged == ["cloud-init", "python3-netplan"]
+    assert fake.apt_calls == [[*APT_GET, "purge", "-y", "-q", "cloud-init", "python3-netplan"]]
+    out = capsys.readouterr().out
+    assert "Purging packages: cloud-init python3-netplan" in out
+    assert "Purged: cloud-init python3-netplan" in out
+
+
+def test_purge_is_noninteractive_and_raises_its_own_error(tmp_path: Path, monkeypatch) -> None:
+    """`check=False`: a failed purge must surface as InstallError, not
+    CalledProcessError, which the installer runner does not report cleanly."""
+    fake = _apt(monkeypatch, FakeApt({"cloud-init": FakeApt.INSTALLED}))
+
+    packages.purge(_ctx(tmp_path), "cloud-init")
+
+    index = fake.calls.index(fake.apt_calls[0])
+    assert fake.env[index]["DEBIAN_FRONTEND"] == "noninteractive"
+    assert fake.check[index] is False
+
+
+def test_purge_never_autoremoves(tmp_path: Path, monkeypatch) -> None:
+    """helm's base packages are apt-marked auto; an autoremove would take them."""
+    fake = _apt(monkeypatch, FakeApt({"cloud-init": FakeApt.INSTALLED}))
+
+    packages.purge(_ctx(tmp_path), "cloud-init")
+
+    assert not any("autoremove" in arg for call in fake.apt_calls for arg in call)
+    assert not any("--auto-remove" in arg for call in fake.apt_calls for arg in call)
+
+
+def test_purge_of_nothing_installed_touches_apt_not_at_all(tmp_path: Path, monkeypatch) -> None:
+    fake = _apt(monkeypatch, FakeApt())
+
+    assert packages.purge(_ctx(tmp_path), "cloud-init") == []
+    assert fake.apt_calls == []
+
+
+def test_purge_raises_when_apt_fails(tmp_path: Path, monkeypatch) -> None:
+    installed = {"cloud-init": FakeApt.INSTALLED, "netplan.io": FakeApt.INSTALLED}
+    _apt(monkeypatch, FakeApt(installed, purge_code=100))
+
+    with pytest.raises(InstallError, match="failed to purge packages: cloud-init, netplan.io$"):
+        packages.purge(_ctx(tmp_path), "cloud-init", "netplan.io")
+
+
+def test_purge_raises_when_a_package_survives(tmp_path: Path, monkeypatch) -> None:
+    installed = {"cloud-init": FakeApt.INSTALLED, "netplan.io": FakeApt.INSTALLED}
+    _apt(monkeypatch, FakeApt(installed, purges=False))
+
+    with pytest.raises(InstallError, match="still installed after purge: cloud-init, netplan.io$"):
+        packages.purge(_ctx(tmp_path), "cloud-init", "netplan.io")
 
 
 # ---------------------------------------------------------------------------

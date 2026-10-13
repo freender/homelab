@@ -18,7 +18,7 @@ from homelab.modules import pve_interface_pinning as pinning
 from homelab_install import systemd
 from homelab_install.context import InstallContext
 from homelab_install.errors import InstallError
-from homelab_install.main import _parse_file_map
+from homelab_install.main import _parse_env_file, _parse_file_map
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 INSTALLER_PATH = REPO_ROOT / "pve-interface-pinning" / "scripts" / "install.py"
@@ -40,8 +40,9 @@ class FakeRegistry:
         self.interfaces = interfaces
 
     def get(self, host: str, key: str, default=None):
-        assert key == "pve-interface-pinning.interfaces"
-        return self.interfaces
+        if key == "pve-interface-pinning.interfaces":
+            return self.interfaces
+        return default
 
 
 def render(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, interfaces: list[dict]):
@@ -63,7 +64,7 @@ def test_file_map_matches_what_was_rendered(
     artifacts = render(tmp_path, monkeypatch, ACE)
 
     file_map = _parse_file_map(artifacts.build_dir / "file-map.conf")
-    rendered = {p.name for p in artifacts.build_dir.iterdir()} - {"file-map.conf"}
+    rendered = {p.name for p in artifacts.build_dir.iterdir()} - {"file-map.conf", "env"}
     assert set(file_map) == rendered == {spec.build_name for spec in artifacts.file_specs}
     assert "link-files.conf" not in rendered
 
@@ -101,6 +102,92 @@ def test_the_wol_service_runs_the_script_the_map_installs(
 
     service = (artifacts.build_dir / SERVICE).read_text(encoding="utf-8")
     assert f"ExecStart={file_map['homelab-interface-wol'][0]}\n" in service
+
+
+class VmRegistry:
+    """A `kind: qemu` guest: its pins come from `pve-guest.net`."""
+
+    def __init__(self, interfaces: list[dict] | None = None) -> None:
+        self.interfaces = interfaces
+
+    def get(self, host: str, key: str, default=None):
+        values = {
+            "config.type": "ubuntu",
+            "pve-guest.kind": "qemu",
+            "pve-guest.net": {
+                "net0": {"name": "nic0", "mac": "BC:24:11:18:E3:17", "tag": 40},
+                "net1": {"name": "nic1", "mac": "BC:24:11:00:00:01"},
+            },
+            "pve-interface-pinning.interfaces": self.interfaces,
+        }
+        value = values.get(key)
+        return default if value is None else value
+
+    def has(self, host: str, feature: str) -> bool:
+        return False
+
+
+def render_vm(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(pinning, "default_registry", lambda _root: VmRegistry())
+    return pinning.build_host_artifacts(tmp_path, "helm")
+
+
+def test_a_vm_takes_its_pins_from_pve_guest_net() -> None:
+    assert pinning.normalize_interface_pins(VmRegistry(), "helm") == (
+        pinning.InterfacePin("nic0", "bc:24:11:18:e3:17", "management", False),
+        pinning.InterfacePin("nic1", "bc:24:11:00:00:01", "net1", False),
+    )
+
+
+def test_a_vm_may_not_declare_its_nics_twice() -> None:
+    registry = VmRegistry(interfaces=[{"name": "nic0", "mac": "bc:24:11:18:e3:17"}])
+    with pytest.raises(ValueError, match="declare its NICs in pve-guest.net"):
+        pinning.normalize_interface_pins(registry, "helm")
+
+
+def test_a_vm_gets_a_network_file_next_to_each_link(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    artifacts = render_vm(tmp_path, monkeypatch)
+    file_map = _parse_file_map(artifacts.build_dir / "file-map.conf")
+
+    networks = {name: dest for name, (dest, _mode) in file_map.items() if name.endswith(".network")}
+    assert networks == {
+        "10-homelab-nic0.network": "/etc/systemd/network/10-homelab-nic0.network",
+        "10-homelab-nic1.network": "/etc/systemd/network/10-homelab-nic1.network",
+    }
+    rendered = (artifacts.build_dir / "10-homelab-nic1.network").read_text(encoding="utf-8")
+    assert "[Match]\nName=nic1\n" in rendered
+    assert "[Network]\nDHCP=ipv4\n" in rendered
+    assert "[DHCPv4]\nClientIdentifier=mac\n" in rendered
+
+
+def test_a_vm_env_turns_on_the_decloud_steps(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    artifacts = render_vm(tmp_path, monkeypatch)
+    env = _parse_env_file(artifacts.build_dir / "env")
+
+    assert env["VM_GUEST"] == "true"
+    assert env["CLOUD_PACKAGES"].split() == list(pinning.CLOUD_PACKAGES)
+    assert "cloud-init" in env["CLOUD_PACKAGES"].split()
+    assert env["CLOUD_PATHS"].split() == list(pinning.CLOUD_PATHS)
+    assert env["RETIRED_NETWORK_FILES"] == "/etc/systemd/network/10-lan.network"
+
+
+def test_a_pve_node_gets_no_network_files_and_no_vm_steps(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    artifacts = render(tmp_path, monkeypatch, ACE)
+    env = _parse_env_file(artifacts.build_dir / "env")
+
+    assert not list(artifacts.build_dir.glob("*.network"))
+    assert env == {
+        "VM_GUEST": "false",
+        "CLOUD_PACKAGES": "",
+        "CLOUD_PATHS": "",
+        "RETIRED_NETWORK_FILES": "",
+    }
 
 
 def test_validate_requires_the_python_installer(
@@ -182,11 +269,22 @@ class FakeSystemctl:
         self.active = {SERVICE}
         self.calls: list[list[str]] = []
         self.udev_code = 0
+        # VM-only reads: what `net_setup_link` reports per iface, and the initramfs.
+        self.udev_props: dict[str, str] = {}
+        self.initrd_listing = ""
+        self.initramfs_code = 0
 
     def __call__(self, command: list[str], **kwargs) -> subprocess.CompletedProcess:
         self.calls.append(list(command))
         code = 0
-        if command[0] == "udevadm":
+        if command[:2] == ["udevadm", "test-builtin"]:
+            iface = command[-1].rsplit("/", 1)[-1]
+            return subprocess.CompletedProcess(command, 0, self.udev_props.get(iface, ""), "")
+        if command[0] == "lsinitramfs":
+            return subprocess.CompletedProcess(command, 0, self.initrd_listing, "")
+        if command[0] == "update-initramfs":
+            code = self.initramfs_code
+        elif command[0] == "udevadm":
             code = self.udev_code
         else:
             verb, unit = command[1], command[-1]
@@ -208,13 +306,18 @@ class FakeSystemctl:
             " ".join(call[1:]) if call[0] == "systemctl" else " ".join(call)
             for call in self.calls
             if call[1] not in queries
+            and call[0] != "lsinitramfs"
+            and call[:2] != ["udevadm", "test-builtin"]
         ]
 
 
 class Host:
     """A sandboxed host filesystem plus a staged bundle rendered by the orchestrator."""
 
-    def __init__(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pins) -> None:
+    def __init__(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pins, vm: bool = False
+    ) -> None:
+        self.vm = vm
         self.installer = load_installer()
         self.root = tmp_path / "hostfs"
         self.systemctl = FakeSystemctl()
@@ -238,9 +341,63 @@ class Host:
         self.udev_rule = self.root / "etc" / "udev" / "rules.d" / "70-persistent-net.rules"
         monkeypatch.setattr(self.installer, "LEGACY_UDEV_RULE", str(self.udev_rule))
 
+        self.sys_net = self.root / "sys" / "class" / "net"
+        monkeypatch.setattr(self.installer, "SYS_CLASS_NET", str(self.sys_net))
+        self.boot = self.root / "boot"
+        monkeypatch.setattr(self.installer, "BOOT_DIR", str(self.boot))
+        self.purged: list[tuple[str, ...]] = []
+        self.installed_packages: set[str] = set(pinning.CLOUD_PACKAGES) if vm else set()
+        monkeypatch.setattr(self.installer.packages, "purge", self._purge)
+        self.retired = self.etc_network / "10-lan.network"
+        self.cloud_dir = self.root / "etc" / "cloud"
+        self.cloud_drop_in = self.root / "etc" / "ssh" / "sshd_config.d" / "50-cloud-init.conf"
+        self.env = (
+            {
+                "VM_GUEST": "true",
+                "CLOUD_PACKAGES": " ".join(pinning.CLOUD_PACKAGES),
+                "CLOUD_PATHS": f"{self.cloud_dir} {self.root / 'var/lib/cloud'} "
+                f"{self.cloud_drop_in}",
+                "RETIRED_NETWORK_FILES": str(self.retired),
+            }
+            if vm
+            else {}
+        )
+
         self.build_dir = tmp_path / "remote" / "build" / "h"
         self.force = False
         self.set_pins(pins)
+
+    def _purge(self, ctx, *names: str) -> list[str]:
+        present = [name for name in names if name in self.installed_packages]
+        self.purged.append(tuple(names))
+        self.installed_packages -= set(present)
+        return present
+
+    def nic(self, iface: str, pin, udev_name: str | None = None) -> None:
+        """A NIC in sysfs; udev confirms `pin` for it unless `udev_name` differs."""
+        path = self.sys_net / iface
+        path.mkdir(parents=True)
+        (path / "device").touch()
+        (path / "address").write_text(f"{pin.mac}\n", encoding="utf-8")
+        self.systemctl.udev_props[iface] = (
+            f"ID_NET_LINK_FILE={self.dest(f'10-homelab-{pin.name}.link')}\n"
+            f"ID_NET_LINK_FILE_DROPINS=\nID_NET_NAME={udev_name or pin.name}\n"
+        )
+
+    def initrd(self, *links: str) -> None:
+        self.boot.mkdir(parents=True, exist_ok=True)
+        (self.boot / "initrd.img-7.2.6+deb13-amd64").touch()
+        self.systemctl.initrd_listing = "".join(
+            f"usr/lib/systemd/network/{name}\n" for name in ("99-default.link", *links)
+        )
+
+    def cloud_leftovers(self) -> None:
+        self.etc_network.mkdir(parents=True, exist_ok=True)
+        self.retired.write_text("[Match]\nType=ether\nKind=!*\n", encoding="utf-8")
+        (self.cloud_dir / "cloud.cfg.d").mkdir(parents=True)
+        (self.cloud_dir / "cloud.cfg.d" / "90.cfg").write_text("x", encoding="utf-8")
+        self.cloud_drop_in.parent.mkdir(parents=True)
+        self.cloud_drop_in.write_text("PasswordAuthentication yes\n", encoding="utf-8")
 
     def set_pins(self, pins) -> None:
         self.build_dir.mkdir(parents=True, exist_ok=True)
@@ -251,6 +408,12 @@ class Host:
             name = f"10-homelab-{pin.name}.link"
             (self.build_dir / name).write_text(pinning.link_file(pin, "h"), encoding="utf-8")
             specs.append(pinning.FileSpec(name, f"/etc/systemd/network/{name}"))
+            if self.vm:
+                network = f"10-homelab-{pin.name}.network"
+                (self.build_dir / network).write_text(
+                    pinning.network_file(pin, "h"), encoding="utf-8"
+                )
+                specs.append(pinning.FileSpec(network, f"/etc/systemd/network/{network}"))
         (self.build_dir / pinning.WOL_CONFIG).write_text(
             "".join(f"{pin.name}|{pin.mac}\n" for pin in pins if pin.wake_on_lan), encoding="utf-8"
         )
@@ -280,7 +443,7 @@ class Host:
                 host="h",
                 script_dir=self.build_dir.parents[1],
                 build_dir=self.build_dir,
-                env={},
+                env=dict(self.env),
                 deploy_env={},
                 file_map=self.file_map,
                 force_update=self.force,
@@ -537,3 +700,139 @@ def test_a_map_entry_without_its_rendered_link_fails_cleanly(host_for) -> None:
         host.deploy()
     assert host.systemctl.calls == []
     assert not host.etc_network.exists()
+
+
+# --- VM: .network, initramfs, decloud (homelab-ops#170) ---------------------------
+
+VM_NIC = pinning.InterfacePin("nic0", "bc:24:11:18:e3:17", "management", False)
+NETWORKD = "systemd-networkd.service"
+
+
+@pytest.fixture
+def vm(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    host = Host(tmp_path, monkeypatch, (VM_NIC,), vm=True)
+    host.systemctl.enabled |= {NETWORKD}
+    host.initrd()
+    host.cloud_leftovers()
+    return host
+
+
+def test_a_confirmed_vm_gets_its_network_and_loses_cloud_init(vm: Host) -> None:
+    vm.nic("ens18", VM_NIC)
+    vm.deploy()
+
+    network = vm.dest("10-homelab-nic0.network")
+    assert network.read_text(encoding="utf-8") == pinning.network_file(VM_NIC, "h")
+    assert "update-initramfs -u -k all" in vm.systemctl.actions()
+    assert not vm.retired.exists()
+    assert vm.purged == [pinning.CLOUD_PACKAGES]
+    assert not vm.installed_packages
+    assert not vm.cloud_dir.exists()
+    assert not vm.cloud_drop_in.exists()
+
+
+def test_networking_is_never_restarted(vm: Host) -> None:
+    """Everything takes effect at the next boot (reboot rail)."""
+    vm.nic("ens18", VM_NIC)
+    vm.deploy()
+
+    touched = " ".join(vm.systemctl.actions())
+    assert "restart" not in touched and "reload systemd-networkd" not in touched
+    assert not any(call[0] == "networkctl" for call in vm.systemctl.calls)
+
+
+def test_networkd_is_enabled_for_the_next_boot_not_started(vm: Host) -> None:
+    vm.systemctl.enabled.discard(NETWORKD)
+    vm.nic("ens18", VM_NIC)
+    vm.deploy()
+
+    assert f"enable {NETWORKD}" in vm.systemctl.actions()
+    assert f"enable --now {NETWORKD}" not in vm.systemctl.actions()
+
+
+def test_an_unconfirmed_pin_keeps_cloud_init_and_the_old_network(
+    vm: Host, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The .link would not rename the NIC: the retired file is its only match."""
+    vm.nic("ens18", VM_NIC, udev_name="ens18")
+    vm.deploy()
+
+    assert vm.retired.exists()
+    assert vm.purged == []
+    assert vm.cloud_dir.exists()
+    assert vm.dest("10-homelab-nic0.network").exists()
+    out = capsys.readouterr().out
+    assert "udev would not name ens18" in out
+    assert "keeping cloud-init" in out
+
+
+def test_a_pin_whose_mac_is_absent_is_unconfirmed(
+    vm: Host, capsys: pytest.CaptureFixture[str]
+) -> None:
+    vm.deploy()
+
+    assert vm.retired.exists()
+    assert vm.purged == []
+    assert f"no NIC has MAC {VM_NIC.mac}" in capsys.readouterr().out
+
+
+def test_a_nic_without_a_device_is_not_the_pinned_one(vm: Host) -> None:
+    """A bridge or veth can share a MAC; only real devices count."""
+    vm.nic("ens18", VM_NIC)
+    (vm.sys_net / "ens18" / "device").unlink()
+    vm.deploy()
+
+    assert vm.purged == []
+
+
+def test_a_converged_vm_rebuilds_nothing_and_says_so(
+    vm: Host, capsys: pytest.CaptureFixture[str]
+) -> None:
+    vm.nic("nic0", VM_NIC)
+    vm.deploy()
+    vm.initrd("10-homelab-nic0.link")
+    capsys.readouterr()
+    vm.deploy()
+
+    assert vm.systemctl.actions() == []
+    out = capsys.readouterr().out
+    assert "initramfs already carries the pinned .link files" in out
+    assert "cloud-init and netplan already gone" in out
+
+
+def test_an_initramfs_without_the_link_is_rebuilt_on_an_unchanged_deploy(vm: Host) -> None:
+    """riven's initramfs predates its .link; a plain redeploy converges it."""
+    vm.nic("nic0", VM_NIC)
+    vm.deploy()
+    vm.deploy()
+
+    assert vm.systemctl.actions() == ["update-initramfs -u -k all"]
+
+
+def test_a_failed_initramfs_rebuild_fails_the_deploy_before_decloud(vm: Host) -> None:
+    vm.nic("ens18", VM_NIC)
+    vm.systemctl.initramfs_code = 1
+
+    with pytest.raises(InstallError, match="--force"):
+        vm.deploy()
+    assert vm.purged == []
+    assert vm.retired.exists()
+
+
+def test_a_vm_map_without_network_files_refuses(vm: Host) -> None:
+    vm.file_map = {n: v for n, v in vm.file_map.items() if not n.endswith(".network")}
+
+    with pytest.raises(InstallError, match="no .network files"):
+        vm.deploy()
+
+
+def test_a_pve_node_runs_none_of_the_vm_steps(host_for) -> None:
+    host = host_for()
+    host.deploy()
+
+    assert not any(
+        call[0] in ("lsinitramfs", "update-initramfs") or call[:2] == ["udevadm", "test-builtin"]
+        for call in host.systemctl.calls
+    )
+    assert host.purged == []
+    assert not list(host.etc_network.glob("*.network"))
