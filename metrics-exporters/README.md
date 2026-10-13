@@ -9,11 +9,12 @@ Bare metal (`node-exporter` + `smartctl_exporter` + ZFS textfile exporter):
 - cinci, cottonwood (Ubuntu, offsite)
 
 LXC guests, `metrics-exporters.lxc_guest: true` (`node-exporter` only):
-- helm (on clovis), neo (on bray), tower (on ace)
+- neo (on bray), tower (on ace)
 
 Guests that boot their own kernel, `lxc_guest: true` plus `own_kernel: true`
 (`node-exporter` + pending-reboot exporter):
-- riven (VM 110; `lxc_guest` only selects the reduced collector set here)
+- riven (VM 110) and helm (VM 112); `lxc_guest` only selects the reduced
+  collector set here
 
 Every host runs host-native exporters; there is no per-host runtime mode. Only
 `cadvisor` remains containerised, in the host-managed compose stack under
@@ -47,6 +48,13 @@ guests, each verified against a live guest:
 Kept, because lxcfs virtualises them to the guest's own limits or they are
 genuinely namespaced: `cpu`, `meminfo`, `loadavg`, `filesystem`, `netdev`,
 `systemd`, `textfile`, `uname`.
+
+The reduced profile also masks two timers from Debian's
+`prometheus-node-exporter-collectors` (a Recommends of node-exporter):
+`prometheus-node-exporter-smartmon.timer` and `-nvme.timer`, and deletes their
+`smartmon.prom`/`nvme.prom`. In an LXC they find no disk and do nothing. On a VM
+they report the virtual disk: riven's smartmon showed a `QEMU HARDDISK`. Nothing
+reads either series (freender/homelab-ops#165). Bare metal keeps both.
 
 Going native on the guests also fixed a long-standing bug: the containerised
 exporter reported `/proc/net/dev` from its **own** network namespace, so
@@ -732,7 +740,13 @@ Retired (freender/homelab-ops#38), same reasoning as every other module: the rep
 no longer ships an uninstall path.
 
 Per-feature unwind still happens on deploy — `scripts/install.py` retires the units,
-configs and textfiles for anything the host's inventory stops asking for. Removing
+configs and textfiles for anything the host's inventory stops asking for. That
+covers a whole profile change too: moving a host from bare metal to the reduced
+profile (as helm did, freender/homelab-ops#165) retires every textfile exporter
+and its `.prom`, the smartctl drop-in, wait-devices helper and wrapper, and purges
+`prometheus-smartctl-exporter` (never autoremove, so `smartmontools` stays). The
+backports source is left in place, since `base-packages.backports_kernel` may
+depend on it. Removing
 the module outright is ad-hoc work against that installer's file map: disable the
 exporter units, delete the binaries, units and `/etc/default` files it lists, run
 `systemctl daemon-reload`, and purge the distro packages if wanted. Note

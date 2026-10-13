@@ -67,18 +67,57 @@ SMARTCTL_PACKAGE = "prometheus-smartctl-exporter"
 SMARTCTL_UNIT = "smartctl_exporter.service"
 SMARTCTL_OVERRIDE = "smartctl-exporter-override.conf"
 SMARTCTL_WAIT = "smartctl-exporter-wait-devices"
+SMARTCTL_WRAPPER = "smartctl-wrapper.sh"
+SMARTCTL_DROPIN = "smartctl_exporter.service.d/override.conf"
+SMARTCTL_WAIT_BIN = "homelab-smartctl-wait-devices"
+SMARTCTL_WRAPPER_BIN = "homelab-smartctl-wrapper"
 
 APCUPSD = ("apcupsd-exporter.py", "apcupsd-exporter.service", "apcupsd-exporter.env")
 IGPU = ("igpu-exporter.py", "igpu-exporter.service", "igpu-exporter.defaults")
 
-# Textfile exporters: file-map script entry -> (unit stem, configs it reads).
+# Service exporters: file-map entries -> unit stem (also its binary and defaults name).
+SERVICE_EXPORTERS = ((APCUPSD, "apcupsd-exporter"), (IGPU, "igpu-exporter"))
+
+# Textfile exporters: file-map script entry -> (unit stem, configs it reads, .prom it writes).
 TEXTFILE_EXPORTERS = {
-    "zfs-pool-textfile-exporter": ("zfs-pool-textfile-exporter", ("zfs-expected-pools.conf",)),
-    "hba-textfile-exporter.py": ("hba-textfile-exporter", ()),
-    "reboot-textfile-exporter": ("reboot-textfile-exporter", ("pve-patch-statuses.conf",)),
-    "boot-entry-textfile-exporter": ("boot-entry-textfile-exporter", ()),
-    "disk-label-textfile-exporter.py": ("disk-label-textfile-exporter", ("disk-labels.conf",)),
-    "pve-replication-textfile-exporter.py": ("pve-replication-textfile-exporter", ()),
+    "zfs-pool-textfile-exporter": (
+        "zfs-pool-textfile-exporter",
+        ("zfs-expected-pools.conf",),
+        ("zfs-pools.prom",),
+    ),
+    "hba-textfile-exporter.py": ("hba-textfile-exporter", (), ("hba.prom",)),
+    "reboot-textfile-exporter": (
+        "reboot-textfile-exporter",
+        ("pve-patch-statuses.conf",),
+        ("reboot.prom",),
+    ),
+    "boot-entry-textfile-exporter": ("boot-entry-textfile-exporter", (), ("boot-entries.prom",)),
+    "disk-label-textfile-exporter.py": (
+        "disk-label-textfile-exporter",
+        ("disk-labels.conf",),
+        ("disk-labels.prom",),
+    ),
+    "pve-replication-textfile-exporter.py": (
+        "pve-replication-textfile-exporter",
+        (),
+        ("pve-replication.prom",),
+    ),
+}
+
+# Optional /etc/homelab configs -> the .prom that goes with them.
+OPTIONAL_CONFIGS = {
+    "zfs-expected-pools.conf": (),
+    "disk-labels.conf": (),
+    "pve-patch-statuses.conf": ("pve-patches.prom",),
+}
+
+# Debian's prometheus-node-exporter-collectors, a Recommends of node-exporter, enables
+# these on every host. On the reduced profile there is no real disk behind them: on
+# riven smartmon reported its QEMU HARDDISK and nvme only the nvme-cli version, and
+# nothing reads either (freender/homelab-ops#165). Bare metal keeps them.
+GUEST_MASKED_COLLECTORS = {
+    "prometheus-node-exporter-smartmon.timer": "smartmon.prom",
+    "prometheus-node-exporter-nvme.timer": "nvme.prom",
 }
 
 # Entries that only make sense together. A map carries all of a group or none of it.
@@ -88,7 +127,7 @@ GROUPS = (
     (SMARTCTL_OVERRIDE, SMARTCTL_WAIT),
     *(
         (script, f"{stem}.service", f"{stem}.timer")
-        for script, (stem, _configs) in TEXTFILE_EXPORTERS.items()
+        for script, (stem, _configs, _proms) in TEXTFILE_EXPORTERS.items()
     ),
 )
 
@@ -168,46 +207,58 @@ def _retire(ctx: InstallContext, units: tuple[str, ...], paths: tuple[str, ...],
     return retired
 
 
+def retire_smartctl(ctx: InstallContext) -> bool:
+    """Remove smartctl_exporter, its drop-in and helpers from a map without them.
+
+    The binary and unit belong to the distro package, so leaving the reduced
+    profile purges it (never autoremove: `smartmontools` stays). The backports
+    source stays too: on helm the backports kernel (`base-packages`) now relies
+    on it. Returns True if a unit or the package was removed.
+    """
+    if SMARTCTL_WRAPPER not in ctx.file_map:
+        files.remove(ctx, f"{BIN_DIR}/{SMARTCTL_WRAPPER_BIN}", "smartctl wrapper not configured")
+    if SMARTCTL_OVERRIDE in ctx.file_map:
+        return False
+    dropin = Path(f"{SYSTEMD_DIR}/{SMARTCTL_DROPIN}")
+    retired = files.remove(ctx, str(dropin), "smartctl_exporter not configured")
+    if dropin.parent.is_dir() and not any(dropin.parent.iterdir()):
+        dropin.parent.rmdir()
+    files.remove(ctx, f"{BIN_DIR}/{SMARTCTL_WAIT_BIN}", "smartctl_exporter not configured")
+    return bool(packages.purge(ctx, SMARTCTL_PACKAGE)) or retired
+
+
 def retire_unconfigured(ctx: InstallContext) -> bool:
     """Remove every optional exporter and config the file map no longer carries.
 
-    A leftover `.prom` has to go with its exporter: the textfile collector serves
-    whatever is in that directory whether or not anything still writes it. Timers
-    are retired before their services. Returns True if a unit was removed.
+    Everything outside the host's active profile goes, so a profile change
+    (bare metal to the reduced profile, as helm did) converges with `./deploy`
+    alone. A leftover `.prom` has to go with its exporter: the textfile
+    collector serves whatever is in that directory whether or not anything
+    still writes it. Timers are retired before their services. Returns True if
+    a unit was removed.
     """
     retired = False
-    if APCUPSD[0] not in ctx.file_map:
-        retired |= _retire(
-            ctx,
-            ("apcupsd-exporter.service",),
-            (f"{DEFAULT_DIR}/apcupsd-exporter", f"{BIN_DIR}/apcupsd-exporter"),
-            "apcupsd exporter",
-        )
-    if IGPU[0] not in ctx.file_map:
-        retired |= _retire(
-            ctx,
-            ("igpu-exporter.service",),
-            (f"{DEFAULT_DIR}/igpu-exporter", f"{BIN_DIR}/igpu-exporter"),
-            "Intel GPU exporter",
-        )
-    for script, prom in (
-        ("hba-textfile-exporter.py", "hba.prom"),
-        ("disk-label-textfile-exporter.py", "disk-labels.prom"),
-    ):
+    for entries, stem in SERVICE_EXPORTERS:
+        if entries[0] not in ctx.file_map:
+            retired |= _retire(
+                ctx,
+                (f"{stem}.service",),
+                (f"{DEFAULT_DIR}/{stem}", f"{BIN_DIR}/{stem}"),
+                stem,
+            )
+    for script, (stem, _configs, proms) in TEXTFILE_EXPORTERS.items():
         if script not in ctx.file_map:
-            stem = TEXTFILE_EXPORTERS[script][0]
             retired |= _retire(
                 ctx,
                 (f"{stem}.timer", f"{stem}.service"),
-                (f"{BIN_DIR}/{stem}", f"{TEXTFILE_DIR}/{prom}"),
+                (f"{BIN_DIR}/{stem}", *(f"{TEXTFILE_DIR}/{prom}" for prom in proms)),
                 stem,
             )
-    if "disk-labels.conf" not in ctx.file_map:
-        files.remove(ctx, f"{ETC_HOMELAB}/disk-labels.conf", "no overrides configured")
-    if "pve-patch-statuses.conf" not in ctx.file_map:
-        files.remove(ctx, f"{ETC_HOMELAB}/pve-patch-statuses.conf", "no patches configured")
-        files.remove(ctx, f"{TEXTFILE_DIR}/pve-patches.prom", "no patches configured")
-    return retired
+    for name, proms in OPTIONAL_CONFIGS.items():
+        if name not in ctx.file_map:
+            for path in (f"{ETC_HOMELAB}/{name}", *(f"{TEXTFILE_DIR}/{prom}" for prom in proms)):
+                files.remove(ctx, path, f"{name} not configured")
+    return retire_smartctl(ctx) or retired
 
 
 def mask_unwanted(ctx: InstallContext) -> None:
@@ -220,9 +271,16 @@ def mask_unwanted(ctx: InstallContext) -> None:
     trip them: `nvmf-autoconnect` needs a module a container cannot load, and the
     ZFS units are gated on `/dev/zfs`, never on container-ness, so masking cannot
     fire on a host that mounts ZFS.
+
+    Off bare metal (no smartctl override in the map) the distro smartmon and nvme
+    collectors are masked as well, with their `.prom` files.
     """
     log.action("Unwanted default services")
     systemd.mask(ctx, "openipmi.service")
+    if SMARTCTL_OVERRIDE not in ctx.file_map:
+        for timer, prom in GUEST_MASKED_COLLECTORS.items():
+            systemd.mask(ctx, timer, "no real disks on the reduced profile")
+            files.remove(ctx, f"{TEXTFILE_DIR}/{prom}", f"{timer} masked")
     in_container = (
         _run(["systemd-detect-virt", "--container", "--quiet"], check=False).returncode == 0
     )
@@ -240,7 +298,7 @@ def start_services(ctx: InstallContext) -> list[str]:
     systemd.ensure_running(ctx, NODE_UNIT, changed=touched(NODE_DEFAULTS))
     expected = [NODE_UNIT]
 
-    for script, (stem, configs) in TEXTFILE_EXPORTERS.items():
+    for script, (stem, configs, _proms) in TEXTFILE_EXPORTERS.items():
         if script not in ctx.file_map:
             continue
         timer, service = f"{stem}.timer", f"{stem}.service"

@@ -93,6 +93,8 @@ class FakeApt:
             )
         if command[:4] == [*APT_GET, "install"]:
             self.missing -= set(command)
+        if command[:4] == [*APT_GET, "purge"]:
+            self.missing |= set(command[4:]) - {"-y", "-q"}
         return subprocess.CompletedProcess(command, 0)
 
     @property
@@ -583,16 +585,18 @@ def test_retirement_paths_match_the_orchestrator_destinations(harness: Harness) 
     installer = load_installer()
     destinations = {spec.remote_path for spec in metrics_exporters.FILE_SPECS}
     retired = {
-        f"{installer.DEFAULT_DIR}/apcupsd-exporter",
-        f"{installer.BIN_DIR}/apcupsd-exporter",
-        f"{installer.DEFAULT_DIR}/igpu-exporter",
-        f"{installer.BIN_DIR}/igpu-exporter",
-        f"{installer.SYSTEMD_DIR}/apcupsd-exporter.service",
-        f"{installer.SYSTEMD_DIR}/igpu-exporter.service",
-        f"{installer.ETC_HOMELAB}/disk-labels.conf",
-        f"{installer.ETC_HOMELAB}/pve-patch-statuses.conf",
+        f"{installer.SYSTEMD_DIR}/{installer.SMARTCTL_DROPIN}",
+        f"{installer.BIN_DIR}/{installer.SMARTCTL_WAIT_BIN}",
+        f"{installer.BIN_DIR}/{installer.SMARTCTL_WRAPPER_BIN}",
+        *(f"{installer.ETC_HOMELAB}/{name}" for name in installer.OPTIONAL_CONFIGS),
     }
-    for stem in ("hba-textfile-exporter", "disk-label-textfile-exporter"):
+    for _entries, stem in installer.SERVICE_EXPORTERS:
+        retired |= {
+            f"{installer.DEFAULT_DIR}/{stem}",
+            f"{installer.BIN_DIR}/{stem}",
+            f"{installer.SYSTEMD_DIR}/{stem}.service",
+        }
+    for stem, _configs, _proms in installer.TEXTFILE_EXPORTERS.values():
         retired |= {
             f"{installer.BIN_DIR}/{stem}",
             f"{installer.SYSTEMD_DIR}/{stem}.timer",
@@ -600,10 +604,89 @@ def test_retirement_paths_match_the_orchestrator_destinations(harness: Harness) 
         }
     assert retired <= destinations
     assert installer.TEXTFILE_DIR == metrics_exporters.TEXTFILE_DIR
-    for script, (stem, configs) in installer.TEXTFILE_EXPORTERS.items():
-        assert {script, f"{stem}.service", f"{stem}.timer", *configs} <= {
-            spec.build_name for spec in metrics_exporters.FILE_SPECS
-        }
+    build_names = {spec.build_name for spec in metrics_exporters.FILE_SPECS}
+    for script, (stem, configs, _proms) in installer.TEXTFILE_EXPORTERS.items():
+        assert {script, f"{stem}.service", f"{stem}.timer", *configs} <= build_names
+    assert set(installer.OPTIONAL_CONFIGS) <= build_names
+    assert {installer.SMARTCTL_WRAPPER, installer.SMARTCTL_WAIT} <= build_names
+
+
+@pytest.mark.parametrize(
+    ("script", "proms"),
+    [
+        ("zfs-pool-textfile-exporter", ["zfs-pools.prom"]),
+        ("hba-textfile-exporter.py", ["hba.prom"]),
+        ("reboot-textfile-exporter", ["reboot.prom", "pve-patches.prom"]),
+        ("boot-entry-textfile-exporter", ["boot-entries.prom"]),
+        ("disk-label-textfile-exporter.py", ["disk-labels.prom"]),
+        ("pve-replication-textfile-exporter.py", ["pve-replication.prom"]),
+    ],
+)
+def test_each_textfile_exporter_names_the_prom_its_script_writes(
+    script: str, proms: list[str]
+) -> None:
+    """A retired exporter's `.prom` is only removed if the installer knows its name."""
+    text = (ROOT / "metrics-exporters" / "configs" / "common" / script).read_text(encoding="utf-8")
+    installer = load_installer()
+    _stem, configs, own = installer.TEXTFILE_EXPORTERS[script]
+    named = {*own, *(prom for config in configs for prom in installer.OPTIONAL_CONFIGS[config])}
+    assert named == set(proms)
+    for prom in proms:
+        assert prom in text
+
+
+def _seed_bare_metal(harness: Harness) -> list[Path]:
+    """Every file a bare-metal deploy with every exporter leaves on the host."""
+    harness.use(everything())
+    harness.converge()
+    proms = [
+        harness.seed(f"/var/lib/prometheus/node-exporter/{prom}")
+        for _stem, _configs, names in harness.installer.TEXTFILE_EXPORTERS.values()
+        for prom in names
+    ]
+    proms.append(harness.seed("/var/lib/prometheus/node-exporter/pve-patches.prom"))
+    return [*(harness.dest(name) for name in harness.file_map), *proms]
+
+
+def test_moving_to_the_reduced_profile_retires_everything_bare_metal(
+    harness: Harness,
+) -> None:
+    """helm went from bare metal to lxc_guest + own_kernel and needed hand cleanup (#165)."""
+    before = _seed_bare_metal(harness)
+    backports = Path(harness.installer.BACKPORTS_SOURCE)
+    assert backports.exists()
+    harness.use(specs(lxc_guest=True, own_kernel=True))
+
+    harness.run()
+
+    kept = {harness.dest(name) for name in harness.file_map}
+    kept.add(Path(harness.under("/var/lib/prometheus/node-exporter/reboot.prom")))
+    assert [path for path in before if path not in kept and path.exists()] == []
+    assert not Path(harness.under("/etc/systemd/system/smartctl_exporter.service.d")).exists()
+    assert [*APT_GET, "purge", "-y", "-q", SMART] in harness.apt.apt_calls
+    assert backports.exists()
+    assert "daemon-reload" in harness.systemctl.actions()
+
+
+def test_a_purged_smartctl_exporter_is_not_purged_again(harness: Harness) -> None:
+    harness.use(specs(lxc_guest=True))
+    harness.converge()
+
+    harness.run()
+
+    assert harness.apt.apt_calls == []
+
+
+def test_an_unconfigured_smartctl_wrapper_is_removed_on_bare_metal(harness: Harness) -> None:
+    harness.use(specs(has_wrapper=True))
+    harness.converge()
+    harness.use(specs())
+
+    harness.run()
+
+    assert not Path(harness.under("/usr/local/bin/homelab-smartctl-wrapper")).exists()
+    assert harness.dest("smartctl-exporter-override.conf").exists()
+    assert not [call for call in harness.apt.apt_calls if "purge" in call]
 
 
 # --------------------------------------------------------------------------
@@ -611,16 +694,43 @@ def test_retirement_paths_match_the_orchestrator_destinations(harness: Harness) 
 # --------------------------------------------------------------------------
 
 
+COLLECTORS = {
+    "prometheus-node-exporter-smartmon.timer": "smartmon.prom",
+    "prometheus-node-exporter-nvme.timer": "nvme.prom",
+}
+
+
 def test_bare_metal_masks_only_openipmi(harness: Harness) -> None:
     harness.systemctl.installed |= {
         "openipmi.service",
         "nvmf-autoconnect.service",
         "zfs-zed.service",
+        *COLLECTORS,
     }
+    proms = [harness.seed(f"/var/lib/prometheus/node-exporter/{p}") for p in COLLECTORS.values()]
 
     harness.run()
 
     assert harness.systemctl.masked == {"openipmi.service"}
+    assert all(prom.exists() for prom in proms)
+
+
+def test_the_reduced_profile_masks_the_disk_collectors_and_drops_their_proms(
+    harness: Harness,
+) -> None:
+    """riven's smartmon reported a QEMU HARDDISK; nothing reads either collector (#165)."""
+    harness.use(specs(lxc_guest=True, own_kernel=True))
+    harness.systemctl.installed |= {"openipmi.service", *COLLECTORS}
+    harness.systemctl.up(*COLLECTORS)
+    proms = [harness.seed(f"/var/lib/prometheus/node-exporter/{p}") for p in COLLECTORS.values()]
+    apt = harness.seed("/var/lib/prometheus/node-exporter/apt.prom")
+
+    harness.run()
+
+    assert harness.systemctl.masked == {"openipmi.service", *COLLECTORS}
+    assert not harness.systemctl.active & set(COLLECTORS)
+    assert not any(prom.exists() for prom in proms)
+    assert apt.exists()
 
 
 def test_a_container_without_zfs_masks_the_zfs_units(harness: Harness) -> None:
