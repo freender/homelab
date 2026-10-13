@@ -1,7 +1,8 @@
-"""docker: orchestrator file map and remote installer (freender/homelab-ops#30).
+"""docker: orchestrator file map and remote installer (freender/homelab-ops#30, #151).
 
-Every destination is rebound under `tmp_path` and systemctl is faked. Nothing
-here touches `/mnt/cache/appdata`, `/etc/systemd`, or a real unit.
+Every destination is rebound under `tmp_path`, and systemctl, apt, dpkg, snap and
+usermod are faked. Nothing here touches `/mnt/cache/appdata`, `/etc`, or a real
+unit or package.
 """
 
 from __future__ import annotations
@@ -9,11 +10,12 @@ from __future__ import annotations
 import importlib.util
 import subprocess
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from homelab.modules import docker
-from homelab_install import systemd
+from homelab_install import packages, systemd
 from homelab_install.context import InstallContext
 from homelab_install.errors import InstallError
 from homelab_install.main import _parse_env_file, _parse_file_map
@@ -22,6 +24,8 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 INSTALLER_PATH = REPO_ROOT / "docker" / "scripts" / "install.py"
 SERVICE = docker.UPDATE_SERVICE
 TIMER = docker.UPDATE_TIMER
+ENGINE_UNITS = ("containerd.service", "docker.service")
+SOURCE = "deb [arch=amd64 signed-by={key}] https://download.docker.com/linux/debian trixie stable\n"
 
 
 # ---------------------------------------------------------------------------
@@ -29,12 +33,12 @@ TIMER = docker.UPDATE_TIMER
 # ---------------------------------------------------------------------------
 
 
-def render(tmp_path: Path, schedule: str) -> tuple[Path, tuple]:
-    for sub in ("templates", "scripts"):
+def render(tmp_path: Path, schedule: str, user: str = "freender") -> tuple[Path, tuple]:
+    for sub in ("templates", "scripts", "configs"):
         link = tmp_path / "docker" / sub
         link.parent.mkdir(parents=True, exist_ok=True)
         link.symlink_to(REPO_ROOT / "docker" / sub)
-    return docker.render_build(tmp_path, "neo", schedule)
+    return docker.render_build(tmp_path, "neo", schedule, user)
 
 
 @pytest.mark.parametrize(("schedule", "has_units"), [("*-*-* 23:30:00", True), ("", False)])
@@ -85,6 +89,44 @@ def test_the_env_flag_follows_the_schedule(tmp_path: Path, schedule: str, flag: 
     assert _parse_env_file(build_dir / "env")["ENABLE_DOCKER_UPDATE_TIMER"] == flag
 
 
+def test_the_group_user_reaches_the_env(tmp_path: Path) -> None:
+    build_dir, _ = render(tmp_path, "", user="sysadm")
+    assert _parse_env_file(build_dir / "env")["DOCKER_GROUP_USER"] == "sysadm"
+
+
+def test_engine_configs_are_copied_verbatim_to_their_system_paths(tmp_path: Path) -> None:
+    build_dir, _ = render(tmp_path, "")
+    file_map = _parse_file_map(build_dir / "file-map.conf")
+
+    for name in docker.ENGINE_CONFIGS:
+        source = REPO_ROOT / "docker" / "configs" / name
+        assert (build_dir / name).read_bytes() == source.read_bytes()
+        assert file_map[name][1] == "644"
+    assert file_map["docker.asc"][0] == "/etc/apt/keyrings/docker.asc"
+    assert file_map["daemon.json"][0] == "/etc/docker/daemon.json"
+    assert file_map["docker-timeout.conf"][0].startswith("/etc/systemd/system/docker.service.d/")
+    assert file_map["containerd-override.conf"][0].startswith(
+        "/etc/systemd/system/containerd.service.d/"
+    )
+
+
+class FakeRegistry:
+    def __init__(self, values: dict[str, str]) -> None:
+        self.values = values
+
+    def get(self, host: str, key: str, default=None):
+        return self.values.get(key, default)
+
+
+def test_the_group_user_is_the_interactive_ssh_user() -> None:
+    registry = FakeRegistry({"config.user": "root", "config.ssh_config.user": "denysc"})
+    assert docker.group_user(registry, "cottonwood") == "denysc"
+
+
+def test_the_group_user_falls_back_to_the_deploy_user() -> None:
+    assert docker.group_user(FakeRegistry({"config.user": "root"}), "h") == "root"
+
+
 def test_the_timer_is_rendered_with_the_schedule(tmp_path: Path) -> None:
     build_dir, _ = render(tmp_path, "*-*-* 23:30:00")
     assert "OnCalendar=*-*-* 23:30:00" in (build_dir / TIMER).read_text(encoding="utf-8")
@@ -100,6 +142,29 @@ def test_validate_requires_every_helper_script(tmp_path: Path) -> None:
         docker.validate(tmp_path, [])
 
 
+def test_validate_requires_every_engine_config(tmp_path: Path) -> None:
+    for sub in ("templates", "scripts"):
+        (tmp_path / "docker" / sub).mkdir(parents=True)
+    for name in docker.TEMPLATE_FILES:
+        (tmp_path / "docker" / "templates" / name).write_text("", encoding="utf-8")
+    for name in docker.HELPER_SCRIPTS:
+        (tmp_path / "docker" / "scripts" / name).write_text("", encoding="utf-8")
+    (tmp_path / "docker" / "configs").mkdir()
+
+    with pytest.raises(ValueError, match="docker.asc"):
+        docker.validate(tmp_path, [])
+
+
+def test_the_shipped_key_is_dockers_release_key() -> None:
+    """Pinned so a swapped key is a test failure, not a silent trust change."""
+    import hashlib
+
+    key = (REPO_ROOT / "docker" / "configs" / "docker.asc").read_bytes()
+    assert hashlib.sha256(key).hexdigest() == (
+        "1500c1f56fa9e26b9b8f42452a553675796ade0807cdce11975eb98170b3a570"
+    )
+
+
 def test_orchestrator_stages_the_python_installer() -> None:
     assert docker.INSTALLER == "scripts/install.py"
     assert docker.INTERPRETER == "python3"
@@ -110,6 +175,8 @@ def test_file_names_agree_across_the_wire() -> None:
     assert installer.UPDATE_SERVICE == docker.UPDATE_SERVICE
     assert installer.UPDATE_TIMER == docker.UPDATE_TIMER
     assert set(installer.HELPER_FILES) == {spec.build_name for spec in docker.HELPER_SPECS}
+    engine = {installer.KEYRING_FILE, installer.DAEMON_CONFIG, *installer.DROP_INS}
+    assert engine == set(docker.ENGINE_CONFIGS)
 
 
 # ---------------------------------------------------------------------------
@@ -127,8 +194,8 @@ def load_installer():
 
 class FakeSystemctl:
     def __init__(self) -> None:
-        self.enabled = {TIMER}
-        self.active = {TIMER}
+        self.enabled = {TIMER, *ENGINE_UNITS}
+        self.active = {TIMER, *ENGINE_UNITS}
         self.failed: set[str] = set()
         self.fail_on_start: set[str] = set()
         self.calls: list[list[str]] = []
@@ -158,14 +225,79 @@ class FakeSystemctl:
         return [" ".join(call[1:]) for call in self.calls if call[1] not in queries]
 
 
+class FakeRun:
+    """apt, dpkg, snap and usermod: answers by longest argv prefix, records calls."""
+
+    def __init__(self) -> None:
+        self.calls: list[list[str]] = []
+        self.answers: dict[tuple[str, ...], tuple[int, str]] = {}
+        self.installed = set(packages_installed())
+        self.before_install = lambda: None
+
+    def answer(self, *argv: str, code: int = 0, stdout: str = "") -> None:
+        self.answers[argv] = (code, stdout)
+
+    def __call__(self, argv, **kwargs) -> subprocess.CompletedProcess:
+        argv = list(argv)
+        self.calls.append(argv)
+        if argv[:2] == ["dpkg-query", "-W"]:
+            status = "install ok installed" if argv[-1] in self.installed else ""
+            return subprocess.CompletedProcess(argv, 0 if status else 1, stdout=status)
+        if "install" in argv and argv[0] == "apt-get":
+            self.before_install()
+            self.installed.update(argv[argv.index("-q") + 1 :])
+        for length in range(len(argv), 0, -1):
+            if tuple(argv[:length]) in self.answers:
+                code, stdout = self.answers[tuple(argv[:length])]
+                break
+        else:
+            code, stdout = 0, ""
+        return subprocess.CompletedProcess(argv, code, stdout=stdout)
+
+    def ran(self, *prefix: str) -> bool:
+        return any(call[: len(prefix)] == list(prefix) for call in self.calls)
+
+
+def packages_installed() -> tuple[str, ...]:
+    return load_installer().ENGINE_PACKAGES
+
+
 class Host:
-    """A sandboxed host filesystem plus a staged bundle."""
+    """A sandboxed host filesystem plus a staged bundle: Debian trixie with the
+    engine packages already installed, `freender` in the docker group."""
 
     def __init__(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, timer: bool) -> None:
         self.installer = load_installer()
         self.root = tmp_path / "hostfs"
         self.systemctl = FakeSystemctl()
         monkeypatch.setattr(systemd, "_run", self.systemctl)
+        monkeypatch.setattr(packages, "_apt_updated", False)
+
+        self.run = FakeRun()
+        self.run.answer("dpkg", "--print-architecture", stdout="amd64\n")
+        monkeypatch.setattr(packages, "_run", self.run)
+        monkeypatch.setattr(self.installer, "_run", self.run)
+        self.binaries: set[str] = set()
+        monkeypatch.setattr(
+            self.installer,
+            "_which",
+            lambda name: f"/usr/bin/{name}" if name in self.binaries else None,
+        )
+        self.users = {"freender": SimpleNamespace(pw_gid=1000), "root": SimpleNamespace(pw_gid=0)}
+        self.docker_group: SimpleNamespace | None = SimpleNamespace(gr_mem=["freender"], gr_gid=991)
+        monkeypatch.setattr(self.installer, "pwd", SimpleNamespace(getpwnam=self._getpwnam))
+        monkeypatch.setattr(self.installer, "grp", SimpleNamespace(getgrnam=self._getgrnam))
+
+        self.os_release = self.root / "etc" / "os-release"
+        self.os_release.parent.mkdir(parents=True)
+        self.os_release.write_text("ID=debian\nVERSION_CODENAME=trixie\n", encoding="utf-8")
+        self.docker_list = self.root / "etc/apt/sources.list.d/docker.list"
+        self.docker_sources = self.root / "etc/apt/sources.list.d/docker.sources"
+        self.backup_dir = self.root / "var/backups/homelab/docker"
+        monkeypatch.setattr(self.installer, "OS_RELEASE", str(self.os_release))
+        monkeypatch.setattr(self.installer, "DOCKER_LIST", str(self.docker_list))
+        monkeypatch.setattr(self.installer, "STALE_SOURCES", (str(self.docker_sources),))
+        monkeypatch.setattr(self.installer, "BACKUP_DIR", str(self.backup_dir))
 
         self.build_dir = tmp_path / "remote" / "build" / "h"
         self.build_dir.mkdir(parents=True)
@@ -177,10 +309,39 @@ class Host:
             spec.build_name: (str(self.root / spec.remote_path.lstrip("/")), spec.mode)
             for spec in specs
         }
-        self.env = {"ENABLE_DOCKER_UPDATE_TIMER": "true" if timer else "false"}
+        self.env = {
+            "ENABLE_DOCKER_UPDATE_TIMER": "true" if timer else "false",
+            "DOCKER_GROUP_USER": "freender",
+        }
+        # The engine is already converged; the appdata helpers are not.
+        for name in docker.ENGINE_CONFIGS:
+            self.dest(name).parent.mkdir(parents=True, exist_ok=True)
+            self.dest(name).write_bytes((self.build_dir / name).read_bytes())
+        self.docker_list.parent.mkdir(parents=True, exist_ok=True)
+        self.docker_list.write_text(self.source(), encoding="utf-8")
+
+    def _getpwnam(self, name: str):
+        if name not in self.users:
+            raise KeyError(name)
+        return self.users[name]
+
+    def _getgrnam(self, name: str):
+        if name != "docker" or self.docker_group is None:
+            raise KeyError(name)
+        return self.docker_group
 
     def dest(self, name: str) -> Path:
         return Path(self.file_map[name][0])
+
+    def snapshot(self) -> dict[str, tuple[int, bytes]]:
+        return {
+            str(path): (path.stat().st_mtime_ns, path.read_bytes())
+            for path in sorted(self.root.rglob("*"))
+            if path.is_file()
+        }
+
+    def source(self) -> str:
+        return SOURCE.format(key=self.dest("docker.asc"))
 
     def ctx(self) -> InstallContext:
         return InstallContext(
@@ -195,7 +356,14 @@ class Host:
 
     def deploy(self) -> None:
         self.systemctl.calls.clear()
+        self.run.calls.clear()
+        monkey_reset_apt()
         self.installer.install(self.ctx())
+
+
+def monkey_reset_apt() -> None:
+    """`_apt_updated` is per installer process; each deploy here is one."""
+    packages._apt_updated = False
 
 
 @pytest.fixture
@@ -267,7 +435,7 @@ def test_a_changed_script_does_not_restart_the_timer(host_for) -> None:
 def test_an_enabled_but_stopped_timer_is_started(host_for) -> None:
     host = host_for()
     host.deploy()
-    host.systemctl.active = set()
+    host.systemctl.active.discard(TIMER)
     host.deploy()
 
     assert host.systemctl.actions() == [f"start {TIMER}"]
@@ -276,7 +444,7 @@ def test_an_enabled_but_stopped_timer_is_started(host_for) -> None:
 def test_no_schedule_stops_the_timer_and_leaves_its_files(host_for) -> None:
     host = host_for(timer=False)
     unit_file = host.root / "etc" / "systemd" / "system" / TIMER
-    unit_file.parent.mkdir(parents=True)
+    unit_file.parent.mkdir(parents=True, exist_ok=True)
     unit_file.write_text("[Timer]\n", encoding="utf-8")
 
     host.deploy()
@@ -287,8 +455,8 @@ def test_no_schedule_stops_the_timer_and_leaves_its_files(host_for) -> None:
 
 def test_no_schedule_on_a_host_without_the_timer_does_nothing(host_for) -> None:
     host = host_for(timer=False)
-    host.systemctl.enabled = set()
-    host.systemctl.active = set()
+    host.systemctl.enabled.discard(TIMER)
+    host.systemctl.active.discard(TIMER)
     host.deploy()
 
     assert host.systemctl.actions() == []
@@ -326,7 +494,12 @@ def test_a_still_failing_update_run_does_not_fail_the_deploy(
 
 @pytest.mark.parametrize(
     ("env", "match"),
-    [({}, "missing: ENABLE_DOCKER_UPDATE_TIMER"), ({"ENABLE_DOCKER_UPDATE_TIMER": "ture"}, "ture")],
+    [
+        ({}, "missing: ENABLE_DOCKER_UPDATE_TIMER"),
+        ({"ENABLE_DOCKER_UPDATE_TIMER": "ture", "DOCKER_GROUP_USER": "freender"}, "ture"),
+        ({"ENABLE_DOCKER_UPDATE_TIMER": "true"}, "missing: DOCKER_GROUP_USER"),
+        ({"ENABLE_DOCKER_UPDATE_TIMER": "true", "DOCKER_GROUP_USER": "nobody2"}, "nobody2"),
+    ],
 )
 def test_a_bad_flag_fails_before_anything_is_touched(
     host_for, env: dict[str, str], match: str
@@ -334,18 +507,251 @@ def test_a_bad_flag_fails_before_anything_is_touched(
     """An absent or typo'd flag must not read as "turn the update timer off"."""
     host = host_for()
     host.env = env
+    before = host.snapshot()
 
     with pytest.raises(InstallError, match=match):
         host.deploy()
 
     assert host.systemctl.calls == []
-    assert not host.root.exists()
+    assert host.run.calls == []
+    assert host.snapshot() == before
 
 
 def test_a_timer_host_whose_map_lacks_the_units_fails(host_for) -> None:
     """Flag and map disagreeing is a broken render, not a host without a timer."""
     host = host_for(timer=False)
-    host.env = {"ENABLE_DOCKER_UPDATE_TIMER": "true"}
+    host.env["ENABLE_DOCKER_UPDATE_TIMER"] = "true"
 
     with pytest.raises(InstallError, match="missing file-map entry"):
         host.deploy()
+
+
+# ---------------------------------------------------------------------------
+# Engine (#151)
+# ---------------------------------------------------------------------------
+
+
+def test_a_converged_engine_is_not_touched(host_for, capsys: pytest.CaptureFixture[str]) -> None:
+    host = host_for()
+    host.deploy()
+    before = host.snapshot()
+
+    host.deploy()
+
+    assert host.snapshot() == before
+    assert host.systemctl.actions() == []
+    for mutating in (("apt-get",), ("usermod",), ("snap",)):
+        assert not host.run.ran(*mutating), mutating
+    assert "restart containerd and docker" not in capsys.readouterr().out
+
+
+def test_the_source_names_the_mapped_key_and_the_host_release(host_for) -> None:
+    host = host_for()
+    host.docker_list.unlink()
+    host.os_release.write_text('ID=ubuntu\nVERSION_CODENAME="resolute"\n', encoding="utf-8")
+    host.run.answer("dpkg", "--print-architecture", stdout="arm64\n")
+
+    host.deploy()
+
+    assert host.docker_list.read_text(encoding="utf-8") == (
+        f"deb [arch=arm64 signed-by={host.dest('docker.asc')}] "
+        "https://download.docker.com/linux/ubuntu resolute stable\n"
+    )
+
+
+def test_a_fresh_host_gets_config_before_packages_and_needs_no_restart(
+    host_for, capsys: pytest.CaptureFixture[str]
+) -> None:
+    host = host_for()
+    for name in docker.ENGINE_CONFIGS:
+        host.dest(name).unlink()
+    host.docker_list.unlink()
+    host.run.installed = set()
+    host.systemctl.enabled -= set(ENGINE_UNITS)
+    host.systemctl.active -= set(ENGINE_UNITS)
+    seen_at_install: list[bool] = []
+    host.run.before_install = lambda: seen_at_install.append(
+        all(host.dest(name).is_file() for name in docker.ENGINE_CONFIGS)
+        and host.docker_list.is_file()
+    )
+
+    host.deploy()
+
+    assert seen_at_install == [True]
+    assert host.run.ran(*packages.APT_GET, "update")
+    install = next(c for c in host.run.calls if c[:1] == ["apt-get"] and "install" in c)
+    assert install[install.index("-q") + 1 :] == list(host.installer.ENGINE_PACKAGES)
+    actions = host.systemctl.actions()
+    assert "daemon-reload" in actions
+    assert [f"enable --now {unit}" for unit in ENGINE_UNITS] == [
+        a for a in actions if a.startswith("enable --now") and a.split()[-1] in ENGINE_UNITS
+    ]
+    assert "restart containerd and docker" not in capsys.readouterr().out
+
+
+def test_a_changed_daemon_config_warns_and_never_restarts(
+    host_for, capsys: pytest.CaptureFixture[str]
+) -> None:
+    host = host_for()
+    host.deploy()
+    (host.build_dir / "daemon.json").write_text('{"log-driver": "local"}\n', encoding="utf-8")
+
+    host.deploy()
+
+    assert host.dest("daemon.json").read_text(encoding="utf-8") == '{"log-driver": "local"}\n'
+    assert host.systemctl.actions() == []
+    assert "restart containerd and docker" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("name", ["docker-timeout.conf", "containerd-override.conf"])
+def test_a_changed_drop_in_reloads_systemd_but_never_restarts(
+    host_for, name: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    host = host_for()
+    host.deploy()
+    (host.build_dir / name).write_text("[Service]\n", encoding="utf-8")
+
+    host.deploy()
+
+    assert host.systemctl.actions() == ["daemon-reload"]
+    assert "restart containerd and docker" in capsys.readouterr().out
+
+
+def test_a_stale_deb822_source_is_replaced_and_kept_aside(host_for) -> None:
+    """cottonwood after its release upgrade: a disabled `noble` docker.sources."""
+    host = host_for()
+    host.docker_list.unlink()
+    stale = "Types: deb\nSuites: noble\nEnabled: no\n"
+    host.docker_sources.write_text(stale, encoding="utf-8")
+
+    host.deploy()
+
+    assert not host.docker_sources.exists()
+    assert (host.backup_dir / "docker.sources").read_text(encoding="utf-8") == stale
+    assert host.docker_list.read_text(encoding="utf-8") == host.source()
+    # Lists marked stale, but nothing is missing, so the network is not touched.
+    assert not host.run.ran("apt-get")
+
+
+def test_a_changed_source_refreshes_the_lists_before_installing(host_for) -> None:
+    host = host_for()
+    host.deploy()
+    host.os_release.write_text("ID=debian\nVERSION_CODENAME=forky\n", encoding="utf-8")
+    host.run.installed.discard("docker-compose-plugin")
+    packages._apt_updated = True  # as if an earlier step in this run had refreshed
+
+    host.installer.install(host.ctx())
+
+    calls = [c for c in host.run.calls if c[:1] == ["apt-get"]]
+    assert calls[0][-2:] == ["update", "-qq"]
+    assert "docker-compose-plugin" in calls[1]
+    assert "forky" in host.docker_list.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("release", ["ID=fedora\nVERSION_CODENAME=x\n", "ID=debian\n", ""])
+def test_an_unsupported_os_fails_before_anything_is_written(host_for, release: str) -> None:
+    host = host_for()
+    host.os_release.write_text(release, encoding="utf-8")
+    before = host.snapshot()
+
+    with pytest.raises(InstallError, match="unsupported OS"):
+        host.deploy()
+
+    assert host.snapshot() == before
+    assert host.systemctl.calls == []
+
+
+def test_a_failed_architecture_probe_fails_before_anything_is_written(host_for) -> None:
+    host = host_for()
+    host.run.answer("dpkg", "--print-architecture", code=2)
+    before = host.snapshot()
+
+    with pytest.raises(InstallError, match="print-architecture"):
+        host.deploy()
+
+    assert host.snapshot() == before
+
+
+def test_snap_docker_is_removed(host_for) -> None:
+    host = host_for()
+    host.binaries.add("snap")
+
+    host.deploy()
+
+    assert ["snap", "remove", "--purge", "docker"] in host.run.calls
+
+
+def test_no_snap_docker_is_left_alone(host_for) -> None:
+    host = host_for()
+    host.binaries.add("snap")
+    host.run.answer("snap", "list", "docker", code=1)
+
+    host.deploy()
+
+    assert not host.run.ran("snap", "remove")
+
+
+def test_a_failed_snap_removal_fails_the_deploy(host_for) -> None:
+    host = host_for()
+    host.binaries.add("snap")
+    host.run.answer("snap", "remove", code=1)
+
+    with pytest.raises(InstallError, match="snap remove --purge docker failed"):
+        host.deploy()
+
+
+def test_the_group_user_is_added_to_the_docker_group(host_for) -> None:
+    host = host_for()
+    host.docker_group.gr_mem = []
+
+    host.deploy()
+
+    assert ["usermod", "-aG", "docker", "freender"] in host.run.calls
+
+
+def test_a_primary_docker_group_counts_as_membership(host_for) -> None:
+    host = host_for()
+    host.docker_group.gr_mem = []
+    host.users["freender"].pw_gid = host.docker_group.gr_gid
+
+    host.deploy()
+
+    assert not host.run.ran("usermod")
+
+
+def test_root_is_never_added_to_the_docker_group(host_for) -> None:
+    host = host_for()
+    host.env["DOCKER_GROUP_USER"] = "root"
+    host.docker_group = None
+
+    host.deploy()
+
+    assert not host.run.ran("usermod")
+
+
+def test_a_missing_docker_group_fails_the_deploy(host_for) -> None:
+    host = host_for()
+    host.docker_group = None
+
+    with pytest.raises(InstallError, match="docker group does not exist"):
+        host.deploy()
+
+
+def test_a_failed_usermod_fails_the_deploy(host_for) -> None:
+    host = host_for()
+    host.docker_group.gr_mem = []
+    host.run.answer("usermod", code=6)
+
+    with pytest.raises(InstallError, match="usermod -aG docker freender failed"):
+        host.deploy()
+
+
+def test_a_map_without_the_key_fails_before_anything_is_written(host_for) -> None:
+    host = host_for()
+    del host.file_map["docker.asc"]
+    before = host.snapshot()
+
+    with pytest.raises(InstallError, match="missing file-map entry: docker.asc"):
+        host.deploy()
+
+    assert host.snapshot() == before

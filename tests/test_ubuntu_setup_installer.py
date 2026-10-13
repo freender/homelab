@@ -103,25 +103,18 @@ class Host:
         for name, path in paths.items():
             monkeypatch.setattr(self.installer, name, str(path))
         self.paths = paths
-        monkeypatch.setattr(
-            self.installer,
-            "DOCKER_APT_SOURCES",
-            (str(self.root / "etc/apt/sources.list.d/docker.list"),),
-        )
 
         self.run = FakeRun()
         for target in (self.installer, files, systemd, packages):
             monkeypatch.setattr(target, "_run", self.run)
-        self.binaries = {"docker"}
+        self.binaries: set[str] = set()
         monkeypatch.setattr(
             self.installer,
             "_which",
             lambda name: f"/usr/bin/{name}" if name in self.binaries else None,
         )
         self.users = {"sysadm": SimpleNamespace(pw_gid=1000)}
-        self.docker_group = SimpleNamespace(gr_mem=["sysadm"], gr_gid=983)
         monkeypatch.setattr(self.installer, "pwd", SimpleNamespace(getpwnam=self._getpwnam))
-        monkeypatch.setattr(self.installer, "grp", SimpleNamespace(getgrnam=self._getgrnam))
 
         self.env = {
             "DEPLOY_USER": "sysadm",
@@ -155,8 +148,6 @@ class Host:
         paths["ETC_TIMEZONE"].write_text(f"{TZ}\n", encoding="utf-8")
         self.nic("nic0", MAC)
         self.nic("wlp2s0", "aa:bb:cc:00:00:ff", kind="1", carrier=None)
-        (self.root / "etc/apt/sources.list.d").mkdir(parents=True)
-        (self.root / "etc/apt/sources.list.d/docker.list").write_text("deb x\n", encoding="utf-8")
         paths["ZFS_ARC_MAX_PARAM"].parent.mkdir(parents=True)
         paths["ZFS_ARC_MAX_PARAM"].write_text("8589934592\n", encoding="utf-8")
 
@@ -175,11 +166,6 @@ class Host:
         if name not in self.users:
             raise KeyError(name)
         return self.users[name]
-
-    def _getgrnam(self, name: str):
-        if name != "docker" or self.docker_group is None:
-            raise KeyError(name)
-        return self.docker_group
 
     @staticmethod
     def rule(mac: str) -> str:
@@ -253,6 +239,7 @@ def test_a_converged_host_is_not_touched(host: Host) -> None:
         ("sysctl",),
         ("usermod",),
         ("curl",),
+        ("snap",),
         ("apt-get",),
     ):
         assert not host.run.ran(*mutating), mutating
@@ -518,81 +505,6 @@ def test_a_rule_that_only_sets_an_env_name_is_not_competing(
     host.install()
 
     assert "competing udev naming rule" not in capsys.readouterr().out
-
-
-# ---------------------------------------------------------------------------
-# Docker CE
-# ---------------------------------------------------------------------------
-
-
-def test_missing_docker_runs_the_convenience_installer(host: Host) -> None:
-    host.binaries.discard("docker")
-
-    host.install()
-
-    assert host.run.ran("curl", "-fsSL", "https://get.docker.com", "-o")
-    sh = next(call for call in host.run.calls if call[0] == "sh")
-    assert len(sh) == 2 and sh[1].endswith("get-docker.sh")
-    assert not Path(sh[1]).exists()
-
-
-def test_a_missing_docker_apt_source_only_sets_up_the_repo(host: Host) -> None:
-    (host.root / "etc/apt/sources.list.d/docker.list").unlink()
-
-    host.install()
-
-    sh = next(call for call in host.run.calls if call[0] == "sh")
-    assert sh[2:] == ["--setup-repo"]
-
-
-def test_a_failed_docker_download_fails_the_deploy(host: Host) -> None:
-    host.binaries.discard("docker")
-    host.run.answer("curl", code=22)
-
-    with pytest.raises(InstallError, match="curl -fsSL .* failed"):
-        host.install()
-    assert not any(call[0] == "sh" for call in host.run.calls)
-
-
-def test_snap_docker_is_removed_first(host: Host) -> None:
-    host.binaries.add("snap")
-
-    host.install()
-
-    assert ["snap", "remove", "--purge", "docker"] in host.run.calls
-
-
-def test_no_snap_docker_is_left_alone(host: Host) -> None:
-    host.binaries.add("snap")
-    host.run.answer("snap", "list", "docker", code=1)
-
-    host.install()
-
-    assert not host.run.ran("snap", "remove")
-
-
-def test_the_deploy_user_is_added_to_the_docker_group(host: Host) -> None:
-    host.docker_group.gr_mem = []
-
-    host.install()
-
-    assert ["usermod", "-aG", "docker", "sysadm"] in host.run.calls
-
-
-def test_a_primary_docker_group_counts_as_membership(host: Host) -> None:
-    host.docker_group.gr_mem = []
-    host.users["sysadm"].pw_gid = host.docker_group.gr_gid
-
-    host.install()
-
-    assert not host.run.ran("usermod")
-
-
-def test_a_missing_docker_group_fails_the_deploy(host: Host) -> None:
-    host.docker_group = None
-
-    with pytest.raises(InstallError, match="docker group does not exist"):
-        host.install()
 
 
 # ---------------------------------------------------------------------------

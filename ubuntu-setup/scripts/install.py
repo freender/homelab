@@ -2,8 +2,9 @@
 """Remote installer for the ubuntu-setup module (freender/homelab-ops#30).
 
 Base OS setup for the Ubuntu bare-metal hosts: hostname and timezone, the
-primary NIC name, Docker CE, deploy-user sudoers, sshd hardening, ZFS ARC and
-inotify limits, and optionally WireGuard. Both targets are offsite, so a broken
+primary NIC name, deploy-user sudoers, sshd hardening, ZFS ARC and inotify
+limits, and optionally WireGuard. Docker CE is the `docker` module's
+(freender/homelab-ops#151). Both targets are offsite, so a broken
 sshd or NIC name is recovered through Pi-KVM, not a console.
 
 Worth knowing before reading:
@@ -35,13 +36,11 @@ Worth knowing before reading:
 
 from __future__ import annotations
 
-import grp
 import os
 import pwd
 import re
 import shutil
 import subprocess
-import tempfile
 from pathlib import Path
 
 from homelab_install import env, files, log, packages, run, systemd
@@ -53,7 +52,6 @@ SSHD_HARDENING = "sshd-hardening.conf"
 REQUIRED_BUILD_FILES = ("sudoers", NIC_RULE, SSHD_HARDENING, "zfs.conf", "99-inotify.conf")
 WIREGUARD_SYSCTL = "99-wireguard.conf"
 UNWANTED_UNITS = {"openipmi.service": "no BMC/IPMI device"}
-DOCKER_INSTALLER_URL = "https://get.docker.com"
 # sshd -T prints the canonical keyword; the drop-in may use a deprecated alias.
 SSHD_KEYWORD_ALIASES = {"challengeresponseauthentication": "kbdinteractiveauthentication"}
 
@@ -65,10 +63,6 @@ SYS_CLASS_NET = "/sys/class/net"
 UDEV_RULES_DIR = "/etc/udev/rules.d"
 LEGACY_PERSISTENT_NET = "/etc/udev/rules.d/70-persistent-net.rules"
 NETPLAN_DIR = "/etc/netplan"
-DOCKER_APT_SOURCES = (
-    "/etc/apt/sources.list.d/docker.list",
-    "/etc/apt/sources.list.d/docker.sources",
-)
 ZFS_ARC_MAX_PARAM = "/sys/module/zfs/parameters/zfs_arc_max"
 WIREGUARD_DIR = "/etc/wireguard"
 
@@ -305,59 +299,6 @@ def pin_primary_nic(ctx: InstallContext) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Docker CE
-# ---------------------------------------------------------------------------
-
-
-def remove_snap_docker() -> None:
-    if (
-        not _which("snap")
-        or _run(["snap", "list", "docker"], check=False, capture_output=True).returncode
-    ):
-        return
-    log.sub("Removing snap docker before installing Docker CE...")
-    _run(["snap", "stop", "docker"], check=False, capture_output=True)
-    _run(["snap", "disable", "docker"], check=False, capture_output=True)
-    _check(["snap", "remove", "--purge", "docker"])
-    log.ok("Removed snap docker")
-
-
-def ensure_docker(ctx: InstallContext) -> None:
-    remove_snap_docker()
-    if not _which("docker"):
-        reason, args, done = "Docker CE not installed", [], "Docker CE installed"
-    elif not any(Path(source).is_file() for source in DOCKER_APT_SOURCES):
-        reason, args, done = (
-            "Docker apt source missing",
-            ["--setup-repo"],
-            "Docker apt source configured",
-        )
-    else:
-        log.sub("Docker already installed")
-        return
-
-    log.sub(f"{reason}; running Docker convenience installer...")
-    packages.ensure(ctx, "ca-certificates", "curl")
-    with tempfile.TemporaryDirectory(prefix="get-docker.") as tmp:
-        script = str(Path(tmp) / "get-docker.sh")
-        _check(["curl", "-fsSL", DOCKER_INSTALLER_URL, "-o", script])
-        _check(["sh", script, *args])
-    log.ok(done)
-
-
-def ensure_docker_group(user: str) -> None:
-    try:
-        group = grp.getgrnam("docker")
-    except KeyError as exc:
-        raise InstallError("docker group does not exist after installing Docker CE") from exc
-    if user in group.gr_mem or pwd.getpwnam(user).pw_gid == group.gr_gid:
-        log.sub(f"{user} already in docker group")
-        return
-    _check(["usermod", "-aG", "docker", user])
-    log.ok(f"Added {user} to docker group")
-
-
-# ---------------------------------------------------------------------------
 # sshd
 # ---------------------------------------------------------------------------
 
@@ -457,10 +398,6 @@ def install(ctx: InstallContext) -> None:
 
     log.action("Primary NIC pinning")
     pin_primary_nic(ctx)
-
-    log.action("Docker CE")
-    ensure_docker(ctx)
-    ensure_docker_group(ctx.env["DEPLOY_USER"])
 
     log.action("Sudoers")
     files.install(ctx, "sudoers")

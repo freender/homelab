@@ -22,6 +22,15 @@ Per-host settings live in `hosts.conf` using `docker.*` keys.
 
 ### What Gets Deployed
 
+**Docker Engine** (all hosts; the only owner since homelab-ops#151, `ubuntu-setup` no longer installs it):
+- `/etc/apt/keyrings/docker.asc` - Docker's release key, shipped from `configs/` (no `get.docker.com`)
+- `/etc/apt/sources.list.d/docker.list` - written on the host from `/etc/os-release`, so it follows a release upgrade; a leftover `docker.sources` is removed and kept in `/var/backups/homelab/docker/`
+- `docker-ce`, `docker-ce-cli`, `containerd.io`, buildx, compose, rootless-extras - unpinned; `apt-upgrade` keeps them current. `docker-model-plugin` is neither installed nor removed
+- `/etc/docker/daemon.json`, `docker.service.d/timeout.conf`, `containerd.service.d/override.conf` - same on every host, written before the packages so a fresh host starts with them
+- the interactive user (`config.ssh_config.user`) in the `docker` group
+
+A running daemon is never restarted by a deploy: a changed config is written, systemd is reloaded, and the deploy warns. Restart `containerd` and `docker` by hand when it is safe (it bounces every container).
+
 **All hosts** (`/mnt/cache/appdata/`):
 - `start.sh` - Updates and starts Docker stacks (Traefik first), then safely prunes unused images after update runs
 - `rm.sh` - Stops all Docker stacks with confirmation

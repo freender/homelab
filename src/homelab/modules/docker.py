@@ -84,11 +84,34 @@ UPDATE_UNIT_SPECS = (
     FileSpec(UPDATE_SERVICE, f"/etc/systemd/system/{UPDATE_SERVICE}", "644"),
     FileSpec(UPDATE_TIMER, f"/etc/systemd/system/{UPDATE_TIMER}", "644"),
 )
+# The engine's static files, copied verbatim from `docker/configs/` and the same on
+# every docker host (freender/homelab-ops#151). The apt source line is not here: it
+# names the host's distro and codename, which only the installer can read.
+ENGINE_SPECS = (
+    FileSpec("docker.asc", "/etc/apt/keyrings/docker.asc", "644"),
+    FileSpec("daemon.json", "/etc/docker/daemon.json", "644"),
+    FileSpec("docker-timeout.conf", "/etc/systemd/system/docker.service.d/timeout.conf", "644"),
+    FileSpec(
+        "containerd-override.conf",
+        "/etc/systemd/system/containerd.service.d/override.conf",
+        "644",
+    ),
+)
+ENGINE_CONFIGS = tuple(spec.build_name for spec in ENGINE_SPECS)
 
 
 def file_specs(update_timer: bool) -> tuple[FileSpec, ...]:
     """The units are managed only where the update timer is configured."""
-    return HELPER_SPECS + (UPDATE_UNIT_SPECS if update_timer else ())
+    return ENGINE_SPECS + HELPER_SPECS + (UPDATE_UNIT_SPECS if update_timer else ())
+
+
+def group_user(registry, host: str) -> str:
+    """The interactive login user, who gets the `docker` group.
+
+    `config.user` is the deploy user (root everywhere), so the human is
+    `config.ssh_config.user` -- the same reading `wsl-conf` makes.
+    """
+    return str(registry.get(host, "config.ssh_config.user", registry.get(host, "config.user")))
 
 
 def deploy(
@@ -119,9 +142,16 @@ def validate(root: Path, hosts: list[str]) -> None:
         file_path = scripts_dir / file_name
         if not file_path.is_file():
             raise ValueError(f"missing required script: {file_path}")
+    configs_dir = root / "docker" / "configs"
+    for file_name in ENGINE_CONFIGS:
+        file_path = configs_dir / file_name
+        if not file_path.is_file():
+            raise ValueError(f"missing required config: {file_path}")
 
 
-def render_build(root: Path, host: str, update_schedule: str) -> tuple[Path, tuple[FileSpec, ...]]:
+def render_build(
+    root: Path, host: str, update_schedule: str, docker_user: str
+) -> tuple[Path, tuple[FileSpec, ...]]:
     """Render everything the installer reads into `docker/build/<host>/`.
 
     An empty `update_schedule` means no update timer: its units are neither
@@ -150,11 +180,14 @@ def render_build(root: Path, host: str, update_schedule: str) -> tuple[Path, tup
         build_dir / "env",
         {
             "ENABLE_DOCKER_UPDATE_TIMER": "true" if update_timer else "false",
+            "DOCKER_GROUP_USER": docker_user,
             **swarm_env_values(host, HA_SWARM_DEFAULTS.get(host, {})),
         },
     )
     for name in HELPER_SCRIPTS:
         shutil.copyfile(root / "docker" / "scripts" / name, build_dir / name)
+    for name in ENGINE_CONFIGS:
+        shutil.copyfile(root / "docker" / "configs" / name, build_dir / name)
     specs = file_specs(update_timer)
     write_file_map(build_dir, specs)
     return build_dir, specs
@@ -165,10 +198,10 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
     ssh_user = str(registry.get(host, "config.user"))
     ssh_hostname = str(registry.get(host, "config.hostname", host))
     update_schedule = str(registry.get(host, "docker.update_schedule", "")).strip()
-    build_dir, specs = render_build(root, host, update_schedule)
+    build_dir, specs = render_build(root, host, update_schedule, group_user(registry, host))
 
     connection = HostConnection(host, user=ssh_user, hostname=ssh_hostname)
-    print_sub("Comparing with remote scripts...")
+    print_sub("Comparing with remote files...")
     diff_pairs = [(build_dir / spec.build_name, spec.remote_path) for spec in specs]
     for message in diff_many(connection, diff_pairs):
         print_sub(message)

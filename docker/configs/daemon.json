@@ -1,0 +1,9 @@
+{
+  "features": {
+    "containerd-snapshotter": true
+  },
+  "log-driver": "local",
+  "log-level": "error",
+  "live-restore": false,
+  "shutdown-timeout": 180
+}
