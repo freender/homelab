@@ -59,6 +59,35 @@ The current evidence likely also belongs upstream to OpenZFS/Linux because the
 observable mismatch is live mounted file contents versus the same dataset's
 snapshot contents after `zfs receive`.
 
+### Recurrence: 2026-10-12 (patch lapse)
+
+Third containerd BoltDB corruption on tower (CT 101), after earlier ones on
+2026-05-10 and 2026-05-12. It happened while the patch was missing, and stopped
+once the patch was back:
+
+1. 2026-10-10: the weekly apt run upgraded `libpve-storage-perl` (9.1.11 to
+   9.1.12) and replaced `ZFSPoolPlugin.pm` on ace and clovis. The
+   large-block patch reapplied first and updated the checksum record that both
+   patches shared. This patch then saw "target unchanged" and skipped
+   reapplying. bray stayed patched.
+2. For about two days, ace and clovis received migrations without the
+   post-receive unmount. tower migrated ace to clovis, then clovis to ace.
+   containerd started on a stale view of `meta.db` and wrote on top of it for
+   hours, which corrupted the on-disk file.
+3. Once both patches were reapplied (each now keeps its own checksum record),
+   the next migration moved the already-corrupt bytes to a freshly rebooted
+   node. That node had no stale cache, so containerd panicked right away. The
+   damage was done before the patch came back.
+4. Later migrations with the patch in place (helm 3 times, tower once) were
+   clean.
+
+The patch health alert missed the lapse because it read only the status file,
+which still said `patched`. The `homelab_pve_patch_healthy` metric now also
+checks that each patched file still contains its patch marker.
+
+This supports the target-side stale-receive model above: the failure comes back
+whenever the patch lapses, and it does not depend on the source side.
+
 ## Operational Files
 
 - Script: `/usr/local/sbin/homelab-pve-zfs-recv-cache-patch`
