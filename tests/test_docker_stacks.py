@@ -281,3 +281,148 @@ def test_real_repo_placement_is_consistent() -> None:
     for host in STACK_HOSTS:
         docker_stacks.check_placement(ROOT, host)
     docker_stacks.check_shared_orphans(ROOT)
+
+
+# --- VM scratch placement: appdata excludes must not sit on a VM's appdata ----
+
+
+@pytest.fixture
+def vm_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """`vm` is a qemu guest, `ct` an LXC; both run the same two stacks."""
+    _write(tmp_path / "backup-excludes" / "appdata.txt", "/app/cache\n/*/logs\n# note\n")
+    _write(
+        tmp_path / "docker-stacks" / "stacks" / "app" / "compose.yml.j2",
+        "services:\n"
+        "  app-{{ HOST }}:\n"
+        "    volumes:\n"
+        "      - /mnt/cache/appdata/app/config:/config\n"
+        "      - /mnt/scratch/app/cache:/cache\n",
+    )
+    _write(
+        tmp_path / "docker-stacks" / "stacks" / "web" / "compose.yml.j2",
+        "services:\n  web-{{ HOST }}:\n    image: busybox\n",
+    )
+    kinds = {"vm": "qemu", "ct": "lxc"}
+
+    class Registry:
+        def list_hosts(self, feature: str | None = None) -> list[str]:
+            return sorted(kinds)
+
+        def get(self, host: str, key: str, default: object = None) -> object:
+            if key == "docker-stacks.stacks":
+                return ["app", "web"]
+            if key == "pve-guest.kind":
+                return kinds[host]
+            return default
+
+    monkeypatch.setattr(docker_stacks, "default_registry", lambda _root: Registry())
+    return tmp_path
+
+
+def _add_volume(repo: Path, volume: str) -> None:
+    path = repo / "docker-stacks" / "stacks" / "web" / "compose.yml.j2"
+    path.write_text(
+        "services:\n"
+        "  web-{{ HOST }}:\n"
+        "    volumes:\n"
+        f"      - {volume}\n",
+        encoding="utf-8",
+    )
+
+
+def test_vm_scratch_clean_repo_passes(vm_repo: Path) -> None:
+    docker_stacks.check_vm_scratch_placement(vm_repo, ["vm", "ct"], known=frozenset())
+
+
+@pytest.mark.parametrize(
+    "volume",
+    [
+        "/mnt/cache/appdata/app/cache:/cache",
+        "/mnt/cache/appdata/app/cache/thumbs:/thumbs:ro",
+        "/mnt/cache/appdata/web/logs:/logs",
+        "/mnt/cache/appdata/web/logs/:/logs",
+        "/mnt/cache/appdata/web/./logs:/logs",
+    ],
+)
+def test_vm_volume_inside_an_exclude_fails(vm_repo: Path, volume: str) -> None:
+    _add_volume(vm_repo, volume)
+    with pytest.raises(ValueError, match=r"vm web/web-vm: /mnt/cache/appdata/") as error:
+        docker_stacks.check_vm_scratch_placement(vm_repo, ["vm", "ct"], known=frozenset())
+    assert "/mnt/scratch/<stack>" in str(error.value)
+    assert "ct " not in str(error.value), "an LXC's exclude-path already covers it"
+
+
+def test_vm_long_syntax_bind_is_checked(vm_repo: Path) -> None:
+    path = vm_repo / "docker-stacks" / "stacks" / "web" / "compose.yml.j2"
+    path.write_text(
+        "services:\n"
+        "  web-{{ HOST }}:\n"
+        "    volumes:\n"
+        "      - type: bind\n"
+        "        source: /mnt/cache/appdata/web/logs\n"
+        "        target: /logs\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="web/web-vm: /mnt/cache/appdata/web/logs"):
+        docker_stacks.check_vm_scratch_placement(vm_repo, ["vm"], known=frozenset())
+
+
+@pytest.mark.parametrize(
+    "volume",
+    [
+        # An exclude *inside* the volume is not a match: Rule A, homelab-ops#157.
+        "/mnt/cache/appdata/app:/app",
+        "/mnt/cache/appdata:/appdata",
+        # Glob covers one segment only.
+        "/mnt/cache/appdata/logs:/logs",
+        "/mnt/cache/appdata/web/logsarchive:/logs",
+        # Outside the appdata root, or a named volume.
+        "/mnt/scratch/web/logs:/logs",
+        "/mnt/cache/appdata-old/app/cache:/cache",
+        "weblogs:/logs",
+    ],
+)
+def test_vm_volume_not_inside_an_exclude_passes(vm_repo: Path, volume: str) -> None:
+    _add_volume(vm_repo, volume)
+    docker_stacks.check_vm_scratch_placement(vm_repo, ["vm"], known=frozenset())
+
+
+def test_vm_scratch_honours_appdata_root(
+    vm_repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(docker_stacks, "appdata_root_for", lambda _root, _host: "/srv/appdata/")
+    _add_volume(vm_repo, "/srv/appdata/web/logs:/logs")
+    with pytest.raises(ValueError, match="web/web-vm: /srv/appdata/web/logs"):
+        docker_stacks.check_vm_scratch_placement(vm_repo, ["vm"], known=frozenset())
+
+
+def test_known_violation_passes_with_a_warning(
+    vm_repo: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _add_volume(vm_repo, "/mnt/cache/appdata/web/logs:/logs")
+    known = frozenset({("vm", "web", "web-vm", "/mnt/cache/appdata/web/logs")})
+    docker_stacks.check_vm_scratch_placement(vm_repo, ["vm"], known=known)
+    assert "1 known VM appdata-exclude mount(s) pending" in capsys.readouterr().out
+
+
+def test_fixed_known_violation_fails_until_removed(vm_repo: Path) -> None:
+    """The list may only shrink: a stale entry would re-admit the mount silently."""
+    known = frozenset({("vm", "web", "web-vm", "/mnt/cache/appdata/web/logs")})
+    with pytest.raises(ValueError, match="no longer violate: vm web/web-vm"):
+        docker_stacks.check_vm_scratch_placement(vm_repo, ["vm"], known=known)
+
+
+def test_known_violation_for_an_unchecked_host_is_not_stale(vm_repo: Path) -> None:
+    """`./deploy docker-stacks ct` validates ct only; vm's entries are not judged."""
+    known = frozenset({("vm", "web", "web-vm", "/mnt/cache/appdata/web/logs")})
+    docker_stacks.check_vm_scratch_placement(vm_repo, ["ct"], known=known)
+
+
+def test_no_vm_host_skips_loading_the_profile(vm_repo: Path) -> None:
+    (vm_repo / "backup-excludes" / "appdata.txt").unlink()
+    docker_stacks.check_vm_scratch_placement(vm_repo, ["ct"], known=frozenset())
+
+
+def test_real_repo_known_scratch_violations_are_exact() -> None:
+    """KNOWN_SCRATCH_VIOLATIONS matches the real tree in both directions."""
+    docker_stacks.check_vm_scratch_placement(ROOT, list(STACK_HOSTS))

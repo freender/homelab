@@ -1,15 +1,19 @@
 from __future__ import annotations
 
+import posixpath
 import shutil
 from pathlib import Path
 
+import yaml
+
+from .. import backup_excludes
 from ..build import write_env_file
 from ..deploy import DeploySession, force_env, prepare_build_dir, stage_and_run_remote_installer
 from ..hosts import default_registry
 from ..module_support import run_module_deploy
 from ..output import print_sub, print_warn
 from ..ssh import HostConnection, diff_many
-from ..templates import render_template
+from ..templates import render_template, render_template_text
 
 REMOTE_ROOT = "/tmp/homelab-docker-stacks"
 INSTALLER = "scripts/install.py"
@@ -17,6 +21,28 @@ INTERPRETER = "python3"
 DEFAULT_APPDATA_ROOT = "/mnt/cache/appdata"
 COMPOSE_NAME = "compose.yml"
 TEMPLATE_NAME = "compose.yml.j2"
+APPDATA_EXCLUDE_PROFILE = "appdata"
+
+# (host, stack, service, bind source)
+ScratchViolation = tuple[str, str, str, str]
+
+# helm's mounts from before check_vm_scratch_placement existed. May only shrink;
+# homelab-ops#158 moves them to /mnt/scratch and deletes the list. victoria-logs
+# is already on the backup=0 disk through a hand-made bind mount, but its compose
+# path is what the check reads.
+KNOWN_SCRATCH_VIOLATIONS: frozenset[ScratchViolation] = frozenset(
+    {
+        ("helm", "alloy", "alloy-helm", "/mnt/cache/appdata/alloy/data"),
+        ("helm", "alloy", "alloy-helm", "/mnt/cache/appdata/geoipupdate"),
+        ("helm", "alloy", "alloy-helm", "/mnt/cache/appdata/traefik/logs"),
+        ("helm", "geoipupdate", "geoipupdate-helm", "/mnt/cache/appdata/geoipupdate"),
+        ("helm", "traefik", "crowdsec-helm", "/mnt/cache/appdata/traefik/logs"),
+        ("helm", "traefik", "traefik-helm", "/mnt/cache/appdata/traefik/logs"),
+        ("helm", "traefik", "traefik-helm", "/mnt/cache/appdata/traefik/plugins-storage"),
+        ("helm", "victoria-logs", "victoria-logs", "/mnt/cache/appdata/victoria-logs/data"),
+        ("helm", "vmagent", "vmagent-helm", "/mnt/cache/appdata/vmagent/data"),
+    }
+)
 
 
 def deploy(
@@ -233,20 +259,128 @@ def check_shared_orphans(root: Path) -> None:
         )
 
 
+def appdata_root_for(root: Path, host: str) -> str:
+    registry = default_registry(root)
+    return str(registry.get(host, "docker-stacks.appdata_root", DEFAULT_APPDATA_ROOT)).strip()
+
+
+def is_vm(root: Path, host: str) -> bool:
+    return default_registry(root).get(host, "pve-guest.kind", None) == "qemu"
+
+
+def compose_document(root: Path, host: str, stack: str) -> dict:
+    """The compose file one host would deploy for one stack, parsed."""
+    origin, source = resolve_stack(root, host, stack)
+    if origin == "shared":
+        text = render_template_text(source, HOST=host)
+    else:
+        text = source.read_text(encoding="utf-8")
+    document = yaml.safe_load(text)
+    return document if isinstance(document, dict) else {}
+
+
+def bind_sources(service: object) -> list[str]:
+    """Host-side paths of a service's bind mounts, normalized; named volumes skipped."""
+    if not isinstance(service, dict):
+        return []
+    sources = []
+    for volume in service.get("volumes") or []:
+        if isinstance(volume, str):
+            source = volume.split(":", 1)[0]
+        elif isinstance(volume, dict) and volume.get("type") == "bind":
+            source = str(volume.get("source", ""))
+        else:
+            continue
+        if source.startswith("/"):
+            sources.append(posixpath.normpath(source))
+    return sources
+
+
+def appdata_relative(source: str, appdata_root: str) -> str | None:
+    """`source` relative to the appdata root (`/grafana`), or None when outside it."""
+    base = posixpath.normpath(appdata_root)
+    if source == base:
+        return "/"
+    if source.startswith(base + "/"):
+        return source[len(base) :]
+    return None
+
+
+def scratch_violations(
+    root: Path, host: str, stacks: list[str], entries: list[str]
+) -> set[ScratchViolation]:
+    """Bind mounts under the appdata root whose path an appdata exclude covers."""
+    appdata_root = appdata_root_for(root, host)
+    found: set[ScratchViolation] = set()
+    for stack in stacks:
+        services = compose_document(root, host, stack).get("services") or {}
+        for name, service in services.items():
+            for source in bind_sources(service):
+                relative = appdata_relative(source, appdata_root)
+                if relative is not None and backup_excludes.matching_entry(relative, entries):
+                    found.add((host, stack, str(name), source))
+    return found
+
+
+def _describe(violations: set[ScratchViolation]) -> str:
+    return "; ".join(
+        f"{host} {stack}/{service}: {source}"
+        for host, stack, service, source in sorted(violations)
+    )
+
+
+def check_vm_scratch_placement(
+    root: Path,
+    hosts: list[str],
+    known: frozenset[ScratchViolation] = KNOWN_SCRATCH_VIOLATIONS,
+) -> None:
+    """On a VM, regenerable data belongs on the scratch disk, not under appdata.
+
+    `exclude-path` is file-level and does nothing for a VM's block backup, so a
+    path `appdata.txt` excludes on an LXC is backed up in full on a VM unless it
+    lives on the backup=0 scratch disk (homelab-ops#154). Fails on a violation
+    not in `known`, and on a `known` entry that no longer violates, so the list
+    only shrinks.
+    """
+    vm_hosts = [host for host in hosts if is_vm(root, host)]
+    if not vm_hosts:
+        return
+    entries = backup_excludes.load_profile(root, APPDATA_EXCLUDE_PROFILE)
+    found: set[ScratchViolation] = set()
+    for host in vm_hosts:
+        found |= scratch_violations(root, host, declared_stacks(root, host), entries)
+
+    new = found - known
+    if new:
+        raise ValueError(
+            f"VM stack volume(s) under appdata match {APPDATA_EXCLUDE_PROFILE}.txt, so a "
+            f"VM backup would include them: {_describe(new)}. "
+            "Mount them from /mnt/scratch/<stack>."
+        )
+    fixed = {entry for entry in known - found if entry[0] in vm_hosts}
+    if fixed:
+        raise ValueError(
+            f"KNOWN_SCRATCH_VIOLATIONS lists mount(s) that no longer violate: "
+            f"{_describe(fixed)}. Remove them from the list."
+        )
+    pending = len(known & found)
+    if pending:
+        print_warn(f"{pending} known VM appdata-exclude mount(s) pending homelab-ops#158")
+
+
 def validate(root: Path, hosts: list[str]) -> None:
     check_stack_tree(root)
     for host in hosts:
         check_placement(root, host)
     check_shared_orphans(root)
+    check_vm_scratch_placement(root, hosts)
 
 
 def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
     registry = default_registry(root)
     ssh_user = str(registry.get(host, "config.user"))
     ssh_hostname = str(registry.get(host, "config.hostname", host))
-    appdata_root = str(
-        registry.get(host, "docker-stacks.appdata_root", DEFAULT_APPDATA_ROOT)
-    ).strip()
+    appdata_root = appdata_root_for(root, host)
     apply_changed = registry.get(host, "docker-stacks.apply_changed", True)
     apply_changed_flag = "true" if apply_changed else "false"
 

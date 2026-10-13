@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from fnmatch import fnmatchcase
 from pathlib import Path
 
 PROFILE_DIR = "backup-excludes"
@@ -55,3 +56,24 @@ def dedupe_preserve_order(values: list[str]) -> list[str]:
 
 def join_mount_prefix(prefix: str, entry: str) -> str:
     return f"{prefix.rstrip('/')}/{entry.lstrip('/')}"
+
+
+def _segments(path: str) -> list[str]:
+    return [part for part in path.split("/") if part]
+
+
+def matching_entry(path: str, entries: list[str]) -> str | None:
+    """The first entry that `path` equals or lies inside, else None.
+
+    Both are profile-relative (`/traefik/logs`). Globs match one segment each, so
+    `/*/logs` covers `/traefik/logs/access` but not `/traefik`: an entry inside
+    `path` is not a match, only `path` inside an entry.
+    """
+    parts = _segments(path)
+    for entry in entries:
+        pattern = _segments(entry)
+        if len(parts) < len(pattern):
+            continue
+        if all(fnmatchcase(part, glob) for part, glob in zip(parts, pattern)):
+            return entry
+    return None
