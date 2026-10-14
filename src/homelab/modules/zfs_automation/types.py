@@ -21,6 +21,13 @@ TEMPLATE_FILES = [
     "zfs-scrub.service",
 ]
 
+# Guest kind -> (log label, systemd unit that is active only on the node running
+# the guest). PVE runs each VM as a transient `<vmid>.scope`.
+GUEST_ACTIVE_UNITS = {
+    "lxc": ("LXC", "pve-container@{vmid}.service"),
+    "qemu": ("VM", "{vmid}.scope"),
+}
+
 
 @dataclass(frozen=True)
 class FileSpec:
@@ -54,7 +61,8 @@ class SnapshotPlan:
     yearly: str
     recursive: bool = True
     process_children_only: bool = True
-    require_active_lxc: int | None = None
+    require_active_guest: int | None = None
+    guest_kind: str = "lxc"
 
 
 @dataclass(frozen=True)
@@ -62,6 +70,7 @@ class MigratableLxcPlan:
     name: str
     vmid: int
     dataset: str
+    kind: str = "lxc"
 
 
 @dataclass(frozen=True)
@@ -74,7 +83,8 @@ class MigratableLxcGroup:
 class ReplicationPlan:
     target: str
     source: str = ""
-    require_active_lxc: int | None = None
+    require_active_guest: int | None = None
+    guest_kind: str = "lxc"
 
 
 @dataclass(frozen=True)

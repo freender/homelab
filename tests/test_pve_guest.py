@@ -100,7 +100,7 @@ def test_every_declared_guest_is_in_sync_with_the_fixture() -> None:
 
 
 def test_hand_written_vmids_all_resolve() -> None:
-    assert validate_inventory(default_registry(ROOT)) == (8, 12)
+    assert validate_inventory(default_registry(ROOT)) == (8, 21)
 
 
 def test_every_impact_label_on_a_changed_helm_spec() -> None:
@@ -957,6 +957,11 @@ def _plans(*plans: dict) -> dict:
         ({}, _plans({"vmid": 201, "dataset": "vm-flash/subvol-202-disk-1"}),
          "is not vmid 201's"),
         ({}, _plans({"vmid": 200, "dataset": "pool/x"}), "is qemu, expected lxc"),
+        ({}, _plans({"vmid": 200, "kind": "qemu", "dataset": "vm-flash/vm-200-disk-1"}), None),
+        ({}, _plans({"vmid": 200, "kind": "qemu", "dataset": "vm-flash/vm-201-disk-1"}),
+         "is not vmid 200's"),
+        ({}, _plans({"vmid": 201, "kind": "qemu", "dataset": "pool/x"}),
+         "is lxc, expected qemu"),
     ],
 )
 def test_vmid_references(tmp_path: Path, osiris_features, ace_features, message) -> None:
@@ -975,7 +980,7 @@ def test_cli_check_pve_guests(monkeypatch: pytest.MonkeyPatch, capsys) -> None:
     from homelab import cli
 
     cli.check_pve_guests(ROOT)
-    assert "8 pve-guest spec(s) valid; 12 hand-written vmid(s) match" in capsys.readouterr().out
+    assert "8 pve-guest spec(s) valid; 21 hand-written vmid(s) match" in capsys.readouterr().out
 
     def broken(registry):
         raise ValueError("helm: pve-guest.vmid must be a positive integer")

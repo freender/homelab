@@ -236,7 +236,7 @@ def test_snapshot_plan_inherits_defaults_and_stringifies_retention() -> None:
     )
     assert plan.recursive is True
     assert plan.process_children_only is True
-    assert plan.require_active_lxc is None
+    assert plan.require_active_guest is None
 
 
 def test_snapshot_plan_overrides_beat_defaults() -> None:
@@ -254,7 +254,7 @@ def test_snapshot_plan_overrides_beat_defaults() -> None:
 def test_snapshot_plan_require_active_lxc_must_be_positive() -> None:
     plan = n.snapshot_plan_from_config({"require_active_lxc": 105}, {}, "t", "ace")
 
-    assert plan.require_active_lxc == 105
+    assert plan.require_active_guest == 105
     with pytest.raises(ValueError, match="require_active_lxc"):
         n.snapshot_plan_from_config({"require_active_lxc": 0}, {}, "t", "ace")
 
@@ -310,7 +310,7 @@ def test_snapshot_plan_falls_back_to_built_in_retention() -> None:
     )
     assert plan.recursive is True
     assert plan.process_children_only is True
-    assert plan.require_active_lxc is None
+    assert plan.require_active_guest is None
 
 
 def test_snapshot_plan_defaults_supply_the_booleans() -> None:
@@ -582,6 +582,10 @@ def test_migratable_groups_absent_returns_empty(tmp_path: Path) -> None:
             "          plans:\n            - {name: a, vmid: 110}\n",
             "dataset required",
         ),
+        (
+            "          plans:\n            - {name: a, vmid: 110, dataset: rpool/a, kind: vm}\n",
+            "kind must be one of lxc, qemu",
+        ),
     ],
 )
 def test_migratable_group_plan_validation(
@@ -607,7 +611,7 @@ def test_resolve_group_reports_an_unknown_group(tmp_path: Path) -> None:
 
 
 def test_snapshot_group_expansion_pins_each_plan_to_its_vmid(tmp_path: Path) -> None:
-    """Every expanded plan must carry require_active_lxc.
+    """Every expanded plan must carry require_active_guest.
 
     A migratable container is snapshotted only on the node currently running it;
     losing that guard means both nodes snapshot the same dataset and the
@@ -617,9 +621,56 @@ def test_snapshot_group_expansion_pins_each_plan_to_its_vmid(tmp_path: Path) -> 
         group_registry(tmp_path), "ace:lxc", {"daily": 5}, "bray"
     )
 
-    assert [(p.dataset, p.require_active_lxc, p.daily) for p in plans] == [
+    assert [(p.dataset, p.require_active_guest, p.daily) for p in plans] == [
         ("rpool/lxc/subvol-110-disk-0", 110, "5"),
         ("rpool/lxc/subvol-111-disk-0", 111, "5"),
+    ]
+
+
+def test_group_plan_kind_defaults_to_lxc(tmp_path: Path) -> None:
+    groups = n.normalize_migratable_lxc_groups(group_registry(tmp_path), "ace")
+
+    assert {p.kind for p in groups["lxc"].plans} == {"lxc"}
+
+
+QEMU_GROUP_HOST = """    zfs-automation:
+      migratable_lxc_groups:
+        mixed:
+          plans:
+            - name: tower-appdata
+              vmid: 101
+              dataset: vm-flash/subvol-101-disk-1
+            - name: helm-os
+              vmid: 112
+              kind: qemu
+              dataset: vm-flash/vm-112-disk-1
+"""
+
+
+def test_qemu_plans_carry_their_kind_into_snapshot_and_replication_plans(
+    tmp_path: Path,
+) -> None:
+    """A VM plan that lost its kind would render the LXC guard and never snapshot."""
+    registry = registry_from(
+        pve_host("ace", QEMU_GROUP_HOST) + pve_host("bray", mgmt_ip="10.0.10.11/24"),
+        tmp_path,
+    )
+
+    snapshots = n.expand_migratable_lxc_snapshot_group(registry, "ace:mixed", {}, "bray")
+    replications = n.expand_migratable_lxc_replication_plans(
+        registry,
+        {"migratable_lxc_group": "ace:mixed", "target_root": "backup"},
+        [{"name": "helm-os", "target": "helm-os"}],
+        "bray",
+        "job",
+    )
+
+    assert [(p.dataset, p.require_active_guest, p.guest_kind) for p in snapshots] == [
+        ("vm-flash/subvol-101-disk-1", 101, "lxc"),
+        ("vm-flash/vm-112-disk-1", 112, "qemu"),
+    ]
+    assert [(p.source, p.require_active_guest, p.guest_kind) for p in replications] == [
+        ("vm-flash/vm-112-disk-1", 112, "qemu"),
     ]
 
 
@@ -668,7 +719,7 @@ def test_relative_targets_are_anchored_under_target_root(tmp_path: Path) -> None
 
     assert plans[0].target == "backup/lxc/traefik"
     assert plans[0].source == "rpool/lxc/subvol-110-disk-0"
-    assert plans[0].require_active_lxc == 110
+    assert plans[0].require_active_guest == 110
 
 
 def test_absolute_and_remote_targets_are_left_alone(tmp_path: Path) -> None:

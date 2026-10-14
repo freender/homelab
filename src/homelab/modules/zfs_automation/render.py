@@ -13,11 +13,19 @@ from __future__ import annotations
 from shlex import quote
 
 from .types import (
+    GUEST_ACTIVE_UNITS,
     KnownHostRefresh,
     ReplicationPlan,
     SnapshotPlan,
     ZfsPushTargetAccess,
 )
+
+
+def active_guest_unit(kind: str, vmid: int) -> tuple[str, str]:
+    """`("LXC 101", "pve-container@101.service")` — the log label and the unit
+    that is active only on the node currently running the guest."""
+    label, unit = GUEST_ACTIVE_UNITS[kind]
+    return f"{label} {vmid}", unit.format(vmid=vmid)
 
 
 def sanoid_plan_lines(plan: SnapshotPlan) -> list[str]:
@@ -94,15 +102,13 @@ def build_snapshot_script(
     else:
         for plan in snapshot_plans:
             config_lines = sanoid_plan_lines(plan)
-            if plan.require_active_lxc is None:
+            if plan.require_active_guest is None:
                 append_snapshot_plan_script(lines, plan, config_lines)
                 continue
 
-            unit_name = f"pve-container@{plan.require_active_lxc}.service"
-            active_message = f"Active LXC {plan.require_active_lxc}; snapshotting {plan.dataset}"
-            skip_message = (
-                f"Skipping {plan.dataset}; LXC {plan.require_active_lxc} is not active locally"
-            )
+            label, unit_name = active_guest_unit(plan.guest_kind, plan.require_active_guest)
+            active_message = f"Active {label}; snapshotting {plan.dataset}"
+            skip_message = f"Skipping {plan.dataset}; {label} is not active locally"
             lines.extend(
                 [
                     f"if systemctl is-active --quiet {quote(unit_name)}; then",
@@ -249,12 +255,10 @@ def build_replication_script(
     else:
         for plan in replication_plans:
             inactive_message = ""
-            if plan.require_active_lxc is not None:
-                unit_name = f"pve-container@{plan.require_active_lxc}.service"
-                inactive_message = (
-                    f"Skipping {plan.source}; LXC {plan.require_active_lxc} is not active locally"
-                )
-                active_message = f"Active LXC {plan.require_active_lxc}; replicating {plan.source}"
+            if plan.require_active_guest is not None:
+                label, unit_name = active_guest_unit(plan.guest_kind, plan.require_active_guest)
+                inactive_message = f"Skipping {plan.source}; {label} is not active locally"
+                active_message = f"Active {label}; replicating {plan.source}"
                 lines.extend(
                     [
                         f"if systemctl is-active --quiet {quote(unit_name)}; then",

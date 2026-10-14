@@ -14,7 +14,7 @@ import re
 from ...hosts import HostRegistry
 from .spec import FEATURE, GuestSpec, parse_guest
 
-SUBVOL_RE = re.compile(r"/subvol-(\d+)-disk-\d+$")
+SUBVOL_RE = re.compile(r"/(?:subvol|vm)-(\d+)-disk-\d+$")
 
 
 def pve_nodes(registry: HostRegistry) -> dict[str, bool]:
@@ -95,7 +95,7 @@ def _migratable_lxc_references(registry: HostRegistry, host: str):
             match = SUBVOL_RE.search(str(plan.get("dataset", "")))
             if match and int(match.group(1)) != vmid:
                 raise ValueError(f"{where}: dataset {plan['dataset']} is not vmid {vmid}'s")
-            yield where, vmid, "lxc", None
+            yield where, vmid, plan.get("kind", "lxc"), None
 
 
 def _restore_references(registry: HostRegistry, host: str):

@@ -8,10 +8,12 @@ groups. Replication-job and push-access normalization live in sibling
 from __future__ import annotations
 
 import re
+from dataclasses import replace
 from pathlib import Path
 
 from ... import op_secrets
 from .types import (
+    GUEST_ACTIVE_UNITS,
     KnownHostRefresh,
     MigratableLxcGroup,
     MigratableLxcPlan,
@@ -239,7 +241,8 @@ def expand_migratable_lxc_replication_plans(
             ReplicationPlan(
                 target=target,
                 source=group_plan.dataset,
-                require_active_lxc=group_plan.vmid,
+                require_active_guest=group_plan.vmid,
+                guest_kind=group_plan.kind,
             )
         )
     return plans
@@ -290,7 +293,7 @@ def snapshot_plan_from_config(
             True,
             f"process_children_only for snapshot plan {dataset} must be true or false for {host}",
         ),
-        require_active_lxc=(
+        require_active_guest=(
             normalize_positive_int(
                 plan.get("require_active_lxc"),
                 "require_active_lxc must be a positive integer for snapshot plan "
@@ -333,11 +336,21 @@ def normalize_migratable_lxc_groups(
 def normalize_migratable_lxc_plan(
     plan: object, index: int, group_name: str, host: str
 ) -> MigratableLxcPlan:
-    """One plan in a migratable-LXC group: a container name, its VMID, and its dataset."""
+    """One plan in a migratable-guest group: a guest name, its VMID, and its dataset.
+
+    `kind` (default `lxc`) picks the unit that marks the guest active locally, so a
+    VM's zvols are snapshotted only on the node running it, like a container's.
+    """
     where = f"{index} in group '{group_name}' for {host}"
     if not isinstance(plan, dict):
         raise ValueError(f"invalid migratable LXC plan at index {where}")
+    kind = str(plan.get("kind", "lxc")).strip()
+    if kind not in GUEST_ACTIVE_UNITS:
+        raise ValueError(
+            f"kind must be one of {', '.join(GUEST_ACTIVE_UNITS)} for migratable LXC plan {where}"
+        )
     return MigratableLxcPlan(
+        kind=kind,
         name=require_safe_authorized_key_option(
             plan.get("name", f"plan-{index}"),
             f"name must be safe for migratable LXC plan {where}",
@@ -422,11 +435,14 @@ def expand_migratable_lxc_snapshot_group(
     group = resolve_migratable_lxc_group(registry, value, host, "migratable_lxc_group")
 
     return [
-        snapshot_plan_from_config(
-            {"require_active_lxc": plan.vmid},
-            defaults,
-            plan.dataset,
-            host,
+        replace(
+            snapshot_plan_from_config(
+                {"require_active_lxc": plan.vmid},
+                defaults,
+                plan.dataset,
+                host,
+            ),
+            guest_kind=plan.kind,
         )
         for plan in group.plans
     ]
