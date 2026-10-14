@@ -40,6 +40,10 @@
   "value": "virtio=BC:24:11:0D:E3:B4,bridge=vmbr0,firewall=1,tag=40"
  },
  {
+  "key": "net1",
+  "value": "virtio=BC:24:11:F8:69:C6,bridge=vmbr0,firewall=1,tag=20"
+ },
+ {
   "key": "numa",
   "value": 0
  },
