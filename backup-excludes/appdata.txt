@@ -9,10 +9,6 @@
 /sonarr/MediaCover
 /sonarr4k/MediaCover
 /tautulli/cache
-/victoria-metrics/data
-/victoria-metrics/indexdb
-/victoria-metrics/cache
-/victoria-metrics/tmp
 /victoria-logs/data
 /grafana/plugins
 /traefik/logs
