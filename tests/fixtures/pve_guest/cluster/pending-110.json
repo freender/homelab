@@ -60,6 +60,10 @@
   "value": "vm-flash:vm-110-disk-1,discard=on,iothread=1,size=32G,ssd=1"
  },
  {
+  "key": "scsi1",
+  "value": "vm-flash:vm-110-disk-2,discard=on,iothread=1,size=32G,ssd=1"
+ },
+ {
   "key": "scsihw",
   "value": "virtio-scsi-single"
  },
