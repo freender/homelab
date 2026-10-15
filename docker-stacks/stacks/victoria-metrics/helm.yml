@@ -10,7 +10,7 @@ services:
     image: victoriametrics/victoria-metrics:v1.117.1
     user: 1000:1000
     volumes:
-      - /mnt/cache/appdata/victoria-metrics/data:/victoria-metrics-data
+      - /mnt/scratch/victoria-metrics:/victoria-metrics-data
     ports:
       - 8428:8428
     command:

@@ -52,8 +52,8 @@ groups:
           summary: "{{ $labels.host }} memory pressure is high"
           description: "Available memory has stayed below 10 percent for 15 minutes."
 
-      # /mnt/scratch is a VM's backup=0 scratch disk (on helm: VictoriaLogs and
-      # other regenerable stack data).
+      # /mnt/scratch is a VM's backup=0 scratch disk (on helm: VictoriaMetrics,
+      # VictoriaLogs and other regenerable stack data).
       - alert: DockerHostFilesystemLowSpace
         expr: |
           node_filesystem_avail_bytes{job="pve-node", host=~"tower|helm|neo", fstype!="tmpfs", mountpoint=~"/|/mnt/cache/appdata|/mnt/scratch|/mnt/cache/downloads|/mnt/cache/pictures|/mnt/cache/documents|/mnt/cache/obsidian|/mnt/cache/logseq|/mnt/cache/games|/mnt/tank/media"}
