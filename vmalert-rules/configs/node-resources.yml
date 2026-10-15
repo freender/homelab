@@ -21,10 +21,29 @@ groups:
       # infrastructure -- it reports /init, /mnt/c and 9p mounts and is
       # expected to be off for days at a time.
 
+      #
+      # ZFS ARC is counted as available. MemAvailable treats the ARC as used,
+      # so an uncapped ARC (bray, zfs_arc_max=0) filled RAM to 47 GiB and fired
+      # this with no real shortage. ARC above c_min shrinks under pressure, so
+      # it is added back. Only the bare-metal ZFS hosts export node_zfs_arc_*;
+      # the `or ... * 0` fallback keeps every other host on plain MemAvailable.
       - alert: NodeMemoryPressure
         expr: |
           1 - (
-            node_memory_MemAvailable_bytes{job="pve-node", host!~"tower|helm|neo|ghost"}
+            (
+              node_memory_MemAvailable_bytes{job="pve-node", host!~"tower|helm|neo|ghost"}
+              +
+              (
+                clamp_min(
+                  node_zfs_arc_size{job="pve-node", host!~"tower|helm|neo|ghost"}
+                  -
+                  node_zfs_arc_c_min{job="pve-node", host!~"tower|helm|neo|ghost"},
+                  0
+                )
+                or
+                node_memory_MemTotal_bytes{job="pve-node", host!~"tower|helm|neo|ghost"} * 0
+              )
+            )
             /
             node_memory_MemTotal_bytes{job="pve-node", host!~"tower|helm|neo|ghost"}
           ) > 0.90
@@ -33,7 +52,7 @@ groups:
           severity: warning
         annotations:
           summary: "{{ $labels.host }} memory pressure is high"
-          description: "Available memory on {{ $labels.host }} has stayed below 10 percent for 15 minutes. Check `free -h` and the top consumers with `ps aux --sort=-%mem | head`."
+          description: "Available memory on {{ $labels.host }}, counting reclaimable ZFS ARC as available, has stayed below 10 percent for 15 minutes. Check `free -h`, `arc_summary | head -30`, and the top consumers with `ps aux --sort=-%mem | head`."
 
       # Filesystem coverage is split by class because most ZFS mountpoints here
       # must NOT be alerted on individually.
