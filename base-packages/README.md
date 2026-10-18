@@ -62,9 +62,26 @@ tower:
 
 ## Backports kernel
 
-A Debian VM boots its own kernel, and stable's is older than the Proxmox kernel
-the PVE nodes and LXCs run. `backports_kernel: true` moves the VM to
-`<codename>-backports`:
+**No host uses this, by decision (2026-10-17).** riven and helm ran it from
+their VM builds until then and are back on stable's kernel.
+
+The flag existed so a VM, which boots its own kernel, would match the 7.x Proxmox
+kernel the PVE nodes and LXCs run (helm: the kernel its stacks ran on as CT
+107). It never stayed matched. Backports follows the newest upstream stable
+release (7.2 at the time), while Proxmox holds one Ubuntu-derived series (7.0)
+for its whole cycle, so the VMs drifted ahead. A VM sees only virtio hardware,
+whose drivers have been mature for years, so a newer kernel buys it nothing.
+What it costs is real:
+
+- Backports has no Debian security support. Fixes land only when a newer
+  upstream release is rebuilt, and each upstream series goes unmaintained once
+  the next one ships.
+- Stable's kernel is an upstream LTS series. The security team patches it
+  through `<codename>-security`, and far more users test it.
+- Every new upstream release is another reboot the VM didn't otherwise need.
+
+Use it again only for a concrete need: passthrough hardware that 6.12 can't
+drive, or a kernel feature a workload requires. The mechanism:
 
 ```yaml
 riven:
@@ -77,9 +94,30 @@ The installer runs `apt-get install -t <codename>-backports linux-image-amd64`
 once, when the installed kernel metapackage is not already a `~bpo` version.
 After that, `apt-upgrade`'s dist-upgrade keeps it current, because backports is
 `ButAutomaticUpgrades`. The module never reboots: `RebootRequired` reports the
-pending kernel. Setting the flag back to false does not downgrade, and
-the kernel keeps following backports; going back to stable is a manual
-`apt-get install linux-image-amd64/<codename>`.
+pending kernel.
+
+Setting the flag back to false does not downgrade anything, and the kernel keeps
+following backports. Going back is manual, and the metapackage alone is not
+enough. Backports also pulls in `linux-base`, `linux-base-amd64`,
+`linux-sysctl-defaults` and, on hosts with build tools, `linux-libc-dev`, and
+each of those follows backports too. Downgrade every `~bpo` package to the
+highest non-backports version in `apt-cache policy`, and remove the backports
+kernel's own packages in the same transaction. Dry-run it with `-s` first:
+
+```bash
+dpkg -l | awk '/^ii/ && $3 ~ /bpo/ {print $2, $3}'
+apt-get install --allow-downgrades \
+  linux-image-amd64=<stable> linux-base=<stable> linux-sysctl-defaults=<stable> \
+  linux-libc-dev=<stable> \
+  linux-image-<bpo-release>- linux-binary-<bpo-release>- \
+  linux-base-<bpo-release>- linux-modules-<bpo-release>- linux-base-amd64-
+```
+
+Removing the running kernel is safe here: with `DEBIAN_FRONTEND=noninteractive`,
+`linux-check-removal` does not prompt. GRUB's default then points at the stable
+kernel. The running kernel no longer matches any installed one, so
+the reboot-textfile-exporter raises `RebootRequired`. Reboot through the VM's procedure in
+`pve-upgrade/README.md`.
 
 ## Why this module exists
 

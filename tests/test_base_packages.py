@@ -225,10 +225,10 @@ def test_backports_kernel_rejects_a_non_boolean(tmp_path: Path) -> None:
         base_packages.backports_kernel(root, "vm")
 
 
-def test_riven_tracks_the_backports_kernel() -> None:
-    # riven is a VM and boots its own kernel; the PVE nodes run Proxmox's.
-    assert base_packages.backports_kernel(ROOT, "riven") is True
-    assert base_packages.backports_kernel(ROOT, "ace") is False
+def test_no_host_tracks_the_backports_kernel() -> None:
+    # The VMs run stable's LTS kernel by decision; see base-packages/README.md.
+    for host in ("riven", "helm", "ace"):
+        assert base_packages.backports_kernel(ROOT, host) is False
 
 
 INSTALLER_PATH = ROOT / "base-packages" / "scripts" / "install.py"

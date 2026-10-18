@@ -212,7 +212,7 @@ def retire_smartctl(ctx: InstallContext) -> bool:
 
     The binary and unit belong to the distro package, so leaving the reduced
     profile purges it (never autoremove: `smartmontools` stays). The backports
-    source stays too: on helm the backports kernel (`base-packages`) now relies
+    source stays too: a host flagged `base-packages.backports_kernel` relies
     on it. Returns True if a unit or the package was removed.
     """
     if SMARTCTL_WRAPPER not in ctx.file_map:

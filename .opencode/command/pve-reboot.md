@@ -1,11 +1,13 @@
 ---
-description: Pre-flight every PVE node, confirm the whole roll once, then reboot in safe waves
+description: Pre-flight every PVE node and VM, confirm the whole roll once, then reboot in safe waves
 agent: build
 ---
 
-survey all nodes -> one confirmation for the whole roll -> reboot wave by wave -> verify
+survey all nodes and VMs -> one confirmation for the whole roll -> reboot wave by wave -> VMs -> verify
 
-Roll the reboot workflow across [$ARGUMENTS], defaulting to every PVE node.
+Roll the reboot workflow across [$ARGUMENTS], defaulting to every PVE node plus the
+VMs that boot their own kernel (`helm`, `riven`). Live migration never clears a VM's
+pending kernel, so the node roll alone leaves the VMs behind.
 `pve-upgrade/README.md` is the canonical runbook and owns the pre-flight commands,
 the stop conditions, and the verification steps — follow it rather than restating or
 improvising it. This file owns the wave policy and the authorization gate.
@@ -30,7 +32,8 @@ there would hide problems a reboot causes.
    `./deploy --confirm-upgrade pve-upgrade` — `apt-upgrade` already owns these nodes
    and that module is now only an on-demand escape hatch (chiefly for `arc`/`xur`).
    Running it here would dist-upgrade a node mid-runbook, which is exactly the
-   unreviewed package change the ordering exists to prevent.
+   unreviewed package change the ordering exists to prevent. Survey `helm` and `riven`
+   too, using their pre-flight in the README (`# Rebooting helm`, `# Rebooting riven`).
 2. **Order.** Choose the three waves from tower's **current** HA placement:
    `ssh ace 'ha-manager status'` reports `ct:101` (tower)'s node. If tower is on ace:
    **`osiris` + `clovis`**, then **`ace`**, then **`bray`**. Otherwise: **`osiris` +
@@ -47,11 +50,12 @@ there would hide problems a reboot causes.
    stop — no question, no reboot. Otherwise use the question tool (`AskUserQuestion`
    under Claude Code) **once**, presenting: the nodes that need a reboot in wave order,
    the guests each one moves or stops, running vs installed kernels, any pre-flight
-   warning that did not rise to a stop condition, and that the run ends with `bray`,
-   which live-migrates riven and with it this agent session and the shared SSH agent.
-   Offer approving
-   the full roll, and — when more than one wave is pending — approving only the earlier
-   waves. Declining stops everything. That single approval is the authorization for
+   warning that did not rise to a stop condition, and that the node waves end with
+   `bray`, which live-migrates riven and with it this agent session and the shared SSH
+   agent. List any pending VM reboots after the waves (step 6), and say that a riven
+   reboot ends this session. Offer approving the full roll, and — when more than one
+   wave or a VM is pending — approving only the earlier waves, or only the nodes
+   without the VMs. Declining stops everything. That single approval is the authorization for
    every `systemctl reboot` in the plan; a green pre-flight is not. If the survey found
    a stop condition, do not ask at all — report it and stop.
 4. **Execute the approved plan unattended.** Reboot wave by wave; after each, wait for
@@ -76,7 +80,19 @@ there would hide problems a reboot causes.
    on ace and verify bray like any other wave. If the session does not survive, the
    human starts a new session to verify bray. No extra confirmation: step 3 already
    covered it.
+6. **VMs, after every node wave has verified.** Skip any VM whose
+   `homelab_reboot_required` is `0`. Re-run its README pre-flight right before its
+   reboot, because the state may have changed during the roll.
+   - **helm first**, per the README's `# Rebooting helm`: reboot it from inside the
+     guest, then run its "After the reboot" checks. Expect a minute or two with no
+     monitoring.
+   - **riven last of all**, per `# Rebooting riven`: a delayed, detached reboot from
+     inside the guest. It ends this session. A riven workflow still running is not a
+     failure: skip riven and report it as still pending. Before issuing the reboot,
+     deliver the final report, which tells the human to reconnect, run
+     `addhomelabkeys`, and run the README's riven "After the reboot" checks.
+   Stop-and-report rules from step 4 apply here too.
 
-Report per node: whether a reboot was pending, the running vs installed kernel, and the
-verification result, plus which waves ran. If nothing was pending, say so rather than
+Report per node and per VM: whether a reboot was pending, the running vs installed
+kernel, and the verification result, plus which waves ran. If nothing was pending, say so rather than
 implying work was done — that is the expected outcome most weeks.

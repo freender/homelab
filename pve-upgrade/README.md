@@ -355,9 +355,10 @@ riven is the OpenCode server and holds the shared SSH agent, so rebooting it
 ends the session that issues the reboot. The procedure is built around that.
 
 **Who:** the agent, only after the human approves it through the `question`
-tool. Asking is separate from any `/pve-reboot` plan. If a roll is also due,
-finish the roll first, because riven's reboot ends the session that drives it.
-Never inside the 02:00 or 08:00 maintenance windows.
+tool. `/pve-reboot` surveys riven with the nodes and puts it in the same single
+approval, as the very last step of the run. Outside `/pve-reboot`, ask on its
+own. If a roll is also due, finish the roll first, because riven's reboot ends
+the session that drives it. Never inside the 02:00 or 08:00 maintenance windows.
 
 ### Pre-flight
 
@@ -415,8 +416,9 @@ window of a minute or two: no alert can fire, and the `Watchdog` heartbeat
 pauses. Unlike riven, it does not end the session that issues it.
 
 **Who:** the agent, only after the human approves it through the `question`
-tool. Never during a `/pve-reboot` roll (finish the roll first) and never inside
-the 02:00 or 08:00 maintenance windows.
+tool. `/pve-reboot` includes helm in its single approval and reboots it after
+every node wave has verified. Never in the middle of a node roll, and never
+inside the 02:00 or 08:00 maintenance windows.
 
 ### Pre-flight
 
