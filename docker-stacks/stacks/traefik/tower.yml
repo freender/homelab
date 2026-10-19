@@ -180,7 +180,10 @@ services:
       - /mnt/cache/appdata/traefik/traefik.yml:/etc/traefik/traefik.yml:ro
       # rw: tower is the ACME issuer and the traefik-sync source of truth.
       - /mnt/cache/appdata/traefik/acme.json:/etc/traefik/acme.json
-      - /mnt/cache/appdata/traefik/fileConfig.yml:/etc/traefik/fileConfig.yml:ro
+      # Directory, not the single file: traefik-sync (and most editors) replace
+      # fileConfig.yml, and a single-file bind mount keeps serving the old inode
+      # until restart (homelab-ops#199). traefik.yml points at dynamic/fileConfig.yml.
+      - /mnt/cache/appdata/traefik:/etc/traefik/dynamic:ro
       - /mnt/cache/appdata/traefik/logs:/etc/traefik/logs:rw
       - /mnt/cache/appdata/traefik/plugins-storage:/plugins-storage:rw
     networks:

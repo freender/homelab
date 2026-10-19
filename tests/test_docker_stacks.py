@@ -277,6 +277,24 @@ def test_crowdsec_is_reachable_as_plain_crowdsec_on_every_host(tmp_path: Path) -
         )
 
 
+def test_traefik_file_provider_is_a_directory_mount(tmp_path: Path) -> None:
+    """traefik-sync replaces fileConfig.yml rather than rewriting it, and a
+    single-file bind mount keeps the container on the old inode until restart,
+    so a node silently routes on stale config (homelab-ops#199). Mounting the
+    parent directory lets Traefik's watcher see the replacement.
+    """
+    for host in STACK_HOSTS:
+        out = tmp_path / host
+        docker_stacks.assemble_stacks(ROOT, host, ["traefik"], out)
+        document = yaml.safe_load((out / "traefik" / "compose.yml").read_text())
+        volumes = document["services"][f"traefik-{host}"]["volumes"]
+
+        assert "/mnt/cache/appdata/traefik:/etc/traefik/dynamic:ro" in volumes, host
+        assert not [v for v in volumes if "fileConfig.yml" in v], (
+            f"{host}: fileConfig.yml must not be bind-mounted as a single file"
+        )
+
+
 def test_real_repo_placement_is_consistent() -> None:
     for host in STACK_HOSTS:
         docker_stacks.check_placement(ROOT, host)

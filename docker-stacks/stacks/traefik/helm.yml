@@ -187,7 +187,10 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - /mnt/cache/appdata/traefik/traefik.yml:/etc/traefik/traefik.yml:ro
       - /mnt/cache/appdata/traefik/acme.json:/etc/traefik/acme.json:ro
-      - /mnt/cache/appdata/traefik/fileConfig.yml:/etc/traefik/fileConfig.yml:ro
+      # Directory, not the single file: traefik-sync (and most editors) replace
+      # fileConfig.yml, and a single-file bind mount keeps serving the old inode
+      # until restart (homelab-ops#199). traefik.yml points at dynamic/fileConfig.yml.
+      - /mnt/cache/appdata/traefik:/etc/traefik/dynamic:ro
       - /mnt/scratch/traefik/logs:/etc/traefik/logs:rw
       - /mnt/scratch/traefik/plugins-storage:/plugins-storage:rw
     networks:
