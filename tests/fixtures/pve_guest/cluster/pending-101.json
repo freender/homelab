@@ -41,7 +41,7 @@
  },
  {
   "key": "net1",
-  "value": "name=nic1,bridge=vmbr0,firewall=1,hwaddr=BC:24:11:7D:28:96,ip=dhcp,tag=10,type=veth"
+  "value": "name=nic1,bridge=vmbr0,firewall=1,hwaddr=BC:24:11:7D:28:96,ip=10.0.10.10/24,tag=10,type=veth"
  },
  {
   "key": "onboot",

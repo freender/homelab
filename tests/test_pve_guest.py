@@ -1077,7 +1077,7 @@ def test_every_lxc_disk_and_nic_field_has_its_own_row() -> None:
         ("net1.tag", "10", "-", drift.LIVE),
         ("net1.firewall", "yes", "no", drift.LIVE),
         ("net1.name", "nic1", "eth1", drift.REBOOT),
-        ("net1.ip", "dhcp", "10.0.0.9/24", drift.LIVE),
+        ("net1.ip", "10.0.10.18/24", "10.0.0.9/24", drift.LIVE),
         ("net1.gw", "-", "10.0.0.1", drift.LIVE),
     ]
 
