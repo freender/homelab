@@ -917,6 +917,22 @@ def test_drifted_live_arc_is_reset_without_an_initramfs_rebuild(harness: Harness
     assert f"6727663616 -> {ARC}" in capsys.readouterr().out
 
 
+def test_uncapping_writes_zero_and_says_it_needs_a_reboot(harness: Harness, capsys) -> None:
+    harness.env["ZFS_ARC_MAX"] = "0"
+    harness.write(harness.build_dir / "zfs.conf", "options zfs zfs_arc_max=0\n")
+    harness.write(harness.installer.ZFS_CONF, f"options zfs zfs_arc_max={ARC}\n")
+    harness.write(harness.installer.ZFS_ARC_MAX_PARAM, f"{ARC}\n")
+
+    harness.run()
+
+    assert Path(harness.installer.ZFS_CONF).read_text() == "options zfs zfs_arc_max=0\n"
+    assert harness.host.ran("update-initramfs")
+    assert Path(harness.installer.ZFS_ARC_MAX_PARAM).read_text() == "0\n"
+    out = capsys.readouterr().out
+    assert "takes effect at next boot" in out
+    assert "set live" not in out
+
+
 def test_failed_initramfs_rebuild_fails_before_the_live_value(harness: Harness) -> None:
     manage_arc(harness, boot="0", live="0")
     harness.host.failing.add("update-initramfs")

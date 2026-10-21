@@ -423,7 +423,8 @@ def configure_zfs_arc(ctx: InstallContext, zfs_arc_max: str) -> None:
     before `/etc/modprobe.d` is readable, so a changed file rebuilds every kernel's
     initramfs; PVE's post-update hook syncs the ESPs. The running value is compared on
     every deploy, not just when the file changes, so a hand-edited parameter is put
-    back. Lowering it takes effect live: the ARC evicts down to the new ceiling.
+    back. A size takes effect live (lowering it evicts down to the new ceiling);
+    `0` only takes effect at the next boot.
     """
     if not zfs_arc_max:
         log.sub("ZFS ARC not repo-managed on this host; skipping")
@@ -451,6 +452,11 @@ def configure_zfs_arc(ctx: InstallContext, zfs_arc_max: str) -> None:
     except OSError as exc:
         raise InstallError(f"could not set {ZFS_ARC_MAX_PARAM}: {exc}") from exc
     ctx.changes.record("zfs_arc_max")
+    if zfs_arc_max == "0":
+        # At runtime OpenZFS treats 0 as "keep the current ceiling"; only a module
+        # load at boot applies the default, so an existing cap stays until reboot.
+        log.warn(f"ZFS ARC limit {current} -> 0 (uncapped) takes effect at next boot")
+        return
     log.ok(f"ZFS ARC limit set live: {current} -> {zfs_arc_max}")
 
 

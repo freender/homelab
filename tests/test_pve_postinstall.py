@@ -169,6 +169,8 @@ def test_zfs_arc_max_absent_leaves_the_host_unmanaged(tmp_path) -> None:
         ("1T", "1099511627776"),
         (17179869184, "17179869184"),
         (" 2G ", "2147483648"),
+        (0, "0"),
+        ("0", "0"),
     ],
 )
 def test_zfs_arc_max_is_normalised_to_bytes(raw, expected: str, tmp_path) -> None:
@@ -189,8 +191,8 @@ def test_zfs_arc_max_is_normalised_to_bytes(raw, expected: str, tmp_path) -> Non
         ("1.5G", "must be bytes or a size like 16G"),
         ("G", "must be bytes or a size like 16G"),
         ("-1", "must be bytes or a size like 16G"),
-        (0, "must be at least 64M"),
-        ("63M", "must be at least 64M"),
+        (1, "must be 0 \\(uncapped\\) or at least 64M"),
+        ("63M", "must be 0 \\(uncapped\\) or at least 64M"),
     ],
 )
 def test_zfs_arc_max_refuses_unusable_values(raw, message: str) -> None:
@@ -211,7 +213,7 @@ def test_every_pve_node_has_a_repo_managed_arc_ceiling() -> None:
     hosts = registry.list_hosts(feature="pve-postinstall")
     assert hosts
     for host in hosts:
-        assert pp._host_settings(registry, host).zfs_arc_max, host
+        assert pp._host_settings(registry, host).zfs_arc_max != "", host
 
 
 # --- cluster rejoin helper: the delnode guard --------------------------------------

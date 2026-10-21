@@ -100,7 +100,7 @@ class HostSettings:
 
 
 ZFS_CONF_REMOTE = "/etc/modprobe.d/zfs.conf"
-# OpenZFS ignores a zfs_arc_max below 64 MiB, so anything smaller is a typo.
+# OpenZFS ignores a nonzero zfs_arc_max below 64 MiB, so anything smaller is a typo.
 ZFS_ARC_MIN_BYTES = 64 * 2**20
 _SIZE_UNITS = {"K": 2**10, "M": 2**20, "G": 2**30, "T": 2**40}
 
@@ -108,8 +108,10 @@ _SIZE_UNITS = {"K": 2**10, "M": 2**20, "G": 2**30, "T": 2**40}
 def _zfs_arc_max(registry: _Registry, host: str) -> str:
     """The ARC ceiling in bytes, `""` when this host's ARC is not repo-managed.
 
-    Accepts plain bytes or a binary-suffixed size (`16G`). `0` -- OpenZFS's
-    "no cap" -- is refused: leaving the key out is how a host stays unmanaged.
+    Accepts plain bytes or a binary-suffixed size (`16G`). `0` is OpenZFS's own
+    default (RAM minus 1G on 2.3+): still rendered and converged, so a node that
+    once had a cap is put back to uncapped. Leaving the key out leaves the host's
+    `zfs.conf` and live value alone.
     """
     raw = registry.get(host, "pve-postinstall.zfs_arc_max", None)
     if raw is None:
@@ -123,8 +125,10 @@ def _zfs_arc_max(registry: _Registry, host: str) -> str:
     if not digits.isdigit():
         raise ValueError(error)
     size = int(digits) * multiplier
-    if size < ZFS_ARC_MIN_BYTES:
-        raise ValueError(f"pve-postinstall.zfs_arc_max must be at least 64M for {host}")
+    if 0 < size < ZFS_ARC_MIN_BYTES:
+        raise ValueError(
+            f"pve-postinstall.zfs_arc_max must be 0 (uncapped) or at least 64M for {host}"
+        )
     return str(size)
 
 
