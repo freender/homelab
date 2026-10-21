@@ -96,6 +96,36 @@ class HostSettings:
     mounts: str
     expected_clustered: str
     cluster_link0: str
+    zfs_arc_max: str = ""
+
+
+ZFS_CONF_REMOTE = "/etc/modprobe.d/zfs.conf"
+# OpenZFS ignores a zfs_arc_max below 64 MiB, so anything smaller is a typo.
+ZFS_ARC_MIN_BYTES = 64 * 2**20
+_SIZE_UNITS = {"K": 2**10, "M": 2**20, "G": 2**30, "T": 2**40}
+
+
+def _zfs_arc_max(registry: _Registry, host: str) -> str:
+    """The ARC ceiling in bytes, `""` when this host's ARC is not repo-managed.
+
+    Accepts plain bytes or a binary-suffixed size (`16G`). `0` -- OpenZFS's
+    "no cap" -- is refused: leaving the key out is how a host stays unmanaged.
+    """
+    raw = registry.get(host, "pve-postinstall.zfs_arc_max", None)
+    if raw is None:
+        return ""
+    error = f"pve-postinstall.zfs_arc_max must be bytes or a size like 16G for {host}"
+    if isinstance(raw, bool):
+        raise ValueError(error)
+    text = str(raw).strip().upper()
+    multiplier = _SIZE_UNITS.get(text[-1:], 1)
+    digits = text[:-1] if text[-1:] in _SIZE_UNITS else text
+    if not digits.isdigit():
+        raise ValueError(error)
+    size = int(digits) * multiplier
+    if size < ZFS_ARC_MIN_BYTES:
+        raise ValueError(f"pve-postinstall.zfs_arc_max must be at least 64M for {host}")
+    return str(size)
 
 
 def _pve_host_type(registry: _Registry, host: str) -> str:
@@ -168,6 +198,7 @@ def _host_settings(registry: _Registry, host: str) -> HostSettings:
         mounts=mounts,
         expected_clustered=expected_clustered,
         cluster_link0=cluster_link0,
+        zfs_arc_max=_zfs_arc_max(registry, host),
     )
 
 
@@ -215,6 +246,7 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
     write_file_map(build_dir, FILE_SPECS)
     write_installer_env(build_dir / "env", settings)
     build_network_interfaces_bundle(root, host, build_dir)
+    build_zfs_conf(build_dir, settings.zfs_arc_max)
 
     connection = connection_for_host(root, host)
     print_sub("Comparing with remote configs...")
@@ -222,6 +254,10 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
         connection,
         [(build_dir / file_name, REMOTE_PATHS[file_name]) for file_name in PVE_FILES],
     ):
+        print_sub(message)
+
+    if settings.zfs_arc_max:
+        _, message = connection.remote_diff(build_dir / "zfs.conf", ZFS_CONF_REMOTE)
         print_sub(message)
 
     interfaces_path = build_dir / "interfaces"
@@ -276,6 +312,14 @@ def build_network_interfaces_bundle(root: Path, host: str, build_dir: Path) -> N
         NET_MGMT_IFACE=mgmt_iface,
         NET_STORAGE_IFACE=storage_iface,
     )
+
+
+def build_zfs_conf(build_dir: Path, zfs_arc_max: str) -> None:
+    """Render `/etc/modprobe.d/zfs.conf` only for a host whose ARC is repo-managed."""
+    if zfs_arc_max:
+        (build_dir / "zfs.conf").write_text(
+            f"options zfs zfs_arc_max={zfs_arc_max}\n", encoding="utf-8"
+        )
 
 
 def build_cluster_rejoin_helper(root: Path, build_dir: Path) -> None:
@@ -447,6 +491,7 @@ def write_installer_env(path: Path, settings: HostSettings) -> None:
             "MOUNTS": settings.mounts,
             "EXPECTED_CLUSTERED": settings.expected_clustered,
             "CLUSTER_LINK0": settings.cluster_link0,
+            "ZFS_ARC_MAX": settings.zfs_arc_max,
         },
     )
 

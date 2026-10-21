@@ -4,7 +4,7 @@
 Post-install convergence for the PVE nodes: the no-subscription and pve-test repo
 sources, the nag removal hook, the sshd hardening drop-in, the cluster rejoin helper,
 the timezone, ZFS pool import and local zfspool storage, the `local` storage's
-`import` and `snippets` content types, native scrub timers, the
+`import` and `snippets` content types, the ZFS ARC limit, native scrub timers, the
 `openipmi` mask, `/etc/network/interfaces`, declared disk mounts, local postfix, and a
 report of the manual `pvecm add` step on a node that should be clustered and is not.
 
@@ -107,6 +107,9 @@ INTERFACES = "/etc/network/interfaces"
 FSTAB = "/etc/fstab"
 MOUNT_OPTIONS = "nosuid,nodev,nofail,x-systemd.device-timeout=60,x-systemd.mount-timeout=60"
 
+ZFS_CONF = "/etc/modprobe.d/zfs.conf"
+ZFS_ARC_MAX_PARAM = "/sys/module/zfs/parameters/zfs_arc_max"
+
 ALIASES = "/etc/aliases"
 ALIASES_DB = "/etc/aliases.db"
 
@@ -122,13 +125,17 @@ class Settings:
     mounts: tuple[tuple[str, str], ...]
     expected_clustered: bool
     cluster_link0: str
+    zfs_arc_max: str
+
+
+OPTIONAL_KEYS = ("IMPORT_POOLS", "MOUNTS", "CLUSTER_LINK0", "ZFS_ARC_MAX")
 
 
 def read_settings(ctx: InstallContext) -> Settings:
-    """Parse the env file. The three list-ish keys may be empty but must be present:
+    """Parse the env file. The optional keys may be empty but must be present:
     empty is "none configured", absent is a truncated render."""
     env.require(ctx, "TIMEZONE", "EXPECTED_CLUSTERED")
-    absent = [name for name in ("IMPORT_POOLS", "MOUNTS", "CLUSTER_LINK0") if name not in ctx.env]
+    absent = [name for name in OPTIONAL_KEYS if name not in ctx.env]
     if absent:
         raise InstallError(
             f"incomplete env file at {ctx.build_dir / 'env'} (missing: {', '.join(absent)}); "
@@ -142,12 +149,17 @@ def read_settings(ctx: InstallContext) -> Settings:
             raise InstallError(f"malformed mount {entry!r}; expected label:/absolute/path")
         mounts.append((label, target))
 
+    zfs_arc_max = ctx.env["ZFS_ARC_MAX"].strip()
+    if zfs_arc_max and not zfs_arc_max.isdigit():
+        raise InstallError(f"ZFS_ARC_MAX must be a byte count, got {zfs_arc_max!r}")
+
     return Settings(
         timezone=ctx.env["TIMEZONE"].strip(),
         import_pools=tuple(ctx.env["IMPORT_POOLS"].split()),
         mounts=tuple(mounts),
         expected_clustered=env.flag(ctx, "EXPECTED_CLUSTERED"),
         cluster_link0=ctx.env["CLUSTER_LINK0"].strip(),
+        zfs_arc_max=zfs_arc_max,
     )
 
 
@@ -167,6 +179,9 @@ def preflight(ctx: InstallContext, settings: Settings) -> None:
 
     if settings.import_pools and not _which("zpool"):
         raise InstallError(f"zpool not found; cannot import {' '.join(settings.import_pools)}")
+
+    if settings.zfs_arc_max and not (ctx.build_dir / "zfs.conf").is_file():
+        raise InstallError(f"ZFS_ARC_MAX is set but {ctx.build_dir / 'zfs.conf'} is missing")
 
 
 def _differs(src: Path, dest: str) -> bool:
@@ -399,6 +414,44 @@ def ensure_local_content(ctx: InstallContext) -> None:
         return
     log.sub(f"Adding {', '.join(missing)} to {LOCAL_STORAGE} storage content")
     _set_storage(ctx, LOCAL_STORAGE, "content", ",".join([*current, *missing]), "content")
+
+
+def configure_zfs_arc(ctx: InstallContext, zfs_arc_max: str) -> None:
+    """Pin the ARC ceiling at boot and converge the running value.
+
+    The boot copy lives in the initramfs, because root-on-ZFS loads the module there
+    before `/etc/modprobe.d` is readable, so a changed file rebuilds every kernel's
+    initramfs; PVE's post-update hook syncs the ESPs. The running value is compared on
+    every deploy, not just when the file changes, so a hand-edited parameter is put
+    back. Lowering it takes effect live: the ARC evicts down to the new ceiling.
+    """
+    if not zfs_arc_max:
+        log.sub("ZFS ARC not repo-managed on this host; skipping")
+        return
+
+    if files.install_from(ctx, ctx.build_dir / "zfs.conf", ZFS_CONF, "644", record="zfs.conf"):
+        result = _run(["update-initramfs", "-u", "-k", "all"], check=False)
+        if result.returncode != 0:
+            raise InstallError(
+                f"update-initramfs failed (exit {result.returncode}); {ZFS_CONF} is in place, "
+                "so re-run the deploy with --force to retry"
+            )
+        log.ok("initramfs rebuilt with the new ARC limit")
+
+    param = Path(ZFS_ARC_MAX_PARAM)
+    try:
+        current = param.read_text(encoding="utf-8").strip()
+    except OSError as exc:
+        raise InstallError(f"could not read {ZFS_ARC_MAX_PARAM}: {exc}") from exc
+    if current == zfs_arc_max:
+        log.sub(f"ZFS ARC limit already {zfs_arc_max}")
+        return
+    try:
+        param.write_text(f"{zfs_arc_max}\n", encoding="utf-8")
+    except OSError as exc:
+        raise InstallError(f"could not set {ZFS_ARC_MAX_PARAM}: {exc}") from exc
+    ctx.changes.record("zfs_arc_max")
+    log.ok(f"ZFS ARC limit set live: {current} -> {zfs_arc_max}")
 
 
 def configure_scrub_timers(ctx: InstallContext) -> None:
@@ -636,6 +689,9 @@ def install(ctx: InstallContext) -> None:
 
     log.action("Reconciling local storage content")
     ensure_local_content(ctx)
+
+    log.action("Configuring ZFS ARC limit")
+    configure_zfs_arc(ctx, settings.zfs_arc_max)
 
     log.action("Configuring native ZFS scrub timers")
     configure_scrub_timers(ctx)

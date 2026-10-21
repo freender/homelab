@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import subprocess
+from pathlib import Path
 
 import pytest
 
-from homelab.hosts import HostLookupError
+from homelab.hosts import HostLookupError, default_registry
 from homelab.modules import pve_postinstall as pp
 
 _MISSING = object()
@@ -138,6 +139,79 @@ def test_host_settings_rejects_invalid_standalone_value() -> None:
 
     with pytest.raises(ValueError, match="config.standalone must be true or false"):
         pp._host_settings(registry, "ace")
+
+
+# --- zfs_arc_max ---------------------------------------------------------------------
+
+
+def _arc_registry(raw: object) -> FakeRegistry:
+    values: dict[str, object] = {"config.type": "pve", "config.standalone": True}
+    if raw is not None:
+        values["pve-postinstall.zfs_arc_max"] = raw
+    return FakeRegistry(values)
+
+
+def test_zfs_arc_max_absent_leaves_the_host_unmanaged(tmp_path) -> None:
+    settings = pp._host_settings(_arc_registry(None), "ace")
+
+    assert settings.zfs_arc_max == ""
+    pp.build_zfs_conf(tmp_path, settings.zfs_arc_max)
+    assert not (tmp_path / "zfs.conf").exists()
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("16G", "17179869184"),
+        ("16g", "17179869184"),
+        ("512M", "536870912"),
+        ("65536K", "67108864"),
+        ("1T", "1099511627776"),
+        (17179869184, "17179869184"),
+        (" 2G ", "2147483648"),
+    ],
+)
+def test_zfs_arc_max_is_normalised_to_bytes(raw, expected: str, tmp_path) -> None:
+    registry = _arc_registry(raw)
+
+    settings = pp._host_settings(registry, "ace")
+
+    assert settings.zfs_arc_max == expected
+    pp.build_zfs_conf(tmp_path, settings.zfs_arc_max)
+    assert (tmp_path / "zfs.conf").read_text() == f"options zfs zfs_arc_max={expected}\n"
+
+
+@pytest.mark.parametrize(
+    ("raw", "message"),
+    [
+        (True, "must be bytes or a size like 16G"),
+        ("16GB", "must be bytes or a size like 16G"),
+        ("1.5G", "must be bytes or a size like 16G"),
+        ("G", "must be bytes or a size like 16G"),
+        ("-1", "must be bytes or a size like 16G"),
+        (0, "must be at least 64M"),
+        ("63M", "must be at least 64M"),
+    ],
+)
+def test_zfs_arc_max_refuses_unusable_values(raw, message: str) -> None:
+    registry = _arc_registry(raw)
+
+    with pytest.raises(ValueError, match=message):
+        pp._host_settings(registry, "ace")
+
+
+def test_zfs_arc_max_floor_is_exactly_64_mib() -> None:
+    registry = _arc_registry("64M")
+
+    assert pp._host_settings(registry, "ace").zfs_arc_max == str(64 * 2**20)
+
+
+def test_every_pve_node_has_a_repo_managed_arc_ceiling() -> None:
+    registry = default_registry(Path(__file__).resolve().parents[1])
+    hosts = registry.list_hosts(feature="pve-postinstall")
+    assert hosts
+    for host in hosts:
+        assert pp._host_settings(registry, host).zfs_arc_max, host
 
 
 # --- cluster rejoin helper: the delnode guard --------------------------------------

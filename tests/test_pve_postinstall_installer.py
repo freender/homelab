@@ -27,6 +27,7 @@ from homelab_install.packages import APT_GET
 ROOT = Path(__file__).resolve().parents[1]
 INSTALLER_PATH = ROOT / "pve-postinstall" / "scripts" / "install.py"
 TZ = "America/New_York"
+ARC = "17179869184"
 
 REBOUND = (
     "SOURCES_DIR",
@@ -42,6 +43,8 @@ REBOUND = (
     "FSTAB",
     "ALIASES",
     "ALIASES_DB",
+    "ZFS_CONF",
+    "ZFS_ARC_MAX_PARAM",
 )
 
 
@@ -172,6 +175,7 @@ class Harness:
             "MOUNTS": "",
             "EXPECTED_CLUSTERED": "true",
             "CLUSTER_LINK0": "10.0.0.20",
+            "ZFS_ARC_MAX": "",
         }
         self.binaries = {"pveversion", "zpool", "pvesm", "newaliases"}
         self.host = FakeHost()
@@ -297,6 +301,9 @@ def test_converged_host_does_not_reload_postfix_or_rebuild_aliases(harness: Harn
         (lambda h: h.binaries.discard("zpool"), "zpool not found; cannot import vm-flash"),
         (lambda h: (h.build_dir / "pve-test.sources").unlink(), "missing in .*pve-test.sources"),
         (lambda h: h.file_map.pop("no-nag-script"), "missing file-map entries: no-nag-script"),
+        (lambda h: h.env.pop("ZFS_ARC_MAX"), "missing: ZFS_ARC_MAX"),
+        (lambda h: h.env.update(ZFS_ARC_MAX="16G"), "ZFS_ARC_MAX must be a byte count"),
+        (lambda h: h.env.update(ZFS_ARC_MAX=ARC), "ZFS_ARC_MAX is set but .*zfs.conf is missing"),
     ],
 )
 def test_refusals_come_before_any_write(harness: Harness, change, message: str) -> None:
@@ -854,6 +861,95 @@ def test_cluster_config_appearing_after_cleanup_skips_manual_join(harness: Harne
     assert "manual pvecm add not needed" in capsys.readouterr().out
 
 
+# --- ZFS ARC limit ---------------------------------------------------------------
+
+
+def manage_arc(harness: Harness, boot: str | None, live: str) -> None:
+    """Stage a managed ARC ceiling; `boot`/`live` are what the host has now."""
+    harness.env["ZFS_ARC_MAX"] = ARC
+    harness.write(harness.build_dir / "zfs.conf", f"options zfs zfs_arc_max={ARC}\n")
+    if boot is not None:
+        harness.write(harness.installer.ZFS_CONF, f"options zfs zfs_arc_max={boot}\n")
+    harness.write(harness.installer.ZFS_ARC_MAX_PARAM, f"{live}\n")
+
+
+def test_unmanaged_arc_touches_nothing(harness: Harness) -> None:
+    harness.run()
+
+    assert not Path(harness.installer.ZFS_CONF).exists()
+    assert not harness.host.ran("update-initramfs")
+
+
+def test_converged_arc_is_a_no_op(harness: Harness) -> None:
+    manage_arc(harness, boot=ARC, live=ARC)
+    before = harness.snapshot()
+
+    ctx = harness.run()
+
+    assert harness.snapshot() == before
+    assert not ctx.changes.any()
+    assert not harness.host.ran("update-initramfs")
+
+
+@pytest.mark.parametrize("boot", [None, "0"])
+def test_changed_arc_conf_rebuilds_every_initramfs_and_sets_live(
+    harness: Harness, boot: str | None
+) -> None:
+    manage_arc(harness, boot=boot, live="0")
+
+    ctx = harness.run()
+
+    assert Path(harness.installer.ZFS_CONF).read_text() == f"options zfs zfs_arc_max={ARC}\n"
+    assert oct(Path(harness.installer.ZFS_CONF).stat().st_mode & 0o777) == "0o644"
+    assert harness.host.ran("update-initramfs") == [["update-initramfs", "-u", "-k", "all"]]
+    assert Path(harness.installer.ZFS_ARC_MAX_PARAM).read_text() == f"{ARC}\n"
+    assert ctx.changes.touched("zfs.conf", "zfs_arc_max")
+
+
+def test_drifted_live_arc_is_reset_without_an_initramfs_rebuild(harness: Harness, capsys) -> None:
+    manage_arc(harness, boot=ARC, live="6727663616")
+
+    ctx = harness.run()
+
+    assert Path(harness.installer.ZFS_ARC_MAX_PARAM).read_text() == f"{ARC}\n"
+    assert not harness.host.ran("update-initramfs")
+    assert ctx.changes.touched("zfs_arc_max")
+    assert f"6727663616 -> {ARC}" in capsys.readouterr().out
+
+
+def test_failed_initramfs_rebuild_fails_before_the_live_value(harness: Harness) -> None:
+    manage_arc(harness, boot="0", live="0")
+    harness.host.failing.add("update-initramfs")
+
+    with pytest.raises(InstallError, match="update-initramfs failed .*--force"):
+        harness.run()
+
+    assert Path(harness.installer.ZFS_ARC_MAX_PARAM).read_text() == "0\n"
+
+
+def test_unreadable_live_arc_fails_the_deploy(harness: Harness) -> None:
+    manage_arc(harness, boot=ARC, live=ARC)
+    Path(harness.installer.ZFS_ARC_MAX_PARAM).unlink()
+
+    with pytest.raises(InstallError, match="could not read .*zfs_arc_max"):
+        harness.run()
+
+
+def test_unwritable_live_arc_fails_the_deploy(harness: Harness, monkeypatch) -> None:
+    manage_arc(harness, boot=ARC, live="0")
+    real_write = Path.write_text
+
+    def refuse(self, *args, **kwargs):
+        if str(self) == harness.installer.ZFS_ARC_MAX_PARAM:
+            raise PermissionError("read-only")
+        return real_write(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "write_text", refuse)
+
+    with pytest.raises(InstallError, match="could not set .*zfs_arc_max"):
+        harness.run()
+
+
 # --- postfix ---------------------------------------------------------------------
 
 
@@ -893,6 +989,7 @@ def test_orchestrator_env_round_trips_into_installer_settings(tmp_path: Path) ->
         mounts="media:/mnt/media backup:/mnt/backup",
         expected_clustered="false",
         cluster_link0="",
+        zfs_arc_max=ARC,
     )
     pve_postinstall.write_installer_env(tmp_path / "env", settings)
     ctx = InstallContext(
@@ -912,3 +1009,4 @@ def test_orchestrator_env_round_trips_into_installer_settings(tmp_path: Path) ->
     assert parsed.mounts == (("media", "/mnt/media"), ("backup", "/mnt/backup"))
     assert parsed.expected_clustered is False
     assert parsed.cluster_link0 == ""
+    assert parsed.zfs_arc_max == ARC
