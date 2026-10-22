@@ -64,7 +64,42 @@ LXC_ORIGINAL=$(cat <<'EOF'
 EOF
 )
 
+# Patched blocks are byte-identical to the series submitted upstream for
+# bug #2984 (see README), so production runs exactly what was sent for review.
 LXC_PATCHED=$(cat <<'EOF'
+    # with a local replication job to the target, replicate while the container is still
+    # running, so that only the remaining delta has to be transferred after shutdown
+    if ($restart && $running && !$remote) {
+        my $rep_cfg = PVE::ReplicationConfig->new();
+        if (my $jobcfg = $rep_cfg->find_local_replication_job($vmid, $self->{node})) {
+            $self->log('info', "run replication before shutting down CT $vmid\n");
+            my $start_time = time();
+            my $logfunc = sub {
+                my ($msg) = @_;
+                $self->log('info', $msg);
+            };
+            PVE::Replication::run_replication(
+                'PVE::LXC::Config', $jobcfg, $start_time, $start_time, $logfunc,
+            );
+        }
+    }
+
+    # in restart mode, we shutdown the container before migrating
+    if ($restart && $running) {
+        my $timeout = $self->{opts}->{timeout} // 180;
+
+        $self->log('info', "shutdown CT $vmid\n");
+
+        PVE::LXC::vm_stop($vmid, 0, $timeout);
+
+        $running = 0;
+    }
+EOF
+)
+
+# Pre-upstream wording that was deployed before the blocks above; a host still
+# carrying it is upgraded in place rather than refused as "unexpected".
+LXC_LEGACY_PATCHED=$(cat <<'EOF'
     if ($restart && $running && !$remote) {
         my $rep_cfg = PVE::ReplicationConfig->new();
         if (my $jobcfg = $rep_cfg->find_local_replication_job($vmid, $self->{node})) {
@@ -111,6 +146,18 @@ HA_PATCHED=$(cat <<'EOF'
         vmid => $id,
         target => $target,
         online => 0, # we cannot migrate CT (yet) online, only relocate
+        restart => 1, # let the migration task handle shutdown and start of running CTs
+    };
+
+EOF
+)
+
+HA_LEGACY_PATCHED=$(cat <<'EOF'
+    my $params = {
+        node => $nodename,
+        vmid => $id,
+        target => $target,
+        online => 0, # we cannot migrate CT (yet) online, only relocate
         restart => 1,
     };
 
@@ -132,7 +179,7 @@ write_status() {
     printf 'ha_pvect_target=%s\n' "${HA_PVECT_TARGET}"
     printf 'pve_container_version=%s\n' "${pve_container_version}"
     printf 'pve_ha_manager_version=%s\n' "${pve_ha_manager_version}"
-    grep -nF 'pre-stop replication before shutdown' "${LXC_MIGRATE_TARGET}" || true
+    grep -nF 'run replication before shutting down CT' "${LXC_MIGRATE_TARGET}" || true
     grep -nF 'restart => 1' "${HA_PVECT_TARGET}" || true
   } > "${STATUS_FILE}"
 }
@@ -170,16 +217,40 @@ record_target_checksum() {
   mv "${checksum_file}.tmp" "${checksum_file}"
 }
 
+count_block() {
+  BLOCK=$1 perl -0ne 'my $count = () = /\Q$ENV{BLOCK}\E/g; print $count' "$2"
+}
+
+replace_block() {
+  local target=$1
+  local from=$2
+  local to=$3
+  local label=$4
+  local timestamp
+  local backup
+  timestamp=$(date -u +%Y%m%dT%H%M%SZ)
+  backup="${BACKUP_DIR}/$(basename "${target}").${timestamp}.bak"
+  cp "${target}" "${backup}"
+  TO_BLOCK=${to} FROM_BLOCK=${from} \
+    perl -0pi -e 's/\Q$ENV{FROM_BLOCK}\E/$ENV{TO_BLOCK}/' "${target}"
+  if ! perl -c "${target}" >/dev/null; then
+    cp "${backup}" "${target}"
+    echo "${label} validation failed; restored ${target} from ${backup}" >&2
+    write_status "failed-validation-${label}"
+    exit 1
+  fi
+}
+
 patch_target() {
   local target=$1
   local original=$2
   local patched=$3
-  local marker=$4
-  local label=$5
-  local timestamp
+  local legacy=$4
+  local marker=$5
+  local label=$6
   local patched_count
   local original_count
-  local backup=
+  local legacy_count
 
   if [[ ! -f ${target} ]]; then
     echo "missing target: ${target}" >&2
@@ -188,25 +259,24 @@ patch_target() {
   fi
 
   patched_count=$(grep -Fc "${marker}" "${target}" || true)
-  original_count=$(ORIGINAL_BLOCK=${original} perl -0ne 'my $count = () = /\Q$ENV{ORIGINAL_BLOCK}\E/g; print $count' "${target}")
+  original_count=$(count_block "${original}" "${target}")
+  legacy_count=$(count_block "${legacy}" "${target}")
 
   if [[ ${patched_count} -eq 1 ]]; then
     printf '%s=already-patched\n' "${label}"
     return
   fi
 
+  # Legacy first: the legacy LXC block still contains the untouched original
+  # stanza, so matching the original first would insert a second copy.
+  if [[ ${patched_count} -eq 0 && ${legacy_count} -eq 1 ]]; then
+    replace_block "${target}" "${legacy}" "${patched}" "${label}"
+    printf '%s=patched (upgraded from legacy wording)\n' "${label}"
+    return
+  fi
+
   if [[ ${patched_count} -eq 0 && ${original_count} -eq 1 ]]; then
-    timestamp=$(date -u +%Y%m%dT%H%M%SZ)
-    backup="${BACKUP_DIR}/$(basename "${target}").${timestamp}.bak"
-    cp "${target}" "${backup}"
-    PATCHED_BLOCK=${patched} ORIGINAL_BLOCK=${original} \
-      perl -0pi -e 's/\Q$ENV{ORIGINAL_BLOCK}\E/$ENV{PATCHED_BLOCK}/' "${target}"
-    if ! perl -c "${target}" >/dev/null; then
-      cp "${backup}" "${target}"
-      echo "${label} validation failed; restored ${target} from ${backup}" >&2
-      write_status "failed-validation-${label}"
-      exit 1
-    fi
+    replace_block "${target}" "${original}" "${patched}" "${label}"
     printf '%s=patched\n' "${label}"
     return
   fi
@@ -226,10 +296,10 @@ if [[ ${IF_TARGET_CHANGED} == true ]] && all_targets_unchanged; then
 fi
 
 tmp_status=$(mktemp)
-patch_target "${LXC_MIGRATE_TARGET}" "${LXC_ORIGINAL}" "${LXC_PATCHED}" \
-  'pre-stop replication before shutdown' 'lxc_migrate' | tee -a "${tmp_status}"
-patch_target "${HA_PVECT_TARGET}" "${HA_ORIGINAL}" "${HA_PATCHED}" \
-  'can run pre-stop replication before shutdown' 'ha_pvect' | tee -a "${tmp_status}"
+patch_target "${LXC_MIGRATE_TARGET}" "${LXC_ORIGINAL}" "${LXC_PATCHED}" "${LXC_LEGACY_PATCHED}" \
+  'run replication before shutting down CT' 'lxc_migrate' | tee -a "${tmp_status}"
+patch_target "${HA_PVECT_TARGET}" "${HA_ORIGINAL}" "${HA_PATCHED}" "${HA_LEGACY_PATCHED}" \
+  'let the migration task handle shutdown and start of running CTs' 'ha_pvect' | tee -a "${tmp_status}"
 
 if [[ ${RESTART_SERVICES} == true ]]; then
   systemctl try-restart pvedaemon.service pve-ha-lrm.service

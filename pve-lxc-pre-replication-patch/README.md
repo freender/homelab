@@ -41,6 +41,13 @@ jobs for arbitrary targets and does not implement true LXC live migration.
 - Forum: https://forum.proxmox.com/threads/improvement-reduce-migration-downtime-to-seconds-with-two-step-transfer.72498/
 - Bugzilla: https://bugzilla.proxmox.com/show_bug.cgi?id=2984
 
+The patched blocks in `scripts/install.sh` are byte-identical to the two-patch
+series prepared for `pve-devel` (`[PATCH container 1/2]` for `Migrate.pm`,
+`[PATCH ha-manager 2/2]` for `PVECT.pm`), so production soak-tests exactly the
+code under review. Hosts that still carry the earlier wording are upgraded in
+place on the next apply. Once the series is merged and released, the installer
+will refuse with `failed-unexpected-*` and the module should be retired.
+
 ## Operational Files
 
 - Script: `/usr/local/sbin/homelab-pve-lxc-pre-replication-patch`
