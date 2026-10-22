@@ -15,6 +15,7 @@ Wave policy (the `/roll` command owns the why):
 
 from __future__ import annotations
 
+import shlex
 from dataclasses import asdict, dataclass, field
 
 from ..modules.apt_upgrade import SERVICE_NAME as UPGRADE_SERVICE
@@ -38,10 +39,28 @@ class Inventory:
     vmids: dict[str, int]
     pbs: list[str] = field(default_factory=list)
     vips: dict[str, list[str]] = field(default_factory=dict)
+    # Own-kernel VM -> the login user whose `systemctl --user` units must come back.
     users: dict[str, str] = field(default_factory=dict)
     monitor: str | None = None
     # Hosts the on-demand pve-upgrade module can dist-upgrade.
     upgraders: list[str] = field(default_factory=list)
+    # Node or own-kernel VM -> `user@hostname`, the root login the survey uses.
+    targets: dict[str, str] = field(default_factory=dict)
+
+
+def reboot_command(inventory: Inventory, host: str) -> str:
+    """What the operator runs to reboot `host`; `./roll` never runs it.
+
+    The controller's reboot is delayed and detached, so the session that issues
+    it can finish its reply before the reboot ends it.
+    """
+    target = inventory.targets.get(host)
+    if not target:
+        return ""
+    remote = "systemctl reboot"
+    if host == CONTROLLER:
+        remote = f"systemd-run --on-active=1min --unit={CONTROLLER}-reboot {remote}"
+    return f"ssh {shlex.quote(target)} {shlex.quote(remote)}"
 
 
 def remedy(inventory: Inventory, host: str) -> str:
@@ -92,6 +111,7 @@ class Step:
     running: str
     installed: str
     details: list[str]
+    reboot: str = ""
 
 
 @dataclass
@@ -216,12 +236,15 @@ def plan_nodes(
     return pending
 
 
-def node_step(facts: NodeFacts, resources: list[dict], ha_sids: set[str]) -> Step:
+def node_step(
+    inventory: Inventory, facts: NodeFacts, resources: list[dict], ha_sids: set[str]
+) -> Step:
     return Step(
         facts.host,
         facts.uname,
         facts.kernel.installed,
         guests_on(facts.host, resources, ha_sids),
+        reboot_command(inventory, facts.host),
     )
 
 
@@ -244,7 +267,7 @@ def build_waves(
     ha_sids = set(view.ha.services) if view else set()
     surveyed = {host: f for host, f in survey.nodes.items() if isinstance(f, NodeFacts)}
     plan.waves = [
-        [node_step(surveyed[node], resources, ha_sids) for node in wave]
+        [node_step(inventory, surveyed[node], resources, ha_sids) for node in wave]
         for wave in keep(order, pending)
     ]
 
@@ -279,7 +302,9 @@ def plan_vm(
     else:
         plan.warnings += by_level(findings, WARN)
         notes = [item.message for item in by_level(findings, NOTE)]
-        plan.vms.append(Step(host, facts.uname, facts.kernel.installed, notes))
+        plan.vms.append(
+            Step(host, facts.uname, facts.kernel.installed, notes, reboot_command(inventory, host))
+        )
 
 
 def plan_vms(
@@ -318,7 +343,8 @@ def build_plan(
 
 def step_lines(step: Step) -> list[str]:
     lines = [f"  {step.host:<8} {step.running or '?'} -> {step.installed or '?'}"]
-    return lines + [f"      {detail}" for detail in step.details]
+    lines += [f"      {detail}" for detail in step.details]
+    return lines + ([f"      reboot: {step.reboot}"] if step.reboot else [])
 
 
 def finding_lines(title: str, findings: list[Finding]) -> list[str]:

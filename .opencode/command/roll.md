@@ -61,9 +61,11 @@ trigger for this command is the Saturday 09:00 `RebootRequired` Telegram digest.
    or only the nodes without the VMs. Declining stops everything. That single
    approval is the authorization for every `systemctl reboot` in the plan; a green
    plan is not.
-4. **Execute the approved plan unattended.** For each wave, `ssh <node>
-   'systemctl reboot'` for every node in it (wave 1 may pair a standalone node with
-   one cluster node; never two cluster nodes), then
+4. **Execute the approved plan unattended.** Every step in the plan carries its
+   own `reboot:` command (`reboot` in `--json`), built from the same `hosts.conf`
+   root login the survey uses. Run exactly that command; never substitute an
+   `~/.ssh/config` alias. For each wave, run it for every node in the wave (wave 1
+   may pair a standalone node with one cluster node; never two cluster nodes), then
    `./roll verify --wait 900 <every node in the wave>` and continue straight into
    the next wave when it exits 0. Report progress as you go, but do not ask again.
    Do **not** enter HA maintenance: `ha: shutdown_policy=migrate` handles HA
@@ -96,15 +98,16 @@ trigger for this command is the Saturday 09:00 `RebootRequired` Telegram digest.
 6. **VMs, after every node wave has verified,** in the plan's order (riven last).
    Right before each, re-run `./roll plan <vm>`: its state may have changed during
    the roll, and a VM that is now held is skipped and reported as still pending.
-   - **helm**, per the README's `# Rebooting helm`: `ssh helm-root 'systemctl
-     reboot'` from inside the guest, then `./roll verify --wait 600 helm`. Expect a
-     minute or two with no monitoring.
-   - **riven last of all**, per `# Rebooting riven`: a delayed, detached reboot from
-     inside the guest. It ends this session. Before issuing it, deliver the final
-     report, which tells the human to reconnect, run `addhomelabkeys`, and run
-     `./roll verify riven`.
-   - Any other own-kernel VM: reboot from inside the guest as root, then
-     `./roll verify --wait 600 <vm>`.
+   Each VM reboots from inside the guest with its `reboot:` command, never with
+   `qm reboot` or `ha-manager`.
+   - **helm**, per the README's `# Rebooting helm`, then `./roll verify --wait 600
+     helm`. Expect a minute or two with no monitoring.
+   - **riven last of all**, per `# Rebooting riven`. Its printed command is delayed
+     and detached (`systemd-run --on-active=1min`). It ends this session. Before
+     issuing it, deliver the final report, which tells the human to reconnect, run
+     `addhomelabkeys`, and run `./roll verify riven`.
+   - Any other own-kernel VM: its `reboot:` command, then `./roll verify --wait 600
+     <vm>`.
    Stop-and-report rules from step 4 apply here too.
 
 Report per node and per VM: whether a reboot was pending, the running vs installed

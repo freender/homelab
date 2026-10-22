@@ -18,6 +18,7 @@ from click.testing import CliRunner
 
 from homelab import cli
 from homelab.hosts import HostRegistry
+from homelab.modules import guest_baseline
 from homelab.roll import checks, facts, parse, plan, survey, windows
 from homelab.roll.checks import NOTE, STOP, WARN, Finding
 
@@ -301,6 +302,10 @@ INVENTORY = plan.Inventory(
     users={"riven": "freender"},
     monitor="helm",
     upgraders=["ace", "bray", "clovis", "osiris"],
+    targets={
+        host: f"root@{host}.x.internal"
+        for host in ("ace", "bray", "clovis", "osiris", "riven", "helm", "shaxx")
+    },
 )
 SCOPE = plan.scoped(INVENTORY, [])
 
@@ -1189,6 +1194,36 @@ def test_step_lines_mark_unknown_kernels() -> None:
     assert plan.step_lines(plan.Step("a", "", "", [])) == ["  a        ? -> ?"]
 
 
+def test_step_lines_print_the_reboot_command_last() -> None:
+    step = plan.Step("a", "1", "2", ["guest"], "ssh root@a 'systemctl reboot'")
+    assert plan.step_lines(step) == [
+        "  a        1 -> 2",
+        "      guest",
+        "      reboot: ssh root@a 'systemctl reboot'",
+    ]
+
+
+def test_reboot_commands_come_from_the_survey_login() -> None:
+    assert plan.reboot_command(INVENTORY, "ace") == "ssh root@ace.x.internal 'systemctl reboot'"
+    assert plan.reboot_command(INVENTORY, "helm") == "ssh root@helm.x.internal 'systemctl reboot'"
+    # The controller's reboot would end the session issuing it: delayed and detached.
+    assert plan.reboot_command(INVENTORY, plan.CONTROLLER) == (
+        f"ssh root@{plan.CONTROLLER}.x.internal 'systemd-run --on-active=1min "
+        f"--unit={plan.CONTROLLER}-reboot systemctl reboot'"
+    )
+    assert plan.reboot_command(INVENTORY, "nowhere") == ""
+
+
+def test_plan_steps_carry_their_reboot_command() -> None:
+    result = make_plan(Cluster(pending=("ace", "helm", "riven")))
+    steps = [step for wave in result.waves for step in wave] + result.vms
+    assert {step.host: step.reboot for step in steps} == {
+        host: plan.reboot_command(INVENTORY, host) for host in ("ace", "helm", "riven")
+    }
+    assert all(step.reboot for step in steps)
+    assert result.as_dict()["vms"][-1]["reboot"] == plan.reboot_command(INVENTORY, "riven")
+
+
 # --------------------------------------------------------------------------------------
 # windows
 # --------------------------------------------------------------------------------------
@@ -1305,8 +1340,9 @@ helm:
     hostname: helm.x.internal
     user: root
     sshkey: infra
-    ssh_config: {user: freender}
+    ssh_config: {user: someone}
   features:
+    guest-baseline: true
     pve-guest: {vmid: 112, kind: qemu, home_node: ace}
     metrics-exporters: {own_kernel: true}
     keepalived: {virtual_ips: ["10.0.40.15 dev nic0"]}
@@ -1335,9 +1371,20 @@ def test_inventory_from_hosts_conf(tmp_path: Path) -> None:
     assert inventory.vmids == {"xur": 105, "helm": 112, "zion": 109, "tower": 101}
     assert inventory.pbs == ["xur"]
     assert inventory.vips == {"helm": ["10.0.40.15"]}
-    assert inventory.users == {"helm": "freender"}
+    # guest-baseline's user, not ssh_config.user: the alias login is not who owns the units.
+    assert inventory.users == {"helm": guest_baseline.USER}
     assert inventory.monitor == "helm"
     assert inventory.upgraders == ["osiris"]
+    assert inventory.targets == {
+        "ace": "root@ace.x.internal",
+        "osiris": "root@osiris.x.internal",
+        "helm": "root@helm.x.internal",
+    }
+
+
+def test_inventory_checks_user_units_only_with_guest_baseline(tmp_path: Path) -> None:
+    text = HOSTS_CONF.replace("    guest-baseline: true\n", "")
+    assert survey.load_inventory(registry(tmp_path, text)).users == {}
 
 
 def test_inventory_without_a_metrics_host(tmp_path: Path) -> None:

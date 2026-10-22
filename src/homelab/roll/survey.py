@@ -20,6 +20,8 @@ import click
 from ..hosts import HostRegistry, default_registry
 from ..module_support import connection_for_host
 from ..modules.apt_upgrade import SERVICE_NAME as UPGRADE_SERVICE
+from ..modules.guest_baseline import FEATURE as GUEST_BASELINE
+from ..modules.guest_baseline import USER as LOGIN_USER
 from ..modules.metrics_exporters import TEXTFILE_DIR as TEXTFILE
 from ..modules.metrics_exporters import own_kernel
 from ..modules.pve_guest.inventory import pve_nodes
@@ -153,11 +155,17 @@ def inventory_problems(registry: HostRegistry) -> list[str]:
     return problems
 
 
+def ssh_target(registry: HostRegistry, host: str) -> str:
+    """The login `connection_for_host` makes, as `user@hostname`."""
+    return f"{registry.get(host, 'config.user')}@{registry.get(host, 'config.hostname', host)}"
+
+
 def load_inventory(registry: HostRegistry) -> Inventory:
     vmids = guest_vmids(registry)
     vms = own_kernel_vms(registry, vmids)
+    nodes = pve_nodes(registry)
     return Inventory(
-        nodes=pve_nodes(registry),
+        nodes=nodes,
         vms=vms,
         vmids=vmids,
         pbs=[h for h in registry.list_hosts() if registry.get(h, "config.type") == "pbs"],
@@ -165,13 +173,11 @@ def load_inventory(registry: HostRegistry) -> Inventory:
             host: [str(vip).split()[0] for vip in registry.get(host, "keepalived.virtual_ips", [])]
             for host in vms
         },
-        users={
-            host: str(registry.get(host, "config.ssh_config.user"))
-            for host in vms
-            if registry.get(host, "config.ssh_config.user", None)
-        },
+        # guest-baseline creates the login user; nothing else names whose units run.
+        users={host: LOGIN_USER for host in vms if registry.has(host, GUEST_BASELINE)},
         monitor=metrics_host(registry),
         upgraders=registry.list_hosts(feature="pve-upgrade"),
+        targets={host: ssh_target(registry, host) for host in [*nodes, *vms]},
     )
 
 

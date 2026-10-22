@@ -277,8 +277,12 @@ live-migrate, so it restarts each of them during the drain and, with
 
 #### 3a. Reboot after confirmation
 
+Run the `reboot:` line `./roll plan` prints under each node. It is built from the
+node's `hosts.conf` `config.user`@`config.hostname`, the same root login the survey
+uses. If `./roll` itself is broken, the same thing by hand:
+
 ```bash
-ssh <node> 'systemctl reboot'
+ssh root@<node>.freender.internal 'systemctl reboot'
 ```
 
 For wave 1, issue the reboots for `osiris` and the selected non-tower node;
@@ -415,11 +419,12 @@ because the reboot would kill the job.
 ### Reboot (detached, delayed)
 
 freender has no passwordless sudo, so the reboot goes through root SSH. It is
-also scheduled a minute out, so the agent can finish its reply first:
+also scheduled a minute out, so the agent can finish its reply first. Run the
+`reboot:` line `./roll plan` prints for riven. By hand, it is:
 
 ```bash
-ssh riven-root 'systemd-run --on-active=1min --unit=riven-reboot systemctl reboot'
-# cancel within the minute: ssh riven-root 'systemctl stop riven-reboot.timer'
+ssh root@riven.freender.internal 'systemd-run --on-active=1min --unit=riven-reboot systemctl reboot'
+# cancel within the minute: ssh root@riven.freender.internal 'systemctl stop riven-reboot.timer'
 ```
 
 Reboot from inside the guest, not with `qm reboot` or `ha-manager`. The QEMU
@@ -480,10 +485,11 @@ quorum needs both. If helm holds `10.0.40.15`, the VIP fails over to tower
 ### Reboot
 
 Reboot from inside the guest, not with `qm reboot` or `ha-manager`, so HA sees
-nothing and does not move the VM:
+nothing and does not move the VM. Run the `reboot:` line `./roll plan` prints
+for helm. By hand, it is:
 
 ```bash
-ssh helm-root 'systemctl reboot'
+ssh root@helm.freender.internal 'systemctl reboot'
 ```
 
 ### After the reboot
