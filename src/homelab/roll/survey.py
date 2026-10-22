@@ -25,7 +25,7 @@ from .checks import STOP, Finding
 from .facts import NodeFacts, Unreachable, VmFacts, node_facts, vm_facts
 from .parse import SECTION_MARK, sections, task_names, up_values
 from .plan import Inventory, Survey, build_plan, render, scoped
-from .windows import load_windows, window_findings
+from .windows import Window, load_windows, wave_findings, window_findings
 
 TEXTFILE = "/var/lib/prometheus/node-exporter"
 METRICS_STACK = "victoria-metrics"
@@ -362,6 +362,16 @@ def verify_once(
     return results
 
 
+def wall_clock() -> datetime:
+    return datetime.now(UTC)
+
+
+def schedule_state(windows: list[Window], now: datetime) -> dict[str, tuple[str, list[Finding]]]:
+    """Re-read every pass, so a short window is waited out rather than walked into."""
+    findings = wave_findings(windows, now)
+    return {"schedule": ("maintenance windows", findings)} if findings else {}
+
+
 def failing(results: dict[str, tuple[str, list[Finding]]]) -> list[str]:
     return [
         host for host, (_, findings) in results.items() if any(f.level == STOP for f in findings)
@@ -385,14 +395,17 @@ def run_verify(
     runner_factory: Callable[[], Runner] | None = None,
     sleep: Callable[[float], None] = time.sleep,
     clock: Callable[[], float] = time.monotonic,
+    now: Callable[[], datetime] | None = None,
 ) -> int:
     inventory = load_inventory(default_registry(root))
     targets = scoped(inventory, hosts)
     factory = runner_factory or (lambda: ssh_runner(root))
+    windows = load_windows(root)
     deadline = clock() + wait
     while True:
         # A fresh runner each pass: connections opened before a reboot are dead.
         results = verify_once(factory(), inventory, targets)
+        results |= schedule_state(windows, (now or wall_clock)())
         pending = failing(results)
         if not pending or clock() >= deadline:
             break

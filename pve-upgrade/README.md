@@ -354,7 +354,9 @@ decision point.
 - Never add a timer to this module, and never enable automatic reboots.
 - Never run this during the 02:00 or 08:00 maintenance windows (see the
   `scheduled-maintenance` interval in `monitoring-config`), or the alert
-  suppression there will hide real problems caused by the reboot.
+  suppression there will hide real problems caused by the reboot. `./roll plan`
+  refuses inside one; `./roll verify` also fails while one is open or opens within
+  15 min, so the next wave waits it out.
 - Never run `./deploy --confirm-upgrade pve-upgrade <node>` once a roll has
   started. `apt-upgrade` owns these nodes; forcing an off-schedule dist-upgrade
   mid-roll is the unreviewed package change the ordering exists to prevent. The

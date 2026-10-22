@@ -1256,6 +1256,34 @@ def test_window_findings(utc: str, expected: list[tuple[str, str]]) -> None:
 def test_no_windows_warns() -> None:
     (found,) = windows.window_findings([], datetime.now(UTC))
     assert found.level == WARN
+    (between,) = windows.wave_findings([], datetime.now(UTC))
+    assert between.level == WARN
+
+
+@pytest.mark.parametrize(
+    ("utc", "expected"),
+    [
+        (
+            "2026-10-21T12:05:00",
+            [(STOP, "inside the 08:00-08:10 America/New_York maintenance window")],
+        ),
+        (
+            "2026-10-21T11:50:00",
+            [(STOP, "the 08:00-08:10 America/New_York maintenance window opens in 10 min")],
+        ),
+        (
+            "2026-10-21T11:45:00",
+            [(STOP, "the 08:00-08:10 America/New_York maintenance window opens in 15 min")],
+        ),
+        # Outside the wave's 15 min, so verify stays quiet even though plan would warn.
+        ("2026-10-21T11:44:00", []),
+        ("2026-10-21T12:10:00", []),
+    ],
+)
+def test_wave_findings_stop_for_the_next_wave(utc: str, expected: list[tuple[str, str]]) -> None:
+    now = datetime.fromisoformat(utc).replace(tzinfo=UTC)
+    found = windows.wave_findings(windows.parse_windows(TEMPLATE), now)
+    assert [(f.level, f.message) for f in found] == expected
 
 
 # --------------------------------------------------------------------------------------
@@ -1417,6 +1445,8 @@ NOW = datetime(2026, 10, 21, 18, 0, tzinfo=UTC)
 @pytest.fixture
 def fake_inventory(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(survey, "load_inventory", lambda registry: INVENTORY)
+    # Clear of every window, so verify's schedule check stays quiet by default.
+    monkeypatch.setattr(survey, "wall_clock", lambda: NOW)
 
 
 @pytest.mark.usefixtures("fake_inventory")
@@ -1495,6 +1525,42 @@ def test_run_verify_gives_up_at_the_deadline(capsys: pytest.CaptureFixture[str])
         "host": "ace",
         "message": f"running {OLD}, installed {NEW}",
     }
+
+
+@pytest.mark.usefixtures("fake_inventory")
+def test_run_verify_waits_out_a_maintenance_window(capsys: pytest.CaptureFixture[str]) -> None:
+    # 07:50 EDT, then 08:05 EDT, then 08:10 EDT: the window is waited out, not walked into.
+    walls = iter(
+        datetime(2026, 10, 21, 11 + h, m, tzinfo=UTC) for h, m in ((0, 50), (1, 5), (1, 10))
+    )
+    clock = iter([0, 10, 20, 30])
+    slept: list[float] = []
+    code = survey.run_verify(
+        ROOT,
+        ["ace"],
+        60,
+        False,
+        runner_factory=Cluster,
+        sleep=slept.append,
+        clock=lambda: next(clock),
+        now=lambda: next(walls),
+    )
+    assert code == 0
+    assert slept == [survey.VERIFY_INTERVAL, survey.VERIFY_INTERVAL]
+    captured = capsys.readouterr()
+    assert captured.err.count("waiting on schedule") == 2
+    assert captured.out.splitlines() == [f"ace: ok ({NEW}, up 3636 min)", "helm: ok (monitoring)"]
+
+
+@pytest.mark.usefixtures("fake_inventory")
+def test_run_verify_fails_on_a_window_at_the_deadline(capsys: pytest.CaptureFixture[str]) -> None:
+    inside = datetime(2026, 10, 21, 12, 5, tzinfo=UTC)
+    code = survey.run_verify(ROOT, ["ace"], 0, False, runner_factory=Cluster, now=lambda: inside)
+    assert code == 1
+    assert capsys.readouterr().out.splitlines()[-2:] == [
+        "schedule: FAIL (maintenance windows)",
+        "  stop: inside the 08:00-08:10 America/New_York maintenance window",
+    ]
 
 
 @pytest.mark.usefixtures("fake_inventory")

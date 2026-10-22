@@ -44,9 +44,12 @@ trigger for this command is the Saturday 09:00 `RebootRequired` Telegram digest.
      for a node, the host's `homelab-apt-dist-upgrade.service` for a VM). Offer that
      to the human as the next step — it is the one sanctioned upgrade, run *before*
      a roll, never during one — then re-plan.
-   - `ready` (exit 0): continue. **Held** VMs (a CI job running, an unhealthy swarm
-     peer, unreachable) stay pending and out of this roll; report them, they do not
-     block the nodes.
+   - `ready` (exit 0): continue. A VM with any stop condition is **held**: it stays
+     pending and out of this roll without blocking the nodes. That covers a CI job
+     running, an unhealthy swarm peer and unreachable, and equally a kernel available
+     but not installed, a failed `homelab-apt-dist-upgrade` result, or a missing or
+     stale `reboot.prom`. Report every held VM with its reason. When the reason names
+     its own fix (the kernel one), offer that fix as for a node, then re-plan.
 3. **One confirmation authorizes the whole roll.** Use the question tool
    (`AskUserQuestion` under Claude Code) **once**, presenting what the plan printed:
    the waves in order, the guests each node moves or stops, running vs installed
@@ -73,15 +76,21 @@ trigger for this command is the Saturday 09:00 `RebootRequired` Telegram digest.
    from its replica. The monitoring blind window until it returns is expected, not
    an incident, but the next wave waits until helm is back.
 
+   Every pass also checks the maintenance windows. It fails on `schedule` while one
+   is open or when one opens within 15 min (the next wave), so verify waits a window
+   out instead of releasing a wave into it. If `schedule` is the only failure left at
+   the deadline, re-run the same `./roll verify` after the window closes and carry
+   on. That is not a deviation.
+
    **Stop and report** — do not silently adapt — when `./roll verify` still fails at
-   its deadline. Re-run `./roll plan` before a wave if anything looks different, and
+   its deadline for any other reason. Re-run `./roll plan` before a wave if anything looks different, and
    re-ask only if the roll must deviate from what was approved (a node newly needing
    a reboot, tower having moved such that the wave order is now wrong, or a
    recovered-but-degraded state where continuing is a judgement call). Stopping
    outranks finishing the task.
 5. **The controller's node, last.** Its reboot live-migrates riven, and this session
-   with it, so issue it only after every earlier wave has verified clean. Then confirm
-   `vm:110` is started on ace and verify it like any other wave. If the session does
+   with it, so issue it only after every earlier wave has verified clean. A session
+   that survives means riven migrated; verify the node like any other wave. If the session does
    not survive, the human starts a new session to run `./roll verify` for it. No extra
    confirmation: step 3 already covered it.
 6. **VMs, after every node wave has verified,** in the plan's order (riven last).
