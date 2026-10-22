@@ -26,8 +26,12 @@ groups:
       # openipmi.service went unnoticed for exactly that reason. An absent or
       # intermittent host (ghost) produces no series and so stays quiet --
       # missing metrics are the absence rules' job, below.
+      #
+      # fwupd-refresh.service is excluded: it only exists on the offsite
+      # hosts, fails whenever the LVFS CDN hiccups, and recovers on its own
+      # next run -- an upstream outage, not something to act on.
       - alert: SystemdUnitFailed
-        expr: node_systemd_unit_state{name!~"homelab-.*",state="failed"} == 1
+        expr: node_systemd_unit_state{name!~"homelab-.*|fwupd-refresh\\.service",state="failed"} == 1
         for: 15m
         labels:
           severity: warning
