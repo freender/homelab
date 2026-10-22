@@ -304,7 +304,7 @@ def unit_names(text: str) -> list[str]:
 
 
 def unhealthy_containers(text: str) -> list[str]:
-    """Running containers (`{{.Names}}\\t{{.Status}}`) that are not plainly up."""
+    """Containers (`docker ps -a`, `{{.Names}}\\t{{.Status}}`) that are not plainly up."""
     bad = []
     for name, status in tab_rows(text, 2):
         if not status.startswith("Up") or "(unhealthy)" in status or "health: starting" in status:

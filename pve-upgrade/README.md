@@ -321,8 +321,8 @@ ssh helm "curl -s --get localhost:8428/api/v1/query \
 ```
 
 **Stop if:** guests are not running, a pool is degraded, quorum is not restored,
-`homelab_reboot_required` is still `1` after the reboot, or the node is not
-being scraped.
+`homelab_reboot_required` is still `1` after the reboot, the node is not
+being scraped, or helm cannot answer the query (no answer is not a pass).
 
 Only when all of the above pass for every node in the wave, move to the next
 wave — directly, on the approval already given. Re-prompt the human only if the
@@ -477,7 +477,7 @@ ssh helm-root 'systemctl reboot'
 ssh helm 'uname -r'                                            # the newest installed kernel
 ssh helm 'cat /var/lib/prometheus/node-exporter/reboot.prom'   # homelab_reboot_required 0
 ssh helm 'systemctl --failed --no-legend'
-ssh helm 'docker ps --format "{{.Names}} {{.Status}}" | grep -v " Up " || true'
+ssh helm 'docker ps -a --format "{{.Names}} {{.Status}}" | grep -v " Up " || true'
 ssh helm 'curl -sf localhost:9093/-/ready && curl -sf localhost:8428/health'
 ssh tower 'docker node ls'           # helm back as a Reachable or Leader manager
 ```

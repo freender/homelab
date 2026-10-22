@@ -33,6 +33,11 @@ CONNECT_TIMEOUT = 10
 COMMAND_TIMEOUT = 180
 VERIFY_INTERVAL = 20
 PBS_TASKS = "proxmox-backup-manager task list --output-format json"
+# The metrics host's own readiness: an exited container there blinds every check.
+MONITOR_READY = [
+    ("alertmanager", "localhost:9093/-/ready"),
+    ("victoriametrics", "localhost:8428/health"),
+]
 
 # Shared by nodes and VMs: did the automation run, and what would it still install.
 # The Inst lines name the packages, which is how a not-yet-installed kernel shows.
@@ -169,7 +174,8 @@ def vm_script(user: str | None) -> str:
         ("ci", "pgrep -c -f 'Runner[.]Worker'"),
         ("failed", "systemctl --failed --no-legend --plain"),
         *UPGRADE_READINGS,
-        ("containers", "docker ps --format '{{.Names}}\t{{.Status}}' 2>/dev/null"),
+        # -a: an exited or never-started container is the failure this looks for.
+        ("containers", "docker ps -a --format '{{.Names}}\t{{.Status}}' 2>/dev/null"),
     ]
     if user:
         manager = shlex.quote(f"{user}@")
@@ -181,6 +187,15 @@ def vm_script(user: str | None) -> str:
 def up_command(host: str) -> str:
     query = shlex.quote(f'query=up{{host="{host}"}}')
     return f"curl -s --max-time 10 --get localhost:8428/api/v1/query --data-urlencode {query}"
+
+
+def ready_command() -> str:
+    return script(
+        [
+            (name, f"curl -s -o /dev/null -w '%{{http_code}}' --max-time 10 {url}")
+            for name, url in MONITOR_READY
+        ]
+    )
 
 
 def ssh_runner(root: Path) -> Runner:
@@ -294,10 +309,27 @@ def verify_host(runner: Runner, inventory: Inventory, host: str) -> tuple[str, l
     return summary(facts), findings + scrape_state(runner, inventory, host)
 
 
+def monitor_state(runner: Runner, monitor: str) -> list[Finding]:
+    found = read(runner, monitor, ready_command())
+    if isinstance(found, Unreachable):
+        return [checks.stop(monitor, f"monitoring is unreachable: {found.error}")]
+    return checks.monitor_ready(monitor, {name: found.get(name, "") for name, _ in MONITOR_READY})
+
+
 def verify_once(
     runner: Runner, inventory: Inventory, hosts: list[str]
 ) -> dict[str, tuple[str, list[Finding]]]:
-    return {host: verify_host(runner, inventory, host) for host in hosts}
+    """Every pass also checks the metrics host, wave target or not: a node wave
+    can migrate it, and without it no host's `up` check means anything."""
+    results = {host: verify_host(runner, inventory, host) for host in hosts}
+    monitor = inventory.monitor
+    if not monitor:
+        return results
+    state, findings = results.get(monitor, ("monitoring", []))
+    if state != "unreachable":
+        findings = findings + monitor_state(runner, monitor)
+    results[monitor] = (state, findings)
+    return results
 
 
 def failing(results: dict[str, tuple[str, list[Finding]]]) -> list[str]:

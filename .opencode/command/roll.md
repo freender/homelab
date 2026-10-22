@@ -66,10 +66,12 @@ trigger for this command is the Saturday 09:00 `RebootRequired` Telegram digest.
    Do **not** enter HA maintenance: `ha: shutdown_policy=migrate` handles HA
    services during a direct reboot, and maintenance would restart every LXC twice
    because LXC cannot live-migrate. A `clovis` reboot live-migrates helm (`vm:112`),
-   the monitoring stack, to ace; `./roll verify` asks helm for `up`, so a helm that
-   did not come back shows there. If that migration fails, HA restarts helm from its
-   replica, and the monitoring blind window until it returns is expected, not an
-   incident.
+   the monitoring stack, to ace. Every `./roll verify` pass asks helm for each
+   host's `up` and checks that Alertmanager and VictoriaMetrics on helm are ready,
+   whether or not helm is in the wave. A helm that cannot answer fails the whole
+   wave, so verify keeps waiting for it. If that migration fails, HA restarts helm
+   from its replica. The monitoring blind window until it returns is expected, not
+   an incident, but the next wave waits until helm is back.
 
    **Stop and report** — do not silently adapt — when `./roll verify` still fails at
    its deadline. Re-run `./roll plan` before a wave if anything looks different, and

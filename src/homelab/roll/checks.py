@@ -259,13 +259,25 @@ def new_kernel(host: str, uname: str, kernel: Kernel) -> list[Finding]:
 
 
 def scraped(host: str, values: list[float] | None, monitor: str | None) -> list[Finding]:
+    """Fail closed: a monitor that cannot answer is not a host that is scraped."""
+    if monitor is None:
+        return [stop(host, "no docker-stacks host runs victoria-metrics: cannot check up")]
     if values is None:
-        return [Finding(WARN, host, f"could not ask {monitor or 'monitoring'} for up{{host}}")]
+        return [stop(host, f"could not ask {monitor} for up{{host}}")]
     if not values:
         return [stop(host, "no up series: monitoring is not scraping it")]
     if min(values) < 1:
         return [stop(host, "up is 0 for at least one scrape job")]
     return []
+
+
+def monitor_ready(monitor: str, codes: dict[str, str]) -> list[Finding]:
+    """HTTP status per readiness endpoint on the metrics host; only 200 is ready."""
+    return [
+        stop(monitor, f"{name} is not ready (HTTP {code or '?'})")
+        for name, code in codes.items()
+        if code != "200"
+    ]
 
 
 def node_recovered(facts: NodeFacts) -> list[Finding]:

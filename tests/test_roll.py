@@ -172,17 +172,20 @@ class Cluster:
         self.hosts.update(hosts)
         self.pbs = "[]"
         self.up = {"data": {"result": [{"value": [0, "1"]}]}}
+        self.ready = {"alertmanager": "200", "victoriametrics": "200"}
         self.calls: list[tuple[str, str]] = []
 
     def __call__(self, host: str, command: str) -> str:
         self.calls.append((host, command))
         if command == survey.PBS_TASKS:
             return self.pbs
-        if "api/v1/query" in command:
-            return json.dumps(self.up)
         readings = self.hosts.get(host)
         if readings is None:
             raise survey.HostDown(f"{host}: no route to host")
+        if "api/v1/query" in command:
+            return json.dumps(self.up)
+        if command == survey.ready_command():
+            return output(self.ready)
         return output(readings)
 
 
@@ -582,14 +585,27 @@ def test_new_kernel_compares_uname_with_installed() -> None:
 def test_scraped() -> None:
     assert checks.scraped("a", [1.0, 1.0], "helm") == []
     assert messages(checks.scraped("a", None, "helm")) == ["a: could not ask helm for up{host}"]
-    assert checks.scraped("a", None, None)[0].message == "could not ask monitoring for up{host}"
-    assert checks.scraped("a", None, "helm")[0].level == WARN
+    assert checks.scraped("a", None, "helm")[0].level == STOP
+    assert messages(checks.scraped("a", [1.0], None)) == [
+        "a: no docker-stacks host runs victoria-metrics: cannot check up"
+    ]
+    assert checks.scraped("a", [1.0], None)[0].level == STOP
     assert messages(checks.scraped("a", [], "helm")) == [
         "a: no up series: monitoring is not scraping it"
     ]
     assert messages(checks.scraped("a", [1.0, 0.0], "helm")) == [
         "a: up is 0 for at least one scrape job"
     ]
+
+
+def test_monitor_ready() -> None:
+    assert checks.monitor_ready("helm", {"alertmanager": "200", "victoriametrics": "200"}) == []
+    found = checks.monitor_ready("helm", {"alertmanager": "503", "victoriametrics": ""})
+    assert messages(found) == [
+        "helm: alertmanager is not ready (HTTP 503)",
+        "helm: victoriametrics is not ready (HTTP ?)",
+    ]
+    assert {item.level for item in found} == {STOP}
 
 
 def test_node_recovered() -> None:
@@ -1162,7 +1178,7 @@ def test_run_verify_waits_for_a_host_to_come_back(capsys: pytest.CaptureFixture[
     assert slept == [survey.VERIFY_INTERVAL, survey.VERIFY_INTERVAL]
     captured = capsys.readouterr()
     assert captured.err.count("waiting on ace") == 2
-    assert captured.out.strip() == f"ace: ok ({NEW}, up 3636 min)"
+    assert captured.out.splitlines() == [f"ace: ok ({NEW}, up 3636 min)", "helm: ok (monitoring)"]
 
 
 @pytest.mark.usefixtures("fake_inventory")
@@ -1199,12 +1215,77 @@ def test_verify_reports_unreachable_and_unscraped(capsys: pytest.CaptureFixture[
         "  stop: unreachable: osiris: no route to host",
         f"riven: FAIL ({VM_NEW}, up 10 min)",
         "  stop: up is 0 for at least one scrape job",
+        "helm: ok (monitoring)",
     ]
+
+
+@pytest.mark.usefixtures("fake_inventory")
+def test_verify_fails_a_node_wave_when_the_monitor_is_down(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    code = survey.run_verify(ROOT, ["ace"], 0, False, runner_factory=lambda: Cluster(helm=None))
+    assert code == 1
+    assert capsys.readouterr().out.splitlines() == [
+        f"ace: FAIL ({NEW}, up 3636 min)",
+        "  stop: could not ask helm for up{host}",
+        "helm: FAIL (monitoring)",
+        "  stop: monitoring is unreachable: helm: no route to host",
+    ]
+
+
+@pytest.mark.usefixtures("fake_inventory")
+def test_verify_fails_when_alertmanager_is_not_ready(capsys: pytest.CaptureFixture[str]) -> None:
+    cluster = Cluster()
+    cluster.ready = {"alertmanager": "503", "victoriametrics": "200"}
+    assert survey.run_verify(ROOT, ["ace"], 0, False, runner_factory=lambda: cluster) == 1
+    assert capsys.readouterr().out.splitlines()[1:] == [
+        "helm: FAIL (monitoring)",
+        "  stop: alertmanager is not ready (HTTP 503)",
+    ]
+
+
+def test_verify_once_folds_readiness_into_a_monitor_target() -> None:
+    cluster = Cluster()
+    cluster.ready = {"alertmanager": "200", "victoriametrics": "000"}
+    state, findings = survey.verify_once(cluster, INVENTORY, ["helm"])["helm"]
+    assert state == f"{VM_NEW}, up 10 min"
+    assert messages(findings) == ["helm: victoriametrics is not ready (HTTP 000)"]
+    # An unreachable monitor target already stops; readiness is not asked twice.
+    down = survey.verify_once(Cluster(helm=None), INVENTORY, ["helm"])["helm"]
+    assert down[0] == "unreachable"
+    assert messages(down[1]) == ["helm: unreachable: helm: no route to host"]
+
+
+def test_verify_once_without_a_monitor_skips_readiness() -> None:
+    no_monitor = plan.Inventory(nodes=INVENTORY.nodes, vms=[], vmids={})
+    results = survey.verify_once(Cluster(), no_monitor, ["ace"])
+    assert list(results) == ["ace"]
+    assert messages(results["ace"][1]) == [
+        "ace: no docker-stacks host runs victoria-metrics: cannot check up"
+    ]
+
+
+def test_ready_command_reads_status_codes_only() -> None:
+    command = survey.ready_command()
+    assert "-o /dev/null -w '%{http_code}'" in command
+    assert "localhost:9093/-/ready" in command
+    assert "localhost:8428/health" in command
+    assert command.endswith("\ntrue")
+
+
+def test_vm_script_lists_stopped_containers() -> None:
+    assert "docker ps -a --format" in survey.vm_script(None)
+
+
+def test_unhealthy_containers_flags_exited_and_created() -> None:
+    assert parse.unhealthy_containers(
+        "victoria-metrics\tExited (137) 2 minutes ago\nalertmanager\tCreated\ngrafana\tUp 1 hour"
+    ) == ["victoria-metrics (Exited (137) 2 minutes ago)", "alertmanager (Created)"]
 
 
 def test_scrape_state_without_a_monitor_or_with_it_down() -> None:
     no_monitor = plan.Inventory(nodes={}, vms=[], vmids={})
-    assert checks.WARN == survey.scrape_state(Cluster(), no_monitor, "ace")[0].level
+    assert STOP == survey.scrape_state(Cluster(), no_monitor, "ace")[0].level
     down = Cluster(helm=None)
 
     def runner(host: str, command: str) -> str:
