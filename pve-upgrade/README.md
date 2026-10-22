@@ -30,8 +30,10 @@ packages, ZFS and the kernel included — at 05:00, 05:05, 05:10 and 05:15
 digest. In between, `apt-upgrade.security_updates` scopes the stock
 unattended-upgrades to Debian-Security, so Debian security fixes still install
 daily (06:00–07:00). Proxmox has no security suite, so an urgent Proxmox CVE
-is the one case for running `./deploy --confirm-upgrade pve-upgrade <node>`
-mid-week. `arc` and `xur` are on the same module, daily at 04:05 and 04:00.
+is one case for running `./deploy --confirm-upgrade pve-upgrade <node>`
+mid-week; the other is a kernel released since Saturday, ahead of a reboot
+(runbook step 2). `arc` and `xur` are on the same module, daily at 04:05 and
+04:00.
 
 | Stream | How it is applied |
 | --- | --- |
@@ -58,11 +60,23 @@ the point.
 
 # Rolling reboot runbook
 
-Driven by `/pve-reboot`. Written to be delegable. Every step has an explicit
+Driven by `/roll`. Written to be delegable. Every step has an explicit
 command and an explicit stop condition. **If a check fails, stop and report — do
 not continue to the next node.**
 
-**The human is asked once.** `/pve-reboot` pre-flights every in-scope node first,
+**`./roll` runs the checks.** `./roll plan [host...]` performs steps 1–3 below
+for every node and own-kernel VM at once, applies the stop conditions, and
+prints the wave order; `./roll verify [--wait N] <host>...` performs step 4.
+Neither reboots anything. The stop conditions are enforced in
+`src/homelab/roll/checks.py`; the commands in each step are what it reads,
+kept here as the manual fallback for when `./roll` itself is broken.
+
+```bash
+./roll plan                    # verdict: nothing-pending | ready | stop
+./roll verify --wait 900 ace   # after ace's reboot; exits 0 once it has recovered
+```
+
+**The human is asked once.** `/roll` pre-flights every in-scope node first,
 then presents one plan covering the whole roll; approving it authorizes every
 reboot in it. The steps below are therefore surveyed for all nodes before any
 reboot happens, and re-run per wave only as the verification in step 4. Further
@@ -200,23 +214,35 @@ the node is one NVRAM shuffle from the same fate).
 
 ### 2. Confirm the automation is current
 
-Do **not** run `./deploy --confirm-upgrade pve-upgrade <node>` here. `apt-upgrade`
-owns these nodes; dist-upgrading one mid-runbook introduces the unreviewed
-package change the ordering exists to prevent. This step only reads state:
+Do **not** run `./deploy --confirm-upgrade pve-upgrade <node>` once the roll has
+started. `apt-upgrade` owns these nodes; dist-upgrading one mid-runbook
+introduces the unreviewed package change the ordering exists to prevent. This
+step only reads state:
 
 ```bash
 # The Saturday upgrade ran and succeeded
 ssh <node> 'systemctl status homelab-apt-dist-upgrade.timer --no-pager | head -4'
 ssh <node> 'systemctl show homelab-apt-dist-upgrade.service -p Result -p ExecMainStatus'
 
-# Nothing left pending
-ssh <node> 'apt-get -s -o DPkg::Lock::Timeout=600 dist-upgrade | tail -2'
+# Nothing left pending, and no kernel among it
+ssh <node> "apt-get -s -o DPkg::Lock::Timeout=600 dist-upgrade | grep -E '^Inst |upgraded,'"
 ```
 
-**Stop if:** the service's last `Result` is anything but `success`, or packages
-are still pending — that means the automation is failing and the reboot you are
-about to take will not land on the kernel you think it will. Fix that first;
-`SystemdUnitFailed` and `ProxmoxUpdatesAvailable` both cover this condition.
+**Stop if:** the service's last `Result` is anything but `success` — the
+automation is failing; fix that first (`SystemdUnitFailed` covers it).
+
+**Also stop if a newer kernel is available but not installed** — typically one
+Proxmox or Debian released after Saturday's run. Rebooting now boots the
+installed kernel and owes a second reboot once the new one lands. Install it
+first, then plan again: `./deploy --confirm-upgrade pve-upgrade <node>` on a
+node, or `systemctl start homelab-apt-dist-upgrade.service` as root on a VM.
+That is the one sanctioned use of `pve-upgrade` here: *before* a roll starts,
+never between its waves. The same reading on a node with nothing pending is a
+warning — the next upgrade will need a reboot.
+
+Other pending packages only warn: they do not change what the reboot boots
+into. Package lists older than 48 h warn too, because they can hide a new
+kernel from this check.
 
 ### 3. Reboot only if needed
 
@@ -234,7 +260,7 @@ If `homelab_reboot_required` is `0`, the node **drops out of the plan entirely**
 — no reboot, and its guests are not touched. Most months that is every node, and
 the whole run ends here with "nothing pending".
 
-If it is `1`, the node joins the plan. `/pve-reboot` may reboot it **only after
+If it is `1`, the node joins the plan. `/roll` may reboot it **only after
 the human has approved the plan through the `question` tool** — a single approval
 covering the full roll, raised once after every node has been surveyed, not one
 per wave. The prompt must name each node needing a reboot in wave order, the
@@ -276,7 +302,9 @@ ssh <node> 'ha-manager status'
 ssh <node> 'pct list; qm list'
 ssh <node> 'systemctl is-active prometheus-node-exporter'
 
-# Pending reboot cleared, and the node is being scraped again
+# Pending reboot cleared: `uname -r` must equal the `installed` label. The
+# `homelab_reboot_required` flag itself is only refreshed 2 min after boot, so
+# right after a reboot it still reads 1.
 ssh <node> 'cat /var/lib/prometheus/node-exporter/reboot.prom'
 ```
 
@@ -318,9 +346,11 @@ decision point.
 - Never run this during the 02:00 or 08:00 maintenance windows (see the
   `scheduled-maintenance` interval in `monitoring-config`), or the alert
   suppression there will hide real problems caused by the reboot.
-- Never run `./deploy --confirm-upgrade pve-upgrade <node>` as a step of this
-  runbook. `apt-upgrade` owns these nodes; forcing an off-schedule dist-upgrade
-  mid-roll is the unreviewed package change the ordering exists to prevent.
+- Never run `./deploy --confirm-upgrade pve-upgrade <node>` once a roll has
+  started. `apt-upgrade` owns these nodes; forcing an off-schedule dist-upgrade
+  mid-roll is the unreviewed package change the ordering exists to prevent. The
+  only exception is before the roll, when `./roll plan` stops on a kernel that
+  is available but not installed (step 2).
 
 ## What tells you this is due
 
@@ -355,8 +385,8 @@ riven is the OpenCode server and holds the shared SSH agent, so rebooting it
 ends the session that issues the reboot. The procedure is built around that.
 
 **Who:** the agent, only after the human approves it through the `question`
-tool. `/pve-reboot` surveys riven with the nodes and puts it in the same single
-approval, as the very last step of the run. Outside `/pve-reboot`, ask on its
+tool. `/roll` surveys riven with the nodes and puts it in the same single
+approval, as the very last step of the run. Outside `/roll`, ask on its
 own. If a roll is also due, finish the roll first, because riven's reboot ends
 the session that drives it. Never inside the 02:00 or 08:00 maintenance windows.
 
@@ -416,7 +446,7 @@ window of a minute or two: no alert can fire, and the `Watchdog` heartbeat
 pauses. Unlike riven, it does not end the session that issues it.
 
 **Who:** the agent, only after the human approves it through the `question`
-tool. `/pve-reboot` includes helm in its single approval and reboots it after
+tool. `/roll` includes helm in its single approval and reboots it after
 every node wave has verified. Never in the middle of a node roll, and never
 inside the 02:00 or 08:00 maintenance windows.
 

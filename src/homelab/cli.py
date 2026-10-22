@@ -278,6 +278,40 @@ def guest_create(dry_run: bool, host: str) -> None:
         raise click.ClickException(str(error)) from error
 
 
+@main.group()
+def roll() -> None:
+    """Rolling reboot of the PVE nodes and own-kernel VMs: read-only plan and verify."""
+
+
+@roll.command("plan")
+@click.option("--json", "as_json", is_flag=True, default=False, help="Print the plan as JSON.")
+@click.argument("hosts", nargs=-1)
+def roll_plan(as_json: bool, hosts: tuple[str, ...]) -> None:
+    """Survey, apply the stop conditions, print the waves. Exits 1 on a stop condition."""
+    from .roll.survey import run_plan
+
+    try:
+        code = run_plan(repo_root(), list(hosts), as_json)
+    except ValueError as error:
+        raise click.ClickException(str(error)) from error
+    raise SystemExit(code)
+
+
+@roll.command("verify")
+@click.option("--wait", default=0, type=click.IntRange(min=0), help="Re-check for up to N seconds.")
+@click.option("--json", "as_json", is_flag=True, default=False, help="Print the result as JSON.")
+@click.argument("hosts", nargs=-1, required=True)
+def roll_verify(wait: int, as_json: bool, hosts: tuple[str, ...]) -> None:
+    """Check rebooted hosts came back on the new kernel, healthy. Exits 1 on a failure."""
+    from .roll.survey import run_verify
+
+    try:
+        code = run_verify(repo_root(), list(hosts), wait, as_json)
+    except ValueError as error:
+        raise click.ClickException(str(error)) from error
+    raise SystemExit(code)
+
+
 @hosts.command("stacks")
 @click.option("--host", help="Only show stacks for this host.")
 @click.option("--stack", help="Only show hosts running this stack.")

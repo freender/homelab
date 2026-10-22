@@ -25,7 +25,7 @@ Flags supported by `./deploy`:
 - `--dry-run`, `-n`: preview actions only
 - `--force`, `--force-update`: overwrite managed files even when content matches
 
-Run `./deploy`, `./validate` and `./guest` from the repo root. The wrappers prefer repo `.venv`, then `uv run`, then plain `python3`, so the same commands work on both `exo` and `riven`.
+Run `./deploy`, `./validate`, `./guest` and `./roll` from the repo root. The wrappers prefer repo `.venv`, then `uv run`, then plain `python3`, so the same commands work on both `exo` and `riven`.
 
 ## New Guests
 
@@ -38,6 +38,18 @@ Run `./deploy`, `./validate` and `./guest` from the repo root. The wrappers pref
 `./guest create` refuses a vmid that exists on any PVE node and never touches a
 running guest. It stops once the guest boots and takes root's infra key. HA and
 replication are not created; `./deploy pve-guest <host>` lists them as drift.
+
+## Rolling Reboots
+
+```bash
+./roll plan [host...]                  # survey nodes + own-kernel VMs, print the waves
+./roll verify [--wait N] <host>...     # after a reboot: new kernel, healthy, scraped
+```
+
+Both are read-only and never reboot anything. `/roll` drives them and asks
+once for the whole roll; [`pve-upgrade/README.md`](pve-upgrade/README.md) is the
+runbook. `plan` exits 1 on any stop condition, including a newer kernel that is
+available but not yet installed, which would otherwise cost a second reboot.
 
 ## Modules
 

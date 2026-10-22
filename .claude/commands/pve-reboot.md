@@ -1,1 +1,0 @@
-../../.opencode/command/pve-reboot.md

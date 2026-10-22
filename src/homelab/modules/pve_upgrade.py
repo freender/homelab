@@ -36,8 +36,8 @@ def deploy(
             "This module upgrades packages on the target during the deploy. "
             "It is now an on-demand escape hatch only: apt-upgrade dist-upgrades "
             "every host here on a daily timer, so reach for this to force an "
-            "upgrade off-schedule, one host at a time. Do not run it as part of "
-            "/pve-reboot -- see pve-upgrade/README.md."
+            "upgrade off-schedule, one host at a time. Never run it once a /roll "
+            "has started -- see pve-upgrade/README.md."
         )
 
     def env_for_host(host: str) -> dict[str, str]:

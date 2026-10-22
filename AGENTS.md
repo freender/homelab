@@ -171,7 +171,7 @@ removed): `deploy-module` skill.
 
 The step-by-step procedures live in the command files, which load on invocation:
 `.opencode/command/ship.md` (validate -> dry-run -> deploy/canary -> verify -> commit ->
-push -> CI) and `.opencode/command/pve-reboot.md` (with `pve-upgrade/README.md` as the
+push -> CI) and `.opencode/command/roll.md` (with `pve-upgrade/README.md` as the
 runbook). These rails apply to any live deploy or reboot, including ad-hoc ones that never
 go through a command:
 
