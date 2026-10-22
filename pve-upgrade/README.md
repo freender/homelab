@@ -259,7 +259,11 @@ ssh helm "curl -s --get localhost:8428/api/v1/query \
 
 If `homelab_reboot_required` is `0`, the node **drops out of the plan entirely**
 — no reboot, and its guests are not touched. Most months that is every node, and
-the whole run ends here with "nothing pending".
+the whole run ends here with "nothing pending". Its other stop conditions then
+only warn, with one exception: while any cluster node is pending, every other
+cluster node receives its HA guests, so on those a degraded pool, a UPS on
+battery or a running task still stops the roll — even when the node is outside
+the requested subset. osiris never receives guests, so nothing there is kept.
 
 If it is `1`, the node joins the plan. `/roll` may reboot it **only after
 the human has approved the plan through the `question` tool** — a single approval

@@ -204,6 +204,11 @@ def node_preflight(facts: NodeFacts, remedy: str) -> list[Finding]:
     ]
 
 
+def receiving(facts: NodeFacts) -> list[Finding]:
+    """What a node taking another node's HA guests must pass: healthy pools, mains, idle."""
+    return [*pools(facts.host, facts.pools), *ups(facts), *tasks(facts.host, facts.tasks)]
+
+
 def ha(host: str, status: HaStatus) -> list[Finding]:
     """Cluster HA health. Unsettled services are a stop too: wait, then re-run."""
     if not status.quorum_ok:

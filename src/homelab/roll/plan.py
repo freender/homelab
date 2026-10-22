@@ -169,12 +169,20 @@ def guests_on(node: str, resources: list[dict], ha_sids: set[str]) -> list[str]:
     ]
 
 
-def demote(findings: list[Finding]) -> list[Finding]:
-    """Stops on a host that is not being rebooted only warn."""
-    return [
-        Finding(WARN, item.host, f"{item.message} (not pending)") if item.level == STOP else item
-        for item in findings
-    ]
+def mark(item: Finding, receiving: bool) -> Finding:
+    if item.level != STOP:
+        return item
+    if receiving:
+        return Finding(STOP, item.host, f"{item.message} (receives HA guests)")
+    return Finding(WARN, item.host, f"{item.message} (not pending)")
+
+
+def demote(findings: list[Finding], kept: list[Finding] | None = None) -> list[Finding]:
+    """Stops on a host that is not being rebooted only warn, but for those in `kept`.
+
+    `kept` is what still matters to a node receiving another's HA guests.
+    """
+    return [mark(item, item in (kept or [])) for item in findings]
 
 
 @dataclass(frozen=True)
@@ -215,28 +223,59 @@ def pbs_findings(node: str, survey: Survey, resources: list[dict]) -> list[Findi
     return findings
 
 
-def sort_findings(plan: Plan, findings: list[Finding], pending: bool) -> None:
-    for item in findings if pending else demote(findings):
+def sort_findings(plan: Plan, findings: list[Finding]) -> None:
+    for item in findings:
         target = plan.stops if item.level == STOP else plan.warnings
         target.append(item)
+
+
+def due_nodes(survey: Survey, scope: list[str]) -> dict[str, bool | None]:
+    """Each surveyed node in scope: pending, current (False), or unknown (None)."""
+    return {
+        host: checks.pending(facts.kernel, facts.kernel_lag, facts.uname)
+        for host, facts in survey.nodes.items()
+        if host in scope and isinstance(facts, NodeFacts)
+    }
+
+
+def receivers(inventory: Inventory, pending: set[str]) -> set[str]:
+    """While a cluster node is pending, every other cluster node takes its HA guests."""
+    cluster = {node for node, alone in inventory.nodes.items() if not alone}
+    return cluster - pending if cluster & pending else set()
+
+
+def node_findings(
+    inventory: Inventory,
+    survey: Survey,
+    facts: NodeFacts,
+    resources: list[dict],
+    due: bool | None,
+    receiver: bool,
+) -> list[Finding]:
+    findings = checks.node_preflight(facts, remedy(inventory, facts.host))
+    findings += pbs_findings(facts.host, survey, resources)
+    if due is not False:
+        return findings
+    return demote(findings, checks.receiving(facts) if receiver else None)
 
 
 def plan_nodes(
     plan: Plan, inventory: Inventory, survey: Survey, scope: list[str], resources: list[dict]
 ) -> set[str]:
-    pending: set[str] = set()
-    for host in (node for node in inventory.nodes if node in scope):
+    """Nodes in scope get every check; a receiver outside it only what receiving needs."""
+    due = due_nodes(survey, scope)
+    pending = {host for host, state in due.items() if state}
+    receiving = receivers(inventory, pending)
+    for host in (node for node in inventory.nodes if node in scope or node in receiving):
         facts = survey.nodes.get(host)
         if not isinstance(facts, NodeFacts):
             plan.stops.append(unreachable(host, facts))
-            continue
-        due = checks.pending(facts.kernel, facts.kernel_lag, facts.uname)
-        findings = checks.node_preflight(facts, remedy(inventory, host))
-        findings += pbs_findings(host, survey, resources)
-        sort_findings(plan, findings, due is not False)
-        if due:
-            pending.add(host)
-        elif due is False:
+        elif host in scope:
+            found = node_findings(inventory, survey, facts, resources, due[host], host in receiving)
+            sort_findings(plan, found)
+        else:
+            sort_findings(plan, demote(checks.receiving(facts), checks.receiving(facts)))
+        if due.get(host) is False:
             plan.current.append(host)
     return pending
 
@@ -336,8 +375,8 @@ def build_plan(
     plan_vms(plan, inventory, survey, scope, known)
     if plan.waves or plan.vms:
         if view is not None:
-            sort_findings(plan, checks.ha("cluster", view.ha), True)
-        sort_findings(plan, window, True)
+            sort_findings(plan, checks.ha("cluster", view.ha))
+        sort_findings(plan, window)
     return plan
 
 

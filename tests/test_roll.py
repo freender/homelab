@@ -1083,6 +1083,86 @@ def test_a_stop_on_a_current_node_only_warns() -> None:
     assert result.warnings[0].message.endswith("(not pending)")
 
 
+DEGRADED = "  pool: rpool\n state: DEGRADED"
+ON_BATTERY = "STATUS   : ONBATT \nTIMELEFT : 20.0 Minutes"
+BUSY = json.dumps([{"type": "vzdump", "id": "", "status": ""}])
+
+
+@pytest.mark.parametrize(
+    ("override", "message"),
+    [
+        ({"pools": DEGRADED}, "bray: zpool status -x: pool: rpool (receives HA guests)"),
+        ({"ups": ON_BATTERY}, "bray: UPS status is ONBATT (receives HA guests)"),
+    ],
+)
+def test_a_receiving_node_still_stops_the_roll(override: dict[str, str], message: str) -> None:
+    cluster = Cluster(pending=("ace",))
+    cluster.hosts["bray"] = node_readings("bray", False, **override)
+    result = make_plan(cluster)
+    assert result.verdict == "stop"
+    assert messages(result.stops) == [message]
+    assert "bray" in result.current
+
+
+def test_a_task_on_a_receiving_node_stops_the_roll() -> None:
+    cluster = Cluster(pending=("ace",))
+    cluster.hosts["clovis"] = node_readings("clovis", False, tasks=BUSY)
+    result = make_plan(cluster)
+    assert [(item.level, item.host) for item in result.stops] == [(STOP, "clovis")]
+    assert result.stops[0].message.endswith("(receives HA guests)")
+
+
+def test_a_receiving_node_with_a_newer_kernel_only_warns() -> None:
+    cluster = Cluster(pending=("ace",))
+    cluster.hosts["bray"] = node_readings("bray", False, apt=APT_KERNEL, pools=DEGRADED)
+    result = make_plan(cluster)
+    assert messages(result.stops) == ["bray: zpool status -x: pool: rpool (receives HA guests)"]
+    assert [item.level for item in result.warnings] == [WARN]
+    assert result.warnings[0].message.endswith("(not pending)")
+
+
+def test_a_receiver_outside_the_scope_is_still_checked() -> None:
+    cluster = Cluster(pending=("ace",))
+    cluster.hosts["bray"] = node_readings("bray", False, pools=DEGRADED, apt=APT_KERNEL)
+    result = make_plan(cluster, scope=plan.scoped(INVENTORY, ["ace"]))
+    assert messages(result.stops) == ["bray: zpool status -x: pool: rpool (receives HA guests)"]
+    # Only the receiving checks: its own kernel is out of scope, not even a warning.
+    assert result.warnings == [] and result.current == []
+
+
+def test_an_unreachable_receiver_outside_the_scope_stops() -> None:
+    result = make_plan(Cluster(pending=("ace",), clovis=None), scope=["ace"])
+    assert messages(result.stops) == ["clovis: unreachable: clovis: no route to host"]
+
+
+@pytest.mark.parametrize("pending", [("osiris",), ("osiris", "helm"), ()])
+def test_nothing_is_promoted_without_a_pending_cluster_node(pending: tuple[str, ...]) -> None:
+    cluster = Cluster(pending=pending)
+    cluster.hosts["bray"] = node_readings("bray", False, pools=DEGRADED, ups=ON_BATTERY)
+    result = make_plan(cluster)
+    assert result.stops == []
+    assert messages(result.warnings) == [
+        "bray: zpool status -x: pool: rpool (not pending)",
+        "bray: UPS status is ONBATT (not pending)",
+    ]
+
+
+def test_nothing_on_osiris_is_promoted() -> None:
+    cluster = Cluster(pending=("ace",))
+    cluster.hosts["osiris"] = node_readings("osiris", False, pools=DEGRADED, ups=ON_BATTERY)
+    result = make_plan(cluster)
+    assert result.stops == []
+    assert [item.host for item in result.warnings] == ["osiris", "osiris"]
+    assert all(item.message.endswith("(not pending)") for item in result.warnings)
+
+
+def test_receivers_are_the_other_cluster_nodes() -> None:
+    assert plan.receivers(INVENTORY, {"ace"}) == {"bray", "clovis"}
+    assert plan.receivers(INVENTORY, {"ace", "bray"}) == {"clovis"}
+    assert plan.receivers(INVENTORY, {"osiris"}) == set()
+    assert plan.receivers(INVENTORY, set()) == set()
+
+
 def test_newer_kernel_on_a_pending_node_stops_with_its_remedy() -> None:
     cluster = Cluster(pending=("clovis",))
     cluster.hosts["clovis"] = node_readings("clovis", True, apt=APT_KERNEL)
@@ -1260,6 +1340,26 @@ def test_demote_leaves_warnings_and_notes_alone() -> None:
     assert plan.demote([Finding(STOP, "a", "s"), *kept]) == [
         Finding(WARN, "a", "s (not pending)"),
         *kept,
+    ]
+
+
+def test_demote_keeps_what_a_receiver_needs() -> None:
+    pool, other = Finding(STOP, "a", "pool"), Finding(STOP, "a", "boot")
+    assert plan.demote([pool, other, Finding(WARN, "a", "w")], [pool]) == [
+        Finding(STOP, "a", "pool (receives HA guests)"),
+        Finding(WARN, "a", "boot (not pending)"),
+        Finding(WARN, "a", "w"),
+    ]
+
+
+def test_receiving_checks_pools_ups_and_tasks_only() -> None:
+    healthy = node("bray", False, apt=APT_KERNEL, boot="")
+    assert checks.receiving(healthy) == []
+    sick = node("bray", False, pools=DEGRADED, ups=ON_BATTERY, tasks=BUSY)
+    assert [item.message.split(":")[0] for item in checks.receiving(sick)] == [
+        "zpool status -x",
+        "UPS status is ONBATT",
+        "task(s) running",
     ]
 
 
