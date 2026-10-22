@@ -8,6 +8,7 @@ what the hosts actually print fails here rather than on a Saturday.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 from datetime import UTC, datetime, time, timedelta
 from pathlib import Path
@@ -369,6 +370,14 @@ def test_quorum_from_real_pvecm() -> None:
     assert parse.parse_quorum(PVECM_STANDALONE) == parse.Quorum(False, None, None)
 
 
+def test_fields_split_at_the_first_separator() -> None:
+    # pvecm's Date and systemd's Environment= carry the separator in their value.
+    assert parse.colon_fields("Date:   Wed Oct 21 21:44:18 2026") == {
+        "Date": "Wed Oct 21 21:44:18 2026"
+    }
+    assert parse.properties("Environment=LANG=C") == {"Environment": "LANG=C"}
+
+
 def test_ha_from_real_status() -> None:
     status = parse.parse_ha(HA + "service vm:113 (ace, migrate)\nservice ct:9 (bray)\n")
     assert status.quorum_ok
@@ -576,7 +585,7 @@ def test_pending_needs_the_flag_and_the_live_uname(
 def test_quorum_stops(override: str, message: str) -> None:
     found = checks.quorum(node(quorum=override))
     assert len(found) == 1
-    assert found[0].level == STOP
+    assert (found[0].level, found[0].host) == (STOP, "ace")
     assert message in found[0].message
 
 
@@ -631,6 +640,7 @@ def test_boot_entries() -> None:
         'homelab_boot_entries_dead{host="a"} 0\nhomelab_boot_first_entry_loadable{host="a"} 0'
     )
     assert "efibootmgr" in checks.boot(node(boot=unloadable))[0].message
+    assert {item.host for item in no_reading + checks.boot(node(boot=unloadable))} == {"ace"}
     dead = 'homelab_boot_entries_dead{host="a"} 2\nhomelab_boot_first_entry_loadable{host="a"} 1'
     assert messages(checks.boot(node(boot=dead))) == [
         "ace: 2 dead UEFI boot entry(ies); clean them first"
@@ -653,16 +663,25 @@ def test_tasks() -> None:
 
 def test_upgrade_unit() -> None:
     assert checks.upgrade_unit("a", {"Result": "success"}) == []
-    assert checks.upgrade_unit("a", {"LoadState": "not-found", "Result": "x"})[0].level == WARN
+    missing = checks.upgrade_unit("a", {"LoadState": "not-found", "Result": "x"})
+    assert missing == [Finding(WARN, "a", "no homelab-apt-dist-upgrade unit")]
     assert messages(checks.upgrade_unit("a", {"Result": "exit-code"})) == [
         "a: last homelab-apt-dist-upgrade result: exit-code"
+    ]
+
+
+def test_upgrade_findings_name_the_node() -> None:
+    broken = node(upgrade="Result=exit-code\nLoadState=loaded", lists="1792400000")
+    assert messages(checks.node_preflight(broken, REMEDY)) == [
+        "ace: last homelab-apt-dist-upgrade result: exit-code",
+        "ace: apt package lists are 65 h old; a new kernel may hide",
     ]
 
 
 def test_a_newer_kernel_than_installed_stops_with_the_remedy() -> None:
     kernel = parse.Kernel(True, OLD, NEW)
     (found,) = checks.available("ace", parse.apt_changes(APT_KERNEL), kernel, REMEDY)
-    assert found.level == STOP
+    assert (found.level, found.host) == (STOP, "ace")
     assert found.message == (
         "kernel 7.0.14-26-pve is available but not installed: a reboot now boots "
         f"{NEW} and needs another once it lands. Install it first ({REMEDY}), then plan again"
@@ -680,15 +699,17 @@ def test_other_packages_only_warn_and_none_is_silent() -> None:
     kernel = parse.Kernel(True, OLD, NEW)
     assert checks.available("a", parse.AptChanges(0, []), kernel, REMEDY) == []
     assert checks.available("a", parse.AptChanges(1, []), kernel, REMEDY)[0].level == WARN
-    assert checks.available("a", None, kernel, REMEDY)[0].level == STOP
+    assert checks.available("a", None, kernel, REMEDY) == [
+        Finding(STOP, "a", "cannot read the apt-get -s dist-upgrade summary")
+    ]
 
 
 def test_stale_lists_warn() -> None:
     assert checks.lists("a", 48 * 3600) == []
-    assert messages(checks.lists("a", 48 * 3600 + 1)) == [
-        "a: apt package lists are 48 h old; a new kernel may hide"
-    ]
-    assert checks.lists("a", None)[0].level == WARN
+    stale = checks.lists("a", 48 * 3600 + 1)
+    assert messages(stale) == ["a: apt package lists are 48 h old; a new kernel may hide"]
+    assert stale[0].level == WARN
+    assert checks.lists("a", None) == [Finding(WARN, "a", "cannot age the apt package lists")]
 
 
 def test_ha_findings() -> None:
@@ -709,8 +730,8 @@ def test_ha_findings() -> None:
 
 def test_vm_preflight() -> None:
     helm = vm()
-    assert [(f.level, f.message) for f in checks.vm_preflight(helm, ["10.0.40.15"], "r")] == [
-        (NOTE, "holds VIP 10.0.40.15; it fails over (expected)")
+    assert checks.vm_preflight(helm, ["10.0.40.15"], "r") == [
+        Finding(NOTE, "helm", "holds VIP 10.0.40.15; it fails over (expected)")
     ]
     assert checks.vips(helm, ["10.0.40.24"]) == []
     assert checks.vips(helm, ["10.0.40.2"]) == []
@@ -743,6 +764,21 @@ def test_swarm_peers() -> None:
     assert checks.swarm_peers(vm(swarm=not_me.replace("neo\tReady", "neo\tDown"))) == []
 
 
+@pytest.mark.parametrize(
+    ("status", "manager", "healthy"),
+    [
+        ("Ready", "Leader", True),
+        ("Ready", "Reachable", True),
+        ("Ready", "Unreachable", False),
+        ("Down", "Reachable", False),
+    ],
+)
+def test_a_healthy_manager_needs_both_ready_and_reachable(
+    status: str, manager: str, healthy: bool
+) -> None:
+    assert checks.healthy_manager(parse.SwarmNode("n", status, manager, False)) is healthy
+
+
 # --------------------------------------------------------------------------------------
 # checks: after the reboot
 # --------------------------------------------------------------------------------------
@@ -756,9 +792,9 @@ def test_new_kernel_compares_uname_with_installed() -> None:
     assert messages(checks.new_kernel("a", "", parse.Kernel(True, OLD, NEW))) == [
         f"a: running ?, installed {NEW}"
     ]
-    assert (
-        "no installed-kernel" in checks.new_kernel("a", NEW, parse.Kernel(None, "", ""))[0].message
-    )
+    assert messages(checks.new_kernel("a", NEW, parse.Kernel(None, "", ""))) == [
+        "a: the reboot exporter has no installed-kernel reading"
+    ]
 
 
 def test_scraped() -> None:
@@ -864,6 +900,9 @@ def test_vm_recovered() -> None:
     ]
     assert messages(checks.vm_recovered(vm(pending=False, enabled=""))) == [
         "helm: cannot read the enabled services"
+    ]
+    assert messages(checks.vm_recovered(vm(pending=True))) == [
+        f"helm: running {VM_OLD}, installed {VM_NEW}"
     ]
 
 
@@ -1092,12 +1131,19 @@ def test_steps_show_the_live_uname_as_running() -> None:
     result = make_plan(cluster)
     assert result.waves[0][0].running == "7.0.9-1-pve"
     assert result.vms[0].running == "6.12.1+deb13-amd64"
+    assert result.vms[0].installed == VM_NEW
 
 
 def test_unreachable_node_in_scope_stops() -> None:
     cluster = Cluster(pending=("ace",), osiris=None)
     result = make_plan(cluster)
     assert messages(result.stops) == ["osiris: unreachable: osiris: no route to host"]
+
+
+def test_an_unreachable_node_does_not_end_the_survey() -> None:
+    result = make_plan(Cluster(pending=("bray",), ace=None))
+    assert messages(result.stops) == ["ace: unreachable: ace: no route to host"]
+    assert [[step.host for step in wave] for wave in result.waves] == [["bray"]]
 
 
 def test_unreachable_node_outside_scope_is_ignored() -> None:
@@ -1117,6 +1163,19 @@ def test_running_pbs_job_blocks_its_node() -> None:
     cluster.pbs = json.dumps([{"worker_type": "backup", "worker_id": "vm/110"}])
     result = make_plan(cluster)
     assert messages(result.stops) == ["osiris: task(s) running on xur: backup vm/110"]
+
+
+def test_pbs_jobs_block_only_the_node_hosting_that_pbs() -> None:
+    taken = plan.Survey({}, {}, {"xur": ["a"], "other": ["b"], "third": ["c"]})
+    resources = [
+        {"name": "xur", "node": "osiris"},
+        {"name": "other", "node": "ace"},
+        {"name": "third", "node": "osiris"},
+    ]
+    assert messages(plan.pbs_findings("osiris", taken, resources)) == [
+        "osiris: task(s) running on xur: a",
+        "osiris: task(s) running on third: c",
+    ]
 
 
 def test_unsettled_ha_blocks_only_when_something_is_pending() -> None:
@@ -1148,22 +1207,69 @@ def test_vm_with_a_ci_job_is_held_and_the_roll_goes_on() -> None:
     assert result.vms == []
 
 
+def test_every_held_vm_is_kept() -> None:
+    cluster = Cluster(pending=("ace", "riven"))
+    cluster.hosts["helm"] = vm_readings("helm", False, dpkgstamp="1792634900")
+    cluster.hosts["riven"] = vm_readings("riven", True, ci="1")
+    result = make_plan(cluster)
+    assert [item.host for item in result.held] == ["helm", "riven"]
+
+
+def test_a_held_vm_names_its_own_remedy() -> None:
+    cluster = Cluster(pending=("helm",))
+    cluster.hosts["helm"] = vm_readings("helm", True, apt=APT_KERNEL)
+    result = make_plan(cluster)
+    assert plan.remedy(INVENTORY, "helm") in result.held[0].message
+
+
+def test_a_vm_with_no_vips_entry_still_plans() -> None:
+    result = plan.Plan()
+    inventory = dataclasses.replace(INVENTORY, vips={})
+    plan.plan_vm(result, inventory, "riven", vm("riven"))
+    assert [step.host for step in result.vms] == ["riven"]
+
+
 def test_vm_warnings_and_unreachable_vms() -> None:
+    one = "1 upgraded, 0 newly installed, 0 to remove"
     cluster = Cluster(pending=("helm",), riven=None)
-    cluster.hosts["helm"] = vm_readings(
-        "helm", True, apt="1 upgraded, 0 newly installed, 0 to remove"
-    )
+    cluster.hosts["clovis"] = node_readings("clovis", apt=one)
+    cluster.hosts["helm"] = vm_readings("helm", True, apt=one)
     result = make_plan(cluster)
     assert [step.host for step in result.vms] == ["helm"]
-    assert messages(result.warnings) == ["helm: 1 non-kernel package change(s) available"]
+    assert messages(result.warnings) == [
+        "clovis: 1 non-kernel package change(s) available",
+        "helm: 1 non-kernel package change(s) available",
+    ]
     assert messages(result.held) == ["riven: unreachable: riven: no route to host"]
 
 
 def test_current_vm_problems_only_warn() -> None:
     cluster = Cluster()
-    cluster.hosts["riven"] = vm_readings("riven", False, ci="1")
+    cluster.hosts["riven"] = vm_readings(
+        "riven", False, ci="1", apt="1 upgraded, 0 newly installed, 0 to remove"
+    )
     result = make_plan(cluster)
-    assert messages(result.warnings) == ["riven: 1 CI job(s) running on its runners (not pending)"]
+    assert messages(result.warnings) == [
+        "riven: 1 non-kernel package change(s) available",
+        "riven: 1 CI job(s) running on its runners (not pending)",
+    ]
+
+
+def test_demote_leaves_warnings_and_notes_alone() -> None:
+    kept = [Finding(WARN, "a", "w"), Finding(NOTE, "a", "n")]
+    assert plan.demote([Finding(STOP, "a", "s"), *kept]) == [
+        Finding(WARN, "a", "s (not pending)"),
+        *kept,
+    ]
+
+
+def test_guests_are_listed_in_vmid_order() -> None:
+    resources = [
+        {"vmid": vmid, "name": f"g{vmid}", "type": "lxc", "node": "n", "status": "running"}
+        for vmid in (111, 105, 20)
+    ]
+    lines = plan.guests_on("n", resources, set())
+    assert [line.split()[0] for line in lines] == ["g20", "g105", "g111"]
 
 
 def test_vm_existence_is_assumed_without_a_cluster_view() -> None:
@@ -1181,10 +1287,13 @@ def test_plan_vm_without_facts_is_held() -> None:
 def test_render_and_json() -> None:
     result = make_plan(Cluster(pending=("ace", "helm")))
     result.warnings.append(Finding(WARN, "x", "careful"))
+    result.held.append(Finding(STOP, "y", "busy"))
     lines = plan.render(result)
     assert lines[:4] == ["verdict: ready", "", "Wave 1: ace", f"  ace      {OLD} -> {NEW}"]
     assert "VMs, after every node wave (reboot from inside the guest):" in lines
     assert "  x: careful" in lines
+    assert "  y: busy" in lines
+    assert all(isinstance(line, str) for line in lines)
     assert "Nothing pending: bray, clovis, osiris, riven" in lines
     assert lines[-1] == "Not built yet: shaxx"
     data = result.as_dict()
