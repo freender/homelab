@@ -39,6 +39,14 @@ MONITOR_READY = [
     ("victoriametrics", "localhost:8428/health"),
 ]
 
+# The reboot exporter's reading, and its age against dpkg's last change: the
+# exporter runs every 15 min and no apt hook refreshes it after an install.
+KERNEL_READINGS = [
+    ("kernel", f"cat {TEXTFILE}/reboot.prom 2>/dev/null"),
+    ("kernelstamp", f"stat -c %Y {TEXTFILE}/reboot.prom 2>/dev/null"),
+    ("dpkgstamp", "stat -c %Y /var/lib/dpkg/status 2>/dev/null"),
+]
+
 # Shared by nodes and VMs: did the automation run, and what would it still install.
 # The Inst lines name the packages, which is how a not-yet-installed kernel shows.
 UPGRADE_READINGS = [
@@ -147,7 +155,7 @@ def script(readings: list[tuple[str, str]]) -> str:
 def node_script(host: str) -> str:
     return script(
         [
-            ("kernel", f"cat {TEXTFILE}/reboot.prom 2>/dev/null"),
+            *KERNEL_READINGS,
             ("boot", f"cat {TEXTFILE}/boot-entries.prom 2>/dev/null"),
             ("uname", "uname -r"),
             ("uptime", "cut -d' ' -f1 /proc/uptime"),
@@ -177,7 +185,7 @@ def node_script(host: str) -> str:
 
 def vm_script(user: str | None) -> str:
     readings = [
-        ("kernel", f"cat {TEXTFILE}/reboot.prom 2>/dev/null"),
+        *KERNEL_READINGS,
         ("uname", "uname -r"),
         ("uptime", "cut -d' ' -f1 /proc/uptime"),
         (

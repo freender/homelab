@@ -37,10 +37,34 @@ def stop(host: str, message: str) -> Finding:
     return Finding(STOP, host, message)
 
 
-def kernel_reading(host: str, kernel: Kernel) -> list[Finding]:
+def kernel_reading(host: str, kernel: Kernel, lag: float | None) -> list[Finding]:
+    """The reading must postdate dpkg's last change, or `installed` may be the old kernel."""
     if kernel.required is None:
         return [stop(host, "the reboot exporter has no reading (reboot.prom)")]
+    if lag is None:
+        return [stop(host, "cannot age reboot.prom against /var/lib/dpkg/status")]
+    if lag > 0:
+        return [
+            stop(
+                host,
+                f"reboot.prom predates the last dpkg change by {int(lag // 60)} min: wait for "
+                "reboot-textfile-exporter.timer (every 15 min) or start "
+                "reboot-textfile-exporter.service, then plan again",
+            )
+        ]
     return []
+
+
+def pending(kernel: Kernel, lag: float | None, uname: str) -> bool | None:
+    """Due for a reboot: None while the reading is missing or stale.
+
+    The flag alone is not enough: reboot.prom is rewritten 2 min after boot, so a
+    host that just rebooted still reads `required 1` until then. The live `uname -r`
+    against `installed` is the answer, and the flag must agree with it.
+    """
+    if kernel_reading("", kernel, lag):
+        return None
+    return bool(kernel.required) and uname != kernel.installed
 
 
 def quorum(facts: NodeFacts) -> list[Finding]:
@@ -169,7 +193,7 @@ def upgrade(
 
 def node_preflight(facts: NodeFacts, remedy: str) -> list[Finding]:
     return [
-        *kernel_reading(facts.host, facts.kernel),
+        *kernel_reading(facts.host, facts.kernel, facts.kernel_lag),
         *quorum(facts),
         *replication(facts),
         *pools(facts.host, facts.pools),
@@ -230,7 +254,7 @@ def vips(facts: VmFacts, addresses: list[str]) -> list[Finding]:
 
 def vm_preflight(facts: VmFacts, vip_addresses: list[str], remedy: str) -> list[Finding]:
     return [
-        *kernel_reading(facts.host, facts.kernel),
+        *kernel_reading(facts.host, facts.kernel, facts.kernel_lag),
         *upgrade(facts.host, facts.upgrade, facts.apt, facts.kernel, facts.lists_age, remedy),
         *ci_jobs(facts),
         *swarm_peers(facts),

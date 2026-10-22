@@ -185,6 +185,11 @@ ConditionResult=yes
 """
 
 
+# reboot.prom written after dpkg's last change: a fresh reading.
+KERNEL_STAMP = "1792634000"
+DPKG_STAMP = "1792616000"
+
+
 def reboot_prom(host: str, running: str, installed: str, required: int | None) -> str:
     lines = [f'homelab_kernel_info{{host="{host}",running="{running}",installed="{installed}"}} 1']
     if required is not None:
@@ -201,6 +206,8 @@ def node_readings(host: str, pending: bool = False, **overrides: str) -> dict[st
     running = OLD if pending else NEW
     readings = {
         "kernel": reboot_prom(host, running, NEW, int(pending)),
+        "kernelstamp": KERNEL_STAMP,
+        "dpkgstamp": DPKG_STAMP,
         "boot": BOOT_OK,
         "uname": running,
         "uptime": "218201.31",
@@ -229,6 +236,8 @@ def vm_readings(host: str, pending: bool = False, **overrides: str) -> dict[str,
     running = VM_OLD if pending else VM_NEW
     readings = {
         "kernel": reboot_prom(host, running, VM_NEW, int(pending)),
+        "kernelstamp": KERNEL_STAMP,
+        "dpkgstamp": DPKG_STAMP,
         "uname": running,
         "uptime": "600",
         "swarm": SWARM if host == "helm" else "",
@@ -513,6 +522,41 @@ def test_a_healthy_node_has_no_findings() -> None:
 def test_missing_reboot_reading_stops() -> None:
     found = checks.node_preflight(node(kernel=""), REMEDY)
     assert messages(found) == ["ace: the reboot exporter has no reading (reboot.prom)"]
+
+
+def test_a_reading_older_than_dpkg_or_unaged_stops() -> None:
+    fresh = parse.Kernel(True, OLD, NEW)
+    assert checks.kernel_reading("a", fresh, 0) == []
+    stale = messages(checks.kernel_reading("a", fresh, 600))
+    assert stale == [
+        "a: reboot.prom predates the last dpkg change by 10 min: wait for "
+        "reboot-textfile-exporter.timer (every 15 min) or start "
+        "reboot-textfile-exporter.service, then plan again"
+    ]
+    assert messages(checks.kernel_reading("a", fresh, None)) == [
+        "a: cannot age reboot.prom against /var/lib/dpkg/status"
+    ]
+    assert messages(checks.vm_preflight(vm(dpkgstamp=""), [], REMEDY)) == [
+        "helm: cannot age reboot.prom against /var/lib/dpkg/status"
+    ]
+
+
+@pytest.mark.parametrize(
+    ("required", "lag", "uname", "expected"),
+    [
+        (True, 0, OLD, True),
+        # Rebooted, but the exporter has not rewritten its flag yet.
+        (True, 0, NEW, False),
+        (False, 0, NEW, False),
+        (None, 0, OLD, None),
+        (True, 1, OLD, None),
+        (False, None, NEW, None),
+    ],
+)
+def test_pending_needs_the_flag_and_the_live_uname(
+    required: bool | None, lag: float | None, uname: str, expected: bool | None
+) -> None:
+    assert checks.pending(parse.Kernel(required, OLD, NEW), lag, uname) is expected
 
 
 @pytest.mark.parametrize(
@@ -1006,6 +1050,39 @@ def test_unknown_reboot_state_stops_without_being_waved() -> None:
     assert messages(result.stops) == ["bray: the reboot exporter has no reading (reboot.prom)"]
     assert [[step.host for step in wave] for wave in result.waves] == [["ace"]]
     assert "bray" not in result.current
+
+
+def test_a_stale_flag_after_a_reboot_is_not_pending() -> None:
+    cluster = Cluster(pending=("ace",))
+    # bray and helm just rebooted into NEW; reboot.prom still says required 1.
+    cluster.hosts["bray"] = node_readings("bray", True, uname=NEW)
+    cluster.hosts["helm"] = vm_readings("helm", True, uname=VM_NEW)
+    result = make_plan(cluster)
+    assert [[step.host for step in wave] for wave in result.waves] == [["ace"]]
+    assert result.vms == []
+    assert {"bray", "helm"} <= set(result.current)
+
+
+def test_a_stale_installed_label_after_an_install_stops() -> None:
+    cluster = Cluster(pending=("ace",))
+    # clovis just installed a kernel; reboot.prom still reads the old one as current.
+    cluster.hosts["clovis"] = node_readings("clovis", False, dpkgstamp="1792634900")
+    cluster.hosts["riven"] = vm_readings("riven", False, dpkgstamp="1792634900")
+    result = make_plan(cluster)
+    assert result.verdict == "stop"
+    assert [item.host for item in result.stops] == ["clovis"]
+    assert "predates the last dpkg change by 15 min" in result.stops[0].message
+    assert [item.host for item in result.held] == ["riven"]
+    assert not {"clovis", "riven"} & set(result.current)
+
+
+def test_steps_show_the_live_uname_as_running() -> None:
+    cluster = Cluster(pending=("ace", "helm"))
+    cluster.hosts["ace"] = node_readings("ace", True, uname="7.0.9-1-pve")
+    cluster.hosts["helm"] = vm_readings("helm", True, uname="6.12.1+deb13-amd64")
+    result = make_plan(cluster)
+    assert result.waves[0][0].running == "7.0.9-1-pve"
+    assert result.vms[0].running == "6.12.1+deb13-amd64"
 
 
 def test_unreachable_node_in_scope_stops() -> None:

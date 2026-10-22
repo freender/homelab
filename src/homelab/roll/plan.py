@@ -202,13 +202,13 @@ def plan_nodes(
         if not isinstance(facts, NodeFacts):
             plan.stops.append(unreachable(host, facts))
             continue
-        due = facts.kernel.required is not False
+        due = checks.pending(facts.kernel, facts.kernel_lag, facts.uname)
         findings = checks.node_preflight(facts, remedy(inventory, host))
         findings += pbs_findings(host, survey, resources)
-        sort_findings(plan, findings, due)
-        if facts.kernel.required:
+        sort_findings(plan, findings, due is not False)
+        if due:
             pending.add(host)
-        elif facts.kernel.required is False:
+        elif due is False:
             plan.current.append(host)
     return pending
 
@@ -216,7 +216,7 @@ def plan_nodes(
 def node_step(facts: NodeFacts, resources: list[dict], ha_sids: set[str]) -> Step:
     return Step(
         facts.host,
-        facts.kernel.running,
+        facts.uname,
         facts.kernel.installed,
         guests_on(facts.host, resources, ha_sids),
     )
@@ -268,7 +268,7 @@ def plan_vm(
         plan.held.append(unreachable(host, facts))
         return
     findings = checks.vm_preflight(facts, inventory.vips.get(host, []), remedy(inventory, host))
-    if facts.kernel.required is False:
+    if checks.pending(facts.kernel, facts.kernel_lag, facts.uname) is False:
         plan.current.append(host)
         plan.warnings += demote(by_level(findings, STOP, WARN))
     elif by_level(findings, STOP):
@@ -276,7 +276,7 @@ def plan_vm(
     else:
         plan.warnings += by_level(findings, WARN)
         notes = [item.message for item in by_level(findings, NOTE)]
-        plan.vms.append(Step(host, facts.kernel.running, facts.kernel.installed, notes))
+        plan.vms.append(Step(host, facts.uname, facts.kernel.installed, notes))
 
 
 def plan_vms(

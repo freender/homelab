@@ -53,6 +53,8 @@ class NodeFacts:
     host: str
     standalone: bool
     kernel: Kernel
+    # Seconds dpkg last changed after reboot.prom was written: > 0 is a stale reading.
+    kernel_lag: float | None
     uname: str
     uptime: float | None
     boot: Boot
@@ -81,6 +83,7 @@ def node_facts(host: str, standalone: bool, found: dict[str, str]) -> NodeFacts:
         host=host,
         standalone=standalone,
         kernel=parse_kernel(get("kernel")),
+        kernel_lag=age(get("kernelstamp"), get("dpkgstamp")),
         uname=get("uname"),
         uptime=to_float(get("uptime")),
         boot=parse_boot(get("boot")),
@@ -106,6 +109,7 @@ def node_facts(host: str, standalone: bool, found: dict[str, str]) -> NodeFacts:
 class VmFacts:
     host: str
     kernel: Kernel
+    kernel_lag: float | None
     uname: str
     uptime: float | None
     swarm: list[SwarmNode]
@@ -129,6 +133,7 @@ def vm_facts(host: str, found: dict[str, str]) -> VmFacts:
     return VmFacts(
         host=host,
         kernel=parse_kernel(get("kernel")),
+        kernel_lag=age(get("kernelstamp"), get("dpkgstamp")),
         uname=get("uname"),
         uptime=to_float(get("uptime")),
         swarm=parse_swarm(get("swarm")),
