@@ -280,6 +280,51 @@ def monitor_ready(monitor: str, codes: dict[str, str]) -> list[Finding]:
     ]
 
 
+def units(host: str, failed: list[str], down: list[str] | None) -> list[Finding]:
+    """Nothing failed, and every enabled long-running service is up again.
+
+    The enabled set is the required-unit list: no copy of it is kept here.
+    """
+    findings = []
+    if failed:
+        findings.append(stop(host, f"failed unit(s): {', '.join(failed)}"))
+    if down is None:
+        findings.append(stop(host, "cannot read the enabled services"))
+    elif down:
+        findings.append(stop(host, f"enabled service(s) not active: {', '.join(down)}"))
+    return findings
+
+
+def user_manager(host: str, state: str | None) -> list[Finding]:
+    if state is None or state in ("running", "degraded"):
+        return []
+    return [stop(host, f"the lingering user manager is {state or '?'}: its units are not up")]
+
+
+def guest_down(vmid: int, resource: dict | None) -> str | None:
+    if resource is None:
+        return f"{vmid} (not listed on this node)"
+    if resource.get("hastate") or resource.get("status") == "running":
+        return None
+    return f"{vmid} {resource.get('name', '?')} ({resource.get('status', '?')})"
+
+
+def guests(facts: NodeFacts) -> list[Finding]:
+    """Guests HA does not manage come back on `onboot` alone (osiris's xur and
+    deepstone): each must be running again. HA ignores onboot; `ha()` covers those."""
+    if facts.onboot is None:
+        return [stop(facts.host, "cannot list the onboot guests in /etc/pve/local")]
+    if not facts.onboot:
+        return []
+    if facts.resources is None:
+        return [stop(facts.host, "cannot read guest status from /cluster/resources")]
+    here = {r.get("vmid"): r for r in facts.resources if r.get("node") == facts.host}
+    down = [problem for vmid in facts.onboot if (problem := guest_down(vmid, here.get(vmid)))]
+    if down:
+        return [stop(facts.host, f"onboot guest(s) not running: {', '.join(down)}")]
+    return []
+
+
 def node_recovered(facts: NodeFacts) -> list[Finding]:
     findings = [
         *new_kernel(facts.host, facts.uname, facts.kernel),
@@ -290,7 +335,7 @@ def node_recovered(facts: NodeFacts) -> list[Finding]:
         findings += ha(facts.host, facts.ha)
     if facts.exporter != "active":
         findings.append(stop(facts.host, f"prometheus-node-exporter is {facts.exporter or '?'}"))
-    return findings
+    return findings + guests(facts) + units(facts.host, facts.failed_units, facts.down_units)
 
 
 def swarm_self(facts: VmFacts) -> list[Finding]:
@@ -301,9 +346,11 @@ def swarm_self(facts: VmFacts) -> list[Finding]:
 
 
 def vm_recovered(facts: VmFacts) -> list[Finding]:
-    findings = new_kernel(facts.host, facts.uname, facts.kernel)
-    if facts.failed_units:
-        findings.append(stop(facts.host, f"failed unit(s): {', '.join(facts.failed_units)}"))
+    findings = [
+        *new_kernel(facts.host, facts.uname, facts.kernel),
+        *units(facts.host, facts.failed_units, facts.down_units),
+        *user_manager(facts.host, facts.user_manager),
+    ]
     if facts.containers:
         findings.append(stop(facts.host, f"container(s) not up: {', '.join(facts.containers)}"))
     return findings + swarm_self(facts)

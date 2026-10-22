@@ -59,6 +59,20 @@ UPGRADE_READINGS = [
     ("epoch", "date +%s"),
 ]
 
+# Every enabled service's state, for checks.units; `systemctl` may carry `--user -M`.
+# Templates are skipped: their instances are what runs, and they list as enabled.
+SERVICE_PROPS = "-p Id -p Type -p ActiveState -p ConditionResult -p TriggeredBy"
+ONBOOT = "grep -l '^onboot: 1' /etc/pve/local/lxc/*.conf /etc/pve/local/qemu-server/*.conf"
+
+
+def enabled_services(systemctl: str) -> str:
+    return (
+        f"units=$({systemctl} list-unit-files --type=service --state=enabled --no-legend "
+        "--plain 2>/dev/null | awk '{print $1}' | grep -v '@[.]service$'); "
+        f'[ -z "$units" ] || {systemctl} show {SERVICE_PROPS} $units 2>/dev/null'
+    )
+
+
 # (host, command) -> stdout; raises HostDown.
 Runner = Callable[[str, str], str]
 
@@ -154,6 +168,9 @@ def node_script(host: str) -> str:
             ),
             *UPGRADE_READINGS,
             ("exporter", "systemctl is-active prometheus-node-exporter"),
+            ("failed", "systemctl --failed --no-legend --plain"),
+            ("enabled", enabled_services("systemctl")),
+            ("onboot", f"test -d /etc/pve/local && echo listed && {ONBOOT} 2>/dev/null"),
         ]
     )
 
@@ -173,14 +190,19 @@ def vm_script(user: str | None) -> str:
         # keeps pgrep from matching this script's own command line.
         ("ci", "pgrep -c -f 'Runner[.]Worker'"),
         ("failed", "systemctl --failed --no-legend --plain"),
+        ("enabled", enabled_services("systemctl")),
         *UPGRADE_READINGS,
         # -a: an exited or never-started container is the failure this looks for.
         ("containers", "docker ps -a --format '{{.Names}}\t{{.Status}}' 2>/dev/null"),
     ]
     if user:
-        manager = shlex.quote(f"{user}@")
-        command = f"systemctl --user -M {manager} --failed --no-legend --plain 2>/dev/null"
-        readings.append(("userfailed", command))
+        user_ctl = f"systemctl --user -M {shlex.quote(f'{user}@')}"
+        readings += [
+            ("userfailed", f"{user_ctl} --failed --no-legend --plain 2>/dev/null"),
+            ("linger", f"loginctl show-user {shlex.quote(user)} -p Linger --value 2>/dev/null"),
+            ("usermanager", f"{user_ctl} is-system-running 2>/dev/null"),
+            ("userenabled", enabled_services(user_ctl)),
+        ]
     return script(readings)
 
 

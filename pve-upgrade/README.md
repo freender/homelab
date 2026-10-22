@@ -168,8 +168,9 @@ reboot that risks the agent.
   deepstone simply go down with it and come back on boot — nothing migrates.
   Confirm no backup or sync is running before you take it.
 - **`void` on clovis is not an HA resource** (`ha-manager status` lists only
-  ct:101, 104, 108 and vm:109, 110, 112). It will not migrate; it stops with clovis and
-  returns on boot.
+  ct:101, 104, 108 and vm:109, 110, 112). It will not migrate, and it has no
+  `onboot`, so it stays stopped after clovis returns and verify does not
+  expect it back.
 
 ## Per-wave procedure
 
@@ -299,8 +300,14 @@ ssh <node> 'uptime; uname -r'
 ssh <node> 'zpool status -x'
 ssh <node> 'pvecm status | grep -E "Quorate|Total votes"'     # cluster nodes
 ssh <node> 'ha-manager status'
-ssh <node> 'pct list; qm list'
+ssh <node> 'pct list; qm list'                      # every onboot guest HA does not manage: running
+ssh <node> 'grep -l "^onboot: 1" /etc/pve/local/{lxc,qemu-server}/*.conf'
 ssh <node> 'systemctl is-active prometheus-node-exporter'
+ssh <node> 'systemctl --failed --no-legend'
+
+# Every enabled service is active again. Of what this prints, oneshots, units
+# skipped by a condition (ConditionResult=no) and socket-activated units are exempt.
+ssh <node> 'for u in $(systemctl list-unit-files --type=service --state=enabled --no-legend | awk "{print \$1}" | grep -v "@[.]"); do systemctl is-active -q "$u" || echo "$u"; done'
 
 # Pending reboot cleared: `uname -r` must equal the `installed` label. The
 # `homelab_reboot_required` flag itself is only refreshed 2 min after boot, so
@@ -320,7 +327,9 @@ ssh helm "curl -s --get localhost:8428/api/v1/query \
   --data-urlencode 'query=up{host=\"<node>\"}'"
 ```
 
-**Stop if:** guests are not running, a pool is degraded, quorum is not restored,
+**Stop if:** an onboot guest outside HA (on osiris, xur and deepstone) is not
+running, a unit failed or an enabled service is not active, a pool is degraded,
+quorum is not restored,
 `homelab_reboot_required` is still `1` after the reboot, the node is not
 being scraped, or helm cannot answer the query (no answer is not a pass).
 
@@ -417,7 +426,10 @@ process keeps running, so HA sees nothing and does not move the VM.
 ### After the reboot
 
 The human reconnects and re-runs `addhomelabkeys`, because the agent is gone.
-The next session then verifies:
+The next session then runs `./roll verify riven`. It requires every enabled
+service to be active, system and freender's `--user` alike (freender lingers,
+so its units come back with the host), with no unit list kept anywhere.
+The manual equivalent:
 
 ```bash
 uname -r                                            # the newest installed kernel
@@ -427,7 +439,8 @@ systemctl --user is-active opencode github-runner github-runner-apply
 systemctl --failed --no-legend; systemctl --user --failed --no-legend
 ```
 
-**Stop and report if** any of these is not active or the kernel did not change.
+**Stop and report if** any enabled service is not active, the user manager is
+not running, or the kernel did not change.
 
 ---
 
@@ -476,11 +489,11 @@ ssh helm-root 'systemctl reboot'
 ```bash
 ssh helm 'uname -r'                                            # the newest installed kernel
 ssh helm 'cat /var/lib/prometheus/node-exporter/reboot.prom'   # homelab_reboot_required 0
-ssh helm 'systemctl --failed --no-legend'
+ssh helm 'systemctl --failed --no-legend'          # and every enabled service active (step 4)
 ssh helm 'docker ps -a --format "{{.Names}} {{.Status}}" | grep -v " Up " || true'
 ssh helm 'curl -sf localhost:9093/-/ready && curl -sf localhost:8428/health'
 ssh tower 'docker node ls'           # helm back as a Reachable or Leader manager
 ```
 
-**Stop and report if** a container is not up, Alertmanager or VictoriaMetrics
-is not ready, helm has not rejoined the swarm, or the kernel did not change.
+**Stop and report if** a unit failed or an enabled service is not active, a
+container is not up, Alertmanager or VictoriaMetrics is not ready, helm has not rejoined the swarm, or the kernel did not change.

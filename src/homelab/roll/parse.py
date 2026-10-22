@@ -303,6 +303,44 @@ def unit_names(text: str) -> list[str]:
     return [line.split()[0] for line in text.splitlines() if line.split()]
 
 
+def service_down(unit: dict[str, str]) -> bool:
+    """An enabled service that should be running and is not.
+
+    A oneshot finishes by design, a failed condition skips the unit on purpose
+    (smartmontools on a VM with no SMART disk), and a socket-activated unit runs
+    only on demand.
+    """
+    return (
+        unit.get("ActiveState") != "active"
+        and unit.get("Type") != "oneshot"
+        and unit.get("ConditionResult") != "no"
+        and not unit.get("TriggeredBy")
+    )
+
+
+def down_services(text: str) -> list[str] | None:
+    """`systemctl show -p Id -p Type -p ActiveState -p ConditionResult -p TriggeredBy`
+    over every enabled service: the ones that are down. None when nothing was
+    listed, which on a system manager means the reading failed (ssh is enabled)."""
+    units = [properties(block) for block in re.split(r"\n\s*\n", text) if block.strip()]
+    if not units:
+        return None
+    return sorted(unit.get("Id", "?") for unit in units if service_down(unit))
+
+
+def onboot_guests(text: str) -> list[int] | None:
+    """VMIDs of the configs under /etc/pve/local set to start on boot.
+
+    The survey prints `listed` before the grep, so a node whose /etc/pve is not
+    mounted reads as None, not as a node with no guests.
+    """
+    lines = text.splitlines()
+    if not lines or lines[0].strip() != "listed":
+        return None
+    stems = [line.strip().rsplit("/", 1)[-1].removesuffix(".conf") for line in lines[1:]]
+    return sorted(vmid for vmid in map(to_int, stems) if vmid is not None)
+
+
 def unhealthy_containers(text: str) -> list[str]:
     """Containers (`docker ps -a`, `{{.Names}}\\t{{.Status}}`) that are not plainly up."""
     bad = []

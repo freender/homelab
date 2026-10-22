@@ -91,16 +91,98 @@ OLD, NEW = "7.0.14-24-pve", "7.0.14-25-pve"
 VM_OLD, VM_NEW = "6.12.112+deb13-amd64", "6.12.113+deb13-amd64"
 
 RESOURCES = [
-    {"vmid": 101, "name": "tower", "node": "ace", "status": "running", "type": "lxc"},
+    {
+        "vmid": 101,
+        "name": "tower",
+        "node": "ace",
+        "status": "running",
+        "type": "lxc",
+        "hastate": "started",
+    },
     {"vmid": 102, "name": "void", "node": "clovis", "status": "stopped", "type": "qemu"},
-    {"vmid": 104, "name": "arc", "node": "bray", "status": "running", "type": "lxc"},
-    {"vmid": 109, "name": "zion", "node": "ace", "status": "running", "type": "qemu"},
-    {"vmid": 110, "name": "riven", "node": "bray", "status": "running", "type": "qemu"},
-    {"vmid": 112, "name": "helm", "node": "clovis", "status": "running", "type": "qemu"},
+    {
+        "vmid": 104,
+        "name": "arc",
+        "node": "bray",
+        "status": "running",
+        "type": "lxc",
+        "hastate": "started",
+    },
+    {
+        "vmid": 109,
+        "name": "zion",
+        "node": "ace",
+        "status": "running",
+        "type": "qemu",
+        "hastate": "started",
+    },
+    {
+        "vmid": 110,
+        "name": "riven",
+        "node": "bray",
+        "status": "running",
+        "type": "qemu",
+        "hastate": "started",
+    },
+    {
+        "vmid": 112,
+        "name": "helm",
+        "node": "clovis",
+        "status": "running",
+        "type": "qemu",
+        "hastate": "started",
+    },
 ]
 OSIRIS_RESOURCES = [
     {"vmid": 105, "name": "xur", "node": "osiris", "status": "running", "type": "lxc"},
+    {"vmid": 111, "name": "deepstone", "node": "osiris", "status": "running", "type": "lxc"},
 ]
+ONBOOT = {
+    "ace": "listed\n/etc/pve/local/lxc/101.conf\n/etc/pve/local/qemu-server/109.conf",
+    "bray": "listed\n/etc/pve/local/lxc/104.conf\n/etc/pve/local/qemu-server/110.conf",
+    "clovis": "listed\n/etc/pve/local/qemu-server/112.conf",
+    "osiris": "listed\n/etc/pve/local/lxc/105.conf\n/etc/pve/local/lxc/111.conf",
+}
+# `systemctl show` over the enabled services: one up, one socket-activated, one
+# oneshot, one skipped by its condition. None of them is down.
+ENABLED = """\
+Type=notify
+Id=ssh.service
+TriggeredBy=
+ActiveState=active
+ConditionResult=yes
+
+Type=exec
+Id=netavark-dhcp-proxy.service
+TriggeredBy=netavark-dhcp-proxy.socket
+ActiveState=inactive
+ConditionResult=yes
+
+Type=oneshot
+Id=grub-common.service
+TriggeredBy=
+ActiveState=inactive
+ConditionResult=yes
+
+Type=notify
+Id=smartmontools.service
+TriggeredBy=
+ActiveState=inactive
+ConditionResult=no
+"""
+USER_ENABLED = """\
+Type=simple
+Id=opencode.service
+TriggeredBy=
+ActiveState=active
+ConditionResult=yes
+
+Type=simple
+Id=github-runner.service
+TriggeredBy=
+ActiveState=active
+ConditionResult=yes
+"""
 
 
 def reboot_prom(host: str, running: str, installed: str, required: int | None) -> str:
@@ -135,6 +217,9 @@ def node_readings(host: str, pending: bool = False, **overrides: str) -> dict[st
         "lists": "1792616825.0000000000",
         "epoch": "1792634266",
         "exporter": "active",
+        "failed": "",
+        "enabled": ENABLED,
+        "onboot": ONBOOT[host],
     }
     readings.update(overrides)
     return readings
@@ -150,12 +235,20 @@ def vm_readings(host: str, pending: bool = False, **overrides: str) -> dict[str,
         "addresses": ADDR if host == "helm" else "",
         "ci": "0",
         "failed": "",
+        "enabled": ENABLED,
         "upgrade": UPGRADE_OK,
         "apt": APT_NONE,
         "lists": "1792616825",
         "epoch": "1792634266",
         "containers": "grafana\tUp 2 hours (healthy)" if host == "helm" else "",
     }
+    if host == "riven":
+        readings |= {
+            "userfailed": "",
+            "linger": "yes",
+            "usermanager": "running",
+            "userenabled": USER_ENABLED,
+        }
     readings.update(overrides)
     return readings
 
@@ -352,6 +445,42 @@ def test_swarm_units_containers_and_up() -> None:
     assert parse.up_values(json.dumps({"data": {"result": []}})) == []
     assert parse.up_values("") is None
     assert parse.up_values('{"data": {"result": [{"value": []}]}}') is None
+
+
+DOWN = "Type=notify\nId=pveproxy.service\nTriggeredBy=\nActiveState=activating\nConditionResult=yes"
+
+
+def test_down_services_skip_oneshots_conditions_and_sockets() -> None:
+    assert parse.down_services(ENABLED) == []
+    assert parse.down_services(ENABLED + "\n" + DOWN) == ["pveproxy.service"]
+    assert parse.down_services("Type=simple\nActiveState=failed") == ["?"]
+    assert parse.down_services("") is None
+    assert parse.down_services("\n\n") is None
+
+
+@pytest.mark.parametrize(
+    ("override", "down"),
+    [
+        ({}, True),
+        ({"ActiveState": "active"}, False),
+        ({"Type": "oneshot"}, False),
+        ({"ConditionResult": "no"}, False),
+        ({"TriggeredBy": "x.socket"}, False),
+        ({"ActiveState": "deactivating"}, True),
+        ({"ConditionResult": ""}, True),
+    ],
+)
+def test_service_down(override: dict[str, str], down: bool) -> None:
+    unit = {"Type": "simple", "ActiveState": "inactive", "ConditionResult": "yes"}
+    assert parse.service_down(unit | {"TriggeredBy": ""} | override) is down
+
+
+def test_onboot_guests() -> None:
+    assert parse.onboot_guests(ONBOOT["osiris"]) == [105, 111]
+    assert parse.onboot_guests("listed\n/etc/pve/local/qemu-server/9.conf\n/x/junk.conf") == [9]
+    assert parse.onboot_guests("listed") == []
+    assert parse.onboot_guests("") is None
+    assert parse.onboot_guests("/etc/pve/local/lxc/105.conf") is None
 
 
 def test_facts_age_needs_both_clocks() -> None:
@@ -626,6 +755,49 @@ def test_node_recovered() -> None:
     assert "is ?" in checks.node_recovered(node(pending=False, exporter=""))[0].message
 
 
+def test_osiris_guests_must_be_running_again() -> None:
+    def osiris(**overrides: str) -> list[str]:
+        return messages(checks.node_recovered(node("osiris", pending=False, **overrides)))
+
+    deepstone_down = [OSIRIS_RESOURCES[0], OSIRIS_RESOURCES[1] | {"status": "stopped"}]
+    assert osiris(resources=json.dumps(deepstone_down)) == [
+        "osiris: onboot guest(s) not running: 111 deepstone (stopped)"
+    ]
+    assert osiris(resources=json.dumps(OSIRIS_RESOURCES[:1])) == [
+        "osiris: onboot guest(s) not running: 111 (not listed on this node)"
+    ]
+    assert osiris(resources=json.dumps([{"vmid": 105, "node": "osiris"}])) == [
+        "osiris: onboot guest(s) not running: 105 ? (?), 111 (not listed on this node)"
+    ]
+    assert osiris(resources="") == ["osiris: cannot read guest status from /cluster/resources"]
+    assert osiris(onboot="") == ["osiris: cannot list the onboot guests in /etc/pve/local"]
+    assert osiris(onboot="listed", resources="") == []
+
+
+def test_ha_guests_are_left_to_ha() -> None:
+    stopped = [r | {"status": "stopped"} for r in RESOURCES]
+    assert checks.guests(node("ace", pending=False, resources=json.dumps(stopped))) == []
+    # A guest on another node with the same vmid is not this node's guest.
+    elsewhere = [{"vmid": 105, "node": "ace", "status": "running"}]
+    found = checks.guests(node("osiris", pending=False, resources=json.dumps(elsewhere)))
+    assert "105 (not listed on this node)" in found[0].message
+
+
+def test_node_units_must_be_up() -> None:
+    broken = node(
+        pending=False,
+        failed="pvescheduler.service loaded failed failed PVE scheduler",
+        enabled=ENABLED + "\n" + DOWN,
+    )
+    assert messages(checks.node_recovered(broken)) == [
+        "ace: failed unit(s): pvescheduler.service",
+        "ace: enabled service(s) not active: pveproxy.service",
+    ]
+    assert messages(checks.node_recovered(node(pending=False, enabled=""))) == [
+        "ace: cannot read the enabled services"
+    ]
+
+
 def test_vm_recovered() -> None:
     assert checks.vm_recovered(vm(pending=False)) == []
     broken = vm(
@@ -639,6 +811,41 @@ def test_vm_recovered() -> None:
         "helm: failed unit(s): docker.service, opencode.service",
         "helm: container(s) not up: grafana (Restarting (1) 2 seconds ago)",
         "helm: not back in the swarm (Down, Unreachable)",
+    ]
+    assert messages(checks.vm_recovered(vm(pending=False, enabled=""))) == [
+        "helm: cannot read the enabled services"
+    ]
+
+
+INACTIVE_OPENCODE = USER_ENABLED.replace(
+    "Id=opencode.service\nTriggeredBy=\nActiveState=active",
+    "Id=opencode.service\nTriggeredBy=\nActiveState=inactive",
+)
+
+
+def test_riven_required_units_are_its_enabled_ones() -> None:
+    assert checks.vm_recovered(vm("riven", pending=False)) == []
+    enabled = ENABLED + "\n" + DOWN
+    inactive = vm("riven", pending=False, userenabled=INACTIVE_OPENCODE, enabled=enabled)
+    assert messages(checks.vm_recovered(inactive)) == [
+        "riven: enabled service(s) not active: pveproxy.service, opencode.service"
+    ]
+    # An inactive unit is not failed: the old failed-only check let this through.
+    assert inactive.failed_units == []
+    # Without linger the user's units are session-bound: not required after a boot.
+    unlingered = vm("riven", pending=False, userenabled=INACTIVE_OPENCODE, linger="no")
+    assert checks.vm_recovered(unlingered) == []
+    assert unlingered.user_manager is None
+    # A lingering user with nothing enabled is not a failed reading.
+    assert checks.vm_recovered(vm("riven", pending=False, userenabled="")) == []
+    assert checks.vm_recovered(vm("riven", pending=False, usermanager="degraded")) == []
+
+
+@pytest.mark.parametrize(("state", "shown"), [("offline", "offline"), ("", "?")])
+def test_a_lingering_user_manager_must_run(state: str, shown: str) -> None:
+    found = checks.vm_recovered(vm("riven", pending=False, usermanager=state))
+    assert messages(found) == [
+        f"riven: the lingering user manager is {shown}: its units are not up"
     ]
 
 
@@ -737,7 +944,10 @@ def test_full_roll() -> None:
     ]
     osiris, clovis = result.waves[0]
     assert (osiris.running, osiris.installed) == (OLD, NEW)
-    assert osiris.details == ["xur (ct:105, no HA: down with the node until it boots)"]
+    assert osiris.details == [
+        "xur (ct:105, no HA: down with the node until it boots)",
+        "deepstone (ct:111, no HA: down with the node until it boots)",
+    ]
     assert clovis.details == ["helm (vm:112, HA: live-migrates)"]
     assert result.waves[1][0].details == [
         "tower (ct:101, HA: LXC restarts on another node)",
@@ -1049,7 +1259,14 @@ def test_scripts_print_every_section_and_always_exit_zero() -> None:
         for line in survey.vm_script(None).splitlines()[:-1]
     ]
     assert set(vm_names) == set(vm_readings("helm"))
-    assert "--user -M freender@" in survey.vm_script("freender")
+    user_names = [
+        line.split("@@%s\\n' ")[1].split(";")[0]
+        for line in survey.vm_script("freender").splitlines()[:-1]
+    ]
+    assert set(user_names) == set(vm_readings("riven"))
+    assert "--user -M freender@ show" in survey.vm_script("freender")
+    assert "loginctl show-user freender -p Linger" in survey.vm_script("freender")
+    assert "test -d /etc/pve/local && echo listed" in node_text
     assert "Runner[.]Worker" in survey.vm_script(None)
 
 
@@ -1215,6 +1432,26 @@ def test_verify_reports_unreachable_and_unscraped(capsys: pytest.CaptureFixture[
         "  stop: unreachable: osiris: no route to host",
         f"riven: FAIL ({VM_NEW}, up 10 min)",
         "  stop: up is 0 for at least one scrape job",
+        "helm: ok (monitoring)",
+    ]
+
+
+@pytest.mark.usefixtures("fake_inventory")
+def test_verify_waits_for_osiris_guests_and_riven_units(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    stopped = [OSIRIS_RESOURCES[0] | {"status": "stopped"}, OSIRIS_RESOURCES[1]]
+    cluster = Cluster(
+        osiris=node_readings("osiris", resources=json.dumps(stopped)),
+        riven=vm_readings("riven", userenabled=INACTIVE_OPENCODE),
+    )
+    code = survey.run_verify(ROOT, ["osiris", "riven"], 0, False, runner_factory=lambda: cluster)
+    assert code == 1
+    assert capsys.readouterr().out.splitlines() == [
+        f"osiris: FAIL ({NEW}, up 3636 min)",
+        "  stop: onboot guest(s) not running: 105 xur (stopped)",
+        f"riven: FAIL ({VM_NEW}, up 10 min)",
+        "  stop: enabled service(s) not active: opencode.service",
         "helm: ok (monitoring)",
     ]
 

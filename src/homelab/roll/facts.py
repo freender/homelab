@@ -15,7 +15,9 @@ from .parse import (
     SwarmNode,
     apt_changes,
     colon_fields,
+    down_services,
     json_list,
+    onboot_guests,
     parse_boot,
     parse_ha,
     parse_kernel,
@@ -66,6 +68,9 @@ class NodeFacts:
     apt: AptChanges | None
     lists_age: float | None
     exporter: str
+    failed_units: list[str]
+    down_units: list[str] | None
+    onboot: list[int] | None
 
 
 def node_facts(host: str, standalone: bool, found: dict[str, str]) -> NodeFacts:
@@ -91,6 +96,9 @@ def node_facts(host: str, standalone: bool, found: dict[str, str]) -> NodeFacts:
         apt=apt_changes(get("apt")),
         lists_age=age(get("lists"), get("epoch")),
         exporter=get("exporter"),
+        failed_units=unit_names(get("failed")),
+        down_units=down_services(get("enabled")),
+        onboot=onboot_guests(get("onboot")),
     )
 
 
@@ -108,6 +116,10 @@ class VmFacts:
     apt: AptChanges | None
     lists_age: float | None
     containers: list[str] = field(default_factory=list)
+    down_units: list[str] | None = None
+    # The ssh user's manager state, read only where that user lingers: without
+    # linger its units are session-bound and do not come back with the host.
+    user_manager: str | None = None
 
 
 def vm_facts(host: str, found: dict[str, str]) -> VmFacts:
@@ -127,4 +139,18 @@ def vm_facts(host: str, found: dict[str, str]) -> VmFacts:
         apt=apt_changes(get("apt")),
         lists_age=age(get("lists"), get("epoch")),
         containers=unhealthy_containers(get("containers")),
+        down_units=services_down(found, down_services(get("enabled"))),
+        user_manager=get("usermanager") if lingers(found) else None,
     )
+
+
+def lingers(found: dict[str, str]) -> bool:
+    return found.get("linger", "") == "yes"
+
+
+def services_down(found: dict[str, str], system: list[str] | None) -> list[str] | None:
+    """System services that are down, plus the lingering user's. A user with no
+    enabled units is not a failed reading, unlike a system manager with none."""
+    if system is None or not lingers(found):
+        return system
+    return system + (down_services(found.get("userenabled", "")) or [])
