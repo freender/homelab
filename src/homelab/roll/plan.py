@@ -27,6 +27,7 @@ from .facts import NodeFacts, Unreachable, VmFacts
 # rather than quietly dropping out of the wave order.
 TOWER = "tower"
 CONTROLLER = "riven"
+ALL = "all"
 
 
 @dataclass(frozen=True)
@@ -71,8 +72,12 @@ def remedy(inventory: Inventory, host: str) -> str:
 
 
 def scoped(inventory: Inventory, requested: list[str]) -> list[str]:
-    """The requested hosts in roll order; everything when nothing is requested."""
+    """The requested hosts in roll order; everything for none, or `all` as `./deploy` takes."""
     known = [*inventory.nodes, *inventory.vms]
+    if ALL in requested:
+        if len(requested) > 1:
+            raise ValueError(f"'{ALL}' cannot be combined with host names")
+        return known
     unknown = sorted(set(requested) - set(known))
     if unknown:
         raise ValueError(

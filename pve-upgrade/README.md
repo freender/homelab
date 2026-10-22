@@ -72,7 +72,7 @@ Neither reboots anything. The stop conditions are enforced in
 kept here as the manual fallback for when `./roll` itself is broken.
 
 ```bash
-./roll plan                    # verdict: nothing-pending | ready | stop
+./roll plan                    # verdict: ready (exit 0) | stop (3) | nothing-pending (4)
 ./roll verify --wait 900 ace   # after ace's reboot; exits 0 once it has recovered
 ```
 

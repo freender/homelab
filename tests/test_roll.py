@@ -17,7 +17,7 @@ import pytest
 from click.testing import CliRunner
 
 from homelab import cli
-from homelab.hosts import HostRegistry
+from homelab.hosts import HostLookupError, HostRegistry
 from homelab.modules import guest_baseline
 from homelab.roll import checks, facts, parse, plan, survey, windows
 from homelab.roll.checks import NOTE, STOP, WARN, Finding
@@ -961,6 +961,9 @@ def test_scope() -> None:
     assert plan.scoped(INVENTORY, ["helm", "ace"]) == ["ace", "helm"]
     with pytest.raises(ValueError, match="not a PVE node or an own-kernel VM: tower, zion"):
         plan.scoped(INVENTORY, ["zion", "tower", "ace"])
+    assert plan.scoped(INVENTORY, ["all"]) == SCOPE
+    with pytest.raises(ValueError, match="'all' cannot be combined with host names"):
+        plan.scoped(INVENTORY, ["all", "ace"])
 
 
 def test_remedy_by_host() -> None:
@@ -1557,15 +1560,17 @@ def fake_inventory(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_run_plan_text_and_exit_codes(capsys: pytest.CaptureFixture[str]) -> None:
     assert survey.run_plan(ROOT, [], False, runner=Cluster(pending=("ace",)), now=NOW) == 0
     assert capsys.readouterr().out.startswith("verdict: ready\n")
+    assert survey.run_plan(ROOT, [], False, runner=Cluster(), now=NOW) == 4
+    assert capsys.readouterr().out.startswith("verdict: nothing-pending\n")
     stopping = Cluster(pending=("ace",))
     stopping.hosts["ace"] = node_readings("ace", True, tasks='[{"type": "vzdump", "id": "101"}]')
-    assert survey.run_plan(ROOT, [], False, runner=stopping, now=NOW) == 1
+    assert survey.run_plan(ROOT, [], False, runner=stopping, now=NOW) == 3
     assert "ace: task(s) running: vzdump 101" in capsys.readouterr().out
 
 
 @pytest.mark.usefixtures("fake_inventory")
 def test_run_plan_json(capsys: pytest.CaptureFixture[str]) -> None:
-    assert survey.run_plan(ROOT, ["helm"], True, runner=Cluster(), now=NOW) == 0
+    assert survey.run_plan(ROOT, ["helm"], True, runner=Cluster(), now=NOW) == 4
     data = json.loads(capsys.readouterr().out)
     assert data["verdict"] == "nothing-pending"
     assert data["current"] == ["helm"]
@@ -1574,7 +1579,7 @@ def test_run_plan_json(capsys: pytest.CaptureFixture[str]) -> None:
 @pytest.mark.usefixtures("fake_inventory")
 def test_run_plan_refuses_inside_a_window(capsys: pytest.CaptureFixture[str]) -> None:
     inside = datetime(2026, 10, 21, 12, 5, tzinfo=UTC)
-    assert survey.run_plan(ROOT, [], False, runner=Cluster(pending=("ace",)), now=inside) == 1
+    assert survey.run_plan(ROOT, [], False, runner=Cluster(pending=("ace",)), now=inside) == 3
     assert "maintenance window" in capsys.readouterr().out
 
 
@@ -1621,7 +1626,7 @@ def test_run_verify_gives_up_at_the_deadline(capsys: pytest.CaptureFixture[str])
         sleep=lambda s: None,
         clock=lambda: next(clock),
     )
-    assert code == 1
+    assert code == 3
     data = json.loads(capsys.readouterr().out)
     assert data["ok"] is False
     assert data["hosts"]["ace"]["findings"][0] == {
@@ -1660,7 +1665,7 @@ def test_run_verify_waits_out_a_maintenance_window(capsys: pytest.CaptureFixture
 def test_run_verify_fails_on_a_window_at_the_deadline(capsys: pytest.CaptureFixture[str]) -> None:
     inside = datetime(2026, 10, 21, 12, 5, tzinfo=UTC)
     code = survey.run_verify(ROOT, ["ace"], 0, False, runner_factory=Cluster, now=lambda: inside)
-    assert code == 1
+    assert code == 3
     assert capsys.readouterr().out.splitlines()[-2:] == [
         "schedule: FAIL (maintenance windows)",
         "  stop: inside the 08:00-08:10 America/New_York maintenance window",
@@ -1672,7 +1677,7 @@ def test_verify_reports_unreachable_and_unscraped(capsys: pytest.CaptureFixture[
     cluster = Cluster(osiris=None)
     cluster.up = {"data": {"result": [{"value": [0, "0"]}]}}
     assert (
-        survey.run_verify(ROOT, ["osiris", "riven"], 0, False, runner_factory=lambda: cluster) == 1
+        survey.run_verify(ROOT, ["osiris", "riven"], 0, False, runner_factory=lambda: cluster) == 3
     )
     assert capsys.readouterr().out.splitlines() == [
         "osiris: FAIL (unreachable)",
@@ -1693,7 +1698,7 @@ def test_verify_waits_for_osiris_guests_and_riven_units(
         riven=vm_readings("riven", userenabled=INACTIVE_OPENCODE),
     )
     code = survey.run_verify(ROOT, ["osiris", "riven"], 0, False, runner_factory=lambda: cluster)
-    assert code == 1
+    assert code == 3
     assert capsys.readouterr().out.splitlines() == [
         f"osiris: FAIL ({NEW}, up 3636 min)",
         "  stop: onboot guest(s) not running: 105 xur (stopped)",
@@ -1708,7 +1713,7 @@ def test_verify_fails_a_node_wave_when_the_monitor_is_down(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     code = survey.run_verify(ROOT, ["ace"], 0, False, runner_factory=lambda: Cluster(helm=None))
-    assert code == 1
+    assert code == 3
     assert capsys.readouterr().out.splitlines() == [
         f"ace: FAIL ({NEW}, up 3636 min)",
         "  stop: could not ask helm for up{host}",
@@ -1721,7 +1726,7 @@ def test_verify_fails_a_node_wave_when_the_monitor_is_down(
 def test_verify_fails_when_alertmanager_is_not_ready(capsys: pytest.CaptureFixture[str]) -> None:
     cluster = Cluster()
     cluster.ready = {"alertmanager": "503", "victoriametrics": "200"}
-    assert survey.run_verify(ROOT, ["ace"], 0, False, runner_factory=lambda: cluster) == 1
+    assert survey.run_verify(ROOT, ["ace"], 0, False, runner_factory=lambda: cluster) == 3
     assert capsys.readouterr().out.splitlines()[1:] == [
         "helm: FAIL (monitoring)",
         "  stop: alertmanager is not ready (HTTP 503)",
@@ -1791,7 +1796,7 @@ def test_cli_wiring(monkeypatch: pytest.MonkeyPatch) -> None:
 
     def fake_plan(root, hosts, as_json):
         seen.append(("plan", hosts, as_json))
-        return 1
+        return 3
 
     def fake_verify(root, hosts, wait, as_json):
         seen.append(("verify", hosts, wait, as_json))
@@ -1800,15 +1805,24 @@ def test_cli_wiring(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(survey, "run_plan", fake_plan)
     monkeypatch.setattr(survey, "run_verify", fake_verify)
     runner = CliRunner()
-    assert runner.invoke(cli.main, ["roll", "plan", "--json", "ace"]).exit_code == 1
+    assert runner.invoke(cli.main, ["roll", "plan", "--json", "ace"]).exit_code == 3
     assert runner.invoke(cli.main, ["roll", "verify", "--wait", "30", "ace"]).exit_code == 0
     assert runner.invoke(cli.main, ["roll", "verify"]).exit_code == 2
     assert seen == [("plan", ["ace"], True), ("verify", ["ace"], 30, False)]
 
 
-def test_cli_turns_a_bad_host_into_a_usage_error(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize(
+    "error",
+    [
+        ValueError("not a PVE node or an own-kernel VM: zion"),
+        HostLookupError("missing key 'config.user' for host 'zion'"),
+    ],
+)
+def test_cli_turns_a_bad_host_into_an_error(
+    monkeypatch: pytest.MonkeyPatch, error: Exception
+) -> None:
     def refuse(*args):
-        raise ValueError("not a PVE node or an own-kernel VM: zion")
+        raise error
 
     monkeypatch.setattr(survey, "run_plan", refuse)
     monkeypatch.setattr(survey, "run_verify", refuse)
@@ -1816,7 +1830,17 @@ def test_cli_turns_a_bad_host_into_a_usage_error(monkeypatch: pytest.MonkeyPatch
     for args in (["roll", "plan", "zion"], ["roll", "verify", "zion"]):
         result = runner.invoke(cli.main, args)
         assert result.exit_code == 1
-        assert "not a PVE node or an own-kernel VM: zion" in result.output
+        assert result.exception is None or isinstance(result.exception, SystemExit)
+        assert "zion" in result.output
+
+
+def test_exit_codes_never_overlap() -> None:
+    # 1 and 2 belong to Click (an error, a usage error); 0 means proceed.
+    plan_codes = set(survey.PLAN_EXIT.values())
+    assert len(plan_codes) == len(survey.PLAN_EXIT)
+    assert survey.PLAN_EXIT["ready"] == 0
+    assert not plan_codes & {1, 2}
+    assert survey.VERIFY_FAILED == survey.PLAN_EXIT["stop"]
 
 
 def test_wrapper_dispatches_to_roll() -> None:

@@ -42,14 +42,17 @@ replication are not created; `./deploy pve-guest <host>` lists them as drift.
 ## Rolling Reboots
 
 ```bash
-./roll plan [host...]                  # survey nodes + own-kernel VMs, print the waves
-./roll verify [--wait N] <host>...     # after a reboot: new kernel, healthy, scraped
+./roll plan [all|host...]              # survey nodes + own-kernel VMs, print the waves
+./roll verify [--wait N] all|<host>... # after a reboot: new kernel, healthy, scraped
 ```
 
 Both are read-only and never reboot anything. `/roll` drives them and asks
 once for the whole roll; [`pve-upgrade/README.md`](pve-upgrade/README.md) is the
-runbook. `plan` exits 1 on any stop condition, including a newer kernel that is
-available but not yet installed, which would otherwise cost a second reboot.
+runbook. Exit 0 always means proceed: `plan` exits 0 ready, 3 on any stop
+condition, 4 nothing-pending; `verify` exits 0 recovered, 3 failed. 1 and 2 are
+`./roll` errors (bad argument, unknown host, usage). A stop includes a newer
+kernel that is available but not yet installed, which would otherwise cost a
+second reboot.
 
 ## Modules
 

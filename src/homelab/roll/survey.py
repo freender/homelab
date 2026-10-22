@@ -38,6 +38,10 @@ VICTORIA_METRICS = "localhost:8428"
 CONNECT_TIMEOUT = 10
 COMMAND_TIMEOUT = 180
 VERIFY_INTERVAL = 20
+# 0 always means "go ahead with the next reboot", so nothing but a ready plan or a
+# recovered wave can return it. 1 and 2 stay Click's: an error and a usage error.
+PLAN_EXIT = {"ready": 0, "stop": 3, "nothing-pending": 4}
+VERIFY_FAILED = 3
 PBS_TASKS = "proxmox-backup-manager task list --output-format json"
 # The metrics host's own readiness: an exited container there blinds every check.
 MONITOR_READY = [
@@ -341,7 +345,7 @@ def run_plan(
         click.echo(json.dumps(plan.as_dict(), indent=2))
     else:
         click.echo("\n".join(render(plan)))
-    return 1 if plan.verdict == "stop" else 0
+    return PLAN_EXIT[plan.verdict]
 
 
 # --------------------------------------------------------------------------------------
@@ -458,4 +462,4 @@ def run_verify(
         click.echo(json.dumps({"ok": not pending, "hosts": payload}, indent=2))
     else:
         click.echo("\n".join(verify_lines(results)))
-    return 1 if pending else 0
+    return VERIFY_FAILED if pending else 0

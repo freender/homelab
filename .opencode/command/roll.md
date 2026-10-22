@@ -34,10 +34,12 @@ trigger for this command is the Saturday 09:00 `RebootRequired` Telegram digest.
    `./deploy --confirm-upgrade pve-upgrade` during the roll — `apt-upgrade` owns these
    nodes, and an upgrade mid-roll is the unreviewed package change the ordering
    exists to prevent.
-2. **Read the verdict.**
-   - `nothing-pending` (exit 0): say so and stop — no question, no reboot. That is
+2. **Read the verdict.** Exit 0 means proceed and nothing else; 1 or 2 is `./roll`
+   itself failing (bad argument, unknown host, crash) — report it and stop, as for
+   a stop condition.
+   - `nothing-pending` (exit 4): say so and stop — no question, no reboot. That is
      the expected outcome most weeks.
-   - `stop` (exit 1): report the stop conditions and stop. Do not ask, do not reboot.
+   - `stop` (exit 3): report the stop conditions and stop. Do not ask, do not reboot.
      One stop names its own fix: a **kernel that is available but not installed**.
      Rebooting then would boot the older kernel and owe a second reboot, so the plan
      tells you to install it first (`./deploy --confirm-upgrade pve-upgrade <node>`
