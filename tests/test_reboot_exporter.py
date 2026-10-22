@@ -11,6 +11,7 @@ reproduced verbatim here rather than paraphrased.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -355,16 +356,24 @@ def test_pve_patch_manifest_is_derived_from_enabled_features() -> None:
 def test_pve_patch_manifest_renders_target_marker_pairs() -> None:
     by_patch = {entry[0]: entry[3] for entry in pve_patch_statuses(ROOT, "ace")}
     assert by_patch["lxc-pre-replication"] == (
-        "/usr/share/perl5/PVE/LXC/Migrate.pm|pre-stop replication before shutdown|"
-        "/usr/share/perl5/PVE/HA/Resources/PVECT.pm|can run pre-stop replication before shutdown"
+        "/usr/share/perl5/PVE/LXC/Migrate.pm|run replication before shutting down CT|"
+        "/usr/share/perl5/PVE/HA/Resources/PVECT.pm|"
+        "let the migration task handle shutdown and start of running CTs"
     )
 
 
 @pytest.mark.parametrize("entry", PVE_PATCH_STATUSES, ids=lambda entry: entry[1])
 def test_pve_patch_markers_match_installer(entry: tuple) -> None:
-    """A marker the installer never writes would report every host unhealthy."""
+    """A marker the installer never writes would report every host unhealthy.
+
+    Legacy heredocs are stripped first: they hold superseded wording the installer
+    rewrites away, so a marker found only there is one no patched host carries.
+    """
     feature, _label, _status, _states, markers = entry
     installer = (ROOT / feature / "scripts" / "install.sh").read_text(encoding="utf-8")
+    installer = re.sub(
+        r"^\w*LEGACY\w*=\$\(cat <<'EOF'\n.*?^EOF\n\)\n", "", installer, flags=re.M | re.S
+    )
     assert markers
     for target, marker in markers:
         assert "|" not in target + marker and "\n" not in target + marker

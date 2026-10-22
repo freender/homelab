@@ -51,10 +51,10 @@ PVE_PATCH_STATUSES = (
         "/var/lib/homelab/pve-lxc-pre-replication-patch/status",
         "patched,already-patched",
         (
-            ("/usr/share/perl5/PVE/LXC/Migrate.pm", "pre-stop replication before shutdown"),
+            ("/usr/share/perl5/PVE/LXC/Migrate.pm", "run replication before shutting down CT"),
             (
                 "/usr/share/perl5/PVE/HA/Resources/PVECT.pm",
-                "can run pre-stop replication before shutdown",
+                "let the migration task handle shutdown and start of running CTs",
             ),
         ),
     ),
