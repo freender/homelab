@@ -214,6 +214,19 @@ def check_pve_guests(root: Path) -> None:
     print_ok(f"{guests} pve-guest spec(s) valid; {references} hand-written vmid(s) match")
 
 
+def check_roll_inventory(root: Path) -> None:
+    """The hosts `./roll` places waves around still exist as it expects them."""
+    from .roll.survey import inventory_problems
+
+    try:
+        problems = inventory_problems(default_registry(root))
+    except ValueError as error:
+        raise click.ClickException(str(error)) from error
+    if problems:
+        raise click.ClickException("; ".join(problems))
+    print_ok("roll inventory: tower, controller and metrics host resolve")
+
+
 
 @click.group()
 def main() -> None:
@@ -766,6 +779,7 @@ def validate() -> None:
     check_stack_placement(root)
     check_node_down_coverage(root)
     check_pve_guests(root)
+    check_roll_inventory(root)
 
     print_action("Leak Check")
     check_public_repo_leaks(root)

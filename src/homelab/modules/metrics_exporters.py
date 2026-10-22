@@ -5,7 +5,7 @@ from pathlib import Path
 
 from ..build import copy_files, render_file
 from ..deploy import DeploySession, force_env, prepare_build_dir, stage_and_run_remote_installer
-from ..hosts import HostLookupError, default_registry
+from ..hosts import HostLookupError, HostRegistry, default_registry
 from ..module_support import FileSpec, normalize_bool, run_module_deploy, write_file_map
 from ..output import print_sub
 from ..ssh import HostConnection, diff_many
@@ -414,7 +414,11 @@ def has_own_kernel(root: Path, host: str) -> bool:
     the pending-reboot exporter without the ZFS and disk exporters the
     bare-metal profile would also bring.
     """
-    registry = default_registry(root)
+    return own_kernel(default_registry(root), host)
+
+
+def own_kernel(registry: HostRegistry, host: str) -> bool:
+    """`has_own_kernel` against an already-loaded registry (`./roll` reads it too)."""
     return normalize_bool(
         registry.get(host, "metrics-exporters.own_kernel", None),
         False,

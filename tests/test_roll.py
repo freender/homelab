@@ -12,6 +12,7 @@ import json
 from datetime import UTC, datetime, time, timedelta
 from pathlib import Path
 
+import click
 import pytest
 from click.testing import CliRunner
 
@@ -1351,6 +1352,62 @@ def test_real_inventory_covers_every_node_and_own_kernel_vm() -> None:
     assert "zion" not in inventory.vms
     assert {plan.TOWER, plan.CONTROLLER} <= set(inventory.vmids)
     assert inventory.monitor == "helm"
+
+
+def test_own_kernel_reads_like_metrics_exporters(tmp_path: Path) -> None:
+    # The same normalize_bool the exporter module uses, so the two cannot drift.
+    text = HOSTS_CONF.replace("own_kernel: true", "own_kernel: 'yes'")
+    assert survey.load_inventory(registry(tmp_path, text)).vms == ["helm"]
+    with pytest.raises(ValueError, match="own_kernel must be true or false for helm"):
+        survey.load_inventory(
+            registry(tmp_path, HOSTS_CONF.replace("own_kernel: true", "own_kernel: maybe"))
+        )
+
+
+def test_the_real_inventory_has_no_roll_problems() -> None:
+    assert survey.inventory_problems(HostRegistry(ROOT / "hosts.conf")) == []
+
+
+RIVEN = """
+riven:
+  config: {type: ubuntu, hostname: riven.x.internal, user: root, sshkey: infra}
+  features:
+    pve-guest: {vmid: 110, kind: qemu, home_node: ace}
+    metrics-exporters: {own_kernel: true}
+"""
+
+
+def test_inventory_problems(tmp_path: Path) -> None:
+    assert survey.inventory_problems(registry(tmp_path, HOSTS_CONF + RIVEN)) == []
+    # No PVE node, no roll: an empty inventory has nothing to hold ./roll to.
+    assert survey.inventory_problems(registry(tmp_path, "{}\n")) == []
+    missing = HOSTS_CONF.replace("tower:", "vault:").replace("grafana, victoria-metrics", "x")
+    assert survey.inventory_problems(registry(tmp_path, missing)) == [
+        "roll plan.TOWER is 'tower', which has no pve-guest.vmid in hosts.conf",
+        "roll plan.CONTROLLER is 'riven', which has no pve-guest.vmid in hosts.conf",
+        "roll needs exactly one docker-stacks host running victoria-metrics, found 0: none",
+    ]
+    twice = HOSTS_CONF.replace("stacks: [traefik]", "stacks: [victoria-metrics]")
+    lxc = RIVEN.replace("kind: qemu", "kind: lxc")
+    assert survey.inventory_problems(registry(tmp_path, twice + lxc)) == [
+        "roll needs exactly one docker-stacks host running victoria-metrics, found 2: helm, tower",
+        "riven sets metrics-exporters.own_kernel but is not a qemu pve-guest, so roll skips it",
+    ]
+
+
+def test_cli_check_roll_inventory(monkeypatch: pytest.MonkeyPatch, capsys) -> None:
+    cli.check_roll_inventory(ROOT)
+    assert "roll inventory: tower, controller and metrics host resolve" in capsys.readouterr().out
+    monkeypatch.setattr(survey, "inventory_problems", lambda registry: ["a", "b"])
+    with pytest.raises(click.ClickException, match="^a; b$"):
+        cli.check_roll_inventory(ROOT)
+
+    def invalid(registry):
+        raise ValueError("own_kernel must be true or false for helm")
+
+    monkeypatch.setattr(survey, "inventory_problems", invalid)
+    with pytest.raises(click.ClickException, match="own_kernel must be true or false"):
+        cli.check_roll_inventory(ROOT)
 
 
 def test_scripts_print_every_section_and_always_exit_zero() -> None:

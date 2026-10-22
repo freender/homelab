@@ -19,16 +19,20 @@ import click
 
 from ..hosts import HostRegistry, default_registry
 from ..module_support import connection_for_host
+from ..modules.apt_upgrade import SERVICE_NAME as UPGRADE_SERVICE
+from ..modules.metrics_exporters import TEXTFILE_DIR as TEXTFILE
+from ..modules.metrics_exporters import own_kernel
 from ..modules.pve_guest.inventory import pve_nodes
 from . import checks
 from .checks import STOP, Finding
 from .facts import NodeFacts, Unreachable, VmFacts, node_facts, vm_facts
 from .parse import SECTION_MARK, sections, task_names, up_values
-from .plan import Inventory, Survey, build_plan, render, scoped
+from .plan import CONTROLLER, TOWER, Inventory, Survey, build_plan, render, scoped
 from .windows import Window, load_windows, wave_findings, window_findings
 
-TEXTFILE = "/var/lib/prometheus/node-exporter"
 METRICS_STACK = "victoria-metrics"
+# The host port docker-stacks/stacks/victoria-metrics publishes, asked from the host itself.
+VICTORIA_METRICS = "localhost:8428"
 CONNECT_TIMEOUT = 10
 COMMAND_TIMEOUT = 180
 VERIFY_INTERVAL = 20
@@ -36,7 +40,7 @@ PBS_TASKS = "proxmox-backup-manager task list --output-format json"
 # The metrics host's own readiness: an exited container there blinds every check.
 MONITOR_READY = [
     ("alertmanager", "localhost:9093/-/ready"),
-    ("victoriametrics", "localhost:8428/health"),
+    ("victoriametrics", f"{VICTORIA_METRICS}/health"),
 ]
 
 # The reboot exporter's reading, and its age against dpkg's last change: the
@@ -52,7 +56,7 @@ KERNEL_READINGS = [
 UPGRADE_READINGS = [
     (
         "upgrade",
-        "systemctl show homelab-apt-dist-upgrade.service -p LoadState -p Result -p ExecMainStatus",
+        f"systemctl show {UPGRADE_SERVICE} -p LoadState -p Result -p ExecMainStatus",
     ),
     (
         "apt",
@@ -108,16 +112,45 @@ def own_kernel_vms(registry: HostRegistry, vmids: dict[str, int]) -> list[str]:
     return [
         host
         for host in vmids
-        if registry.get(host, "pve-guest.kind", None) == "qemu"
-        and registry.get(host, "metrics-exporters.own_kernel", False) is True
+        if registry.get(host, "pve-guest.kind", None) == "qemu" and own_kernel(registry, host)
+    ]
+
+
+def metrics_hosts(registry: HostRegistry) -> list[str]:
+    return [
+        host
+        for host in registry.list_hosts(feature="docker-stacks")
+        if METRICS_STACK in (registry.get(host, "docker-stacks.stacks", []) or [])
     ]
 
 
 def metrics_host(registry: HostRegistry) -> str | None:
-    for host in registry.list_hosts(feature="docker-stacks"):
-        if METRICS_STACK in (registry.get(host, "docker-stacks.stacks", []) or []):
-            return host
-    return None
+    return next(iter(metrics_hosts(registry)), None)
+
+
+def inventory_problems(registry: HostRegistry) -> list[str]:
+    """What `./validate` refuses: hosts.conf drifting from what `./roll` assumes."""
+    if not pve_nodes(registry):
+        return []
+    vmids = guest_vmids(registry)
+    problems = [
+        f"roll plan.{name} is {host!r}, which has no pve-guest.vmid in hosts.conf"
+        for name, host in (("TOWER", TOWER), ("CONTROLLER", CONTROLLER))
+        if host not in vmids
+    ]
+    monitors = metrics_hosts(registry)
+    if len(monitors) != 1:
+        problems.append(
+            f"roll needs exactly one docker-stacks host running {METRICS_STACK}, "
+            f"found {len(monitors)}: {', '.join(monitors) or 'none'}"
+        )
+    qemu = set(own_kernel_vms(registry, vmids))
+    problems += [
+        f"{host} sets metrics-exporters.own_kernel but is not a qemu pve-guest, so roll skips it"
+        for host in registry.list_hosts()
+        if own_kernel(registry, host) and host not in qemu
+    ]
+    return problems
 
 
 def load_inventory(registry: HostRegistry) -> Inventory:
@@ -216,7 +249,7 @@ def vm_script(user: str | None) -> str:
 
 def up_command(host: str) -> str:
     query = shlex.quote(f'query=up{{host="{host}"}}')
-    return f"curl -s --max-time 10 --get localhost:8428/api/v1/query --data-urlencode {query}"
+    return f"curl -s --max-time 10 --get {VICTORIA_METRICS}/api/v1/query --data-urlencode {query}"
 
 
 def ready_command() -> str:

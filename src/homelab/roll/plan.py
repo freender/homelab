@@ -17,10 +17,13 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 
+from ..modules.apt_upgrade import SERVICE_NAME as UPGRADE_SERVICE
 from . import checks
 from .checks import NOTE, STOP, WARN, Finding
 from .facts import NodeFacts, Unreachable, VmFacts
 
+# Held to hosts.conf by `./validate` (check_roll_inventory): a rename fails CI
+# rather than quietly dropping out of the wave order.
 TOWER = "tower"
 CONTROLLER = "riven"
 
@@ -45,7 +48,7 @@ def remedy(inventory: Inventory, host: str) -> str:
     """How to install a pending kernel now, before the roll rather than during it."""
     if host in inventory.upgraders:
         return f"./deploy --confirm-upgrade pve-upgrade {host}"
-    return f"systemctl start homelab-apt-dist-upgrade.service on {host}, as root"
+    return f"systemctl start {UPGRADE_SERVICE} on {host}, as root"
 
 
 def scoped(inventory: Inventory, requested: list[str]) -> list[str]:
