@@ -115,9 +115,13 @@ scrape_configs:
         labels:
           host: neo
 
+  # apcupsd's NIS server stalls for 2-15 s while its USB poll holds the UPS lock
+  # (freender/homelab-ops#228). The chain must stay ordered: apcaccess gives up
+  # on its own (~20 s) < exporter APCUPSD_EXPORTER_TIMEOUT (22 s) < scrape_timeout
+  # <= scrape_interval -- vmagent silently clamps a longer timeout to the interval.
   - job_name: apcupsd
-    scrape_interval: 10s
-    scrape_timeout: 8s
+    scrape_interval: 30s
+    scrape_timeout: 25s
     relabel_configs:
       - source_labels: [__address__]
         target_label: endpoint

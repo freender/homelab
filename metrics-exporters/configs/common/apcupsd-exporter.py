@@ -3,14 +3,19 @@
 import os
 import re
 import subprocess
-from http.server import BaseHTTPRequestHandler, HTTPServer
-
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 PORT = int(os.getenv("APCUPSD_EXPORTER_PORT", "9162"))
 PATH = os.getenv("APCUPSD_EXPORTER_PATH", "/metrics")
 UPS_NAME = os.getenv("APCUPSD_EXPORTER_UPS_NAME", "")
 UPS_HOST = os.getenv("APCUPSD_EXPORTER_UPS_HOST", "")
 UPS_SERIAL = os.getenv("APCUPSD_EXPORTER_UPS_SERIAL", "")
+# Must outlast apcaccess's own give-up (5 s connect + 15 s read in apclibnis.c),
+# so apcaccess always exits on its own and is never killed mid-request -- a kill
+# leaves apcupsd's NIS thread parked on its lock (freender/homelab-ops#228). It
+# must also stay under the apcupsd job's scrape_timeout in scrape.yml.
+APCACCESS_TIMEOUT = float(os.getenv("APCUPSD_EXPORTER_TIMEOUT", "22"))
 
 GAUGES = {
     "LINEV": ("apcupsd_line_volts", "line voltage"),
@@ -27,7 +32,7 @@ def esc(value):
 
 
 def parse_status():
-    out = subprocess.check_output(["apcaccess", "status"], text=True, timeout=10)
+    out = subprocess.check_output(["apcaccess", "status"], text=True, timeout=APCACCESS_TIMEOUT)
     values = {}
     for line in out.splitlines():
         if ":" not in line:
@@ -35,6 +40,44 @@ def parse_status():
         key, value = line.split(":", 1)
         values[key.strip()] = value.strip()
     return values
+
+
+class SingleFlight:
+    """Concurrent callers share one in-flight call instead of each starting their own.
+
+    Two vmagents scrape this exporter. Without this, a stall in apcupsd would
+    get one apcaccess client per scrape queued on its lock; with it, every
+    scrape that arrives mid-call waits for and returns that same result.
+    """
+
+    def __init__(self, fn):
+        self._fn = fn
+        self._lock = threading.Lock()
+        self._flight = None
+
+    def __call__(self):
+        with self._lock:
+            flight = self._flight
+            leader = flight is None
+            if leader:
+                flight = self._flight = {"done": threading.Event()}
+        if leader:
+            try:
+                flight["value"] = self._fn()
+            except Exception as exc:
+                flight["error"] = exc
+            finally:
+                with self._lock:
+                    self._flight = None
+                flight["done"].set()
+        else:
+            flight["done"].wait()
+        if "error" in flight:
+            raise flight["error"]
+        return flight["value"]
+
+
+fetch_status = SingleFlight(parse_status)
 
 
 def metric_value(raw):
@@ -60,7 +103,7 @@ def identity_labels():
 
 
 def build_metrics():
-    values = parse_status()
+    values = fetch_status()
     # STATUS is deliberately NOT part of the common label set: it flips on every
     # ONBATTERY/ONLINE transition, and carrying it on the gauges would give each
     # transition a brand-new series, breaking exactly the trend continuity the
@@ -109,11 +152,6 @@ class Handler(BaseHTTPRequestHandler):
             return
         try:
             body = build_metrics().encode()
-            self.send_response(200)
-            self.send_header("Content-Type", "text/plain; version=0.0.4")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
         except Exception as exc:
             # Answer 200, not 500: a 5xx makes the scraper discard the body, so the
             # apcupsd_up 0 this path exists to publish never actually landed in
@@ -121,15 +159,19 @@ class Handler(BaseHTTPRequestHandler):
             # UpsExporterDown fire on a dead apcupsd rather than only on a dead
             # exporter process.
             body = (build_failure_metrics() + f"# scrape_error {exc}\n").encode()
+        try:
             self.send_response(200)
             self.send_header("Content-Type", "text/plain; version=0.0.4")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError):
+            # The scraper gave up before apcaccess answered; nobody to tell.
+            pass
 
     def log_message(self, format, *args):
         return
 
 
 if __name__ == "__main__":
-    HTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
+    ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
