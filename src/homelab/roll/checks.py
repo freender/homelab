@@ -120,12 +120,6 @@ def boot(facts: NodeFacts) -> list[Finding]:
     return []
 
 
-def ups(facts: NodeFacts) -> list[Finding]:
-    if facts.ups is not None and not facts.ups.startswith("ONLINE"):
-        return [stop(facts.host, f"UPS status is {facts.ups}")]
-    return []
-
-
 def tasks(host: str, running: list[str] | None, owner: str | None = None) -> list[Finding]:
     where = f" on {owner}" if owner else ""
     if running is None:
@@ -198,15 +192,14 @@ def node_preflight(facts: NodeFacts, remedy: str) -> list[Finding]:
         *replication(facts),
         *pools(facts.host, facts.pools),
         *boot(facts),
-        *ups(facts),
         *tasks(facts.host, facts.tasks),
         *upgrade(facts.host, facts.upgrade, facts.apt, facts.kernel, facts.lists_age, remedy),
     ]
 
 
 def receiving(facts: NodeFacts) -> list[Finding]:
-    """What a node taking another node's HA guests must pass: healthy pools, mains, idle."""
-    return [*pools(facts.host, facts.pools), *ups(facts), *tasks(facts.host, facts.tasks)]
+    """What a node taking another node's HA guests must pass: healthy pools, idle."""
+    return [*pools(facts.host, facts.pools), *tasks(facts.host, facts.tasks)]
 
 
 def ha(host: str, status: HaStatus) -> list[Finding]:

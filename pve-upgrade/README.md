@@ -198,16 +198,13 @@ ssh <node> 'zpool status -x'
 # come back from the reboot. 0 dead entries and a loadable first entry.
 ssh <node> 'grep -v "^#" /var/lib/prometheus/node-exporter/boot-entries.prom'
 
-# On mains power, not battery
-ssh <node> 'apcaccess status 2>/dev/null | grep -E "STATUS|TIMELEFT" || true'
-
 # No backup running (check PBS tasks on xur, and PVE tasks on the node)
 ssh <node> 'pvesh get /nodes/<node>/tasks --limit 5 --output-format json-pretty | head -40'
 ```
 
 **Stop if:** not quorate, `ha-manager status` shows anything but `quorum OK` and
 active LRMs, any replication job failing, `zpool status -x` is not
-`all pools are healthy`, the UPS is on battery, a backup is in progress, or
+`all pools are healthy`, a backup is in progress, or
 `homelab_boot_first_entry_loadable` is `0` (the node will not come back — fix
 the boot entry with `efibootmgr` first, while it is still reachable) or
 `homelab_boot_entries_dead` is above `0` (clean the husks before rebooting, or
@@ -261,8 +258,8 @@ If `homelab_reboot_required` is `0`, the node **drops out of the plan entirely**
 — no reboot, and its guests are not touched. Most months that is every node, and
 the whole run ends here with "nothing pending". Its other stop conditions then
 only warn, with one exception: while any cluster node is pending, every other
-cluster node receives its HA guests, so on those a degraded pool, a UPS on
-battery or a running task still stops the roll — even when the node is outside
+cluster node receives its HA guests, so on those a degraded pool or a running
+task still stops the roll — even when the node is outside
 the requested subset. osiris never receives guests, so nothing there is kept.
 
 If it is `1`, the node joins the plan. `/roll` may reboot it **only after

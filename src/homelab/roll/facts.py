@@ -14,7 +14,6 @@ from .parse import (
     ReplJob,
     SwarmNode,
     apt_changes,
-    colon_fields,
     down_services,
     json_list,
     onboot_guests,
@@ -64,7 +63,6 @@ class NodeFacts:
     resources: list[dict] | None
     replication: list[ReplJob]
     clock: datetime | None
-    ups: str | None
     tasks: list[str] | None
     upgrade: dict[str, str]
     apt: AptChanges | None
@@ -93,7 +91,6 @@ def node_facts(host: str, standalone: bool, found: dict[str, str]) -> NodeFacts:
         resources=json_list(get("resources")),
         replication=parse_replication(get("replication")),
         clock=sync_time(get("clock")),
-        ups=colon_fields(get("ups")).get("STATUS"),
         tasks=task_names(get("tasks")),
         upgrade=properties(get("upgrade")),
         apt=apt_changes(get("apt")),

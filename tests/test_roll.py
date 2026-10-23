@@ -10,8 +10,12 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import os
+import subprocess
+import threading
 from datetime import UTC, datetime, time, timedelta
 from pathlib import Path
+from time import monotonic
 
 import click
 import pytest
@@ -77,7 +81,6 @@ BOOT_OK = """\
 homelab_boot_entries_dead{host="ace"} 0
 homelab_boot_first_entry_loadable{host="ace"} 1
 """
-UPS_ONLINE = "STATUS   : ONLINE \nBCHARGE  : 100.0 Percent\nTIMELEFT : 38.1 Minutes"
 UPGRADE_OK = "Result=success\nExecMainStatus=0\nLoadState=loaded"
 APT_NONE = "0 upgraded, 0 newly installed, 0 to remove and 0 not upgraded."
 APT_KERNEL = """\
@@ -220,7 +223,6 @@ def node_readings(host: str, pending: bool = False, **overrides: str) -> dict[st
         "resources": json.dumps(OSIRIS_RESOURCES if standalone else RESOURCES),
         "replication": PVESR_EMPTY if standalone else PVESR,
         "clock": CLOCK,
-        "ups": UPS_ONLINE,
         "tasks": "[]",
         "upgrade": UPGRADE_OK,
         "apt": APT_NONE,
@@ -645,12 +647,6 @@ def test_boot_entries() -> None:
     assert messages(checks.boot(node(boot=dead))) == [
         "ace: 2 dead UEFI boot entry(ies); clean them first"
     ]
-
-
-def test_ups() -> None:
-    assert checks.ups(node()) == []
-    assert checks.ups(node(ups="")) == []
-    assert messages(checks.ups(node(ups="STATUS   : ONBATT"))) == ["ace: UPS status is ONBATT"]
 
 
 def test_tasks() -> None:
@@ -1084,23 +1080,15 @@ def test_a_stop_on_a_current_node_only_warns() -> None:
 
 
 DEGRADED = "  pool: rpool\n state: DEGRADED"
-ON_BATTERY = "STATUS   : ONBATT \nTIMELEFT : 20.0 Minutes"
 BUSY = json.dumps([{"type": "vzdump", "id": "", "status": ""}])
 
 
-@pytest.mark.parametrize(
-    ("override", "message"),
-    [
-        ({"pools": DEGRADED}, "bray: zpool status -x: pool: rpool (receives HA guests)"),
-        ({"ups": ON_BATTERY}, "bray: UPS status is ONBATT (receives HA guests)"),
-    ],
-)
-def test_a_receiving_node_still_stops_the_roll(override: dict[str, str], message: str) -> None:
+def test_a_receiving_node_still_stops_the_roll() -> None:
     cluster = Cluster(pending=("ace",))
-    cluster.hosts["bray"] = node_readings("bray", False, **override)
+    cluster.hosts["bray"] = node_readings("bray", False, pools=DEGRADED)
     result = make_plan(cluster)
     assert result.verdict == "stop"
-    assert messages(result.stops) == [message]
+    assert messages(result.stops) == ["bray: zpool status -x: pool: rpool (receives HA guests)"]
     assert "bray" in result.current
 
 
@@ -1138,18 +1126,18 @@ def test_an_unreachable_receiver_outside_the_scope_stops() -> None:
 @pytest.mark.parametrize("pending", [("osiris",), ("osiris", "helm"), ()])
 def test_nothing_is_promoted_without_a_pending_cluster_node(pending: tuple[str, ...]) -> None:
     cluster = Cluster(pending=pending)
-    cluster.hosts["bray"] = node_readings("bray", False, pools=DEGRADED, ups=ON_BATTERY)
+    cluster.hosts["bray"] = node_readings("bray", False, pools=DEGRADED, tasks=BUSY)
     result = make_plan(cluster)
     assert result.stops == []
     assert messages(result.warnings) == [
         "bray: zpool status -x: pool: rpool (not pending)",
-        "bray: UPS status is ONBATT (not pending)",
+        "bray: task(s) running: vzdump (not pending)",
     ]
 
 
 def test_nothing_on_osiris_is_promoted() -> None:
     cluster = Cluster(pending=("ace",))
-    cluster.hosts["osiris"] = node_readings("osiris", False, pools=DEGRADED, ups=ON_BATTERY)
+    cluster.hosts["osiris"] = node_readings("osiris", False, pools=DEGRADED, tasks=BUSY)
     result = make_plan(cluster)
     assert result.stops == []
     assert [item.host for item in result.warnings] == ["osiris", "osiris"]
@@ -1352,13 +1340,12 @@ def test_demote_keeps_what_a_receiver_needs() -> None:
     ]
 
 
-def test_receiving_checks_pools_ups_and_tasks_only() -> None:
+def test_receiving_checks_pools_and_tasks_only() -> None:
     healthy = node("bray", False, apt=APT_KERNEL, boot="")
     assert checks.receiving(healthy) == []
-    sick = node("bray", False, pools=DEGRADED, ups=ON_BATTERY, tasks=BUSY)
+    sick = node("bray", False, pools=DEGRADED, tasks=BUSY)
     assert [item.message.split(":")[0] for item in checks.receiving(sick)] == [
         "zpool status -x",
-        "UPS status is ONBATT",
         "task(s) running",
     ]
 
@@ -1669,22 +1656,27 @@ def test_cli_check_roll_inventory(monkeypatch: pytest.MonkeyPatch, capsys) -> No
         cli.check_roll_inventory(ROOT)
 
 
+def printed_names(text: str) -> list[str]:
+    (loop,) = [line for line in text.splitlines() if line.startswith("for n in ")]
+    return loop.removeprefix("for n in ").split("; do")[0].split()
+
+
+def started_names(text: str) -> list[str]:
+    return [
+        line.rsplit('"$d/', 1)[1].removesuffix('" &')
+        for line in text.splitlines()
+        if line.endswith(" &")
+    ]
+
+
 def test_scripts_print_every_section_and_always_exit_zero() -> None:
     node_text = survey.node_script("ace")
-    names = [line.split("@@%s\\n' ")[1].split(";")[0] for line in node_text.splitlines()[:-1]]
-    assert names == list(node_readings("ace"))
+    assert printed_names(node_text) == list(node_readings("ace"))
+    assert started_names(node_text) == list(node_readings("ace"))
     assert node_text.endswith("\ntrue")
     assert "/nodes/ace/tasks --source active" in node_text
-    vm_names = [
-        line.split("@@%s\\n' ")[1].split(";")[0]
-        for line in survey.vm_script(None).splitlines()[:-1]
-    ]
-    assert set(vm_names) == set(vm_readings("helm"))
-    user_names = [
-        line.split("@@%s\\n' ")[1].split(";")[0]
-        for line in survey.vm_script("freender").splitlines()[:-1]
-    ]
-    assert set(user_names) == set(vm_readings("riven"))
+    assert set(printed_names(survey.vm_script(None))) == set(vm_readings("helm"))
+    assert set(printed_names(survey.vm_script("freender"))) == set(vm_readings("riven"))
     assert "--user -M freender@ show" in survey.vm_script("freender")
     assert "loginctl show-user freender -p Linger" in survey.vm_script("freender")
     assert "test -d /etc/pve/local && echo listed" in node_text
@@ -1739,6 +1731,117 @@ def test_ssh_runner(monkeypatch: pytest.MonkeyPatch) -> None:
     assert len(made) == 2
     assert made[0].connect_timeout == survey.CONNECT_TIMEOUT
     assert made[0].kwargs[0] == {"hide": True, "warn": True, "timeout": survey.COMMAND_TIMEOUT}
+
+
+def test_ssh_runner_serializes_one_host_but_not_two(monkeypatch: pytest.MonkeyPatch) -> None:
+    inside: dict[str, int] = {"ace": 0, "helm": 0}
+    overlap: dict[str, int] = {"ace": 0, "helm": 0}
+    both = threading.Barrier(2, timeout=5)
+
+    class Slow:
+        def __init__(self, host: str) -> None:
+            self.host = host
+
+        def run(self, command: str, **kwargs):
+            inside[self.host] += 1
+            overlap[self.host] = max(overlap[self.host], inside[self.host])
+            if command == "meet":
+                both.wait()  # only returns if another host is running at the same time
+            threading.Event().wait(0.05)
+            inside[self.host] -= 1
+            return FakeResult(0, self.host)
+
+    monkeypatch.setattr(
+        survey,
+        "connection_for_host",
+        lambda root, host: type("HostConnection", (), {"connection": Slow(host)})(),
+    )
+    run = survey.ssh_runner(ROOT)
+    calls = [("ace", "meet"), ("helm", "meet"), ("helm", "x"), ("helm", "x")]
+    threads = [threading.Thread(target=run, args=call) for call in calls]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert not both.broken
+    assert overlap == {"ace": 1, "helm": 1}
+
+
+def bash(text: str, tmp_path: Path) -> subprocess.CompletedProcess[str]:
+    env = os.environ | {"TMPDIR": str(tmp_path)}
+    return subprocess.run(["bash", "-c", text], capture_output=True, text=True, env=env)
+
+
+def test_script_runs_readings_at_once_and_prints_them_in_order(tmp_path: Path) -> None:
+    text = survey.script(
+        [
+            ("slow", "sleep 0.6; echo one"),
+            ("fails", "echo half; false"),
+            ("piped", "printf 'a\\nb\\n' | grep b && echo and"),
+            ("quiet", "true"),
+            ("also", "sleep 0.6; echo two"),
+        ]
+    )
+    started = monotonic()
+    result = bash(text, tmp_path)
+    assert monotonic() - started < 1.1  # two 0.6 s readings, run side by side
+    assert result.returncode == 0
+    assert list(parse.sections(result.stdout).items()) == [
+        ("slow", "one"),
+        ("fails", "half"),
+        ("piped", "b\nand"),
+        ("quiet", ""),
+        ("also", "two"),
+    ]
+    assert list(tmp_path.iterdir()) == []  # the scratch dir goes with the script
+
+
+def test_script_fails_without_a_scratch_dir(tmp_path: Path) -> None:
+    result = bash(survey.script([("a", "echo a")]), tmp_path / "missing")
+    assert result.returncode != 0
+    assert "@@a" not in result.stdout
+
+
+def test_survey_reads_every_host_at_once() -> None:
+    scope = plan.scoped(INVENTORY, [])
+    hosts = [*INVENTORY.nodes, *[h for h in INVENTORY.vms if h in scope], *INVENTORY.pbs]
+    meet = threading.Barrier(len(hosts), timeout=5)
+    cluster = Cluster()
+
+    def runner(host: str, command: str) -> str:
+        meet.wait()  # breaks, and so fails, unless every host is read concurrently
+        return cluster(host, command)
+
+    taken = survey.take_survey(INVENTORY, runner, scope)
+    assert list(taken.nodes) == list(INVENTORY.nodes)
+    assert list(taken.pbs_tasks) == ["xur"]
+    assert not meet.broken
+
+
+def test_verify_reads_its_hosts_at_once() -> None:
+    hosts = ["ace", "bray", "riven"]
+    meet = threading.Barrier(len(hosts), timeout=5)
+    cluster = Cluster()
+
+    def runner(host: str, command: str) -> str:
+        if host in hosts and "api/v1/query" not in command:
+            meet.wait()
+        return cluster(host, command)
+
+    results = survey.verify_once(runner, INVENTORY, hosts)
+    assert list(results) == [*hosts, "helm"]
+    assert not meet.broken
+
+
+def test_concurrently_keeps_order_and_raises() -> None:
+    assert survey.concurrently({"b": lambda: 2, "a": lambda: 1}) == {"b": 2, "a": 1}
+    assert list(survey.concurrently({"b": lambda: 2, "a": lambda: 1})) == ["b", "a"]
+
+    def boom() -> int:
+        raise RuntimeError("boom")
+
+    with pytest.raises(RuntimeError, match="boom"):
+        survey.concurrently({"a": boom})
 
 
 def test_pbs_tasks_survives_a_down_pbs() -> None:

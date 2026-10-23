@@ -104,7 +104,7 @@ def parse_boot(text: str) -> Boot:
 
 
 def colon_fields(text: str) -> dict[str, str]:
-    """`Key:   value` lines, as printed by pvecm and apcaccess."""
+    """`Key:   value` lines, as printed by pvecm."""
     fields: dict[str, str] = {}
     for line in text.splitlines():
         key, sep, value = line.partition(":")

@@ -2,6 +2,8 @@
 
 One SSH command per host: a script that prints each reading under an `@@name`
 marker, so an unreachable host costs one connect timeout, not one per check.
+Hosts are read in parallel, and so are the readings within each script, so a
+survey costs its slowest host's slowest reading rather than the sum of them all.
 Nothing here writes to a host. The reboots themselves stay with the operator,
 behind the single approval `/roll` asks for.
 """
@@ -10,9 +12,12 @@ from __future__ import annotations
 
 import json
 import shlex
+import threading
 import time
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
+from functools import partial
 from pathlib import Path
 
 import click
@@ -37,6 +42,8 @@ METRICS_STACK = "victoria-metrics"
 VICTORIA_METRICS = "localhost:8428"
 CONNECT_TIMEOUT = 10
 COMMAND_TIMEOUT = 180
+# More than the fleet's nodes, own-kernel VMs and PBS hosts together.
+SURVEY_WORKERS = 16
 VERIFY_INTERVAL = 20
 # 0 always means "go ahead with the next reboot", so nothing but a ready plan or a
 # recovered wave can return it. 1 and 2 stay Click's: an error and a usage error.
@@ -191,8 +198,22 @@ def load_inventory(registry: HostRegistry) -> Inventory:
 
 
 def script(readings: list[tuple[str, str]]) -> str:
-    lines = [f"printf '\\n{SECTION_MARK}%s\\n' {name}; {command}" for name, command in readings]
-    return "\n".join([*lines, "true"])
+    """Start every reading at once, each into its own file, then print them in order.
+
+    The PVE CLIs (pvesh, ha-manager, pvesr, pvecm) are Perl and take most of a
+    second each just to start; run in turn they were most of a node's survey.
+    """
+    names = " ".join(name for name, _ in readings)
+    return "\n".join(
+        [
+            "d=$(mktemp -d) || exit 1",
+            "trap 'rm -rf \"$d\"' EXIT",
+            *[f'( {command} ) >"$d/{name}" &' for name, command in readings],
+            "wait",
+            f'for n in {names}; do printf \'\\n{SECTION_MARK}%s\\n\' "$n"; cat "$d/$n"; done',
+            "true",
+        ]
+    )
 
 
 def node_script(host: str) -> str:
@@ -211,7 +232,6 @@ def node_script(host: str) -> str:
             ),
             ("replication", "pvesr status 2>&1"),
             ("clock", "date +%Y-%m-%d_%H:%M:%S"),
-            ("ups", "apcaccess status 2>/dev/null"),
             (
                 "tasks",
                 f"pvesh get /nodes/{shlex.quote(host)}/tasks --source active "
@@ -272,9 +292,15 @@ def ready_command() -> str:
 
 
 def ssh_runner(root: Path) -> Runner:
+    """Safe across threads: calls to one host take turns on its single connection."""
     connections: dict = {}
+    locks: dict[str, threading.Lock] = {}
 
     def run(host: str, command: str) -> str:
+        with locks.setdefault(host, threading.Lock()):
+            return run_alone(host, command)
+
+    def run_alone(host: str, command: str) -> str:
         if host not in connections:
             connection = connection_for_host(root, host).connection
             connection.connect_timeout = CONNECT_TIMEOUT
@@ -315,12 +341,30 @@ def pbs_tasks(runner: Runner, host: str) -> list[str] | None:
         return None
 
 
+def concurrently[T](calls: dict[str, Callable[[], T]]) -> dict[str, T]:
+    """Run every call at once; results keep the calls' order, exceptions propagate."""
+    with ThreadPoolExecutor(max_workers=SURVEY_WORKERS) as pool:
+        futures = {key: pool.submit(call) for key, call in calls.items()}
+    return {key: future.result() for key, future in futures.items()}
+
+
 def take_survey(inventory: Inventory, runner: Runner, scope: list[str]) -> Survey:
     """Every node is read even for a subset: tower's placement and HA are cluster facts."""
+    with ThreadPoolExecutor(max_workers=SURVEY_WORKERS) as pool:
+        nodes = {
+            host: pool.submit(survey_node, runner, host, alone)
+            for host, alone in inventory.nodes.items()
+        }
+        vms = {
+            host: pool.submit(survey_vm, runner, inventory, host)
+            for host in inventory.vms
+            if host in scope
+        }
+        tasks = {host: pool.submit(pbs_tasks, runner, host) for host in inventory.pbs}
     return Survey(
-        nodes={host: survey_node(runner, host, alone) for host, alone in inventory.nodes.items()},
-        vms={host: survey_vm(runner, inventory, host) for host in inventory.vms if host in scope},
-        pbs_tasks={host: pbs_tasks(runner, host) for host in inventory.pbs},
+        nodes={host: future.result() for host, future in nodes.items()},
+        vms={host: future.result() for host, future in vms.items()},
+        pbs_tasks={host: future.result() for host, future in tasks.items()},
     )
 
 
@@ -394,7 +438,7 @@ def verify_once(
 ) -> dict[str, tuple[str, list[Finding]]]:
     """Every pass also checks the metrics host, wave target or not: a node wave
     can migrate it, and without it no host's `up` check means anything."""
-    results = {host: verify_host(runner, inventory, host) for host in hosts}
+    results = concurrently({host: partial(verify_host, runner, inventory, host) for host in hosts})
     monitor = inventory.monitor
     if not monitor:
         return results
