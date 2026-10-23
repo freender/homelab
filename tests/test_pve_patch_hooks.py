@@ -8,7 +8,6 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 PATCH_INSTALLERS = (
     "pve-zfs-large-block-patch/scripts/install.sh",
-    "pve-zfs-migration-sync-patch/scripts/install.sh",
     "pve-lxc-pre-replication-patch/scripts/install.sh",
 )
 

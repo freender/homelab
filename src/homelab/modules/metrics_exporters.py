@@ -32,13 +32,6 @@ TEXTFILE_DIR = "/var/lib/prometheus/node-exporter"
 # patched text written by the module's install.sh (tests enforce this).
 PVE_PATCH_STATUSES = (
     (
-        "pve-zfs-migration-sync-patch",
-        "zfs-migration-sync",
-        "/var/lib/homelab/pve-zfs-recv-cache-patch/status",
-        "patched,already-patched,repaired-partial-patch",
-        (("/usr/share/perl5/PVE/Storage/ZFSPoolPlugin.pm", "$unmount_received_subvol->();"),),
-    ),
-    (
         "pve-zfs-large-block-patch",
         "zfs-large-block",
         "/var/lib/homelab/pve-zfs-large-block-patch/status",

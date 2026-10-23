@@ -342,12 +342,10 @@ def test_pve_patch_health_requires_marker_in_live_target(
 
 def test_pve_patch_manifest_is_derived_from_enabled_features() -> None:
     assert [entry[0] for entry in pve_patch_statuses(ROOT, "ace")] == [
-        "zfs-migration-sync",
         "zfs-large-block",
         "lxc-pre-replication",
     ]
     assert [entry[0] for entry in pve_patch_statuses(ROOT, "bray")] == [
-        "zfs-migration-sync",
         "lxc-pre-replication",
     ]
     assert pve_patch_statuses(ROOT, "osiris") == []

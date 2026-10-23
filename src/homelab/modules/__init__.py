@@ -28,7 +28,6 @@ from .pve_postinstall import deploy as deploy_pve_postinstall
 from .pve_postinstall_webhook import deploy as deploy_pve_postinstall_webhook
 from .pve_upgrade import deploy as deploy_pve_upgrade
 from .pve_zfs_large_block_patch import deploy as deploy_pve_zfs_large_block_patch
-from .pve_zfs_migration_sync_patch import deploy as deploy_pve_zfs_migration_sync_patch
 from .ssh_config import deploy as deploy_ssh_config
 from .ubuntu_setup import deploy as deploy_ubuntu_setup
 from .vmalert_rules import deploy as deploy_vmalert_rules
@@ -146,10 +145,6 @@ MODULES: dict[str, ModuleDefinition] = {
         name="PVE ZFS Large-Block Patch",
         deploy=deploy_pve_zfs_large_block_patch,
     ),
-    "pve-zfs-migration-sync-patch": ModuleDefinition(
-        name="PVE ZFS Migration Sync Patch",
-        deploy=deploy_pve_zfs_migration_sync_patch,
-    ),
     "ssh-config": ModuleDefinition(name="SSH Config", deploy=deploy_ssh_config),
     "ubuntu-setup": ModuleDefinition(name="Ubuntu OS Setup", deploy=deploy_ubuntu_setup),
     "vmalert-rules": ModuleDefinition(name="vmalert Rules", deploy=deploy_vmalert_rules),
@@ -179,7 +174,6 @@ MODULE_ORDER = [
     "monitoring-config",
     "vmalert-rules",
     "pve-zfs-large-block-patch",
-    "pve-zfs-migration-sync-patch",
     "pve-lxc-pre-replication-patch",
     "pve-gpu-passthrough",
     "keepalived",

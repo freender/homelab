@@ -1,5 +1,13 @@
 # PVE ZFS Migration Receive Cache Patch
 
+> **Retired 2026-10-23.** Proxmox fixed bug 7653 in `proxmox-kernel-7.0.14-26-pve`
+> (backport of `openzfs/zfs#19013`). The patch was reverted on ace, bray and
+> clovis before they booted -26. Once all three ran -26, the mmap reproducer was
+> clean in both rollback and recv modes on every node. 16 real stopped
+> migrations were then clean too, with no patch in place: tower ace<->clovis x4
+> and neo bray<->ace x4, each received into a warm, mounted target. Live BoltDB
+> files matched the `__replicate_*` snapshot every time.
+
 Patches Proxmox ZFS storage import so LXC `subvol` datasets are unmounted after
 `zfs recv -F`. This mitigates stale Linux page-cache/live-mount reads after PVE
 ZFS replication or migration receives into an already-mounted target dataset.
