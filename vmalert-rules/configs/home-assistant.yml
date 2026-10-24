@@ -20,3 +20,26 @@ groups:
         annotations:
           summary: "Home Assistant on {{ $labels.host }} is down"
           description: "vmagent has been unable to scrape Home Assistant's Prometheus endpoint ({{ $labels.endpoint }}) for 10 minutes. Either HA core or the zion VM (VM 109, ace, replica on clovis) is down, or the scrape token in /mnt/cache/appdata/vmagent/ha_token was rejected -- check `ha-ctl status` first."
+
+      # The Zigbee2MQTT add-on exits on an adapter disconnect (ASH timeouts to
+      # the network coordinator) instead of reconnecting, and sat stopped for
+      # 4.5h unnoticed. HA's MQTT bridge-connection sensor drops to 0 when the
+      # add-on publishes bridge/state offline; the absent branch covers the
+      # entity disappearing. Both are gated on the HA scrape being up so a
+      # zion outage reports as HomeAssistantDown only. for: 5m rides out the
+      # add-on watchdog's own restart.
+      - alert: Zigbee2MQTTDown
+        expr: |
+          (
+            homeassistant_binary_sensor_state{job="home-assistant", entity="binary_sensor.zigbee2mqtt_bridge_connection_state"} == 0
+            or
+            absent_over_time(homeassistant_binary_sensor_state{job="home-assistant", entity="binary_sensor.zigbee2mqtt_bridge_connection_state"}[10m])
+          )
+          and on() (min_over_time(up{job="home-assistant"}[10m]) == 1)
+        for: 5m
+        labels:
+          severity: critical
+          host: zion
+        annotations:
+          summary: "Zigbee2MQTT on zion is down"
+          description: "The Zigbee2MQTT bridge has reported offline to Home Assistant for 5 minutes, so no Zigbee device is controllable. Check `ssh zion 'ha apps info 45df7312_zigbee2mqtt'` and its logs for an adapter disconnect, and that the coordinator dongle-m.freender.internal:6638 answers."
