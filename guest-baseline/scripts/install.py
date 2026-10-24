@@ -13,6 +13,9 @@ sudoers file, the key-only sshd drop-in, the timezone and the locale.
 * **The effective sshd config is verified**, not just the file written
   (`homelab_install.sshd`). The drop-in it supersedes is removed only after the
   new one has passed `sshd -t`.
+* **systemd-resolved's DNS cache is turned off where it runs** (homelab-ops#235),
+  and the merged config it reads is verified to say `Cache=no`. A guest without
+  it (the LXCs) gets no drop-in: nothing there caches.
 * **`PLAN_ONLY=true` (a dry run) writes nothing.** Each step prints what it
   would change, and the sshd check reports the settings that would move.
 """
@@ -33,8 +36,10 @@ from homelab_install.errors import InstallError
 
 SUDOERS = "sudoers"
 SSHD_DROP_IN = "99-homelab-key-only.conf"
+RESOLVED_DROP_IN = "99-homelab-no-dns-cache.conf"
 AUTHORIZED_KEYS = "authorized_keys"
 SUDO_GROUP = "sudo"
+RESOLVED = "systemd-resolved"
 
 # Module-level so tests can rebind them under tmp_path.
 ZONEINFO = "/usr/share/zoneinfo"
@@ -83,7 +88,7 @@ def preflight(ctx: InstallContext) -> None:
 
     missing = [
         name
-        for name in (SUDOERS, SSHD_DROP_IN, AUTHORIZED_KEYS)
+        for name in (SUDOERS, SSHD_DROP_IN, RESOLVED_DROP_IN, AUTHORIZED_KEYS)
         if not (ctx.build_dir / name).is_file()
         or (name != AUTHORIZED_KEYS and name not in ctx.file_map)
     ]
@@ -286,6 +291,64 @@ def ensure_locale(locale: str, plan_only: bool) -> None:
         log.ok(f"LANG set to {locale} (applies to new sessions)")
 
 
+# ---------------------------------------------------------------------------
+# DNS cache
+# ---------------------------------------------------------------------------
+
+
+def resolved_active() -> bool:
+    return _run(["systemctl", "is-active", "--quiet", RESOLVED], check=False).returncode == 0
+
+
+def effective_cache() -> str:
+    """The `Cache=` systemd-resolved reads: the last one in its merged config.
+
+    `systemd-analyze cat-config` prints the main file and every drop-in in the
+    order resolved applies them, so a later drop-in that turns the cache back on
+    is caught here rather than trusted away. Unset means resolved's default, yes.
+    """
+    value = "yes"
+    section = ""
+    for raw in _output(["systemd-analyze", "cat-config", "systemd/resolved.conf"]).splitlines():
+        line = raw.strip()
+        if not line or line.startswith(("#", ";")):
+            continue
+        if line.startswith("[") and line.endswith("]"):
+            section = line[1:-1]
+            continue
+        key, sep, setting = line.partition("=")
+        if sep and section == "Resolve" and key.strip() == "Cache":
+            value = setting.strip()
+    return value
+
+
+def ensure_dns_cache_off(ctx: InstallContext, plan_only: bool) -> None:
+    if not resolved_active():
+        log.sub(f"{RESOLVED} not running; nothing caches DNS")
+        return
+
+    dest = ctx.file_map[RESOLVED_DROP_IN][0]
+    if plan_only:
+        if differs(ctx, RESOLVED_DROP_IN):
+            log.sub(f"Would update {dest} and restart {RESOLVED}")
+        current = effective_cache()
+        if current == "no":
+            log.ok(f"{RESOLVED} cache already off")
+        else:
+            log.sub(f"Effective {RESOLVED} Cache would change: {current} -> no")
+        return
+
+    changed = files.install(ctx, RESOLVED_DROP_IN)
+    current = effective_cache()
+    if current != "no":
+        raise InstallError(f"{RESOLVED} Cache is {current} after {dest}, expected no")
+    if changed:
+        _check(["systemctl", "restart", RESOLVED])
+        log.ok(f"{RESOLVED} restarted with its cache off")
+    else:
+        log.sub(f"{RESOLVED} cache already off")
+
+
 def install(ctx: InstallContext) -> None:
     log.header("Guest Baseline")
     plan_only = env.deploy_flag(ctx, "PLAN_ONLY")
@@ -305,6 +368,9 @@ def install(ctx: InstallContext) -> None:
 
     log.action("Locale")
     ensure_locale(ctx.env["LOCALE"], plan_only)
+
+    log.action("DNS cache")
+    ensure_dns_cache_off(ctx, plan_only)
 
     if plan_only:
         log.sub("PLAN_ONLY: nothing written")

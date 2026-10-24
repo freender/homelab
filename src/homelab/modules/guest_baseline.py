@@ -1,7 +1,8 @@
 """guest-baseline: the login and locale baseline of a Debian guest (homelab-ops#162).
 
 Creates `freender` when missing, installs its sudoers file (sudo asks for a
-password) and the key-only sshd drop-in, and sets the timezone and locale. The
+password) and the key-only sshd drop-in, sets the timezone and locale, and turns
+off systemd-resolved's DNS cache where it runs (homelab-ops#235). The
 values are the fleet's, not per host, so `guest-baseline: true` is the whole
 config. It is the guest counterpart of `ubuntu-setup`, which stays the
 bare-metal module; a host may have one or the other, never both, because both
@@ -39,9 +40,13 @@ SSHD_DROP_IN = "99-homelab-key-only.conf"
 # Hand-placed on helm, tower, riven and xur before this module; same settings.
 RETIRED_SSHD_DROP_INS = ("/etc/ssh/sshd_config.d/99-disable-password-auth.conf",)
 
+# Installed only where systemd-resolved runs; the LXC guests have none.
+RESOLVED_DROP_IN = "99-homelab-no-dns-cache.conf"
+
 FILE_SPECS = (
     FileSpec("sudoers", f"/etc/sudoers.d/{USER}", mode="440"),
     FileSpec(SSHD_DROP_IN, f"/etc/ssh/sshd_config.d/{SSHD_DROP_IN}"),
+    FileSpec(RESOLVED_DROP_IN, f"/etc/systemd/resolved.conf.d/{RESOLVED_DROP_IN}"),
 )
 # Only read when the user is created; an existing account's keys are its own.
 AUTHORIZED_KEYS = "authorized_keys"

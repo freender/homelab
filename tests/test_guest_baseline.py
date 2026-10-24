@@ -107,6 +107,8 @@ def test_build_renders_the_bundle(tmp_path: Path) -> None:
     assert (build / "file-map.conf").read_text() == (
         "sudoers|/etc/sudoers.d/freender|440\n"
         "99-homelab-key-only.conf|/etc/ssh/sshd_config.d/99-homelab-key-only.conf|644\n"
+        "99-homelab-no-dns-cache.conf|"
+        "/etc/systemd/resolved.conf.d/99-homelab-no-dns-cache.conf|644\n"
     )
     assert (build / "env").read_text().splitlines() == [
         "USER_NAME=freender",
@@ -242,12 +244,14 @@ class Guest:
         self.sudoers = etc / "sudoers.d" / "freender"
         self.drop_in = etc / "ssh/sshd_config.d/99-homelab-key-only.conf"
         self.retired = etc / "ssh/sshd_config.d/99-disable-password-auth.conf"
+        self.resolved_drop_in = etc / "systemd/resolved.conf.d/99-homelab-no-dns-cache.conf"
         self.locale_gen = etc / "locale.gen"
         self.default_locale = etc / "default/locale"
         self.home = self.root / "home" / "freender"
         for dest, name, mode in (
             (self.sudoers, "sudoers", 0o440),
             (self.drop_in, "99-homelab-key-only.conf", 0o644),
+            (self.resolved_drop_in, "99-homelab-no-dns-cache.conf", 0o644),
         ):
             dest.parent.mkdir(parents=True, exist_ok=True)
             dest.write_bytes((CONFIGS / name).read_bytes())
@@ -273,6 +277,8 @@ class Guest:
         self.run.answer("systemctl", "is-active", "--quiet", "ssh.socket", code=3)
         self.run.answer("timedatectl", "show", stdout=f"{TZ}\n")
         self.run.answer("locale", "-a", stdout="C\nC.utf8\nen_US.utf8\nPOSIX\n")
+        self.run.answer("systemctl", "is-active", "--quiet", "systemd-resolved")
+        self.resolved_config("[Resolve]\nCache=no\n")
         self.run.effects[("useradd",)] = self._useradd
         self.run.effects[("groupadd",)] = self._groupadd
         self.run.effects[("usermod",)] = self._usermod
@@ -315,8 +321,13 @@ class Guest:
         self.file_map = {
             "sudoers": (str(self.sudoers), "440"),
             "99-homelab-key-only.conf": (str(self.drop_in), "644"),
+            "99-homelab-no-dns-cache.conf": (str(self.resolved_drop_in), "644"),
         }
         self.deploy_env: dict[str, str] = {}
+
+    def resolved_config(self, merged: str) -> None:
+        """What `systemd-analyze cat-config systemd/resolved.conf` prints."""
+        self.run.answer("systemd-analyze", "cat-config", stdout=merged)
 
     @staticmethod
     def _passwd(name: str, uid: int, gid: int, home: str) -> SimpleNamespace:
@@ -386,7 +397,8 @@ MUTATING = (
     ("groupadd",),
     ("usermod",),
     ("sshd", "-t"),
-    ("systemctl",),
+    ("systemctl", "reload"),
+    ("systemctl", "restart"),
     ("timedatectl", "set-timezone"),
     ("locale-gen",),
     ("update-locale",),
@@ -433,10 +445,14 @@ def test_the_real_sudoers_asks_for_a_password() -> None:
 
 def test_the_installer_and_orchestrator_agree_on_file_names() -> None:
     installer = load_installer()
-    assert {installer.SUDOERS, installer.SSHD_DROP_IN, installer.AUTHORIZED_KEYS} == set(
-        guest_baseline.STATIC_FILES
-    )
+    assert {
+        installer.SUDOERS,
+        installer.SSHD_DROP_IN,
+        installer.RESOLVED_DROP_IN,
+        installer.AUTHORIZED_KEYS,
+    } == set(guest_baseline.STATIC_FILES)
     assert installer.SSHD_DROP_IN == guest_baseline.SSHD_DROP_IN
+    assert installer.RESOLVED_DROP_IN == guest_baseline.RESOLVED_DROP_IN
 
 
 # --- refusals ---------------------------------------------------------------
@@ -481,6 +497,10 @@ def test_a_missing_retired_list_is_refused_but_an_empty_one_is_allowed(host: Gue
         (
             lambda h: h.file_map.pop("99-homelab-key-only.conf"),
             r"^staged bundle is incomplete \(missing: 99-homelab-key-only.conf\)$",
+        ),
+        (
+            lambda h: h.file_map.pop("99-homelab-no-dns-cache.conf"),
+            r"^staged bundle is incomplete \(missing: 99-homelab-no-dns-cache.conf\)$",
         ),
         (
             lambda h: h.run.answer("visudo", code=1),
@@ -638,6 +658,64 @@ def test_an_overriding_earlier_drop_in_fails_the_deploy(host: Guest) -> None:
         host.install()
 
 
+# --- DNS cache --------------------------------------------------------------
+
+
+def test_a_missing_dns_cache_drop_in_is_installed_and_resolved_restarted(host: Guest) -> None:
+    host.resolved_drop_in.unlink()
+
+    host.install()
+
+    assert host.resolved_drop_in.read_bytes() == (
+        CONFIGS / "99-homelab-no-dns-cache.conf"
+    ).read_bytes()
+    assert ["systemctl", "restart", "systemd-resolved"] in host.run.calls
+
+
+def test_a_guest_without_resolved_gets_no_drop_in(host: Guest) -> None:
+    """The LXCs have no systemd-resolved; a drop-in there would be config for nothing."""
+    host.resolved_drop_in.unlink()
+    host.run.answer("systemctl", "is-active", "--quiet", "systemd-resolved", code=3)
+
+    host.install()
+
+    assert not host.resolved_drop_in.exists()
+    assert not host.run.ran("systemd-analyze")
+    assert_no_mutation(host)
+
+
+def test_a_later_drop_in_turning_the_cache_back_on_fails_the_deploy(host: Guest) -> None:
+    host.resolved_drop_in.unlink()
+    host.resolved_config("[Resolve]\nCache=no\n[Resolve]\nCache=yes\n")
+
+    with pytest.raises(
+        InstallError, match=f"^systemd-resolved Cache is yes after {host.resolved_drop_in}"
+    ):
+        host.install()
+
+    assert not host.run.ran("systemctl", "restart")
+
+
+@pytest.mark.parametrize(
+    ("merged", "expected"),
+    [
+        ("", "yes"),
+        ("[Resolve]\n#Cache=no\n", "yes"),
+        ("[Resolve]\nCache=no\n", "no"),
+        ("[Resolve]\nCache = no-negative\n", "no-negative"),
+        ("[Resolve]\nCache=no\n[Resolve]\nCache=yes\n", "yes"),
+        ("[Other]\nCache=no\n", "yes"),
+        ("[Resolve]\n; Cache=no\nDNS=10.0.40.1\n", "yes"),
+    ],
+)
+def test_effective_cache_is_the_last_cache_in_the_resolve_section(
+    host: Guest, merged: str, expected: str
+) -> None:
+    host.resolved_config(merged)
+
+    assert host.installer.effective_cache() == expected
+
+
 # --- timezone and locale ----------------------------------------------------
 
 
@@ -732,6 +810,8 @@ def test_a_dry_run_writes_nothing_and_reports_every_change(
     host.run.answer("timedatectl", "show", stdout="Etc/UTC\n")
     host.run.answer("locale", "-a", stdout="C\n")
     host.default_locale.write_text("LANG=C.UTF-8\n", encoding="utf-8")
+    host.resolved_drop_in.unlink()
+    host.resolved_config("[Resolve]\n")
     before = host.snapshot()
 
     host.install(plan_only=True)
@@ -748,6 +828,8 @@ def test_a_dry_run_writes_nothing_and_reports_every_change(
         "Would set timezone Etc/UTC -> America/New_York",
         f"Would enable en_US.UTF-8 in {host.locale_gen} and run locale-gen",
         "Would set LANG C.UTF-8 -> en_US.UTF-8",
+        f"Would update {host.resolved_drop_in} and restart systemd-resolved",
+        "Effective systemd-resolved Cache would change: yes -> no",
         "PLAN_ONLY: nothing written",
     ):
         assert line in out, line
@@ -762,6 +844,7 @@ def test_a_converged_dry_run_reports_no_changes(
     assert "Would" not in out
     assert "Effective sshd config already matches the drop-in" in out
     assert f"{host.sudoers} unchanged" in out
+    assert "systemd-resolved cache already off" in out
 
 
 def test_a_dry_run_reports_missing_sudo_membership(
