@@ -173,6 +173,75 @@ for stack in "${ORDERED_STACKS[@]}"; do
     started_stacks["$stack"]=1
 done
 
+ensure_shared_networks() {
+    [[ $# -gt 0 ]] || return 0
+    if ! command -v python3 >/dev/null 2>&1; then
+        echo "!! python3 not found; skipping shared network check"
+        return 0
+    fi
+
+    python3 - "$@" <<'PY'
+import json
+import subprocess
+import sys
+
+external = set()
+owners = {}
+for stack_dir in sys.argv[1:]:
+    result = subprocess.run(
+        ["docker", "compose", "config", "--format", "json"],
+        cwd=stack_dir, capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        continue
+    try:
+        project = json.loads(result.stdout)
+    except ValueError:
+        continue
+    for key, net in (project.get("networks") or {}).items():
+        name = net.get("name") or key
+        if net.get("external"):
+            external.add(name)
+        else:
+            owners.setdefault(name, (project.get("name", ""), key, net))
+
+for name in sorted(external & owners.keys()):
+    if subprocess.run(["docker", "network", "inspect", name], capture_output=True).returncode == 0:
+        continue
+    project, key, net = owners[name]
+    # Compose labels without a config-hash: the owner adopts the network as its
+    # own on its next `up`, silently and without recreating it.
+    cmd = ["docker", "network", "create",
+           "--label", f"com.docker.compose.project={project}",
+           "--label", f"com.docker.compose.network={key}"]
+    if net.get("driver"):
+        cmd += ["--driver", net["driver"]]
+    for opt, value in (net.get("driver_opts") or {}).items():
+        cmd += ["--opt", f"{opt}={value}"]
+    for cfg in (net.get("ipam") or {}).get("config") or []:
+        for field, flag in (("subnet", "--subnet"), ("ip_range", "--ip-range"), ("gateway", "--gateway")):
+            if cfg.get(field):
+                cmd += [flag, cfg[field]]
+    if net.get("internal"):
+        cmd.append("--internal")
+    if net.get("enable_ipv6"):
+        cmd.append("--ipv6")
+    cmd.append(name)
+    print(f">>> {name} missing; creating it from the {project} stack's definition", flush=True)
+    if subprocess.run(cmd, stdout=subprocess.DEVNULL).returncode != 0:
+        print(f"!! failed to create {name}", flush=True)
+PY
+}
+
+# A shared bridge is declared by one owner stack and joined as external by the
+# rest -- net.internal owned by traefik onsite; the offsite hosts use their own
+# name and owner (not always traefik). If the owner's `up` failed, or it simply
+# sorts after its joiners, every joiner fails with it. Pre-create each missing
+# one from the owner's own definition: the subnet matters, since a host may
+# trust its bridge subnet in traefik. External-only networks with no owner
+# stack, like the swarm overlay, are never created here.
+ensure_shared_networks "${STACK_DIRS[@]}"
+
 [[ ${#ORDERED_STACKS[@]} -gt 0 ]] && echo "" && echo ">>> Starting remaining stacks..." && echo ""
 
 # Now start all other stacks
