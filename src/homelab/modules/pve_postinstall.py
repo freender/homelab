@@ -298,14 +298,10 @@ def build_network_interfaces_bundle(root: Path, host: str, build_dir: Path) -> N
     # storage_ip/storage_iface are an optional pair: a host with no dedicated
     # storage NIC (e.g. osiris after its USB storage dongle was retired) omits
     # both, and the template renders management-only (no nic1/vmbr1 stanza).
-    storage_ip_raw = registry.get(host, "pve-postinstall.interfaces.storage_ip", None)
-    has_storage = storage_ip_raw is not None
-    storage_ip = str(storage_ip_raw) if has_storage else ""
-    storage_iface = (
-        str(registry.get(host, "pve-postinstall.interfaces.storage_iface", "nic1"))
-        if has_storage
-        else ""
-    )
+    storage_ip, storage_iface = optional_interface(registry, host, "storage", "nic1")
+    # corosync_ip/corosync_iface: the same optional pair for the dedicated
+    # corosync link on its own isolated switch, rendered as a plain interface.
+    corosync_ip, corosync_iface = optional_interface(registry, host, "corosync", "nic2")
 
     render_file(
         root / "pve-postinstall" / "templates" / "pve-interfaces",
@@ -315,7 +311,18 @@ def build_network_interfaces_bundle(root: Path, host: str, build_dir: Path) -> N
         NET_STORAGE_IP=storage_ip,
         NET_MGMT_IFACE=mgmt_iface,
         NET_STORAGE_IFACE=storage_iface,
+        NET_COROSYNC_IP=corosync_ip,
+        NET_COROSYNC_IFACE=corosync_iface,
     )
+
+
+def optional_interface(registry, host: str, kind: str, default_iface: str) -> tuple[str, str]:
+    """Return `(<kind>_ip, <kind>_iface)`, or `("", "")` when the host omits `<kind>_ip`."""
+    ip_raw = registry.get(host, f"pve-postinstall.interfaces.{kind}_ip", None)
+    if ip_raw is None:
+        return "", ""
+    iface = registry.get(host, f"pve-postinstall.interfaces.{kind}_iface", default_iface)
+    return str(ip_raw), str(iface)
 
 
 def build_zfs_conf(build_dir: Path, zfs_arc_max: str) -> None:

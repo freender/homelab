@@ -93,6 +93,21 @@ def test_interfaces_render_is_complete_and_addressed(host: str, tmp_path: Path) 
             r"^\s*auto vmbr1\b", rendered, re.MULTILINE
         ), f"{host}: unexpected vmbr1 iface with no storage_ip configured"
 
+    # corosync_ip is optional the same way; when set it renders a plain static iface
+    # (no bridge) on corosync_iface, which is what corosync.conf's link addresses bind to.
+    corosync_ip = registry.get(host, "pve-postinstall.interfaces.corosync_ip", None)
+    corosync_iface = registry.get(host, "pve-postinstall.interfaces.corosync_iface", "nic2")
+    corosync_stanza = re.compile(
+        rf"^auto {corosync_iface}\niface {corosync_iface} inet static\n\taddress (\S+)$",
+        re.MULTILINE,
+    )
+    match = corosync_stanza.search(rendered)
+    if corosync_ip is not None:
+        assert match, f"{host}: no static {corosync_iface} stanza for corosync_ip"
+        assert match.group(1) == str(corosync_ip), f"{host}: corosync address mismatch"
+    else:
+        assert not match, f"{host}: unexpected {corosync_iface} stanza with no corosync_ip"
+
     # A loopback stanza and the mgmt bridge must exist, or the node boots unreachable.
     assert re.search(r"^\s*auto lo\b", rendered, re.MULTILINE), f"{host}: no loopback stanza"
     assert re.search(r"^\s*iface\s+vmbr0\b", rendered, re.MULTILINE), f"{host}: no vmbr0 iface"
@@ -211,6 +226,48 @@ def test_postinstall_alignment_guard_actually_fires_on_drift() -> None:
 
     with pytest.raises(ValueError, match="mgmt_iface"):
         pve_interface_pinning.validate_postinstall_alignment(registry, host, drifted)
+
+
+def _corosync_hosts() -> list[str]:
+    registry = default_registry(ROOT)
+    return [
+        host
+        for host in _interface_hosts()
+        if registry.get(host, "pve-postinstall.interfaces.corosync_ip", None) is not None
+    ]
+
+
+def test_there_are_corosync_hosts_to_cover() -> None:
+    assert _corosync_hosts(), "expected at least one host with pve-postinstall corosync_ip"
+
+
+@pytest.mark.parametrize(("drift", "match"), [("name", "has no matching"), ("role", "'corosync'")])
+def test_postinstall_alignment_guard_fires_on_corosync_drift(drift: str, match: str) -> None:
+    # Unpinning nic2, or pinning the corosync role on a different NIC, must both fail:
+    # either way /etc/network/interfaces would address a NIC that is not the corosync one.
+    host = _corosync_hosts()[0]
+    registry = default_registry(ROOT)
+    pins = pve_interface_pinning.normalize_interface_pins(registry, host)
+    corosync_iface = str(registry.get(host, "pve-postinstall.interfaces.corosync_iface", "nic2"))
+    drifted = []
+    for pin in pins:
+        if pin.name == corosync_iface:
+            pin = pve_interface_pinning.InterfacePin(
+                name="nic9" if drift == "name" else pin.name,
+                role=pin.role if drift == "name" else "spare",
+                mac=pin.mac,
+                wake_on_lan=pin.wake_on_lan,
+            )
+        drifted.append(pin)
+    if drift == "role":
+        drifted.append(
+            pve_interface_pinning.InterfacePin(
+                name="nic9", role="corosync", mac="00:00:00:00:00:09", wake_on_lan=False
+            )
+        )
+
+    with pytest.raises(ValueError, match=match):
+        pve_interface_pinning.validate_postinstall_alignment(registry, host, tuple(drifted))
 
 
 # --------------------------------------------------------------------------------------

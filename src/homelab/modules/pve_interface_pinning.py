@@ -119,14 +119,16 @@ def validate_postinstall_alignment(registry, host: str, pins: tuple[InterfacePin
     _require_iface_pinned(host, "mgmt_iface", mgmt_iface, pinned_names)
     _require_role_matches_iface(host, "management", "mgmt_iface", mgmt_iface, pins_by_role)
 
-    # storage_iface only needs to align when the host actually declares a
-    # storage_ip; a host with no dedicated storage NIC omits both and has
+    # storage_iface/corosync_iface only need to align when the host actually
+    # declares the matching *_ip; a host without that NIC omits both and has
     # nothing to cross-check here.
-    has_storage = registry.get(host, "pve-postinstall.interfaces.storage_ip", None) is not None
-    if has_storage:
-        storage_iface = str(registry.get(host, "pve-postinstall.interfaces.storage_iface", "nic1"))
-        _require_iface_pinned(host, "storage_iface", storage_iface, pinned_names)
-        _require_role_matches_iface(host, "storage", "storage_iface", storage_iface, pins_by_role)
+    for kind, default_iface in (("storage", "nic1"), ("corosync", "nic2")):
+        if registry.get(host, f"pve-postinstall.interfaces.{kind}_ip", None) is None:
+            continue
+        key = f"{kind}_iface"
+        iface = str(registry.get(host, f"pve-postinstall.interfaces.{key}", default_iface))
+        _require_iface_pinned(host, key, iface, pinned_names)
+        _require_role_matches_iface(host, kind, key, iface, pins_by_role)
 
 
 def _require_iface_pinned(host: str, key: str, iface: str, pinned_names: set[str]) -> None:
@@ -153,7 +155,7 @@ def _require_role_matches_iface(
         raise ValueError(
             f"pve-postinstall.interfaces.{key}={iface!r} for {host} does not match the "
             f"pve-interface-pinning.interfaces[] entry with role={role!r} "
-            f"({sorted(role_names)}); mgmt/storage roles have drifted from the pinned names"
+            f"({sorted(role_names)}); interface roles have drifted from the pinned names"
         )
 
 

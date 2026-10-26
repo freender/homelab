@@ -33,4 +33,9 @@ iface vmbr1 inet static
 	bridge-stp off
 	bridge-fd 0
 {% endif %}
+{% if NET_COROSYNC_IFACE %}
+auto {{ NET_COROSYNC_IFACE }}
+iface {{ NET_COROSYNC_IFACE }} inet static
+	address {{ NET_COROSYNC_IP }}
+{% endif %}
 source /etc/network/interfaces.d/*
