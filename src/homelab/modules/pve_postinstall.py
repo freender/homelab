@@ -95,7 +95,7 @@ class HostSettings:
     import_pools: str
     mounts: str
     expected_clustered: str
-    cluster_link0: str
+    cluster_links: str
     zfs_arc_max: str = ""
 
 
@@ -166,12 +166,37 @@ def _mounts(registry: _Registry, host: str) -> str:
     return " ".join(mounts)
 
 
-def _cluster_link0(registry: _Registry, host: str) -> str:
-    """The address corosync link0 should bind, preferring the mgmt IP over DNS."""
-    mgmt_ip = str(registry.get(host, "pve-postinstall.interfaces.mgmt_ip", ""))
-    if mgmt_ip:
-        return mgmt_ip.split("/", 1)[0]
-    return str(registry.get(host, "config.hostname"))
+def _interface_address(registry: _Registry, host: str, key: str) -> str:
+    """`pve-postinstall.interfaces.<key>` without its prefix length, `""` when unset."""
+    raw = registry.get(host, f"pve-postinstall.interfaces.{key}", "")
+    return str(raw).split("/", 1)[0] if raw else ""
+
+
+def _mgmt_address(registry: _Registry, host: str) -> str:
+    """The node's management address, preferring the mgmt IP over DNS."""
+    return _interface_address(registry, host, "mgmt_ip") or str(
+        registry.get(host, "config.hostname")
+    )
+
+
+def _cluster_links(registry: _Registry, host: str) -> str:
+    """Corosync link addresses in link-number order, space-separated.
+
+    The order mirrors the cluster's corosync.conf: link0 is the dedicated corosync
+    NIC on its own switch, link1 management, link2 the storage/migration VLAN. A
+    host without one of the optional NICs simply has fewer links.
+    """
+    links = (
+        _interface_address(registry, host, "corosync_ip"),
+        _mgmt_address(registry, host),
+        _interface_address(registry, host, "storage_ip"),
+    )
+    return " ".join(link for link in links if link)
+
+
+def _pvecm_link_args(links: str) -> str:
+    """`--link0 <a> --link1 <b> ...` for `pvecm add`, from `_cluster_links` output."""
+    return " ".join(f"--link{index} {addr}" for index, addr in enumerate(links.split()))
 
 
 def _host_settings(registry: _Registry, host: str) -> HostSettings:
@@ -193,7 +218,7 @@ def _host_settings(registry: _Registry, host: str) -> HostSettings:
     # host_type == "pve" is already enforced above, so clustering only depends
     # on config.standalone from this point on.
     expected_clustered = str(not is_standalone).lower()
-    cluster_link0 = "" if is_standalone else _cluster_link0(registry, host)
+    cluster_links = "" if is_standalone else _cluster_links(registry, host)
 
     return HostSettings(
         host_type=host_type,
@@ -201,7 +226,7 @@ def _host_settings(registry: _Registry, host: str) -> HostSettings:
         import_pools=import_pools,
         mounts=mounts,
         expected_clustered=expected_clustered,
-        cluster_link0=cluster_link0,
+        cluster_links=cluster_links,
         zfs_arc_max=_zfs_arc_max(registry, host),
     )
 
@@ -364,18 +389,18 @@ def build_cluster_rejoin_helper(root: Path, build_dir: Path) -> None:
     ]
     for pve_host in pve_hosts:
         hostname = str(registry.get(pve_host, "config.hostname"))
-        mgmt_ip = str(registry.get(pve_host, "pve-postinstall.interfaces.mgmt_ip", ""))
-        link0 = mgmt_ip.split("/", 1)[0] if mgmt_ip else hostname
         standalone = normalize_bool(
             registry.get(pve_host, "config.standalone", None),
             False,
             f"config.standalone must be true or false for {pve_host}",
         )
+        link_args = _pvecm_link_args(_cluster_links(registry, pve_host))
         lines.extend(
             [
                 f"    {pve_host})",
                 f"        node_fqdn='{hostname}'",
-                f"        node_link0='{link0}'",
+                f"        node_mgmt='{_mgmt_address(registry, pve_host)}'",
+                f"        node_link_args='{link_args}'",
                 f"        node_standalone='{str(standalone).lower()}'",
                 "        ;;",
             ]
@@ -439,27 +464,27 @@ def build_cluster_rejoin_helper(root: Path, build_dir: Path) -> None:
             "fi",
             "",
             "echo \"==> Removing stale SSH known_hosts entries\"",
-            "for host in \"$node\" \"$node_fqdn\" \"$node_link0\"; do",
+            "for host in \"$node\" \"$node_fqdn\" \"$node_mgmt\"; do",
             "    ssh-keygen -R \"$host\" >/dev/null 2>&1 || true",
             "done",
             "",
             "echo \"==> Waiting for rebuilt node readiness\"",
             "for attempt in $(seq 1 60); do",
-            "    if timeout 3 bash -c \"</dev/tcp/$node_link0/22\" >/dev/null 2>&1; then",
-            "        echo \"SSH is reachable on $node_link0\"",
+            "    if timeout 3 bash -c \"</dev/tcp/$node_mgmt/22\" >/dev/null 2>&1; then",
+            "        echo \"SSH is reachable on $node_mgmt\"",
             "        break",
             "    fi",
             "    if [[ \"$attempt\" -eq 60 ]]; then",
-            "        echo \"SSH did not become reachable on $node_link0\" >&2",
+            "        echo \"SSH did not become reachable on $node_mgmt\" >&2",
             "        exit 1",
             "    fi",
             "    sleep 10",
             "done",
             "",
-            "if timeout 3 bash -c \"</dev/tcp/$node_link0/8006\" >/dev/null 2>&1; then",
-            "    echo \"PVE API port is reachable on $node_link0\"",
+            "if timeout 3 bash -c \"</dev/tcp/$node_mgmt/8006\" >/dev/null 2>&1; then",
+            "    echo \"PVE API port is reachable on $node_mgmt\"",
             "else",
-            "    echo \"PVE API port 8006 is not reachable yet on $node_link0\" >&2",
+            "    echo \"PVE API port 8006 is not reachable yet on $node_mgmt\" >&2",
             "fi",
             "",
             "fingerprint=",
@@ -473,9 +498,9 @@ def build_cluster_rejoin_helper(root: Path, build_dir: Path) -> None:
             "echo \"==> Manual join command\"",
             "echo \"Run on rebuilt node $node after confirming hostname/IP are correct:\"",
             "if [[ -n \"$fingerprint\" ]]; then",
-            "    echo \"pvecm add $cluster_peer --fingerprint $fingerprint --link0 $node_link0\"",
+            "    echo \"pvecm add $cluster_peer --fingerprint $fingerprint $node_link_args\"",
             "else",
-            "    echo \"pvecm add $cluster_peer --link0 $node_link0\"",
+            "    echo \"pvecm add $cluster_peer $node_link_args\"",
             "    echo \"Fingerprint lookup failed; verify it manually.\" >&2",
             "fi",
         ]
@@ -501,7 +526,7 @@ def write_installer_env(path: Path, settings: HostSettings) -> None:
             "IMPORT_POOLS": settings.import_pools,
             "MOUNTS": settings.mounts,
             "EXPECTED_CLUSTERED": settings.expected_clustered,
-            "CLUSTER_LINK0": settings.cluster_link0,
+            "CLUSTER_LINKS": settings.cluster_links,
             "ZFS_ARC_MAX": settings.zfs_arc_max,
         },
     )

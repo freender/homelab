@@ -174,7 +174,7 @@ class Harness:
             "IMPORT_POOLS": "vm-flash",
             "MOUNTS": "",
             "EXPECTED_CLUSTERED": "true",
-            "CLUSTER_LINK0": "10.0.0.20",
+            "CLUSTER_LINKS": "10.0.70.20 10.0.0.20 10.0.60.20",
             "ZFS_ARC_MAX": "",
         }
         self.binaries = {"pveversion", "zpool", "pvesm", "newaliases"}
@@ -321,7 +321,7 @@ def test_refusals_come_before_any_write(harness: Harness, change, message: str) 
 
 
 def test_empty_optional_keys_are_accepted(harness: Harness) -> None:
-    harness.env.update(IMPORT_POOLS="", CLUSTER_LINK0="", EXPECTED_CLUSTERED="false")
+    harness.env.update(IMPORT_POOLS="", CLUSTER_LINKS="", EXPECTED_CLUSTERED="false")
     harness.binaries.discard("zpool")
 
     harness.run()
@@ -793,8 +793,8 @@ def test_unclustered_node_cleans_up_from_peer_and_prints_join(harness: Harness, 
     digest = hashlib.sha256(b"certificate-bytes").hexdigest().upper()
     fingerprint = ":".join(digest[i : i + 2] for i in range(0, 64, 2))
     assert (
-        f"pvecm add bray.freender.internal --fingerprint {fingerprint} --link0 10.0.0.20"
-        in capsys.readouterr().out
+        f"pvecm add bray.freender.internal --fingerprint {fingerprint} "
+        "--link0 10.0.70.20 --link1 10.0.0.20 --link2 10.0.60.20" in capsys.readouterr().out
     )
     assert not harness.host.ran("pvecm", "add")
 
@@ -804,7 +804,7 @@ def test_failed_peer_cleanup_tries_each_peer_once_and_skips_itself(
 ) -> None:
     Path(harness.installer.COROSYNC_CONF).unlink()
     harness.hostname = "bray"
-    harness.env["CLUSTER_LINK0"] = ""
+    harness.env["CLUSTER_LINKS"] = ""
     harness.host.failing.add("ssh")
 
     harness.run()
@@ -1004,7 +1004,7 @@ def test_orchestrator_env_round_trips_into_installer_settings(tmp_path: Path) ->
         import_pools="vm-flash vault-hdd",
         mounts="media:/mnt/media backup:/mnt/backup",
         expected_clustered="false",
-        cluster_link0="",
+        cluster_links="",
         zfs_arc_max=ARC,
     )
     pve_postinstall.write_installer_env(tmp_path / "env", settings)
@@ -1024,5 +1024,5 @@ def test_orchestrator_env_round_trips_into_installer_settings(tmp_path: Path) ->
     assert parsed.import_pools == ("vm-flash", "vault-hdd")
     assert parsed.mounts == (("media", "/mnt/media"), ("backup", "/mnt/backup"))
     assert parsed.expected_clustered is False
-    assert parsed.cluster_link0 == ""
+    assert parsed.cluster_links == ()
     assert parsed.zfs_arc_max == ARC

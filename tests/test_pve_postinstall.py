@@ -26,7 +26,7 @@ class FakeRegistry:
         raise HostLookupError(f"missing key '{key}' for host '{host}'")
 
 
-def test_host_settings_clustered_host_uses_mgmt_ip_for_link0() -> None:
+def test_host_settings_clustered_host_uses_mgmt_ip_for_its_only_link() -> None:
     registry = FakeRegistry(
         {
             "config.type": "pve",
@@ -41,7 +41,22 @@ def test_host_settings_clustered_host_uses_mgmt_ip_for_link0() -> None:
     assert settings.import_pools == ""
     assert settings.mounts == ""
     assert settings.expected_clustered == "true"
-    assert settings.cluster_link0 == "10.0.10.5"
+    assert settings.cluster_links == "10.0.10.5"
+
+
+def test_host_settings_orders_links_corosync_then_mgmt_then_storage() -> None:
+    registry = FakeRegistry(
+        {
+            "config.type": "pve",
+            "pve-postinstall.interfaces.mgmt_ip": "10.0.0.20/24",
+            "pve-postinstall.interfaces.storage_ip": "10.0.60.20/24",
+            "pve-postinstall.interfaces.corosync_ip": "10.0.70.20/24",
+        }
+    )
+
+    settings = pp._host_settings(registry, "ace")
+
+    assert settings.cluster_links == "10.0.70.20 10.0.0.20 10.0.60.20"
 
 
 def test_host_settings_clustered_host_without_mgmt_ip_falls_back_to_hostname() -> None:
@@ -49,16 +64,17 @@ def test_host_settings_clustered_host_without_mgmt_ip_falls_back_to_hostname() -
         {
             "config.type": "pve",
             "config.hostname": "ace.freender.internal",
+            "pve-postinstall.interfaces.corosync_ip": "10.0.70.20/24",
         }
     )
 
     settings = pp._host_settings(registry, "ace")
 
     assert settings.expected_clustered == "true"
-    assert settings.cluster_link0 == "ace.freender.internal"
+    assert settings.cluster_links == "10.0.70.20 ace.freender.internal"
 
 
-def test_host_settings_standalone_host_has_no_cluster_link0() -> None:
+def test_host_settings_standalone_host_has_no_cluster_links() -> None:
     registry = FakeRegistry(
         {
             "config.type": "pve",
@@ -70,7 +86,14 @@ def test_host_settings_standalone_host_has_no_cluster_link0() -> None:
     settings = pp._host_settings(registry, "osiris")
 
     assert settings.expected_clustered == "false"
-    assert settings.cluster_link0 == ""
+    assert settings.cluster_links == ""
+
+
+def test_pvecm_link_args_numbers_links_from_zero() -> None:
+    assert pp._pvecm_link_args("10.0.70.20 10.0.0.20 10.0.60.20") == (
+        "--link0 10.0.70.20 --link1 10.0.0.20 --link2 10.0.60.20"
+    )
+    assert pp._pvecm_link_args("") == ""
 
 
 def test_host_settings_reads_timezone_import_pools_and_mounts() -> None:
@@ -262,3 +285,15 @@ def test_rejoin_helper_proceeds_for_an_offline_or_absent_node(tmp_path, members)
 
     assert result.returncode == 0
     assert "PROCEED" in result.stdout
+
+
+def test_rejoin_helper_joins_with_every_link_and_checks_reachability_on_mgmt(tmp_path) -> None:
+    root = Path(__file__).resolve().parents[1]
+    pp.build_cluster_rejoin_helper(root, tmp_path)
+    script = (tmp_path / "homelab-pve-cluster-rejoin-helper").read_text(encoding="utf-8")
+
+    ace = script[script.index("    ace)") : script.index(";;", script.index("    ace)"))]
+    assert "node_mgmt='10.0.0.20'" in ace
+    assert "node_link_args='--link0 10.0.70.20 --link1 10.0.0.20 --link2 10.0.60.20'" in ace
+    assert 'echo "pvecm add $cluster_peer $node_link_args"' in script
+    assert "</dev/tcp/$node_mgmt/22" in script

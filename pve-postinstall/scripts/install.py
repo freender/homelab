@@ -124,11 +124,11 @@ class Settings:
     import_pools: tuple[str, ...]
     mounts: tuple[tuple[str, str], ...]
     expected_clustered: bool
-    cluster_link0: str
+    cluster_links: tuple[str, ...]
     zfs_arc_max: str
 
 
-OPTIONAL_KEYS = ("IMPORT_POOLS", "MOUNTS", "CLUSTER_LINK0", "ZFS_ARC_MAX")
+OPTIONAL_KEYS = ("IMPORT_POOLS", "MOUNTS", "CLUSTER_LINKS", "ZFS_ARC_MAX")
 
 
 def read_settings(ctx: InstallContext) -> Settings:
@@ -158,7 +158,7 @@ def read_settings(ctx: InstallContext) -> Settings:
         import_pools=tuple(ctx.env["IMPORT_POOLS"].split()),
         mounts=tuple(mounts),
         expected_clustered=env.flag(ctx, "EXPECTED_CLUSTERED"),
-        cluster_link0=ctx.env["CLUSTER_LINK0"].strip(),
+        cluster_links=tuple(ctx.env["CLUSTER_LINKS"].split()),
         zfs_arc_max=zfs_arc_max,
     )
 
@@ -598,18 +598,19 @@ def print_manual_join(settings: Settings, peer: str) -> None:
         log.sub("Cluster config appeared after cleanup; manual pvecm add not needed")
         return
 
-    link0 = settings.cluster_link0
-    if not link0:
+    links = settings.cluster_links
+    if not links:
         addresses = _run(["hostname", "-I"], check=False, capture_output=True, text=True)
-        link0 = next(iter((addresses.stdout or "").split()), "")
+        links = tuple((addresses.stdout or "").split()[:1])
+    link_args = " ".join(f"--link{index} {addr}" for index, addr in enumerate(links))
 
     fingerprint = peer_fingerprint(peer)
     log.warn("Cluster join is a manual step")
     if fingerprint:
-        log.sub(f"Manual command: pvecm add {peer} --fingerprint {fingerprint} --link0 {link0}")
+        log.sub(f"Manual command: pvecm add {peer} --fingerprint {fingerprint} {link_args}")
     else:
         log.warn("Cluster peer fingerprint unavailable; verify it manually")
-        log.sub(f"Manual command: pvecm add {peer} --link0 {link0}")
+        log.sub(f"Manual command: pvecm add {peer} {link_args}")
 
 
 def report_cluster_join(ctx: InstallContext, settings: Settings) -> None:
