@@ -3,7 +3,6 @@
   "threshold": 10.0,
   "functions": {
     "src/homelab/hosts.py::validate_host_config": 12.0,
-    "src/homelab/modules/metrics_exporters.py::validate": 12.6,
     "src/homelab/modules/pbs_client_backup.py::deploy_host": 17.3,
     "src/homelab/modules/pbs_client_backup.py::validate": 12.3,
     "src/homelab/modules/pve_autoinstall.py::_get_mgmt_mac": 12.3,

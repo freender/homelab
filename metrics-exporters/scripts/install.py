@@ -82,7 +82,7 @@ SERVICE_EXPORTERS = ((APCUPSD, "apcupsd-exporter"), (IGPU, "igpu-exporter"))
 TEXTFILE_EXPORTERS = {
     "zfs-pool-textfile-exporter": (
         "zfs-pool-textfile-exporter",
-        ("zfs-expected-pools.conf",),
+        ("zfs-expected-pools.conf", "zfs-replica-datasets.conf"),
         ("zfs-pools.prom",),
     ),
     "hba-textfile-exporter.py": ("hba-textfile-exporter", (), ("hba.prom",)),
@@ -107,6 +107,7 @@ TEXTFILE_EXPORTERS = {
 # Optional /etc/homelab configs -> the .prom that goes with them.
 OPTIONAL_CONFIGS = {
     "zfs-expected-pools.conf": (),
+    "zfs-replica-datasets.conf": (),
     "disk-labels.conf": (),
     "pve-patch-statuses.conf": ("pve-patches.prom",),
 }

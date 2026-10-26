@@ -3,7 +3,7 @@
 set -euo pipefail
 
 HOST="${HOSTNAME_OVERRIDE:-$(hostname -s)}"
-OUT_DIR="/var/lib/prometheus/node-exporter"
+OUT_DIR="${TEXTFILE_DIR:-/var/lib/prometheus/node-exporter}"
 OUT_FILE="$OUT_DIR/zfs-pools.prom"
 # Optional per-host list of pools that are expected to be imported. `zpool list`
 # only reports pools that actually imported, so a pool that fails to import (or
@@ -14,6 +14,14 @@ OUT_FILE="$OUT_DIR/zfs-pools.prom"
 # When the file is absent the exporter only reports what is imported, exactly as
 # before, so hosts that opt out are unaffected.
 EXPECTED_POOLS_FILE="${ZFS_EXPECTED_POOLS_FILE:-/etc/homelab/zfs-expected-pools.conf}"
+# Optional per-host list of datasets this host receives as a ZFS push target
+# (rendered from zfs-automation.push_target_access). A push job's own unit only
+# fails on the *source* host, and only when it runs; it cannot report a timer
+# that stopped, a run hung on a lock, or a source that went offline. The newest
+# received snapshot's creation time is the one signal that covers all of them,
+# and since a received snapshot keeps its source creation time, it measures how
+# old the copy really is, not when it last transferred.
+REPLICA_DATASETS_FILE="${ZFS_REPLICA_DATASETS_FILE:-/etc/homelab/zfs-replica-datasets.conf}"
 
 mkdir -p "$OUT_DIR"
 TMP_FILE="$(mktemp "$OUT_DIR/.zfs-pools.prom.XXXXXX")"
@@ -51,15 +59,37 @@ write_metric() {
         "$metric" "$HOST" "$pool" "$tier" "$role" "$value"
 }
 
-read_expected_pools() {
-    [[ -r "$EXPECTED_POOLS_FILE" ]] || return 0
+read_list_file() {
+    local file="$1"
+    [[ -r "$file" ]] || return 0
     local line
     while IFS= read -r line || [[ -n "$line" ]]; do
         line="${line%%#*}"
         line="$(printf '%s' "$line" | tr -d '[:space:]')"
         [[ -n "$line" ]] || continue
         printf '%s\n' "$line"
-    done < "$EXPECTED_POOLS_FILE"
+    done < "$file"
+}
+
+read_expected_pools() {
+    read_list_file "$EXPECTED_POOLS_FILE"
+}
+
+# One series per listed dataset, always. A dataset that does not exist (never
+# seeded, or destroyed) or holds no snapshot reports 0 rather than nothing, so
+# the staleness rule sees it instead of an absent series it cannot match.
+# `-d 1` keeps this to the dataset's own snapshots, never a recursive walk.
+write_replica_metrics() {
+    local dataset newest
+    while IFS= read -r dataset; do
+        [[ -n "$dataset" ]] || continue
+        # `|| true`: under pipefail a missing dataset would otherwise abort the
+        # whole exporter and freeze every pool metric on this host with it.
+        newest="$(zfs list -Hp -t snapshot -o creation -s creation -d 1 "$dataset" 2>/dev/null | tail -n 1 || true)"
+        [[ "$newest" =~ ^[0-9]+$ ]] || newest=0
+        printf 'homelab_zfs_replica_last_snapshot_timestamp_seconds{host="%s",zpool="%s",dataset="%s"} %s\n' \
+            "$HOST" "${dataset%%/*}" "$dataset" "$newest"
+    done < <(read_list_file "$REPLICA_DATASETS_FILE")
 }
 
 write_labeled_metric() {
@@ -144,6 +174,8 @@ write_device_errors() {
     printf '# TYPE homelab_zpool_device_state_info gauge\n'
     printf '# HELP homelab_zpool_device_errors ZFS per-device error counters as reported by zpool status.\n'
     printf '# TYPE homelab_zpool_device_errors gauge\n'
+    printf '# HELP homelab_zfs_replica_last_snapshot_timestamp_seconds Creation time of the newest snapshot on a dataset this host receives as a ZFS push target; 0 when the dataset is missing or has no snapshot.\n'
+    printf '# TYPE homelab_zfs_replica_last_snapshot_timestamp_seconds gauge\n'
 
     # Process substitution rather than a pipe: a piped `while` runs in a subshell,
     # so seen_marker would not survive the loop.
@@ -172,6 +204,8 @@ write_device_errors() {
         write_metric homelab_zpool_healthy "$pool" 0
         write_labeled_metric homelab_zpool_state_info "$pool" state MISSING 1
     done < <(read_expected_pools)
+
+    write_replica_metrics
 } > "$TMP_FILE"
 
 chmod 0644 "$TMP_FILE"
