@@ -545,6 +545,19 @@ def test_a_new_push_target_gets_its_user_files_and_grants(harness: Harness) -> N
     ]
 
 
+def test_a_missing_direct_child_gets_a_local_grant_on_its_parent(harness: Harness) -> None:
+    # A descendant-only grant on the direct parent cannot create the child:
+    # `zfs receive` of a new filesystem needs create/receive on the parent itself.
+    harness.push_target("tank/replica/new\n")
+
+    harness.run()
+
+    grants = [call for call in harness.host_calls if call[:2] == ["zfs", "allow"]]
+    assert grants == [
+        ["zfs", "allow", "-u", "zfs-push", "create,mount,receive,hold,release", "tank/replica"],
+    ]
+
+
 def test_a_host_that_stops_being_a_push_target_loses_its_access(harness: Harness) -> None:
     harness.push_target()
     harness.users.add("zfs-push")

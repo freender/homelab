@@ -121,8 +121,10 @@ def plan_push_grants(ctx: InstallContext) -> list[tuple[str, bool]]:
     """`(dataset, descendants_only)` per line of the staged allow-list.
 
     A dataset that exists is granted directly. One that does not yet exist is
-    granted as future descendants of its nearest existing parent, so the first
-    push can create it.
+    granted on its nearest existing parent, so the first push can create it.
+    Creating a dataset needs `create`/`receive` on its direct parent itself, so
+    a direct parent gets a local+descendant grant; a farther ancestor gets a
+    descendant-only grant, which already covers the missing intermediate.
     """
     grants: list[tuple[str, bool]] = []
     staged = ctx.build_dir / "zfs-push-datasets.conf"
@@ -130,11 +132,12 @@ def plan_push_grants(ctx: InstallContext) -> list[tuple[str, bool]]:
         if _dataset_exists(dataset):
             grants.append((dataset, False))
             continue
+        direct_parent = dataset.rsplit("/", 1)[0]
         parent = dataset
         while "/" in parent:
             parent = parent.rsplit("/", 1)[0]
             if _dataset_exists(parent):
-                grants.append((parent, True))
+                grants.append((parent, parent != direct_parent))
                 break
         else:
             raise InstallError(f"ZFS push target dataset parent not found: {dataset}")
@@ -240,7 +243,7 @@ def grant_push_access(ctx: InstallContext, grants: list[tuple[str, bool]]) -> No
         if descendants_only:
             log.sub(f"Granted future descendant receive access at {dataset}")
         else:
-            log.ok(f"Granted receive target access for {dataset}")
+            log.ok(f"Granted receive access at {dataset} and below")
 
 
 def refresh_known_hosts(ctx: InstallContext) -> None:
