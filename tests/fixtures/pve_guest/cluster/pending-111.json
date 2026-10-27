@@ -1,0 +1,54 @@
+[
+ {
+  "key": "net0",
+  "value": "name=nic0,bridge=vmbr0,hwaddr=BC:24:11:69:45:B8,ip=dhcp,tag=10,type=veth"
+ },
+ {
+  "key": "arch",
+  "value": "amd64"
+ },
+ {
+  "key": "onboot",
+  "value": 1
+ },
+ {
+  "key": "ostype",
+  "value": "debian"
+ },
+ {
+  "key": "swap",
+  "value": 0
+ },
+ {
+  "key": "mp0",
+  "value": "vault-hdd:subvol-111-disk-1,mp=/srv/timemachine,backup=0,size=1T"
+ },
+ {
+  "key": "unprivileged",
+  "value": 1
+ },
+ {
+  "key": "hostname",
+  "value": "deepstone"
+ },
+ {
+  "key": "protection",
+  "value": 1
+ },
+ {
+  "key": "cores",
+  "value": 2
+ },
+ {
+  "key": "memory",
+  "value": 1024
+ },
+ {
+  "key": "features",
+  "value": "nesting=1"
+ },
+ {
+  "key": "rootfs",
+  "value": "vm-flash:subvol-111-disk-0,size=8G"
+ }
+]

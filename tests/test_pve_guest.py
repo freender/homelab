@@ -100,7 +100,7 @@ def test_every_declared_guest_is_in_sync_with_the_fixture() -> None:
 
 
 def test_hand_written_vmids_all_resolve() -> None:
-    assert validate_inventory(default_registry(ROOT)) == (8, 21)
+    assert validate_inventory(default_registry(ROOT)) == (8, 20)
 
 
 def test_every_impact_label_on_a_changed_helm_spec() -> None:
@@ -136,8 +136,18 @@ def test_every_impact_label_on_a_changed_helm_spec() -> None:
         ("net0.tag", "10", "40", drift.LIVE),
         ("net1", "new nic1 BC:24:11:00:00:01", "-", drift.LIVE),
         ("vga", "-", "serial0", drift.UNMANAGED),
-        ("ha.nodes", "ace:1,clovis:3", "ace:2,clovis:3", drift.CLUSTER),
-        ("ha.strict", "no", "yes", drift.CLUSTER),
+        (
+            "ha.nodes",
+            "ace:1,clovis:3",
+            "ace:2,clovis:3",
+            f"{drift.CLUSTER} (splits rule ha-rule-d9d6e797-22ea, shared with ct:111)",
+        ),
+        (
+            "ha.strict",
+            "no",
+            "yes",
+            f"{drift.CLUSTER} (splits rule ha-rule-d9d6e797-22ea, shared with ct:111)",
+        ),
         ("replication.schedule", "*/5", "*/15", drift.CLUSTER),
     ]
 
@@ -980,7 +990,7 @@ def test_cli_check_pve_guests(monkeypatch: pytest.MonkeyPatch, capsys) -> None:
     from homelab import cli
 
     cli.check_pve_guests(ROOT)
-    assert "8 pve-guest spec(s) valid; 21 hand-written vmid(s) match" in capsys.readouterr().out
+    assert "8 pve-guest spec(s) valid; 20 hand-written vmid(s) match" in capsys.readouterr().out
 
     def broken(registry):
         raise ValueError("helm: pve-guest.vmid must be a positive integer")

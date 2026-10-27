@@ -6,13 +6,5 @@
   "status": "running",
   "type": "lxc",
   "vmid": 105
- },
- {
-  "id": "lxc/111",
-  "name": "deepstone",
-  "node": "osiris",
-  "status": "running",
-  "type": "lxc",
-  "vmid": 111
  }
 ]
