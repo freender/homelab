@@ -26,33 +26,6 @@ services:
       PGID: 1000
       UMASK: 022
 
-  # Drop is a transfer area (Mac <-> work laptop via neo), not storage.
-  # ctime, not mtime: Syncthing preserves the sender's mtime, so ctime is
-  # when the file landed here. BusyBox `find -ctime` tests mtime, hence stat.
-  # Deletions propagate to every device.
-  drop-expiry:
-    image: alpine:latest
-    container_name: drop-expiry
-    restart: always
-    mem_limit: 32m
-    network_mode: none
-    user: "1000:1000"
-    volumes:
-      - /mnt/cache/drop:/drop
-    command:
-      - sh
-      - -c
-      - |
-        while :; do
-          cutoff=$$(( $$(date +%s) - 14 * 86400 ))
-          find /drop -mindepth 1 -path /drop/.stfolder -prune -o -type f ! -name .stignore -print |
-            while IFS= read -r f; do
-              [ "$$(stat -c %Z "$$f")" -lt "$$cutoff" ] && rm -f -- "$$f" && echo "expired $$f"
-            done
-          find /drop -mindepth 1 -path /drop/.stfolder -prune -o -type d -empty -print -delete
-          sleep 86400
-        done
-
 networks:
   net.internal:
     external: true
