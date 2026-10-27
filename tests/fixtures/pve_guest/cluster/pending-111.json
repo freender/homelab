@@ -21,7 +21,7 @@
  },
  {
   "key": "mp0",
-  "value": "vault-hdd:subvol-111-disk-1,mp=/srv/timemachine,backup=0,size=1T"
+  "value": "vault-hdd:subvol-111-disk-1,mp=/srv/timemachine,backup=0,size=512G"
  },
  {
   "key": "unprivileged",
