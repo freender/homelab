@@ -222,6 +222,65 @@ def test_weekly_pve_nodes_keep_daily_security_updates() -> None:
         assert apt_upgrade.normalize_security_updates(registry, host) is True, host
 
 
+def test_pve_nodes_clean_up_after_the_dist_upgrade() -> None:
+    """Without cleanup every weekly kernel stays installed and the apt cache
+    grows unbounded -- the drift this flag was enabled to stop."""
+    registry = default_registry(ROOT)
+    for host in PVE_NODES:
+        assert apt_upgrade.normalize_cleanup(registry, host) is True, host
+
+
+def test_cleanup_defaults_to_false(tmp_path: Path) -> None:
+    registry = registry_for(tmp_path, "somehost")
+    assert apt_upgrade.normalize_cleanup(registry, "somehost") is False
+
+
+def test_cleanup_rejects_a_non_boolean(tmp_path: Path) -> None:
+    registry = registry_for(tmp_path, "somehost", extra="      cleanup: weekly\n")
+    with pytest.raises(ValueError, match="cleanup must be true or false"):
+        apt_upgrade.normalize_cleanup(registry, "somehost")
+
+
+def _exec_starts(build_dir: Path) -> list[str]:
+    text = (build_dir / "service").read_text(encoding="utf-8")
+    return [line for line in text.splitlines() if line.startswith("ExecStart=")]
+
+
+def test_cleanup_runs_autoremove_then_autoclean_after_the_upgrade(tmp_path: Path) -> None:
+    apt_upgrade.build_unit_files(
+        tmp_path,
+        autoupgrade="true",
+        schedule="Sat *-*-* 05:00:00",
+        paused=False,
+        auto_reboot=False,
+        auto_reboot_time="now",
+        cleanup=True,
+    )
+    steps = _exec_starts(tmp_path)
+    assert len(steps) == 4
+    assert steps[1].endswith("-y dist-upgrade")
+    assert steps[2].endswith("-y autoremove")
+    assert steps[3].endswith("-y autoclean")
+    # autoremove can hit the same apt-daily lock contention as the upgrade.
+    assert all("DPkg::Lock::Timeout=600" in step for step in steps)
+    assert "CLEANUP=true" in (tmp_path / "env").read_text(encoding="utf-8")
+
+
+def test_without_cleanup_the_service_only_upgrades(tmp_path: Path) -> None:
+    apt_upgrade.build_unit_files(
+        tmp_path,
+        autoupgrade="true",
+        schedule="Sat *-*-* 05:00:00",
+        paused=False,
+        auto_reboot=False,
+        auto_reboot_time="now",
+    )
+    steps = _exec_starts(tmp_path)
+    assert len(steps) == 2
+    assert not any("autoremove" in step or "autoclean" in step for step in steps)
+    assert "CLEANUP=false" in (tmp_path / "env").read_text(encoding="utf-8")
+
+
 def test_security_updates_defaults_to_false(tmp_path: Path) -> None:
     registry = registry_for(tmp_path, "somehost")
     assert apt_upgrade.normalize_security_updates(registry, "somehost") is False

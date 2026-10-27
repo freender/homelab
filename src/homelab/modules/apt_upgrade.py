@@ -89,6 +89,7 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
         registry.get(host, "apt-upgrade.auto_reboot_time", DEFAULT_AUTO_REBOOT_TIME)
     )
     security_updates = normalize_security_updates(registry, host)
+    cleanup = normalize_cleanup(registry, host)
 
     build_dir = root / "apt-upgrade" / "build" / host
     build_unit_files(
@@ -99,6 +100,7 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
         auto_reboot=auto_reboot,
         auto_reboot_time=auto_reboot_time,
         security_updates=security_updates,
+        cleanup=cleanup,
     )
 
     ssh_hostname = str(registry.get(host, "config.hostname", host))
@@ -123,6 +125,7 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
             auto_reboot_time=auto_reboot_time,
         )
         report_security_updates(host, security_updates)
+        report_cleanup(host, cleanup)
         return
 
     stage_and_install(root, build_dir, connection, host, force=force)
@@ -137,6 +140,7 @@ def build_unit_files(
     auto_reboot: bool,
     auto_reboot_time: str,
     security_updates: bool = False,
+    cleanup: bool = False,
 ) -> None:
     """Render the service, and conditionally the timer and the two apt drop-ins.
 
@@ -146,7 +150,7 @@ def build_unit_files(
     uploads whatever exists.
     """
     prepare_build_dir(build_dir)
-    write_service(build_dir, cleanup=False)
+    write_service(build_dir, cleanup=cleanup)
     specs = [SERVICE_SPEC]
     if autoupgrade == "true":
         write_timer(build_dir, schedule)
@@ -164,6 +168,7 @@ def build_unit_files(
         paused=paused,
         auto_reboot=auto_reboot,
         security_updates=security_updates,
+        cleanup=cleanup,
     )
     # Only the files this host actually gets. A map entry with no build file
     # behind it would make `files.install` raise on a missing source, so the
@@ -233,6 +238,31 @@ def report_security_updates(host: str, security_updates: bool) -> None:
         )
     else:
         print_sub(f"[DRY-RUN] Would ensure no homelab security-updates drop-in on {host}")
+
+
+def report_cleanup(host: str, cleanup: bool) -> None:
+    if cleanup:
+        print_sub(
+            f"[DRY-RUN] Would autoremove and autoclean after each dist-upgrade on {host}"
+        )
+    else:
+        print_sub(f"[DRY-RUN] Would leave unused packages and the apt cache alone on {host}")
+
+
+def normalize_cleanup(registry, host: str) -> bool:
+    """Opt-in `autoremove` + `autoclean` after the dist-upgrade, default false.
+
+    On the PVE nodes this is what retires old kernels: proxmox-kernel-helper's
+    76pveconf adds NeverAutoRemove entries for the running kernel and the two
+    newest, so autoremove only takes the older ones. autoclean drops only
+    archives no longer downloadable, keeping the cache bounded without
+    discarding the current versions.
+    """
+    return normalize_bool(
+        registry.get(host, "apt-upgrade.cleanup", None),
+        False,
+        f"apt-upgrade.cleanup must be true or false for {host}",
+    )
 
 
 def normalize_security_updates(registry, host: str) -> bool:
@@ -425,11 +455,12 @@ def write_env(
     paused: bool,
     auto_reboot: bool = False,
     security_updates: bool = False,
+    cleanup: bool = False,
 ) -> None:
     write_env_file(
         build_dir / "env",
         {
-            "CLEANUP": "false",
+            "CLEANUP": "true" if cleanup else "false",
             "AUTOUPGRADE": autoupgrade,
             "SCHEDULE": schedule,
             "PAUSED": "true" if paused else "false",
