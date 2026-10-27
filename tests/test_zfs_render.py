@@ -64,6 +64,24 @@ def test_unguarded_snapshot_plan_has_no_active_check() -> None:
     assert "Including snapshot plan: vm-flash/vm-112-disk-1" in script
 
 
+def test_snapshot_plan_takes_snapshots_by_default() -> None:
+    script = build_snapshot_script([snapshot_plan()])
+
+    assert "autosnap = yes\nautoprune = yes\n" in script
+    assert "autosnap = no" not in script
+
+
+def test_prune_only_plan_renders_autosnap_off_and_says_so() -> None:
+    """A receive-only replica must be pruned but never snapshotted locally: a
+    local autosnap would share no name with the source, so it can never be a
+    common snapshot and only pins blocks."""
+    script = build_snapshot_script([snapshot_plan(autosnap=False)])
+
+    assert "autosnap = no\nautoprune = yes\n" in script
+    assert "autosnap = yes" not in script
+    assert "echo 'Including prune-only plan: vm-flash/vm-112-disk-1'" in script
+
+
 def test_replication_script_guards_a_vm_on_its_scope() -> None:
     plan = ReplicationPlan(
         target="cinci:tank/helm",

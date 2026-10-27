@@ -480,6 +480,183 @@ def test_snapshot_template_resolves_across_hosts(tmp_path: Path) -> None:
     assert plans[0].daily == "21"
 
 
+def test_snapshot_plan_autosnap_defaults_on_and_reads_plan_then_defaults(tmp_path: Path) -> None:
+    registry = registry_from(
+        pve_host(
+            "ace",
+            """    zfs-automation:
+      snapshot_defaults:
+        autosnap: "no"
+      snapshot_plans:
+        - dataset: tank/inherits
+        - dataset: tank/overrides
+          autosnap: true
+""",
+        ),
+        tmp_path,
+    )
+
+    plans = n.normalize_snapshot_plans(registry, "ace")
+
+    assert [p.autosnap for p in plans] == [False, True]
+    assert n.snapshot_plan_from_config({}, {}, "tank/x", "ace").autosnap is True
+
+
+def test_snapshot_plan_rejects_a_non_boolean_autosnap() -> None:
+    with pytest.raises(ValueError, match="autosnap for snapshot plan tank/x must be true or false"):
+        n.snapshot_plan_from_config({"autosnap": "sometimes"}, {}, "tank/x", "ace")
+
+
+def template_host_with_own_plans(own_block: str) -> str:
+    return pve_host(
+        "ace",
+        """    zfs-automation:
+      snapshot_templates:
+        lxc:
+          snapshot_defaults:
+            daily: 21
+          snapshot_plans:
+            - dataset: rpool/lxc
+""",
+    ) + pve_host(
+        "clovis",
+        """    zfs-automation:
+      snapshot_template: ace:lxc
+"""
+        + own_block,
+    )
+
+
+def test_snapshot_template_host_plans_follow_the_template_with_their_own_defaults(
+    tmp_path: Path,
+) -> None:
+    """Host plans are appended after the template's, and neither side's defaults
+    reach the other: a template's 21 daily must not become a replica's retention."""
+    registry = registry_from(
+        template_host_with_own_plans(
+            """      snapshot_defaults:
+        daily: 3
+        autosnap: false
+      snapshot_plans:
+        - dataset: vault-hdd/replica/tm
+"""
+        ),
+        tmp_path,
+    )
+
+    plans = n.normalize_snapshot_plans(registry, "clovis")
+
+    assert [(p.dataset, p.daily, p.autosnap) for p in plans] == [
+        ("rpool/lxc", "21", True),
+        ("vault-hdd/replica/tm", "3", False),
+    ]
+
+
+def test_snapshot_template_without_host_plans_is_unchanged(tmp_path: Path) -> None:
+    registry = registry_from(template_host_with_own_plans(""), tmp_path)
+
+    plans = n.normalize_snapshot_plans(registry, "clovis")
+
+    assert [(p.dataset, p.daily) for p in plans] == [("rpool/lxc", "21")]
+
+
+def test_snapshot_template_and_host_plan_for_one_dataset_is_rejected(tmp_path: Path) -> None:
+    registry = registry_from(
+        template_host_with_own_plans(
+            """      snapshot_plans:
+        - dataset: rpool/lxc
+"""
+        ),
+        tmp_path,
+    )
+
+    with pytest.raises(ValueError, match="duplicate snapshot plan dataset rpool/lxc for clovis"):
+        n.normalize_snapshot_plans(registry, "clovis")
+
+
+def test_snapshot_template_host_defaults_must_still_be_a_mapping(tmp_path: Path) -> None:
+    registry = registry_from(
+        template_host_with_own_plans("      snapshot_defaults: [daily]\n"),
+        tmp_path,
+    )
+
+    with pytest.raises(ValueError, match="snapshot_defaults must be a mapping for clovis"):
+        n.normalize_snapshot_plans(registry, "clovis")
+
+
+def test_snapshot_template_host_plans_must_be_a_list(tmp_path: Path) -> None:
+    registry = registry_from(
+        template_host_with_own_plans("      snapshot_plans: {dataset: tank/x}\n"),
+        tmp_path,
+    )
+
+    with pytest.raises(ValueError, match="snapshot_plans must be a list for clovis"):
+        n.normalize_snapshot_plans(registry, "clovis")
+
+
+def test_snapshot_template_host_plan_errors_name_their_index_and_host(tmp_path: Path) -> None:
+    registry = registry_from(
+        template_host_with_own_plans(
+            """      snapshot_plans:
+        - dataset: tank/ok
+        - not-a-mapping
+"""
+        ),
+        tmp_path,
+    )
+
+    with pytest.raises(ValueError, match="invalid snapshot plan at index 1 for clovis"):
+        n.normalize_snapshot_plans(registry, "clovis")
+
+
+def test_empty_snapshot_defaults_fall_back_to_built_in_retention(tmp_path: Path) -> None:
+    """`snapshot_defaults:` with no value loads as None, not a mapping."""
+    registry = registry_from(
+        pve_host(
+            "ace",
+            """    zfs-automation:
+      snapshot_defaults:
+      snapshot_plans:
+        - dataset: tank/x
+""",
+        ),
+        tmp_path,
+    )
+
+    assert n.normalize_snapshot_plans(registry, "ace")[0].daily == "7"
+
+
+def test_snapshot_template_ref_errors_name_the_key_and_host(tmp_path: Path) -> None:
+    registry = registry_from(
+        pve_host(
+            "clovis",
+            """    zfs-automation:
+      snapshot_template: nocolon
+""",
+        ),
+        tmp_path,
+    )
+
+    with pytest.raises(ValueError, match="snapshot_template for clovis must use host:group format"):
+        n.normalize_snapshot_plans(registry, "clovis")
+
+
+def test_snapshot_template_source_without_templates_is_an_error(tmp_path: Path) -> None:
+    registry = registry_from(
+        pve_host("ace")
+        + pve_host(
+            "clovis",
+            """    zfs-automation:
+      snapshot_template: ace:lxc
+""",
+        ),
+        tmp_path,
+    )
+
+    with pytest.raises(ValueError, match="snapshot_templates must be a dict for ace"):
+        n.normalize_snapshot_plans(registry, "clovis")
+
+
 def test_snapshot_template_missing_name_is_an_error(tmp_path: Path) -> None:
     registry = registry_from(
         pve_host(
@@ -500,7 +677,7 @@ def test_snapshot_template_missing_name_is_an_error(tmp_path: Path) -> None:
         tmp_path,
     )
 
-    with pytest.raises(ValueError, match="not found"):
+    with pytest.raises(ValueError, match="snapshot_template ace:ghost not found for bray"):
         n.normalize_snapshot_plans(registry, "bray")
 
 

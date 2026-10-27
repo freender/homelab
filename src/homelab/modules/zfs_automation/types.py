@@ -63,6 +63,7 @@ class SnapshotPlan:
     process_children_only: bool = True
     require_active_guest: int | None = None
     guest_kind: str = "lxc"
+    autosnap: bool = True
 
 
 @dataclass(frozen=True)

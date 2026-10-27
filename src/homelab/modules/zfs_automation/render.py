@@ -38,7 +38,7 @@ def sanoid_plan_lines(plan: SnapshotPlan) -> list[str]:
         f"weekly = {plan.weekly}",
         f"monthly = {plan.monthly}",
         f"yearly = {plan.yearly}",
-        "autosnap = yes",
+        f"autosnap = {'yes' if plan.autosnap else 'no'}",
         "autoprune = yes",
         "",
     ]
@@ -61,9 +61,10 @@ def append_snapshot_plan_script(
     plan: SnapshotPlan,
     config_lines: list[str],
 ) -> None:
+    kind = "snapshot plan" if plan.autosnap else "prune-only plan"
     lines.extend(
         [
-            f"echo {quote(f'Including snapshot plan: {plan.dataset}')}",
+            f"echo {quote(f'Including {kind}: {plan.dataset}')}",
             "cat >> \"$CONFIG_FILE\" <<'SANOID_CONFIG'",
             *config_lines,
             "SANOID_CONFIG",

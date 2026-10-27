@@ -293,6 +293,11 @@ def snapshot_plan_from_config(
             True,
             f"process_children_only for snapshot plan {dataset} must be true or false for {host}",
         ),
+        autosnap=normalize_bool(
+            plan.get("autosnap", defaults.get("autosnap")),
+            True,
+            f"autosnap for snapshot plan {dataset} must be true or false for {host}",
+        ),
         require_active_guest=(
             normalize_positive_int(
                 plan.get("require_active_lxc"),
@@ -448,19 +453,27 @@ def expand_migratable_lxc_snapshot_group(
     ]
 
 
-def resolve_snapshot_source(registry, host: str) -> tuple[object, object]:
-    """The `(defaults, explicit_plans)` pair, from a snapshot_template or the host itself.
+def resolve_snapshot_sources(registry, host: str) -> list[tuple[object, object]]:
+    """The `(defaults, explicit_plans)` pairs: a snapshot_template's, then the host's own.
 
-    A `snapshot_template` reference replaces both halves wholesale rather than
-    merging, so a host either templates its snapshots or writes them out.
+    Each pair keeps its own defaults, so a template's retention never leaks into a
+    host plan or the other way round. A host on a template adds its own
+    `snapshot_plans` after the template's, e.g. prune-only plans for the replica
+    datasets only that host receives.
     """
+    own = (
+        registry.get(host, "zfs-automation.snapshot_defaults", {}),
+        registry.get(host, "zfs-automation.snapshot_plans", None),
+    )
     snapshot_template = registry.get(host, "zfs-automation.snapshot_template", None)
     if snapshot_template is None:
-        return (
-            registry.get(host, "zfs-automation.snapshot_defaults", {}),
-            registry.get(host, "zfs-automation.snapshot_plans", None),
-        )
+        return [own]
+    return [resolve_snapshot_template(registry, snapshot_template, host), own]
 
+
+def resolve_snapshot_template(
+    registry, snapshot_template: object, host: str
+) -> tuple[object, object]:
     source_host, template_name = parse_migratable_lxc_group_ref(
         snapshot_template,
         host,
@@ -499,32 +512,40 @@ def expand_snapshot_plan_entry(registry, plan: object, index: int, defaults: dic
     ]
 
 
-def normalize_snapshot_plans(registry, host: str) -> list[SnapshotPlan]:
-    defaults, explicit = resolve_snapshot_source(registry, host)
-
+def expand_snapshot_source(registry, defaults: object, explicit: object, host: str):
+    """One `(defaults, explicit_plans)` pair as plans; `None` when it declares none."""
     if defaults is None:
         defaults = {}
     if not isinstance(defaults, dict):
         raise ValueError(f"zfs-automation.snapshot_defaults must be a mapping for {host}")
-
     if explicit is None:
+        return None
+    if not isinstance(explicit, list):
+        raise ValueError(f"zfs-automation.snapshot_plans must be a list for {host}")
+    return [
+        expanded_plan
+        for index, plan in enumerate(explicit)
+        for expanded_plan in expand_snapshot_plan_entry(registry, plan, index, defaults, host)
+    ]
+
+
+def normalize_snapshot_plans(registry, host: str) -> list[SnapshotPlan]:
+    expanded = [
+        expand_snapshot_source(registry, defaults, explicit, host)
+        for defaults, explicit in resolve_snapshot_sources(registry, host)
+    ]
+    if all(source is None for source in expanded):
         if registry.get(host, "zfs-automation.sanoid", None) is not None:
             raise ValueError(
                 f"zfs-automation.sanoid is no longer supported for {host}; use snapshot_plans"
             )
         return []
 
-    if not isinstance(explicit, list):
-        raise ValueError(f"zfs-automation.snapshot_plans must be a list for {host}")
-
     plans: list[SnapshotPlan] = []
     seen: set[str] = set()
-    for index, plan in enumerate(explicit):
-        for expanded_plan in expand_snapshot_plan_entry(registry, plan, index, defaults, host):
-            if expanded_plan.dataset in seen:
-                raise ValueError(
-                    f"duplicate snapshot plan dataset {expanded_plan.dataset} for {host}"
-                )
-            seen.add(expanded_plan.dataset)
-            plans.append(expanded_plan)
+    for expanded_plan in (plan for source in expanded if source for plan in source):
+        if expanded_plan.dataset in seen:
+            raise ValueError(f"duplicate snapshot plan dataset {expanded_plan.dataset} for {host}")
+        seen.add(expanded_plan.dataset)
+        plans.append(expanded_plan)
     return plans
