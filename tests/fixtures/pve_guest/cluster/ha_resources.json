@@ -29,10 +29,5 @@
   "sid": "vm:110",
   "state": "started",
   "type": "vm"
- },
- {
-  "sid": "ct:111",
-  "state": "started",
-  "type": "ct"
  }
 ]

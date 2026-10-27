@@ -3,7 +3,7 @@
   "affinity": "positive",
   "nodes": "ace:2,clovis:3",
   "order": 1,
-  "resources": "ct:111,vm:112",
+  "resources": "vm:112",
   "rule": "ha-rule-d9d6e797-22ea",
   "strict": 1,
   "type": "node-affinity"

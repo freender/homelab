@@ -36,15 +36,6 @@
  },
  {
   "hastate": "started",
-  "id": "lxc/111",
-  "name": "deepstone",
-  "node": "clovis",
-  "status": "running",
-  "type": "lxc",
-  "vmid": 111
- },
- {
-  "hastate": "started",
   "id": "qemu/109",
   "name": "zion",
   "node": "ace",
