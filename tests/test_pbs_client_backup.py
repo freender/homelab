@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from homelab.modules import pbs_client_backup
 
 
@@ -18,6 +20,7 @@ def _base_plan(**overrides: object) -> pbs_client_backup.BackupPlan:
         "host_type": "ubuntu",
         "encrypt": False,
         "purge_keyfile": False,
+        "change_detection_mode": "metadata",
         "archives": (
             pbs_client_backup.ArchivePlan(
                 name="etc", dataset="", path="/etc", excludes=()
@@ -75,6 +78,29 @@ def test_purge_keyfile_cleared_for_encrypted_pve_storage() -> None:
     plan = pbs_client_backup.normalize_backup_plan(Path("/"), registry, "ace")
     assert plan.encrypt is False
     assert plan.purge_keyfile is False
+
+
+def test_change_detection_mode_defaults_to_metadata() -> None:
+    plan = pbs_client_backup.normalize_backup_plan(Path("/"), _FakeRegistry({}), "cinci")
+    assert plan.change_detection_mode == "metadata"
+
+
+def test_change_detection_mode_can_be_set_back_to_legacy() -> None:
+    registry = _FakeRegistry({"pbs-client-backup.change_detection_mode": " legacy "})
+    plan = pbs_client_backup.normalize_backup_plan(Path("/"), registry, "cinci")
+    assert plan.change_detection_mode == "legacy"
+
+
+def test_an_unknown_change_detection_mode_is_rejected() -> None:
+    registry = _FakeRegistry({"pbs-client-backup.change_detection_mode": "fast"})
+    with pytest.raises(ValueError, match="change_detection_mode for cinci must be one of"):
+        pbs_client_backup.normalize_backup_plan(Path("/"), registry, "cinci")
+
+
+def test_write_config_emits_change_detection_mode(tmp_path: Path) -> None:
+    path = tmp_path / "conf"
+    pbs_client_backup.write_config(path, _base_plan(change_detection_mode="data"))
+    assert 'CHANGE_DETECTION_MODE="data"' in path.read_text(encoding="utf-8")
 
 
 class _FakeRegistry:

@@ -326,12 +326,15 @@ class Node:
         return 0, "", ""
 
 
-def snapshot(time: int, archive: str = "etc-pve") -> dict:
+def snapshot(time: int, archive: str = "etc-pve", split: bool = False) -> dict:
+    archives = [f"{archive}.mpxar.didx", f"{archive}.ppxar.didx"] if split else [
+        f"{archive}.pxar.didx"
+    ]
     return {
         "backup-type": "host",
         "backup-id": "pve-standalone",
         "backup-time": time,
-        "files": [{"filename": f"{archive}.pxar.didx"}, {"filename": "index.json.blob"}],
+        "files": [*({"filename": name} for name in archives), {"filename": "index.json.blob"}],
     }
 
 
@@ -695,7 +698,7 @@ def test_restore_fetches_the_newest_snapshot_that_holds_the_archive(node: Node) 
     node.deploy()
 
     restore_call = next(write for write in node.writes if write[1] == "restore")
-    assert restore_call[2] == "host/pve-standalone/2026-09-14T04:30:05Z"
+    assert restore_call[2:4] == ["host/pve-standalone/2026-09-14T04:30:05Z", "etc-pve.pxar"]
     assert restore_call[-2:] == ["--keyfile", node.m.PERSISTENT_KEYFILE]
     assert node.envs[-1]["PBS_PASSWORD"] == "pw0"
     live = (node.pve / "nodes" / "osiris" / "lxc" / "105.conf").read_text()
@@ -704,6 +707,18 @@ def test_restore_fetches_the_newest_snapshot_that_holds_the_archive(node: Node) 
     assert (Path(node.m.RESTORE_OUTPUT) / "latest" / "priv" / "notifications.cfg").is_file()
     assert not Path(node.m.RESTORE_ROOT).exists()
     assert not (node.build / "lxc-105.conf").exists()
+
+
+def test_a_split_metadata_mode_archive_restores_by_its_mpxar_name(node: Node) -> None:
+    restore_node(node)
+    node.datastores["xur-sync@pbs@cinci.internal:backup"].append(
+        snapshot(1789390000, split=True)
+    )
+
+    node.deploy()
+
+    restore_call = next(write for write in node.writes if write[1] == "restore")
+    assert restore_call[2:4] == ["host/pve-standalone/2026-09-14T12:46:40Z", "etc-pve.mpxar"]
 
 
 def test_a_failed_listing_is_reported_and_the_next_destination_tried(

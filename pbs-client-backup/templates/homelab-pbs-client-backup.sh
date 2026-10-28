@@ -49,6 +49,7 @@ backup_with_client() {
     local exclude_args=("${PBS_EXCLUDE_ARGS[@]}")
     local namespace_args=()
     local crypt_args=()
+    local mode_args=()
 
     if ! command -v proxmox-backup-client >/dev/null 2>&1; then
         echo "proxmox-backup-client not found" >&2
@@ -56,6 +57,9 @@ backup_with_client() {
     fi
     if [[ -n "${NAMESPACE:-}" ]]; then
         namespace_args=(--ns "$NAMESPACE")
+    fi
+    if [[ -n "${CHANGE_DETECTION_MODE:-}" ]]; then
+        mode_args=(--change-detection-mode "$CHANGE_DETECTION_MODE")
     fi
 
     if [[ "${ENCRYPT:-false}" == "true" ]]; then
@@ -86,6 +90,7 @@ backup_with_client() {
         --repository "$repository" \
         "${namespace_args[@]}" \
         "${crypt_args[@]}" \
+        "${mode_args[@]}" \
         --backup-type "$BACKUP_TYPE" \
         --backup-id "$BACKUP_ID"
 }

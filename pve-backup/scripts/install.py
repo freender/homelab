@@ -679,7 +679,22 @@ def namespace_args(restore: Restore) -> list[str]:
     return ["--ns", restore.namespace] if restore.namespace else []
 
 
-def latest_snapshot(restore: Restore, repository: str, env: dict[str, str]) -> str | None:
+def snapshot_archive(restore: Restore, snapshot: dict) -> str | None:
+    """The archive name to restore from one snapshot, or None if it lacks it.
+
+    A metadata- or data-mode client backup splits the archive into
+    `.mpxar`/`.ppxar`; `restore` takes the `.mpxar` name for those.
+    """
+    files = {entry.get("filename") for entry in snapshot.get("files", [])}
+    for suffix in (".mpxar", ".pxar"):
+        if f"{restore.archive}{suffix}.didx" in files:
+            return f"{restore.archive}{suffix}"
+    return None
+
+
+def latest_snapshot(
+    restore: Restore, repository: str, env: dict[str, str]
+) -> tuple[str, str] | None:
     listing = _run(
         [
             "proxmox-backup-client",
@@ -698,13 +713,12 @@ def latest_snapshot(restore: Restore, repository: str, env: dict[str, str]) -> s
     if listing.returncode != 0:
         log.warn(f"Listing snapshots on {repository} failed: {(listing.stderr or '').strip()}")
         return None
-    archive = f"{restore.archive}.pxar.didx"
     candidates = [
         snapshot
         for snapshot in json.loads(listing.stdout or "[]")
         if snapshot.get("backup-type") == "host"
         and snapshot.get("backup-id") == restore.backup_id
-        and archive in {entry.get("filename") for entry in snapshot.get("files", [])}
+        and snapshot_archive(restore, snapshot)
     ]
     if not candidates:
         log.warn(
@@ -713,7 +727,8 @@ def latest_snapshot(restore: Restore, repository: str, env: dict[str, str]) -> s
         return None
     newest = max(candidates, key=lambda snapshot: snapshot["backup-time"])
     stamp = datetime.datetime.fromtimestamp(newest["backup-time"], datetime.UTC)
-    return f"host/{restore.backup_id}/{stamp.strftime('%Y-%m-%dT%H:%M:%SZ')}"
+    path = f"host/{restore.backup_id}/{stamp.strftime('%Y-%m-%dT%H:%M:%SZ')}"
+    return path, str(snapshot_archive(restore, newest))
 
 
 def fetch_from(ctx: InstallContext, restore: Restore, index: int, repository: str) -> bool:
@@ -721,9 +736,10 @@ def fetch_from(ctx: InstallContext, restore: Restore, index: int, repository: st
     if env is None:
         return False
     log.sub(f"Searching {repository} for backup id '{restore.backup_id}'...")
-    snapshot = latest_snapshot(restore, repository, env)
-    if snapshot is None:
+    found = latest_snapshot(restore, repository, env)
+    if found is None:
         return False
+    snapshot, archive = found
     log.sub(f"Restoring snapshot {snapshot} from {repository}...")
     target = Path(RESTORE_ROOT) / "etc-pve"
     shutil.rmtree(RESTORE_ROOT, ignore_errors=True)
@@ -734,7 +750,7 @@ def fetch_from(ctx: InstallContext, restore: Restore, index: int, repository: st
             "proxmox-backup-client",
             "restore",
             snapshot,
-            f"{restore.archive}.pxar",
+            archive,
             str(target),
             "--repository",
             repository,

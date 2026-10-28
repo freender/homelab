@@ -37,6 +37,7 @@ TIMER_NAME = "homelab-pbs-client-backup.timer"
 # /etc/pve archives can be decrypted.
 KEYFILE_REMOTE_PATH = "/etc/homelab/pbs-encryption.key"
 VALID_ARCHIVE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+CHANGE_DETECTION_MODES = ("legacy", "data", "metadata")
 PROFILE_TO_SECRET = {
     "backup-main": "pbs-backup-main",
     "backup-cinci": "pbs-backup-cinci",
@@ -75,6 +76,7 @@ class BackupPlan:
     host_type: str
     encrypt: bool
     purge_keyfile: bool
+    change_detection_mode: str
     archives: tuple[ArchivePlan, ...]
     fallback_destinations: tuple[BackupDestination, ...]
 
@@ -253,6 +255,17 @@ def normalize_backup_plan(root: Path, registry, host: str) -> BackupPlan:
     # restores read the same path.
     purge_keyfile = not encrypt and not registry_has_encrypted_pve_storage(registry, host)
 
+    # metadata skips re-reading files whose size and mtime match the previous
+    # snapshot; the first run after switching modes still reads everything.
+    change_detection_mode = str(
+        registry.get(host, f"{prefix}.change_detection_mode", "metadata")
+    ).strip()
+    if change_detection_mode not in CHANGE_DETECTION_MODES:
+        raise ValueError(
+            f"{prefix}.change_detection_mode for {host} must be one of "
+            f"{', '.join(CHANGE_DETECTION_MODES)}"
+        )
+
     return BackupPlan(
         enabled=normalize_bool(
             registry.get(host, f"{prefix}.enabled", None),
@@ -275,6 +288,7 @@ def normalize_backup_plan(root: Path, registry, host: str) -> BackupPlan:
         host_type=host_type,
         encrypt=encrypt,
         purge_keyfile=purge_keyfile,
+        change_detection_mode=change_detection_mode,
         archives=tuple(archives),
         fallback_destinations=tuple(fallback_destinations),
     )
@@ -424,6 +438,7 @@ def write_config(path: Path, plan: BackupPlan) -> None:
         f'PURGE_KEYFILE="{str(plan.purge_keyfile).lower()}"',
         f'KEYFILE="{KEYFILE_REMOTE_PATH}"',
         f'RETIRE_PVE_CONFIG_BACKUP="{str(plan.host_type == "pve").lower()}"',
+        f'CHANGE_DETECTION_MODE="{plan.change_detection_mode}"',
         f'ARCHIVE_COUNT="{len(plan.archives)}"',
         f'DESTINATION_COUNT="{len(destinations_for(plan))}"',
     ]
