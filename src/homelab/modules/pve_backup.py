@@ -88,6 +88,11 @@ def validate_backup_jobs(jobs: list, storage_names: set[str], host: str) -> None
         storage = str(job.get("storage", "")).strip()
         if storage not in storage_names:
             raise ValueError(f"{host}: backup job {index} references unknown storage {storage!r}")
+        mode = str(job.get("pbs_change_detection_mode", "")).strip()
+        if mode not in PBS_CHANGE_DETECTION_MODES:
+            raise ValueError(
+                f"{host}: backup job {index} has invalid pbs_change_detection_mode {mode!r}"
+            )
         key = (
             storage,
             str(job.get("schedule", "")).strip(),
@@ -232,7 +237,11 @@ JOB_DEFAULTS = {
     "prune_backups": "keep-all=1",
     "enabled": "1",
     "fleecing": "0",
+    # Empty leaves PVE's default (`legacy`) and clears a value set earlier.
+    "pbs_change_detection_mode": "",
 }
+
+PBS_CHANGE_DETECTION_MODES = ("", "legacy", "data", "metadata")
 
 JOB_PLAN_KEYS = [
     "schedule",
@@ -246,6 +255,7 @@ JOB_PLAN_KEYS = [
     "prune_backups",
     "enabled",
     "fleecing",
+    "pbs_change_detection_mode",
 ]
 
 

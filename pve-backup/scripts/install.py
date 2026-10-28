@@ -108,6 +108,7 @@ JOB_FIELDS = (
     "PRUNE_BACKUPS",
     "ENABLED",
     "FLEECING",
+    "PBS_CHANGE_DETECTION_MODE",
     "EXCLUDE_PATH_COUNT",
 )
 RESTORE_FIELDS = (
@@ -281,6 +282,8 @@ def job_options(values: dict[str, str], paths: list[str]) -> dict[str, object]:
         "enabled": values["ENABLED"],
         "fleecing": values["FLEECING"],
     }
+    if values["PBS_CHANGE_DETECTION_MODE"]:
+        options["pbs-change-detection-mode"] = values["PBS_CHANGE_DETECTION_MODE"]
     if values["VMID"]:
         options["vmid"] = values["VMID"]
     else:
@@ -594,7 +597,7 @@ def option_differs(current: dict, key: str, desired: object) -> bool:
 
 
 def stale_job_keys(current: dict, options: dict[str, object]) -> list[str]:
-    owned = ("all", "vmid", "exclude", "exclude-path")
+    owned = ("all", "vmid", "exclude", "exclude-path", "pbs-change-detection-mode")
     return [key for key in owned if key in current and key not in options]
 
 

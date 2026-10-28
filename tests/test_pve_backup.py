@@ -105,6 +105,32 @@ def test_build_standalone_backup_plans_emits_encryption_flag(
     assert "STORAGE_1_ENCRYPTION='false'" in text
 
 
+def test_job_plan_carries_change_detection_mode_and_defaults_it_empty(tmp_path: Path) -> None:
+    base = {"schedule": "*-*-* 23:00:00", "storage": "backup-local"}
+
+    default = pve_backup.job_plan_lines(tmp_path, base, 0, "ace")
+    metadata = pve_backup.job_plan_lines(
+        tmp_path, {**base, "pbs_change_detection_mode": "metadata"}, 0, "ace"
+    )
+
+    assert "JOB_0_PBS_CHANGE_DETECTION_MODE=''" in default
+    assert "JOB_0_PBS_CHANGE_DETECTION_MODE=metadata" in metadata
+
+
+@pytest.mark.parametrize("mode", ["", "legacy", "data", "metadata"])
+def test_validate_backup_jobs_accepts_each_change_detection_mode(mode: str) -> None:
+    job = {"storage": "backup-local", "pbs_change_detection_mode": mode}
+
+    pve_backup.validate_backup_jobs([job], {"backup-local"}, "ace")
+
+
+def test_validate_backup_jobs_rejects_an_unknown_change_detection_mode() -> None:
+    job = {"storage": "backup-local", "pbs_change_detection_mode": "meta"}
+
+    with pytest.raises(ValueError, match="invalid pbs_change_detection_mode 'meta'"):
+        pve_backup.validate_backup_jobs([job], {"backup-local"}, "ace")
+
+
 def test_host_has_encrypted_storage(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

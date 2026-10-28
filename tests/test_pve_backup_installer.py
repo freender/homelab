@@ -59,7 +59,13 @@ PBS_BACKUP_MAIN_PASSWORD='s3cr'"'"'et'
 PASSWORD = "s3cr'et"
 
 
-def job_plan(vmid: str = "", exclude: str = "105", paths: list[str] | None = None) -> str:
+def job_plan(
+    vmid: str = "",
+    exclude: str = "105",
+    paths: list[str] | None = None,
+    fleecing: str = "0",
+    detection: str = "",
+) -> str:
     paths = EXCLUDES if paths is None else paths
     lines = [
         "JOB_COUNT='1'",
@@ -73,7 +79,8 @@ def job_plan(vmid: str = "", exclude: str = "105", paths: list[str] | None = Non
         "JOB_0_NOTIFICATION_MODE='notification-system'",
         "JOB_0_PRUNE_BACKUPS='keep-all=1'",
         "JOB_0_ENABLED='1'",
-        "JOB_0_FLEECING='0'",
+        f"JOB_0_FLEECING='{fleecing}'",
+        f"JOB_0_PBS_CHANGE_DETECTION_MODE='{detection}'",
         f"JOB_0_EXCLUDE_PATH_COUNT='{len(paths)}'",
         *[f"JOB_0_EXCLUDE_PATH_{index}='{path}'" for index, path in enumerate(paths)],
     ]
@@ -537,6 +544,45 @@ def test_an_emptied_exclude_path_list_is_deleted(node: Node) -> None:
     node.deploy()
 
     assert "exclude-path" not in node.jobs[0]
+
+
+def test_a_change_detection_mode_is_set_and_then_converged(node: Node) -> None:
+    node.stage(jobs=job_plan(detection="metadata"))
+
+    node.deploy()
+
+    assert node.jobs[0]["pbs-change-detection-mode"] == "metadata"
+    node.writes.clear()
+    node.stage(jobs=job_plan(detection="metadata"))
+    node.deploy()
+    assert node.writes == []
+
+
+def test_an_emptied_change_detection_mode_is_deleted(node: Node) -> None:
+    node.jobs[0]["pbs-change-detection-mode"] = "metadata"
+    node.stage()
+
+    node.deploy()
+
+    assert "pbs-change-detection-mode" not in node.jobs[0]
+    assert node.writes[0][-2:] == ["--delete", "pbs-change-detection-mode"]
+
+
+def test_fleecing_with_a_storage_matches_pves_parsed_form(node: Node) -> None:
+    node.jobs[0]["fleecing"] = {"enabled": 1, "storage": "vm-flash"}
+    node.stage(jobs=job_plan(fleecing="enabled=1,storage=vm-flash"))
+
+    node.deploy()
+
+    assert node.writes == []
+
+
+def test_fleecing_switched_on_updates_the_job(node: Node) -> None:
+    node.stage(jobs=job_plan(fleecing="enabled=1,storage=vm-flash"))
+
+    node.deploy()
+
+    assert node.jobs[0]["fleecing"] == "enabled=1,storage=vm-flash"
 
 
 def test_a_vmid_job_drops_all_and_exclude(node: Node) -> None:
