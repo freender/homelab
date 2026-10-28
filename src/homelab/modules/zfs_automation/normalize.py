@@ -1,28 +1,22 @@
 """Config normalization: turn raw hosts.conf values into typed objects.
 
 Covers generic scalar/list validation, snapshot plans, and migratable-LXC
-groups. Replication-job and push-access normalization live in sibling
-`.replication` / `.access` modules since they build on top of what's here.
+groups.
 """
 
 from __future__ import annotations
 
 import re
 from dataclasses import replace
-from pathlib import Path
 
-from ... import op_secrets
 from .types import (
     GUEST_ACTIVE_UNITS,
-    KnownHostRefresh,
     MigratableLxcGroup,
     MigratableLxcPlan,
-    ReplicationPlan,
     SnapshotPlan,
-    SourcePrivateKey,
 )
 
-REPLICATION_JOB_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
+NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
 
 
 def require_string(value: object, message: str) -> str:
@@ -42,114 +36,6 @@ def normalize_string_list(value: object, message: str) -> list[str]:
     return [require_string(item, message) for item in value]
 
 
-def normalize_source_private_keys(registry, host: str) -> tuple[SourcePrivateKey, ...]:
-    raw = registry.get(host, "zfs-automation.source_private_keys", [])
-    if raw in (None, ""):
-        return ()
-    if not isinstance(raw, list):
-        raise ValueError(f"zfs-automation.source_private_keys must be a list for {host}")
-
-    keys: list[SourcePrivateKey] = []
-    seen_paths: set[str] = set()
-    for index, item in enumerate(raw):
-        if not isinstance(item, dict):
-            raise ValueError(
-                f"zfs-automation.source_private_keys[{index}] must be a mapping for {host}"
-            )
-        secret = require_safe_authorized_key_option(
-            item.get("secret", ""),
-            f"zfs-automation.source_private_keys[{index}].secret must be safe for {host}",
-        )
-        path = require_string(
-            item.get("path", ""),
-            f"zfs-automation.source_private_keys[{index}].path required for {host}",
-        )
-        if not path.startswith("/root/.ssh/") or path.endswith("/"):
-            raise ValueError(
-                f"zfs-automation.source_private_keys[{index}].path must be under "
-                f"/root/.ssh/ for {host}"
-            )
-        if any(char in path for char in ["\0", "\n", "\r"]):
-            raise ValueError(f"zfs-automation.source_private_keys[{index}].path invalid for {host}")
-        if path in seen_paths:
-            raise ValueError(f"duplicate source private key path {path} for {host}")
-        seen_paths.add(path)
-        keys.append(SourcePrivateKey(secret=secret, path=path))
-    return tuple(keys)
-
-
-def known_host_refresh_port(item: dict, index: int, host: str) -> int:
-    """The entry's SSH port, defaulting to 22 and bounded to the valid range."""
-    message = f"zfs-automation.known_host_refresh[{index}].port is invalid for {host}"
-    try:
-        port = int(item.get("port", 22))
-    except (TypeError, ValueError) as exc:
-        raise ValueError(message) from exc
-    if port < 1 or port > 65535:
-        raise ValueError(message)
-    return port
-
-
-def normalize_known_host_refresh_entry(item: object, index: int, host: str) -> KnownHostRefresh:
-    """One `known_host_refresh` entry.
-
-    `known_hosts` is confined to /root/.ssh/ because the installer rewrites the
-    named file; an unconfined path would let inventory target any file on the host.
-    """
-    if not isinstance(item, dict):
-        raise ValueError(f"zfs-automation.known_host_refresh[{index}] must be a mapping for {host}")
-    hostname = require_string(
-        item.get("host", ""),
-        f"zfs-automation.known_host_refresh[{index}].host required for {host}",
-    )
-    if not re.fullmatch(r"[A-Za-z0-9_.-]+", hostname):
-        raise ValueError(f"zfs-automation.known_host_refresh[{index}].host is invalid for {host}")
-    known_hosts = str(item.get("known_hosts", "/root/.ssh/known_hosts")).strip()
-    if not known_hosts.startswith("/root/.ssh/") or known_hosts.endswith("/"):
-        raise ValueError(
-            f"zfs-automation.known_host_refresh known_hosts must be a root .ssh file for {host}"
-        )
-    return KnownHostRefresh(
-        host=hostname,
-        known_hosts=known_hosts,
-        port=known_host_refresh_port(item, index, host),
-    )
-
-
-def normalize_known_host_refresh(registry, host: str) -> tuple[KnownHostRefresh, ...]:
-    raw = registry.get(host, "zfs-automation.known_host_refresh", [])
-    if raw in (None, ""):
-        return ()
-    if not isinstance(raw, list):
-        raise ValueError(f"zfs-automation.known_host_refresh must be a list for {host}")
-
-    entries: list[KnownHostRefresh] = []
-    seen: set[tuple[str, str, int]] = set()
-    for index, item in enumerate(raw):
-        entry = normalize_known_host_refresh_entry(item, index, host)
-        key = (entry.host, entry.known_hosts, entry.port)
-        if key in seen:
-            raise ValueError(f"duplicate known_host_refresh entry {key} for {host}")
-        seen.add(key)
-        entries.append(entry)
-    return tuple(entries)
-
-
-def rendered_private_key(root: Path, secret: str) -> str:
-    text = op_secrets.secret_file(root, secret).read_text(encoding="utf-8")
-    prefix = "ZFS_PUSH_PRIVATE_KEY="
-    if text.startswith(prefix):
-        text = text[len(prefix) :]
-    text = text.strip()
-    if (text.startswith('"') and text.endswith('"')) or (
-        text.startswith("'") and text.endswith("'")
-    ):
-        text = text[1:-1]
-    if not text.startswith("-----BEGIN ") or "PRIVATE KEY-----" not in text.splitlines()[0]:
-        raise ValueError(f"secret '{secret}' did not render a private key")
-    return text.rstrip("\n") + "\n"
-
-
 def normalize_bool(value: object, default: bool, message: str) -> bool:
     if value is None:
         return default
@@ -164,19 +50,9 @@ def normalize_bool(value: object, default: bool, message: str) -> bool:
     raise ValueError(message)
 
 
-def normalize_replication_job_name(value: object, host: str) -> str:
-    name = require_string(value, f"replication job name required for {host}")
-    if not REPLICATION_JOB_NAME_PATTERN.fullmatch(name):
-        raise ValueError(
-            f"replication job name '{name}' for {host} must use only letters, numbers,"
-            " underscores, or hyphens and must start with a letter or number"
-        )
-    return name
-
-
 def normalize_migratable_lxc_group_name(value: object, host: str) -> str:
     name = require_string(value, f"migratable LXC group name required for {host}")
-    if not REPLICATION_JOB_NAME_PATTERN.fullmatch(name):
+    if not NAME_PATTERN.fullmatch(name):
         raise ValueError(
             f"migratable LXC group '{name}' for {host} must use only letters, "
             "numbers, underscores, or hyphens and must start with a letter or number"
@@ -194,61 +70,7 @@ def normalize_positive_int(value: object, message: str) -> int:
     return normalized
 
 
-def expand_migratable_lxc_replication_plans(
-    registry,
-    job_config: dict,
-    explicit_plans: list,
-    host: str,
-    job_name: str,
-) -> list[ReplicationPlan]:
-    group = resolve_migratable_lxc_group(
-        registry,
-        job_config.get("migratable_lxc_group"),
-        host,
-        "migratable_lxc_group",
-    )
-    target_root = require_string(
-        job_config.get("target_root", ""),
-        f"target_root required for migratable LXC replication job '{job_name}' on {host}",
-    ).rstrip("/")
-    group_plans = {plan.name: plan for plan in group.plans}
-    plans: list[ReplicationPlan] = []
-    seen_targets: set[str] = set()
-    for index, plan in enumerate(explicit_plans):
-        if not isinstance(plan, dict):
-            raise ValueError(f"invalid plan at index {index} in job '{job_name}' for {host}")
-        name = require_safe_authorized_key_option(
-            plan.get("name", ""),
-            f"plan name required at index {index} in job '{job_name}' for {host}",
-        )
-        group_plan = group_plans.get(name)
-        if group_plan is None:
-            raise ValueError(
-                f"plan '{name}' in job '{job_name}' does not exist in group {group.name}"
-            )
-        target = require_string(
-            plan.get("target", ""),
-            f"plan target required at index {index} in job '{job_name}' for {host}",
-        )
-        if ":" not in target and not target.startswith("/"):
-            # No lstrip("/") here: this branch is only reached when target does not
-            # start with "/", so there is never a leading separator to strip.
-            target = f"{target_root}/{target}"
-        if target in seen_targets:
-            raise ValueError(f"duplicate target {target} in job '{job_name}' for {host}")
-        seen_targets.add(target)
-        plans.append(
-            ReplicationPlan(
-                target=target,
-                source=group_plan.dataset,
-                require_active_guest=group_plan.vmid,
-                guest_kind=group_plan.kind,
-            )
-        )
-    return plans
-
-
-def require_safe_authorized_key_option(value: object, message: str) -> str:
+def require_safe_name(value: object, message: str) -> str:
     text = require_string(value, message)
     if any(char in text for char in ['"', "'", ",", " ", "\t", "\n", "\r"]):
         raise ValueError(message)
@@ -256,18 +78,7 @@ def require_safe_authorized_key_option(value: object, message: str) -> str:
 
 
 def dataset_pool(dataset: str) -> str:
-    dataset_name = dataset.split(":", 1)[1] if ":" in dataset else dataset
-    return dataset_name.split("/", 1)[0]
-
-
-def is_remote_dataset(dataset: str) -> bool:
-    return ":" in dataset
-
-
-def normalize_dataset_under_root(dataset: str, root_dataset: str) -> str:
-    if dataset == root_dataset or dataset.startswith(f"{root_dataset}/"):
-        return dataset
-    return f"{root_dataset}/{dataset}"
+    return dataset.split("/", 1)[0]
 
 
 def snapshot_plan_from_config(
@@ -356,7 +167,7 @@ def normalize_migratable_lxc_plan(
         )
     return MigratableLxcPlan(
         kind=kind,
-        name=require_safe_authorized_key_option(
+        name=require_safe_name(
             plan.get("name", f"plan-{index}"),
             f"name must be safe for migratable LXC plan {where}",
         ),
@@ -376,8 +187,8 @@ def normalize_migratable_lxc_plans(
 ) -> list[MigratableLxcPlan]:
     """A group's plans, rejecting a repeated name or dataset.
 
-    Both must be unique: the name keys the rendered unit and the dataset decides
-    what gets replicated, so a duplicate of either silently drops one container.
+    Both must be unique: a repeated name is a copy-paste slip, and a repeated
+    dataset would render the same sanoid section twice.
     """
     explicit_plans = group_config.get("plans", [])
     if not isinstance(explicit_plans, list) or not explicit_plans:
@@ -458,8 +269,8 @@ def resolve_snapshot_sources(registry, host: str) -> list[tuple[object, object]]
 
     Each pair keeps its own defaults, so a template's retention never leaks into a
     host plan or the other way round. A host on a template adds its own
-    `snapshot_plans` after the template's, e.g. prune-only plans for the replica
-    datasets only that host receives.
+    `snapshot_plans` after the template's, e.g. a prune-only plan for a dataset
+    only that host holds.
     """
     own = (
         registry.get(host, "zfs-automation.snapshot_defaults", {}),

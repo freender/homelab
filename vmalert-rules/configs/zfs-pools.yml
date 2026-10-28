@@ -122,32 +122,3 @@ groups:
         annotations:
           summary: "{{ $labels.host }} ZFS pool metrics are stale"
           description: "zfs-pools.prom on {{ $labels.host }} has not been rewritten in over 15 minutes, so every homelab_zpool_* series is frozen at its last value and ZfsPoolUnhealthy/ZfsPoolSpaceCritical cannot fire on anything that has changed since. Check `systemctl status zfs-pool-textfile-exporter.timer` on {{ $labels.host }}."
-
-      # Syncoid push replication (zfs-automation replication_jobs) into a push
-      # target: osiris -> ace/clovis, cottonwood -> clovis -> ace, the cluster
-      # nodes -> cinci. Measured on the *target*, from the newest snapshot that
-      # actually arrived, because the push's own unit lives on the source and
-      # HomelabUnitFailed only sees a run that ran and failed. This also catches
-      # a timer that stopped, a run hung waiting on the replication lock, a
-      # source host that is offline, and a source whose snapshots stopped.
-      #
-      # A received snapshot keeps its source creation time, so the value is the
-      # age of the data, not of the last transfer. Every job here is daily and
-      # replicates the source's daily autosnap, so the healthy worst case is
-      # 24h plus the snapshot-to-push gap (longest: cottonwood's 00:00 Eastern
-      # snapshot relayed to ace at 04:30, ~28.5h). 36h therefore means one
-      # whole day's copy did not land.
-      #
-      # 0 (dataset missing or never snapshotted) is reported as a series on
-      # purpose and fires this too: a replica that never arrived or was
-      # destroyed is the most stale copy there is. Expect it during a first
-      # full send. No host-up gate: a down target makes the series absent, and
-      # NodeDown inhibition covers the rest.
-      - alert: ZfsReplicaStale
-        expr: time() - homelab_zfs_replica_last_snapshot_timestamp_seconds > 36 * 3600
-        for: 1h
-        labels:
-          severity: warning
-        annotations:
-          summary: "ZFS replica {{ $labels.dataset }} on {{ $labels.host }} is stale"
-          description: "The newest snapshot on {{ $labels.host }}:{{ $labels.dataset }} is {{ $value | humanizeDuration }} old (over 36h; a value near 56 years means the dataset is missing or has no snapshot). Its daily push has not landed. Find the job that writes it in hosts.conf zfs-automation.replication_jobs, then check `systemctl status homelab-zfs-replication-<job>.service` and its journal on the source host; a run stuck in `activating` is waiting on the replication lock or another syncoid."

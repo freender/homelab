@@ -1,4 +1,4 @@
-"""The active-guest guard in the rendered snapshot and replication scripts.
+"""The active-guest guard in the rendered snapshot script.
 
 A migratable guest's datasets must be touched only on the node running it. The
 guard is a `systemctl is-active` on a unit that differs by guest kind; a wrong
@@ -9,12 +9,8 @@ from __future__ import annotations
 
 import pytest
 
-from homelab.modules.zfs_automation.render import (
-    active_guest_unit,
-    build_replication_script,
-    build_snapshot_script,
-)
-from homelab.modules.zfs_automation.types import ReplicationPlan, SnapshotPlan
+from homelab.modules.zfs_automation.render import active_guest_unit, build_snapshot_script
+from homelab.modules.zfs_automation.types import SnapshotPlan
 
 
 @pytest.mark.parametrize(
@@ -72,26 +68,9 @@ def test_snapshot_plan_takes_snapshots_by_default() -> None:
 
 
 def test_prune_only_plan_renders_autosnap_off_and_says_so() -> None:
-    """A receive-only replica must be pruned but never snapshotted locally: a
-    local autosnap would share no name with the source, so it can never be a
-    common snapshot and only pins blocks."""
     script = build_snapshot_script([snapshot_plan(autosnap=False)])
 
     assert "autosnap = no\nautoprune = yes\n" in script
     assert "autosnap = yes" not in script
     assert "echo 'Including prune-only plan: vm-flash/vm-112-disk-1'" in script
 
-
-def test_replication_script_guards_a_vm_on_its_scope() -> None:
-    plan = ReplicationPlan(
-        target="cinci:tank/helm",
-        source="vm-flash/vm-112-disk-3",
-        require_active_guest=112,
-        guest_kind="qemu",
-    )
-
-    script = build_replication_script([plan], [], False)
-
-    assert "if systemctl is-active --quiet 112.scope; then" in script
-    assert "echo 'Active VM 112; replicating vm-flash/vm-112-disk-3'" in script
-    assert "echo 'Skipping vm-flash/vm-112-disk-3; VM 112 is not active locally'" in script

@@ -1,12 +1,9 @@
 """Guards for base-packages.
 
-Two things are worth pinning. First, the baseline actually reaches every
-apt-managed host: this module exists because `mbuffer`/`vim`/`mc` were installed
-by `pve-postinstall` and therefore guaranteed on four hosts out of fourteen, and
-a host silently dropping out of the feature set would recreate that gap without
-any visible failure. Second, `mbuffer` must survive in the baseline, because
-`zfs-automation`'s replication jobs pipe through it -- removing it would break
-replication on the next rebuild, not at deploy time.
+The baseline has to actually reach every apt-managed host: this module exists
+because `mbuffer`/`vim`/`mc` were installed by `pve-postinstall` and therefore
+guaranteed on four hosts out of fourteen, and a host silently dropping out of the
+feature set would recreate that gap without any visible failure.
 """
 
 from __future__ import annotations
@@ -42,17 +39,12 @@ def write_hosts(tmp_path: Path, body: str) -> Path:
     return tmp_path
 
 
-def test_baseline_includes_mbuffer_for_zfs_replication() -> None:
-    # zfs-automation pipes zfs send/recv through mbuffer. It used to come from
-    # pve-postinstall; base-packages owns it now and must keep it.
-    assert "mbuffer" in base_packages.BASE_PACKAGES
+def test_baseline_includes_ripgrep() -> None:
     assert "ripgrep" in base_packages.BASE_PACKAGES
 
 
-def test_runs_before_zfs_automation() -> None:
-    # Ordering is the reason mbuffer is safe to move here: the package has to be
-    # installed before the replication units that use it are written.
-    assert MODULE_ORDER.index("base-packages") < MODULE_ORDER.index("zfs-automation")
+def test_runs_first() -> None:
+    assert MODULE_ORDER[0] == "base-packages"
     assert MODULE_ORDER[0] == "base-packages"
 
 

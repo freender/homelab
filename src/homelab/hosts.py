@@ -144,7 +144,7 @@ def _feature_value_enabled(value: object) -> bool:
         # An `enabled:` key inside a feature block is NOT read here. It belongs to
         # whichever module defines it -- pbs-client-backup has its own
         # `enabled` with different semantics (see pbs_client_backup.py's
-        # BackupPlan.enabled), as do zfs-automation's per-job blocks. The
+        # BackupPlan.enabled). The
         # framework previously also honored a feature-level `enabled: false` as a
         # deprecated spelling of `deploy: false`, which meant the same key could
         # silently mean two different things depending on which layer read it

@@ -1,19 +1,9 @@
 """Unit tests for `zfs_automation.normalize` — the hosts.conf -> typed-plan layer.
 
-This is the largest single file in the repo (749 lines) and it decides what gets
-snapshotted and what gets replicated where. Until now its only assertion-backed
-coverage was per-job pause semantics (`test_zfs_replication_pause.py`); everything
-else was exercised only by the offline dry-run smoke test, which asserts nothing
-beyond "did not raise".
-
-The failure modes worth pinning down here are quiet ones:
-  * A validator that stops rejecting bad input lets a malformed plan render into a
-    unit file that fails at 02:00 on a schedule nobody watches.
-  * A dataset-path helper that stops being prefix-safe redirects replication into
-    the wrong dataset, which looks like success.
-  * `require_safe_authorized_key_option` guards strings that get interpolated into
-    `authorized_keys` command= restrictions on the *source* host. A regression
-    there is a remote-command-restriction bypass, not a cosmetic bug.
+It decides what gets snapshotted, and on which node. The failure modes worth
+pinning down here are quiet ones: a validator that stops rejecting bad input lets
+a malformed plan render into a sanoid config that fails at midnight on a schedule
+nobody watches.
 
 Pure functions are called directly. Anything that reads inventory goes through a
 real `HostRegistry` over a temp hosts.conf, so the tests also cover the key paths
@@ -117,7 +107,7 @@ def test_normalize_positive_int_rejects_non_positive(value: object) -> None:
 
 
 # --------------------------------------------------------------------------
-# authorized_keys injection guard
+# safe-name and group-name guards
 # --------------------------------------------------------------------------
 
 
@@ -134,37 +124,24 @@ def test_normalize_positive_int_rejects_non_positive(value: object) -> None:
         "",
     ],
 )
-def test_require_safe_authorized_key_option_rejects_separators(value: str) -> None:
-    """These characters terminate or add options in an authorized_keys line.
-
-    Candidate names reach the source host as part of a `command=`/`restrict`
-    stanza; a comma or quote getting through is an option-injection bypass.
-    """
+def test_require_safe_name_rejects_separators(value: str) -> None:
     with pytest.raises(ValueError, match="boom"):
-        n.require_safe_authorized_key_option(value, "boom")
+        n.require_safe_name(value, "boom")
 
 
-def test_require_safe_authorized_key_option_allows_ordinary_node_names() -> None:
-    assert n.require_safe_authorized_key_option("bray-01_x", "boom") == "bray-01_x"
+def test_require_safe_name_allows_ordinary_node_names() -> None:
+    assert n.require_safe_name("bray-01_x", "boom") == "bray-01_x"
 
 
-@pytest.mark.parametrize("name", ["alpha", "Alpha1", "a_b-c", "9lives"])
-def test_replication_job_names_accept_safe_identifiers(name: str) -> None:
-    assert n.normalize_replication_job_name(name, "ace") == name
+@pytest.mark.parametrize("name", ["alpha", "Alpha1", "a_b-c", "9lives", "grp-1"])
+def test_migratable_group_names_accept_safe_identifiers(name: str) -> None:
+    assert n.normalize_migratable_lxc_group_name(name, "ace") == name
 
 
 @pytest.mark.parametrize("name", ["-alpha", "_alpha", "al pha", "al/pha", "al.pha", ""])
-def test_replication_job_names_reject_unsafe_identifiers(name: str) -> None:
-    """Job names become systemd unit-name fragments and file names; a dot or slash
-    would silently produce a different unit than the one the config names."""
+def test_migratable_group_names_reject_unsafe_identifiers(name: str) -> None:
     with pytest.raises(ValueError):
-        n.normalize_replication_job_name(name, "ace")
-
-
-def test_migratable_group_names_use_the_same_rule() -> None:
-    assert n.normalize_migratable_lxc_group_name("grp-1", "ace") == "grp-1"
-    with pytest.raises(ValueError):
-        n.normalize_migratable_lxc_group_name("-grp", "ace")
+        n.normalize_migratable_lxc_group_name(name, "ace")
 
 
 # --------------------------------------------------------------------------
@@ -177,40 +154,10 @@ def test_migratable_group_names_use_the_same_rule() -> None:
     [
         ("tank/data/media", "tank"),
         ("tank", "tank"),
-        ("zfs-pull@10.0.0.1:rpool/data", "rpool"),
-        ("host:tank", "tank"),
     ],
 )
-def test_dataset_pool_handles_remote_and_local_forms(dataset: str, expected: str) -> None:
+def test_dataset_pool_is_the_first_path_component(dataset: str, expected: str) -> None:
     assert n.dataset_pool(dataset) == expected
-
-
-def test_is_remote_dataset_keys_on_the_colon() -> None:
-    assert n.is_remote_dataset("host:tank/a") is True
-    assert n.is_remote_dataset("tank/a") is False
-
-
-@pytest.mark.parametrize(
-    ("dataset", "root", "expected"),
-    [
-        ("backup/ace", "backup", "backup/ace"),
-        ("backup", "backup", "backup"),
-        ("ace/rpool", "backup", "backup/ace/rpool"),
-    ],
-)
-def test_normalize_dataset_under_root_is_idempotent(
-    dataset: str, root: str, expected: str
-) -> None:
-    assert n.normalize_dataset_under_root(dataset, root) == expected
-
-
-def test_normalize_dataset_under_root_is_prefix_safe() -> None:
-    """`backupx` is not under `backup`, despite the string prefix.
-
-    Getting this wrong sends a replication stream to a real but unintended
-    dataset, which succeeds silently.
-    """
-    assert n.normalize_dataset_under_root("backupx", "backup") == "backup/backupx"
 
 
 # --------------------------------------------------------------------------
@@ -791,8 +738,7 @@ def test_snapshot_group_expansion_pins_each_plan_to_its_vmid(tmp_path: Path) -> 
     """Every expanded plan must carry require_active_guest.
 
     A migratable container is snapshotted only on the node currently running it;
-    losing that guard means both nodes snapshot the same dataset and the
-    replication source becomes ambiguous.
+    losing that guard means both nodes snapshot the same dataset.
     """
     plans = n.expand_migratable_lxc_snapshot_group(
         group_registry(tmp_path), "ace:lxc", {"daily": 5}, "bray"
@@ -824,9 +770,7 @@ QEMU_GROUP_HOST = """    zfs-automation:
 """
 
 
-def test_qemu_plans_carry_their_kind_into_snapshot_and_replication_plans(
-    tmp_path: Path,
-) -> None:
+def test_qemu_plans_carry_their_kind_into_snapshot_plans(tmp_path: Path) -> None:
     """A VM plan that lost its kind would render the LXC guard and never snapshot."""
     registry = registry_from(
         pve_host("ace", QEMU_GROUP_HOST) + pve_host("bray", mgmt_ip="10.0.10.11/24"),
@@ -834,19 +778,9 @@ def test_qemu_plans_carry_their_kind_into_snapshot_and_replication_plans(
     )
 
     snapshots = n.expand_migratable_lxc_snapshot_group(registry, "ace:mixed", {}, "bray")
-    replications = n.expand_migratable_lxc_replication_plans(
-        registry,
-        {"migratable_lxc_group": "ace:mixed", "target_root": "backup"},
-        [{"name": "helm-os", "target": "helm-os"}],
-        "bray",
-        "job",
-    )
 
     assert [(p.dataset, p.require_active_guest, p.guest_kind) for p in snapshots] == [
         ("vm-flash/subvol-101-disk-1", 101, "lxc"),
-        ("vm-flash/vm-112-disk-1", 112, "qemu"),
-    ]
-    assert [(p.source, p.require_active_guest, p.guest_kind) for p in replications] == [
         ("vm-flash/vm-112-disk-1", 112, "qemu"),
     ]
 
@@ -873,424 +807,3 @@ def test_snapshot_plans_can_embed_a_migratable_group(tmp_path: Path) -> None:
         "rpool/lxc/subvol-110-disk-0",
         "rpool/lxc/subvol-111-disk-0",
     ]
-
-
-# --------------------------------------------------------------------------
-# --------------------------------------------------------------------------
-# migratable LXC replication expansion
-# --------------------------------------------------------------------------
-
-
-def expand(tmp_path: Path, job_config: dict, plans: list) -> list:
-    return n.expand_migratable_lxc_replication_plans(
-        group_registry(tmp_path), job_config, plans, "osiris", "lxc"
-    )
-
-
-def base_job() -> dict:
-    return {"migratable_lxc_group": "ace:lxc", "target_root": "backup/lxc"}
-
-
-def test_relative_targets_are_anchored_under_target_root(tmp_path: Path) -> None:
-    plans = expand(tmp_path, base_job(), [{"name": "traefik", "target": "traefik"}])
-
-    assert plans[0].target == "backup/lxc/traefik"
-    assert plans[0].source == "rpool/lxc/subvol-110-disk-0"
-    assert plans[0].require_active_guest == 110
-
-
-def test_absolute_and_remote_targets_are_left_alone(tmp_path: Path) -> None:
-    plans = expand(
-        tmp_path,
-        base_job(),
-        [
-            {"name": "traefik", "target": "/abs/path"},
-            {"name": "redis", "target": "host:pool/redis"},
-        ],
-    )
-
-    assert [p.target for p in plans] == ["/abs/path", "host:pool/redis"]
-
-
-def test_target_root_trailing_slash_does_not_double_up(tmp_path: Path) -> None:
-    """`backup/lxc//traefik` is not the same dataset as `backup/lxc/traefik`, so the
-    target_root rstrip has to fire for a config that is sloppy on that side.
-
-    A leading slash on the *target* needs no stripping: a target starting with "/" is
-    treated as absolute and skips anchoring entirely, asserted below.
-    """
-    job = base_job() | {"target_root": "backup/lxc/"}
-
-    plans = expand(tmp_path, job, [{"name": "traefik", "target": "/traefik"}])
-
-    assert plans[0].target == "/traefik"
-
-    plans = expand(tmp_path, job, [{"name": "traefik", "target": "traefik"}])
-
-    assert plans[0].target == "backup/lxc/traefik"
-
-
-@pytest.mark.parametrize(
-    ("job", "plans", "match"),
-    [
-        ({"migratable_lxc_group": "ace:lxc"}, [{"name": "traefik", "target": "t"}],
-         "target_root required for migratable LXC replication job 'lxc' on osiris"),
-        (None, ["not-a-mapping"], "invalid plan at index 0 in job 'lxc' for osiris"),
-        (None, [{"target": "t"}], "plan name required at index 0 in job 'lxc' for osiris"),
-        (None, [{"name": "traefik"}], "plan target required at index 0 in job 'lxc' for osiris"),
-    ],
-)
-def test_replication_plan_expansion_rejects_bad_shapes(
-    tmp_path: Path, job: dict | None, plans: list, match: str
-) -> None:
-    """Each message carries the job name, the host and the list index.
-
-    The missing-key cases are the sharp ones: without the "" default, `get` returns
-    None, `require_string` stringifies it to "None", and a silently wrong dataset
-    path is built instead of the deploy failing.
-    """
-    with pytest.raises(ValueError, match=match):
-        expand(tmp_path, base_job() if job is None else job, plans)
-
-
-@pytest.mark.parametrize(
-    ("group_ref", "match"),
-    [
-        ("", "migratable_lxc_group must be set for osiris"),
-        ("bare-name", "migratable_lxc_group for osiris must use host:group format"),
-        ("ace:nope", "migratable_lxc_group ace:nope not found for osiris"),
-    ],
-)
-def test_replication_plan_expansion_reports_the_group_key_and_host(
-    tmp_path: Path, group_ref: str, match: str
-) -> None:
-    """The group reference is resolved with a literal key name and the host passed
-    through, so both have to appear in the failure the operator sees."""
-    job = base_job() | {"migratable_lxc_group": group_ref}
-
-    with pytest.raises(ValueError, match=match):
-        expand(tmp_path, job, [{"name": "traefik", "target": "t"}])
-
-
-def test_duplicate_targets_are_rejected(tmp_path: Path) -> None:
-    """Two jobs replicating into one dataset would interleave streams and break
-    the incremental chain for both."""
-    with pytest.raises(ValueError, match="duplicate target"):
-        expand(
-            tmp_path,
-            base_job(),
-            [
-                {"name": "traefik", "target": "shared"},
-                {"name": "redis", "target": "shared"},
-            ],
-        )
-
-
-def test_plan_must_exist_in_the_referenced_group(tmp_path: Path) -> None:
-    with pytest.raises(ValueError, match="does not exist in group"):
-        expand(tmp_path, base_job(), [{"name": "ghost", "target": "ghost"}])
-
-
-# --------------------------------------------------------------------------
-# source private keys and known-host refresh
-# --------------------------------------------------------------------------
-
-
-def keys_registry(tmp_path: Path, entries_yaml: str) -> HostRegistry:
-    return registry_from(
-        pve_host("ace", f"    zfs-automation:\n      source_private_keys:\n{entries_yaml}"),
-        tmp_path,
-    )
-
-
-def test_source_private_keys_parse(tmp_path: Path) -> None:
-    registry = keys_registry(
-        tmp_path,
-        "        - {secret: zfs-push-bray, path: /root/.ssh/homelab-zfs-push_bray}\n",
-    )
-
-    keys = n.normalize_source_private_keys(registry, "ace")
-
-    assert [(k.secret, k.path) for k in keys] == [
-        ("zfs-push-bray", "/root/.ssh/homelab-zfs-push_bray")
-    ]
-
-
-@pytest.mark.parametrize(
-    ("path", "match"),
-    [
-        ("/etc/ssh/key", "must be under"),
-        ("/root/.ssh/", "must be under"),
-        ("relative/key", "must be under"),
-        ("/root/.sshx/key", "must be under"),
-    ],
-)
-def test_source_private_key_paths_are_confined_to_root_ssh(
-    tmp_path: Path, path: str, match: str
-) -> None:
-    """These paths receive a rendered private key at mode 600.
-
-    Confining them to /root/.ssh/ keeps a config typo from writing a key into a
-    world-readable location.
-    """
-    registry = keys_registry(tmp_path, f"        - {{secret: s, path: '{path}'}}\n")
-
-    with pytest.raises(ValueError, match=match):
-        n.normalize_source_private_keys(registry, "ace")
-
-
-def test_source_private_key_paths_must_be_unique(tmp_path: Path) -> None:
-    """Two secrets writing the same path means one silently wins, and which one
-    depends on list order."""
-    registry = keys_registry(
-        tmp_path,
-        "        - {secret: a, path: /root/.ssh/k}\n"
-        "        - {secret: b, path: /root/.ssh/k}\n",
-    )
-
-    with pytest.raises(ValueError, match="duplicate source private key path"):
-        n.normalize_source_private_keys(registry, "ace")
-
-
-def test_source_private_keys_absent_returns_empty(tmp_path: Path) -> None:
-    assert n.normalize_source_private_keys(registry_from(pve_host("ace"), tmp_path), "ace") == ()
-
-
-class RawRegistry:
-    """Returns one value for any key, so a test can supply a shape YAML cannot.
-
-    Interior NUL and newlines are the point: `require_string` strips surrounding
-    whitespace, so a trailing "\\n" never reaches the control-character check.
-    """
-
-    def __init__(self, raw: object) -> None:
-        self._raw = raw
-
-    def get(self, _host: str, _key: str, _default: object = None) -> object:
-        return self._raw
-
-
-@pytest.mark.parametrize(
-    ("raw", "match"),
-    [
-        ("not-a-list", "source_private_keys must be a list for ace"),
-        (["not-a-mapping"], r"source_private_keys\[0\] must be a mapping for ace"),
-        ([{"path": "/root/.ssh/k"}], r"source_private_keys\[0\]\.secret must be safe for ace"),
-        ([{"secret": "s"}], r"source_private_keys\[0\]\.path required for ace"),
-        ([{"secret": "s", "path": "/root/.ssh/a\0b"}], r"source_private_keys\[0\]\.path invalid"),
-        ([{"secret": "s", "path": "/root/.ssh/a\nb"}], r"source_private_keys\[0\]\.path invalid"),
-        ([{"secret": "s", "path": "/root/.ssh/a\rb"}], r"source_private_keys\[0\]\.path invalid"),
-    ],
-)
-def test_source_private_keys_reject_bad_shapes(raw: object, match: str) -> None:
-    """Each message names the key and index. A missing `secret` is the sharp one:
-    without the "" default it stringifies to "None" and passes as a safe option."""
-    with pytest.raises(ValueError, match=match):
-        n.normalize_source_private_keys(RawRegistry(raw), "ace")
-
-
-def test_source_private_keys_empty_string_is_treated_as_absent() -> None:
-    assert n.normalize_source_private_keys(RawRegistry(""), "ace") == ()
-
-
-@pytest.mark.parametrize("raw", ["not-a-list", 7])
-def test_known_host_refresh_must_be_a_list(raw: object) -> None:
-    with pytest.raises(ValueError, match="known_host_refresh must be a list for ace"):
-        n.normalize_known_host_refresh(RawRegistry(raw), "ace")
-
-
-def test_known_host_refresh_empty_string_is_treated_as_absent() -> None:
-    assert n.normalize_known_host_refresh(RawRegistry(""), "ace") == ()
-
-
-def refresh_registry(tmp_path: Path, entries_yaml: str) -> HostRegistry:
-    return registry_from(
-        pve_host("ace", f"    zfs-automation:\n      known_host_refresh:\n{entries_yaml}"),
-        tmp_path,
-    )
-
-
-def test_known_host_refresh_applies_defaults(tmp_path: Path) -> None:
-    registry = refresh_registry(tmp_path, "        - {host: bray.internal}\n")
-
-    entries = n.normalize_known_host_refresh(registry, "ace")
-
-    assert [(e.host, e.known_hosts, e.port) for e in entries] == [
-        ("bray.internal", "/root/.ssh/known_hosts", 22)
-    ]
-
-
-@pytest.mark.parametrize(
-    ("entry", "match"),
-    [
-        ("{host: 'bray internal'}", r"known_host_refresh\[0\]\.host is invalid for ace"),
-        ("{host: 'bray;rm -rf /'}", r"known_host_refresh\[0\]\.host is invalid for ace"),
-        ("{host: bray, port: 0}", r"known_host_refresh\[0\]\.port is invalid for ace"),
-        ("{host: bray, port: 65536}", r"known_host_refresh\[0\]\.port is invalid for ace"),
-        ("{host: bray, port: abc}", r"known_host_refresh\[0\]\.port is invalid for ace"),
-        (
-            "{host: bray, known_hosts: /etc/ssh/known_hosts}",
-            "known_hosts must be a root .ssh file for ace",
-        ),
-        ("{host: bray, known_hosts: '/root/.ssh/'}", "known_hosts must be a root .ssh file"),
-        ("{}", r"known_host_refresh\[0\]\.host required for ace"),
-        ("'not-a-mapping'", r"known_host_refresh\[0\] must be a mapping for ace"),
-    ],
-)
-def test_known_host_refresh_validation(tmp_path: Path, entry: str, match: str) -> None:
-    """Hostname and known_hosts both end up in a `ssh-keyscan`/`ssh-keygen -R`
-    command line run as root.
-
-    Asserting the message, not just that *something* raised: it names the offending
-    key and its list index, which is all the operator gets to locate the typo.
-    """
-    registry = refresh_registry(tmp_path, f"        - {entry}\n")
-
-    with pytest.raises(ValueError, match=match):
-        n.normalize_known_host_refresh(registry, "ace")
-
-
-@pytest.mark.parametrize("port", [1, 22, 65535])
-def test_known_host_refresh_accepts_the_port_boundaries(tmp_path: Path, port: int) -> None:
-    """1 and 65535 are valid. Only the ends of the range distinguish `< 1` from
-    `<= 1`, and `> 65535` from `>= 65535`."""
-    registry = refresh_registry(tmp_path, f"        - {{host: bray, port: {port}}}\n")
-
-    assert [e.port for e in n.normalize_known_host_refresh(registry, "ace")] == [port]
-
-
-def test_known_host_refresh_accepts_uppercase_hostnames(tmp_path: Path) -> None:
-    """The hostname pattern is case-insensitive by having both ranges, not by a flag."""
-    registry = refresh_registry(tmp_path, "        - {host: BRAY.Internal}\n")
-
-    assert [e.host for e in n.normalize_known_host_refresh(registry, "ace")] == ["BRAY.Internal"]
-
-
-def test_known_host_refresh_keeps_a_custom_known_hosts_file(tmp_path: Path) -> None:
-    registry = refresh_registry(
-        tmp_path, "        - {host: bray, known_hosts: /root/.ssh/known_hosts_zfs}\n"
-    )
-
-    entries = n.normalize_known_host_refresh(registry, "ace")
-
-    assert [(e.host, e.known_hosts) for e in entries] == [("bray", "/root/.ssh/known_hosts_zfs")]
-
-
-def test_known_host_refresh_rejects_duplicates(tmp_path: Path) -> None:
-    registry = refresh_registry(
-        tmp_path, "        - {host: bray}\n        - {host: bray}\n"
-    )
-
-    with pytest.raises(ValueError, match="duplicate known_host_refresh"):
-        n.normalize_known_host_refresh(registry, "ace")
-
-
-# --------------------------------------------------------------------------
-# rendered_private_key
-# --------------------------------------------------------------------------
-
-
-def test_rendered_private_key_strips_env_prefix_and_quotes(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    body = (
-        "-----BEGIN OPENSSH PRIVATE KEY-----\n"
-        "body\n"
-        "-----END OPENSSH PRIVATE KEY-----"
-    )
-    key_file = tmp_path / "rendered"
-    key_file.write_text(f'ZFS_PUSH_PRIVATE_KEY="{body}"\n', encoding="utf-8")
-    monkeypatch.setattr(n.op_secrets, "secret_file", lambda _root, _secret: key_file)
-
-    rendered = n.rendered_private_key(tmp_path, "zfs-push")
-
-    assert rendered.startswith("-----BEGIN OPENSSH PRIVATE KEY-----")
-    assert rendered.endswith("-----END OPENSSH PRIVATE KEY-----\n")
-
-
-def test_rendered_private_key_rejects_a_non_key(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """A 1Password miss renders an empty or placeholder value. Writing that to
-    the key path would break replication with a confusing ssh error instead of
-    failing at deploy time.
-    """
-    key_file = tmp_path / "rendered"
-    key_file.write_text("ZFS_PUSH_PRIVATE_KEY=\n", encoding="utf-8")
-    monkeypatch.setattr(n.op_secrets, "secret_file", lambda _root, _secret: key_file)
-
-    with pytest.raises(ValueError, match="did not render a private key"):
-        n.rendered_private_key(tmp_path, "zfs-push")
-
-
-KEY_BODY = "-----BEGIN OPENSSH PRIVATE KEY-----\nbody\n-----END OPENSSH PRIVATE KEY-----"
-
-
-def stub_secret_file(
-    monkeypatch: pytest.MonkeyPatch, key_file: Path, calls: list[tuple] | None = None
-) -> None:
-    def fake(root: Path, secret: str) -> Path:
-        if calls is not None:
-            calls.append((root, secret))
-        return key_file
-
-    monkeypatch.setattr(n.op_secrets, "secret_file", fake)
-
-
-def test_rendered_private_key_looks_the_secret_up_by_root_and_name(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """The existing stub ignored both arguments, so passing the wrong root -- or no
-    secret name at all -- would have resolved to the same file."""
-    key_file = tmp_path / "rendered"
-    key_file.write_text(KEY_BODY, encoding="utf-8")
-    calls: list[tuple] = []
-    stub_secret_file(monkeypatch, key_file, calls)
-
-    n.rendered_private_key(tmp_path, "zfs-push-bray")
-
-    assert calls == [(tmp_path, "zfs-push-bray")]
-
-
-@pytest.mark.parametrize("quote", ['"', "'"])
-def test_rendered_private_key_strips_either_quote_style(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, quote: str
-) -> None:
-    key_file = tmp_path / "rendered"
-    key_file.write_text(f"ZFS_PUSH_PRIVATE_KEY={quote}{KEY_BODY}{quote}\n", encoding="utf-8")
-    stub_secret_file(monkeypatch, key_file)
-
-    rendered = n.rendered_private_key(tmp_path, "zfs-push")
-
-    assert rendered.startswith("-----BEGIN OPENSSH PRIVATE KEY-----")
-    assert quote not in rendered
-
-
-@pytest.mark.parametrize("quote", ['"', "'"])
-def test_rendered_private_key_does_not_strip_an_unbalanced_quote(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, quote: str
-) -> None:
-    """A leading quote with no closing one is a truncated render. Stripping on
-    *either* end would shave a real character off the key and return it as valid.
-    """
-    key_file = tmp_path / "rendered"
-    key_file.write_text(f"ZFS_PUSH_PRIVATE_KEY={quote}{KEY_BODY}\n", encoding="utf-8")
-    stub_secret_file(monkeypatch, key_file)
-
-    with pytest.raises(ValueError, match="did not render a private key"):
-        n.rendered_private_key(tmp_path, "zfs-push")
-
-
-def test_rendered_private_key_ends_with_exactly_one_newline(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """ssh rejects a key file without a trailing newline, and a doubled one is a
-    silent difference from what the installer wrote last time."""
-    key_file = tmp_path / "rendered"
-    key_file.write_text(f'ZFS_PUSH_PRIVATE_KEY="{KEY_BODY}\n\n"\n', encoding="utf-8")
-    stub_secret_file(monkeypatch, key_file)
-
-    rendered = n.rendered_private_key(tmp_path, "zfs-push")
-
-    assert rendered.endswith("-----END OPENSSH PRIVATE KEY-----\n")
-    assert not rendered.endswith("\n\n")

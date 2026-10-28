@@ -15,8 +15,6 @@ STATIC_CONFIG_FILES = ["zfs-scrub.timer"]
 TEMPLATE_FILES = [
     "homelab-zfs-snapshots.service",
     "homelab-zfs-snapshots.timer",
-    "homelab-zfs-replication.service",
-    "homelab-zfs-replication.timer",
     "homelab-zfs-scrub.sh",
     "zfs-scrub.service",
 ]
@@ -37,18 +35,9 @@ class FileSpec:
 
 
 @dataclass(frozen=True)
-class SecretFileSpec:
-    build_name: str
-    remote_path: str
-    secret: str
-    mode: str = "600"
-
-
-@dataclass(frozen=True)
 class HostArtifacts:
     build_dir: Path
     file_specs: tuple[FileSpec, ...]
-    secret_file_specs: tuple[SecretFileSpec, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -78,52 +67,6 @@ class MigratableLxcPlan:
 class MigratableLxcGroup:
     name: str
     plans: tuple[MigratableLxcPlan, ...]
-
-
-@dataclass(frozen=True)
-class ReplicationPlan:
-    target: str
-    source: str = ""
-    require_active_guest: int | None = None
-    guest_kind: str = "lxc"
-
-
-@dataclass(frozen=True)
-class ReplicationJob:
-    name: str
-    schedule: str
-    plans: tuple[ReplicationPlan, ...]
-    syncoid_options: tuple[str, ...]
-    delete_target_snapshots: bool
-    paused: bool = False
-
-
-@dataclass(frozen=True)
-class ZfsPusher:
-    name: str
-    from_address: str
-    public_key: str
-
-
-@dataclass(frozen=True)
-class ZfsPushTargetAccess:
-    enabled: bool
-    user: str
-    datasets: tuple[str, ...]
-    pushers: tuple[ZfsPusher, ...]
-
-
-@dataclass(frozen=True)
-class SourcePrivateKey:
-    secret: str
-    path: str
-
-
-@dataclass(frozen=True)
-class KnownHostRefresh:
-    host: str
-    known_hosts: str = "/root/.ssh/known_hosts"
-    port: int = 22
 
 
 BASE_FILE_SPECS = (

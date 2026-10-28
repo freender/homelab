@@ -117,9 +117,6 @@ Then `./deploy metrics-exporters <host>` from the repo.
 ## What It Collects
 - Host metrics via node_exporter (CPU, memory, load, uptime, disk, network, hwmon, ZFS)
 - ZFS pool capacity metrics via node_exporter textfile collector (`homelab_zpool_*`)
-- ZFS push-replica freshness (`homelab_zfs_replica_last_snapshot_timestamp_seconds`)
-  on push targets: the newest received snapshot's creation time per dataset in
-  `zfs-automation.push_target_access`, 0 when missing or unsnapshotted
 - SMART metrics via smartctl_exporter
 - UPS metrics via apcupsd exporter on `master` / `master-standalone` UPS hosts
 - Intel GPU metrics via `igpu-exporter` on selected PVE hosts
@@ -171,7 +168,6 @@ Then `./deploy metrics-exporters <host>` from the repo.
 - `/etc/systemd/system/disk-label-textfile-exporter.service`
 - `/etc/systemd/system/disk-label-textfile-exporter.timer`
 - `/etc/homelab/disk-labels.conf`
-- `/etc/homelab/zfs-replica-datasets.conf`
 
 **In this repo:**
 - `configs/common/node-exporter.defaults`
@@ -199,7 +195,6 @@ Then `./deploy metrics-exporters <host>` from the repo.
 - `configs/common/disk-label-textfile-exporter.service`
 - `configs/common/disk-label-textfile-exporter.timer`
 - `templates/disk-labels.conf.tpl`
-- `templates/zfs-replica-datasets.conf.tpl`
 - `../deploy`
 
 ### Pending-reboot reporting

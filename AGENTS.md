@@ -149,7 +149,7 @@ test would have failed on.
 
 ## Deploy, Disable, and Pause
 
-Three distinct "off/freeze" switches in `hosts.conf` — do not conflate them:
+Two distinct "off/freeze" switches in `hosts.conf` — do not conflate them:
 
 - **`deploy: false`** (host-level feature gate) — removes the host from the module's
   deploy targets: module skipped, running service **never touched**. This is the only
@@ -159,9 +159,6 @@ Three distinct "off/freeze" switches in `hosts.conf` — do not conflate them:
   units are **stopped and disabled**; reversible. Supported by `apt-upgrade`,
   `pbs-client-backup`, `zfs-automation`; `pve-upgrade.paused` instead skips the
   dist-upgrade (it has no units).
-- **Per-job `paused: true`** (fine-grained) — pauses one unit while others run (e.g.
-  `zfs-automation.replication_jobs.<job>.paused`). Distinct from that job's
-  `enabled: false`, which retires it entirely (unit files removed).
 
 Implementation how-to (Python flag read, `env.flag` vs `env.deploy_flag`,
 `systemd.pause()`, unit-file semantics, why the `enabled:` spelling of the gate was

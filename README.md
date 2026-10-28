@@ -160,12 +160,11 @@ PVE physical NIC naming and Wake-on-LAN configuration (also used on the Debian V
 ```
 
 ### [zfs-automation](zfs-automation/)
-ZFS snapshots, scrub, health checks, and replication
-- Sanoid-style snapshot plans, scrub and health-check timers
-- Replication jobs (pull and push), including dynamic LXC sources
-- SSH forced-command allow-lists (`homelab-zfs-send-only` / `homelab-zfs-receive-only`)
-  restrict what a peer may `zfs send`/`receive`
-- Supports module-wide `paused: true` and per-job `replication_jobs.<job>.paused: true`
+ZFS snapshots, scrub, and TRIM
+- Sanoid snapshot plans, including migratable-guest plans that snapshot only on the
+  node running the guest
+- Scrub and TRIM timers
+- Supports module-wide `paused: true`
 
 ```bash
 ./deploy zfs-automation all

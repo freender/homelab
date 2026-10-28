@@ -126,6 +126,5 @@ covers only the four PVE nodes. Everything else — tower, helm, neo, riven, arc
 xur, deepstone, ghost, and the offsite hosts — had these packages only because
 someone once installed them by hand, and would have lost them on a rebuild.
 
-That is also why this module is **first in `MODULE_ORDER`**: `zfs-automation`
-builds replication jobs that pipe through `mbuffer`, so the package has to exist
-before those units are installed, not after.
+It is **first in `MODULE_ORDER`** so later modules can assume the baseline tools
+exist.

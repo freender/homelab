@@ -153,9 +153,7 @@ MODULES: dict[str, ModuleDefinition] = {
 }
 
 MODULE_ORDER = [
-    # First: later modules assume the baseline tools exist. zfs-automation's
-    # replication pipes through mbuffer, which used to be installed by
-    # pve-postinstall and so was only ever guaranteed on the four PVE nodes.
+    # First: later modules assume the baseline tools exist.
     "base-packages",
     "pve-interface-pinning",
     "pve-postinstall",

@@ -9,7 +9,6 @@ from ..hosts import HostLookupError, HostRegistry, default_registry
 from ..module_support import FileSpec, normalize_bool, run_module_deploy, write_file_map
 from ..output import print_sub
 from ..ssh import HostConnection, diff_many
-from .zfs_automation.access import normalize_push_target_access
 
 REMOTE_ROOT = "/tmp/homelab-metrics-exporters"
 INSTALLER = "scripts/install.py"
@@ -325,11 +324,6 @@ FILE_SPECS = (
         "/etc/homelab/zfs-expected-pools.conf",
         feature="zfs_expected_pools",
     ),
-    FileSpec(
-        "zfs-replica-datasets.conf",
-        "/etc/homelab/zfs-replica-datasets.conf",
-        feature="zfs_replica_datasets",
-    ),
 )
 
 # apcupsd-exporter.env and the zfs-*.conf lists are rendered purely from
@@ -338,7 +332,6 @@ FILE_SPECS = (
 _TEMPLATED_ONLY_BUILD_NAMES = {
     "apcupsd-exporter.env",
     "zfs-expected-pools.conf",
-    "zfs-replica-datasets.conf",
     "disk-labels.conf",
     "pve-patch-statuses.conf",
     "smartctl-exporter-override.conf",
@@ -374,7 +367,6 @@ def validate(root: Path) -> None:
         *(common_dir / name for name in REQUIRED),
         apcupsd_exporter_env_template(root),
         zfs_expected_pools_template(root),
-        zfs_replica_datasets_template(root),
         disk_labels_template(root),
         smartctl_override_template(root),
         node_exporter_defaults_template(root),
@@ -474,10 +466,6 @@ def zfs_expected_pools_template(root: Path) -> Path:
     return root / "metrics-exporters" / "templates" / "zfs-expected-pools.conf.tpl"
 
 
-def zfs_replica_datasets_template(root: Path) -> Path:
-    return root / "metrics-exporters" / "templates" / "zfs-replica-datasets.conf.tpl"
-
-
 def disk_labels_template(root: Path) -> Path:
     return root / "metrics-exporters" / "templates" / "disk-labels.conf.tpl"
 
@@ -512,17 +500,6 @@ def zfs_expected_pools(root: Path, host: str) -> list[str]:
             )
         pools.append(pool)
     return pools
-
-
-def zfs_replica_datasets(root: Path, host: str) -> list[str]:
-    """Datasets this host receives as a ZFS push target, from zfs-automation's config.
-
-    Read through zfs-automation's own normalizer so a `template:` reference resolves
-    exactly as it does at deploy time; a host that is not a push target, or whose
-    access is disabled, has none.
-    """
-    access = normalize_push_target_access(default_registry(root), host)
-    return list(access.datasets) if access is not None else []
 
 
 def disk_label_overrides(root: Path, host: str) -> list[tuple[str, str]]:
@@ -576,7 +553,6 @@ def build_file_specs(
     has_hba: bool,
     has_expected_pools: bool,
     has_disk_label_overrides: bool,
-    has_replica_datasets: bool = False,
     has_pve_patch_statuses: bool,
     has_pve_replication: bool,
     has_wrapper: bool,
@@ -592,7 +568,6 @@ def build_file_specs(
             hba=has_hba,
             pve_replication=has_pve_replication,
             zfs_expected_pools=has_expected_pools,
-            zfs_replica_datasets=has_replica_datasets,
             disk_label_overrides=has_disk_label_overrides,
             pve_patch_statuses=has_pve_patch_statuses,
             smartctl_wrapper=has_wrapper,
@@ -683,19 +658,16 @@ class BareMetalData:
     expected_pools: list
     label_overrides: list
     patch_statuses: list
-    replica_datasets: list
 
 
 def bare_metal_data(root: Path, host: str, lxc_guest: bool) -> BareMetalData:
-    """ZFS pools and replicas, disk-label overrides and PVE patch statuses, all empty
-    in a guest."""
+    """ZFS pools, disk-label overrides and PVE patch statuses, all empty in a guest."""
     if lxc_guest:
-        return BareMetalData([], [], [], [])
+        return BareMetalData([], [], [])
     return BareMetalData(
         expected_pools=zfs_expected_pools(root, host),
         label_overrides=disk_label_overrides(root, host),
         patch_statuses=pve_patch_statuses(root, host),
-        replica_datasets=zfs_replica_datasets(root, host),
     )
 
 
@@ -815,12 +787,6 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
         "ZFS_EXPECTED_POOLS",
     )
     render_if_any(
-        data.replica_datasets,
-        zfs_replica_datasets_template(root),
-        build_dir / "zfs-replica-datasets.conf",
-        "ZFS_REPLICA_DATASETS",
-    )
-    render_if_any(
         data.label_overrides,
         disk_labels_template(root),
         build_dir / "disk-labels.conf",
@@ -839,7 +805,6 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
         has_hba=flags.has_hba,
         has_expected_pools=bool(data.expected_pools),
         has_disk_label_overrides=bool(data.label_overrides),
-        has_replica_datasets=bool(data.replica_datasets),
         has_pve_patch_statuses=bool(data.patch_statuses),
         has_pve_replication=flags.has_pve_replication,
         has_wrapper=flags.has_wrapper,

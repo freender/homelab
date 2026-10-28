@@ -1,9 +1,0 @@
-[Unit]
-Description=Run homelab ZFS replication on schedule
-
-[Timer]
-OnCalendar={{ REPLICATION_SCHEDULE }}
-Persistent=true
-
-[Install]
-WantedBy=timers.target

@@ -45,8 +45,7 @@ have chosen one.
 
   Only for units that are cheap, idempotent, and safe to run off-schedule.
   `docker` uses it for `homelab-docker-update.service` (a `docker compose up -d`
-  oneshot whose `start.sh` pulls images), and `zfs-automation` for unpaused
-  replication jobs when `ZFS_REPLICATION_RECOVERY_START_FAILED` is set.
+  oneshot whose `start.sh` pulls images).
   Deliberately **not** used by `pbs-client-backup` (multi-hour backup) or
   `apt-upgrade` (a start there means running a dist-upgrade at deploy time);
   those have daily timers that clear a stale failure on their next successful
@@ -59,8 +58,7 @@ have chosen one.
   changed. Returns **True when it retired something, False when there was
   nothing to do**. Call it once per unit for multi-unit retirements and delete
   any remaining non-unit files (script, textfile-collector output) alongside it
-  with `files.remove`; `zfs-automation`'s `retire_obsolete_replication` and the
-  `metrics-exporters` `_retire` follow that shape.
+  with `files.remove`; `metrics-exporters`' `_retire` follows that shape.
 
 One hand-rolled `reset-failed` call site remains on purpose, outside this model:
 `docker/scripts/rebuild.sh` (not a module installer).

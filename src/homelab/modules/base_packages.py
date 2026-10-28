@@ -25,8 +25,6 @@ INTERPRETER = "python3"
 # purpose: these are the tools the agent and the operator expect to exist on any
 # host before doing anything else.
 #
-# mbuffer is load-bearing beyond convenience — zfs-automation's replication jobs
-# pipe through it — which is why base-packages runs first in MODULE_ORDER.
 # ripgrep is the standard content-search tool; without it, searches on a host
 # silently fall back to recursive grep, which is exactly what the scan-boundary
 # rules forbid on the storage hosts.
