@@ -29,11 +29,11 @@
  },
  {
   "key": "mp1",
-  "value": "vm-flash:subvol-108-disk-2,mp=/mnt/cache/pictures,size=0T"
+  "value": "vm-flash:subvol-108-disk-2,mp=/mnt/cache/pictures,backup=1,size=0T"
  },
  {
   "key": "mp2",
-  "value": "vm-flash:subvol-108-disk-3,mp=/mnt/cache/documents,size=0T"
+  "value": "vm-flash:subvol-108-disk-3,mp=/mnt/cache/documents,backup=1,size=0T"
  },
  {
   "key": "mp3",
@@ -45,7 +45,7 @@
  },
  {
   "key": "mp5",
-  "value": "vm-flash:subvol-108-disk-6,mp=/mnt/cache/games,size=0T"
+  "value": "vm-flash:subvol-108-disk-6,mp=/mnt/cache/games,backup=1,size=0T"
  },
  {
   "key": "net0",

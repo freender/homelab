@@ -1152,7 +1152,7 @@ def test_a_ct_mount_point_reattaches_with_pct_unless_two_disks_compete() -> None
     current["unused0"] = "vm-flash:subvol-108-disk-2"
     (row,) = drift.disk_diffs(spec, current)
     assert (row.key, row.want, row.impact) == ("mp1", "reattach unused0", drift.CONFIG)
-    assert row.fix == "pct set 108 --mp1 vm-flash:subvol-108-disk-2,mp=/mnt/cache/pictures"
+    assert row.fix == "pct set 108 --mp1 vm-flash:subvol-108-disk-2,mp=/mnt/cache/pictures,backup=1"
 
     del current["mp2"]
     rows = drift.disk_diffs(spec, current)
