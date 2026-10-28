@@ -111,7 +111,7 @@ def test_every_impact_label_on_a_changed_helm_spec() -> None:
     raw["balloon"] = 4096  # applies live
     raw["disks"]["scsi0"]["size"] = "40G"  # grow: applies live
     raw["disks"]["scsi1"]["size"] = "32G"  # shrink: refused
-    raw["disks"]["scsi1"]["backup"] = True  # config only
+    raw["disks"]["scsi1"]["backup"] = False  # config only
     raw["disks"]["scsi3"] = {"role": "data", "size": "10G", "mount": "/mnt/data"}  # new disk
     raw["net"]["net0"]["tag"] = 10  # applies live
     raw["net"]["net1"] = {"name": "nic1", "mac": "BC:24:11:00:00:01"}
@@ -131,7 +131,7 @@ def test_every_impact_label_on_a_changed_helm_spec() -> None:
         ("startup", "order=5", "-", drift.LIVE),
         ("scsi0.size", "40G", "32G", drift.LIVE),
         ("scsi1.size", "32G", "64G", "refused (shrink)"),
-        ("scsi1.backup", "yes", "no", drift.CONFIG),
+        ("scsi1.backup", "no", "yes", drift.CONFIG),
         ("scsi3", "new data disk", "-", drift.LIVE),
         ("net0.tag", "10", "40", drift.LIVE),
         ("net1", "new nic1 BC:24:11:00:00:01", "-", drift.LIVE),
@@ -1086,7 +1086,7 @@ def test_vm_disk_options_and_sizes() -> None:
     spec = real_specs()["helm"]
     current = fixture_live("cluster", 112)
     current["scsi0"] = "vm-flash:vm-112-disk-1,iothread=1,size=32G,ssd=0"
-    current["scsi1"] = "vm-flash:vm-112-disk-2,backup=0,discard=on,iothread=1,ssd=1"
+    current["scsi1"] = "vm-flash:vm-112-disk-2,discard=on,iothread=1,ssd=1"
     assert _rows(drift.disk_diffs(spec, current)) == [
         ("scsi0.discard", "on", "-", drift.REBOOT),
         ("scsi0.ssd", "1", "0", drift.REBOOT),
@@ -1110,7 +1110,7 @@ def test_a_restored_vm_points_at_its_unused_disk_not_a_new_one() -> None:
         ("scsi3", "new data disk", "-", drift.LIVE),
     ]
     assert [row.fix for row in rows] == [
-        "qm set 112 --scsi1 vm-flash:vm-112-disk-2,backup=0,discard=on,iothread=1,ssd=1",
+        "qm set 112 --scsi1 vm-flash:vm-112-disk-2,discard=on,iothread=1,ssd=1",
         None,
     ]
     unmanaged = drift.unmanaged_diffs(spec, current)
@@ -1186,7 +1186,7 @@ def test_report_prints_the_reattach_command_under_its_row() -> None:
 
     assert report[1:] == [
         "  " + drift.format_diff(drift.diff("scsi1", "reattach unused0", None, drift.CONFIG)),
-        "    $ qm set 112 --scsi1 vm-flash:vm-112-disk-2,backup=0,discard=on,iothread=1,ssd=1",
+        "    $ qm set 112 --scsi1 vm-flash:vm-112-disk-2,discard=on,iothread=1,ssd=1",
         "  "
         + drift.format_diff(drift.diff("unused0", None, "vm-flash:vm-112-disk-2", drift.UNMANAGED)),
     ]
