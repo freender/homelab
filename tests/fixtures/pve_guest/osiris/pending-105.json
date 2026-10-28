@@ -21,7 +21,7 @@
  },
  {
   "key": "mp0",
-  "value": "vm-flash:subvol-105-disk-1,mp=/backup,backup=0,size=1T"
+  "value": "vm-flash:subvol-105-disk-1,mp=/backup,backup=0,size=1280G"
  },
  {
   "key": "net0",
