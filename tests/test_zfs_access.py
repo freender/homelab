@@ -200,6 +200,87 @@ def test_expand_access_template_rejects_a_host_with_no_templates_block(tmp_path:
 
 
 # --------------------------------------------------------------------------
+# replication job templates and sets
+# --------------------------------------------------------------------------
+
+JOB_TEMPLATES = (
+    "    zfs-automation:\n"
+    "      replication_job_templates:\n"
+    "        push-data:\n"
+    "          schedule: '*-*-* 03:00:00'\n"
+    "          delete_target_snapshots: false\n"
+    "      replication_job_sets:\n"
+    "        cluster:\n"
+    "          - name: push-data\n"
+    "            template: ace:push-data\n"
+    "        broken: push-data\n"
+)
+
+
+def test_resolve_replication_job_template_returns_a_copy(tmp_path: Path) -> None:
+    registry = registry_from(pve_host("ace", JOB_TEMPLATES) + pve_host("bray"), tmp_path)
+
+    resolved = r.resolve_replication_job_template(registry, "ace:push-data", "bray", "j")
+    resolved["schedule"] = "changed"
+
+    assert r.resolve_replication_job_template(registry, "ace:push-data", "bray", "j") == {
+        "schedule": "*-*-* 03:00:00",
+        "delete_target_snapshots": False,
+    }
+
+
+def test_resolve_replication_job_template_rejects_a_missing_template(tmp_path: Path) -> None:
+    registry = registry_from(pve_host("ace", JOB_TEMPLATES) + pve_host("bray"), tmp_path)
+
+    with pytest.raises(ValueError, match="ace:nope not found for bray"):
+        r.resolve_replication_job_template(registry, "ace:nope", "bray", "j")
+
+
+def test_resolve_replication_job_template_rejects_a_host_with_no_templates(
+    tmp_path: Path,
+) -> None:
+    registry = registry_from(pve_host("ace") + pve_host("bray"), tmp_path)
+
+    with pytest.raises(ValueError, match="replication_job_templates must be a dict for ace"):
+        r.resolve_replication_job_template(registry, "ace:push-data", "bray", "j")
+
+
+def test_resolve_replication_job_set_returns_its_entries(tmp_path: Path) -> None:
+    registry = registry_from(pve_host("ace", JOB_TEMPLATES) + pve_host("bray"), tmp_path)
+
+    assert r.resolve_replication_job_set(registry, "ace:cluster", "bray", "cluster") == [
+        {"name": "push-data", "template": "ace:push-data"}
+    ]
+
+
+def test_resolve_replication_job_set_rejects_a_non_list_set(tmp_path: Path) -> None:
+    registry = registry_from(pve_host("ace", JOB_TEMPLATES) + pve_host("bray"), tmp_path)
+
+    with pytest.raises(ValueError, match="ace:broken must be a list for bray"):
+        r.resolve_replication_job_set(registry, "ace:broken", "bray", "cluster")
+
+
+def test_resolve_replication_job_set_rejects_a_host_with_no_sets(tmp_path: Path) -> None:
+    registry = registry_from(pve_host("ace") + pve_host("bray"), tmp_path)
+
+    with pytest.raises(ValueError, match="replication_job_sets must be a dict for ace"):
+        r.resolve_replication_job_set(registry, "ace:cluster", "bray", "cluster")
+
+
+def test_expand_replication_jobs_expands_a_set_reference(tmp_path: Path) -> None:
+    registry = registry_from(pve_host("ace", JOB_TEMPLATES) + pve_host("bray"), tmp_path)
+
+    jobs = r.expand_replication_jobs(
+        registry, "bray", {"cluster": "ace:cluster", "local": {"schedule": "x"}}
+    )
+
+    assert jobs == [
+        ("push-data", {"template": "ace:push-data"}),
+        ("local", {"schedule": "x"}),
+    ]
+
+
+# --------------------------------------------------------------------------
 # allowed_pushers
 # --------------------------------------------------------------------------
 
