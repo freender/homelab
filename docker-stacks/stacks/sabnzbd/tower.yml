@@ -11,7 +11,6 @@ services:
     cpus: 2
     volumes:
       - /mnt/cache/appdata/sabnzbd:/config
-      - /mnt/cache/media/downloads:/data/downloads
       - /mnt/cache/downloads:/downloads
     environment:
       PUID: 1000

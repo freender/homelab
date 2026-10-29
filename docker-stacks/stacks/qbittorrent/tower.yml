@@ -17,7 +17,6 @@ services:
       - net.ipv4.conf.all.src_valid_mark=1
     volumes:
       - /mnt/cache/appdata/qbittorrent:/config
-      - /mnt/cache/media/downloads:/data/downloads
       - /mnt/cache/downloads:/downloads
     environment:
       VPN_ENABLED: yes
