@@ -1,0 +1,92 @@
+groups:
+  - name: pbs-backups
+    interval: 1m
+    rules:
+      # State-based backup freshness from xur's pbs-backup-textfile-exporter.
+      # PBS's own webhook only reports a job that runs and fails; a vzdump job
+      # removed on the PVE side, a stopped pbs-client-backup timer or a client
+      # that can no longer reach xur leaves no event at all. Every group on xur
+      # is written daily (vzdump 23:00, host archives ~00:30), so 36h is one
+      # missed night plus slack for a late or slow run.
+      #
+      # host/ghost is the work laptop: it is excluded from NodeDown for the same
+      # reason (up == 0 means "away"), so it gets its own week-long threshold
+      # below rather than a nightly one.
+      #
+      # A retired guest's group never ages out on its own -- keep-daily keeps
+      # the newest snapshots of a group no matter how old they are -- so a
+      # retirement must forget its group on xur or this alert stays up.
+      - alert: PbsBackupStale
+        expr: |
+          time() - homelab_pbs_group_last_backup_timestamp_seconds{backup_id!="ghost"} > 129600
+          and on(host) (min_over_time(up{job="pve-node", host="xur"}[30m]) == 1)
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "PBS backup {{ $labels.ns }}/{{ $labels.backup_type }}/{{ $labels.backup_id }} is stale"
+          description: "The newest snapshot of {{ $labels.backup_type }}/{{ $labels.backup_id }} in {{ $labels.datastore }} ns {{ $labels.ns }} on xur is {{ $value | humanizeDuration }} old, past the 36h a daily backup allows. Check the vzdump job (`cat /etc/pve/jobs.cfg`) for a guest, or `systemctl status homelab-pbs-client-backup.timer` on the client for a host archive. If the guest was retired, forget its group on xur."
+
+      - alert: PbsBackupStaleRoaming
+        expr: |
+          time() - homelab_pbs_group_last_backup_timestamp_seconds{backup_id="ghost"} > 604800
+          and on(host) (min_over_time(up{job="pve-node", host="xur"}[30m]) == 1)
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "PBS backup of ghost is over a week old"
+          description: "The newest host/ghost snapshot on xur is {{ $value | humanizeDuration }} old. ghost is a roaming laptop so a few missed nights are normal, but a week means its backup timer or WireGuard path is broken. Check `systemctl status homelab-pbs-client-backup.timer` on ghost."
+
+      # A job whose last run failed and whose next scheduled run did not clear
+      # it. The single failure is already reported by PBS's webhook as a
+      # ProxmoxNotification; that event never resolves, so this is the
+      # state-based follow-up that does. 25h is one daily cycle plus slack.
+      - alert: PbsJobFailing
+        expr: |
+          homelab_pbs_job_last_run_ok == 0
+          and on(host) (min_over_time(up{job="pve-node", host="xur"}[30m]) == 1)
+        for: 25h
+        labels:
+          severity: warning
+        annotations:
+          summary: "PBS {{ $labels.job_type }} job {{ $labels.job_id }} keeps failing"
+          description: "The last run of {{ $labels.job_type }} job {{ $labels.job_id }} on xur failed and no successful run has replaced it for over 25 hours. Read the task log in the xur web UI (Administration -> Tasks); for an offsite push check the remote's tunnel first."
+
+      # A job that is not failing but not running either: schedule removed,
+      # proxmox-backup-proxy wedged. Every job on xur is daily. A long sync
+      # in progress is excluded, since PBS drops last-run-endtime while it runs.
+      - alert: PbsJobStale
+        expr: |
+          (time() - homelab_pbs_job_last_run_timestamp_seconds > 129600)
+          unless on(job_type, job_id) (homelab_pbs_job_running == 1)
+          and on(host) (min_over_time(up{job="pve-node", host="xur"}[30m]) == 1)
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "PBS {{ $labels.job_type }} job {{ $labels.job_id }} has not run in 36h"
+          description: "{{ $labels.job_type }} job {{ $labels.job_id }} on xur last finished {{ $value | humanizeDuration }} ago. Check its schedule (`/etc/proxmox-backup/*.cfg`) and `systemctl status proxmox-backup-proxy` on xur."
+
+      # node_exporter keeps serving a .prom nobody rewrites, so a dead timer
+      # would freeze every series above at a healthy value. The timer runs
+      # every 5 minutes.
+      - alert: PbsBackupMetricsStale
+        expr: time() - node_textfile_mtime_seconds{file=~".*/pbs-backups\\.prom"} > 1800
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.host }} PBS backup metrics are stale"
+          description: "pbs-backups.prom on {{ $labels.host }} has not been rewritten in over 30 minutes, so backup freshness is frozen at its last value and PbsBackupStale cannot fire. Check `systemctl status pbs-backup-textfile-exporter.service` on {{ $labels.host }}."
+
+      - alert: PbsBackupMetricsMissing
+        expr: |
+          absent_over_time(homelab_pbs_groups_total{host="xur"}[30m])
+          and on(host) (min_over_time(up{job="pve-node", host="xur"}[30m]) == 1)
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "xur PBS backup metrics missing"
+          description: "xur is up but has published no homelab_pbs_groups_total for 30 minutes, so backup freshness is unmonitored. The pbs-backup-textfile-exporter may never have run or been removed by a metrics-exporters deploy."

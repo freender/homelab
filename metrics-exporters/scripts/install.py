@@ -102,6 +102,11 @@ TEXTFILE_EXPORTERS = {
         (),
         ("pve-replication.prom",),
     ),
+    "pbs-backup-textfile-exporter.py": (
+        "pbs-backup-textfile-exporter",
+        (),
+        ("pbs-backups.prom",),
+    ),
 }
 
 # Optional /etc/homelab configs -> the .prom that goes with them.

@@ -21,6 +21,7 @@ RULE_FILES = (
     "nic-link.yml",
     "node-down.yml",
     "node-resources.yml",
+    "pbs-backups.yml",
     "probe-report.yml",
     "pve-patches.yml",
     "pve-replication.yml",

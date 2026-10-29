@@ -274,6 +274,25 @@ FILE_SPECS = (
         "/etc/systemd/system/pve-replication-textfile-exporter.timer",
         feature="pve_replication",
     ),
+    # PBS backup freshness and job state. Gated on `config.type: pbs`, not on
+    # `baremetal`: xur is an LXC guest, and the gate is the PBS API reachable
+    # through `proxmox-backup-debug`, which only a PBS install has.
+    FileSpec(
+        "pbs-backup-textfile-exporter.py",
+        "/usr/local/bin/pbs-backup-textfile-exporter",
+        mode="755",
+        feature="pbs_backups",
+    ),
+    FileSpec(
+        "pbs-backup-textfile-exporter.service",
+        "/etc/systemd/system/pbs-backup-textfile-exporter.service",
+        feature="pbs_backups",
+    ),
+    FileSpec(
+        "pbs-backup-textfile-exporter.timer",
+        "/etc/systemd/system/pbs-backup-textfile-exporter.timer",
+        feature="pbs_backups",
+    ),
     FileSpec(
         "pve-patch-statuses.conf",
         "/etc/homelab/pve-patch-statuses.conf",
@@ -452,6 +471,12 @@ def is_pve_node(root: Path, host: str) -> bool:
     return str(registry.get(host, "config.type", "")) == "pve"
 
 
+def is_pbs_server(root: Path, host: str) -> bool:
+    """Whether this host runs Proxmox Backup Server (`config.type: pbs`)."""
+    registry = default_registry(root)
+    return str(registry.get(host, "config.type", "")) == "pbs"
+
+
 def has_igpu_exporter(root: Path, host: str) -> bool:
     registry = default_registry(root)
     exporter_config = registry.get(host, "metrics-exporters.intel_gpu_exporter", None)
@@ -558,10 +583,16 @@ def build_file_specs(
     has_wrapper: bool,
     lxc_guest: bool,
     own_kernel: bool,
+    has_pbs_backups: bool = False,
 ) -> tuple[FileSpec, ...]:
     # Everything that reads real disks, ZFS or PVE state is bare-metal only; a
     # guest gets just the exporters that work from inside one.
-    enabled_features = {"reboot": own_kernel, "apcupsd": has_apcupsd, "igpu": has_igpu}
+    enabled_features = {
+        "reboot": own_kernel,
+        "apcupsd": has_apcupsd,
+        "igpu": has_igpu,
+        "pbs_backups": has_pbs_backups,
+    }
     if not lxc_guest:
         enabled_features.update(
             baremetal=True,
@@ -610,6 +641,12 @@ PVE_REPLICATION_EXPORTER_FILES = [
     "pve-replication-textfile-exporter.timer",
 ]
 
+PBS_BACKUP_EXPORTER_FILES = [
+    "pbs-backup-textfile-exporter.py",
+    "pbs-backup-textfile-exporter.service",
+    "pbs-backup-textfile-exporter.timer",
+]
+
 APCACCESS_SERIAL_CMD = (
     "apcaccess status 2>/dev/null | sed -n "
     "'s/^SERIALNO[[:space:]]*:[[:space:]]*//p' | xargs"
@@ -627,6 +664,7 @@ class ExporterFlags:
     has_igpu: bool
     has_hba: bool
     has_pve_replication: bool
+    has_pbs_backups: bool = False
 
 
 def exporter_flags(root: Path, host: str) -> ExporterFlags:
@@ -648,6 +686,7 @@ def exporter_flags(root: Path, host: str) -> ExporterFlags:
         has_igpu=has_igpu_exporter(root, host),
         has_hba=has_hba_exporter(root, host) and not lxc_guest,
         has_pve_replication=is_pve_node(root, host) and not lxc_guest,
+        has_pbs_backups=is_pbs_server(root, host),
     )
 
 
@@ -778,6 +817,8 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
         copy_files(common_dir, build_dir, HBA_EXPORTER_FILES)
     if flags.has_pve_replication:
         copy_files(common_dir, build_dir, PVE_REPLICATION_EXPORTER_FILES)
+    if flags.has_pbs_backups:
+        copy_files(common_dir, build_dir, PBS_BACKUP_EXPORTER_FILES)
 
     data = bare_metal_data(root, host, flags.lxc_guest)
     render_if_any(
@@ -810,6 +851,7 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
         has_wrapper=flags.has_wrapper,
         lxc_guest=flags.lxc_guest,
         own_kernel=flags.own_kernel,
+        has_pbs_backups=flags.has_pbs_backups,
     )
     write_file_map(build_dir, file_specs)
 

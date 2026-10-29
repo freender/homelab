@@ -76,6 +76,7 @@ def everything():
         has_pve_patch_statuses=True,
         has_pve_replication=True,
         has_wrapper=True,
+        has_pbs_backups=True,
     )
 
 
@@ -620,6 +621,7 @@ def test_retirement_paths_match_the_orchestrator_destinations(harness: Harness) 
         ("boot-entry-textfile-exporter", ["boot-entries.prom"]),
         ("disk-label-textfile-exporter.py", ["disk-labels.prom"]),
         ("pve-replication-textfile-exporter.py", ["pve-replication.prom"]),
+        ("pbs-backup-textfile-exporter.py", ["pbs-backups.prom"]),
     ],
 )
 def test_each_textfile_exporter_names_the_prom_its_script_writes(

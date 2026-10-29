@@ -1,0 +1,13 @@
+[Unit]
+Description=Refresh PBS backup textfile metrics
+
+[Timer]
+# Backups and jobs here run daily, so five minutes is far finer than the
+# 36h staleness the rules look for, and keeps the API walk off the minute tick.
+OnBootSec=3min
+OnUnitActiveSec=5min
+AccuracySec=30s
+Unit=pbs-backup-textfile-exporter.service
+
+[Install]
+WantedBy=timers.target

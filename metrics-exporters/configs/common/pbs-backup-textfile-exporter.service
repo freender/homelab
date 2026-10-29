@@ -1,0 +1,7 @@
+[Unit]
+Description=Write PBS backup freshness and job state metrics for node_exporter textfile collector
+ConditionPathExists=/usr/sbin/proxmox-backup-debug
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/pbs-backup-textfile-exporter
