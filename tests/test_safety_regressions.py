@@ -75,7 +75,7 @@ def test_dangerous_booleans_read_their_own_key(normalizer, key: str, safe_defaul
 
 def test_postinstall_poller_env_excludes_retired_listener_values() -> None:
     env = pve_postinstall_webhook._env_values(
-        "/root/homelab", "pdm-token", "false", "1200", "3600"
+        "/root/homelab", "pdm-token", "false", "1200", "3600", "root@riven.example.internal"
     )
 
     assert env["PDM_TOKEN_SECRET"] == "pdm-token"

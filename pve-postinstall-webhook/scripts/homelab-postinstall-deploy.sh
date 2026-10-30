@@ -125,6 +125,45 @@ refresh_pdm_remote() {
     fi
 }
 
+KNOWN_HOSTS_TOOL=${KNOWN_HOSTS_TOOL:-/usr/local/sbin/homelab-known-hosts}
+host_keys_recorded=false
+
+# Before the first connection, so arc's system known_hosts already holds the
+# installer-reported keys (freender/homelab-ops#281).
+record_payload_host_keys() {
+    if [[ "$DRY_RUN" == "true" ]]; then
+        log "dry-run: skipping known_hosts update"
+        host_keys_recorded=true
+        return
+    fi
+    if [[ -z "$EVENT_FILE" ]]; then
+        return
+    fi
+
+    local status=0
+    "$KNOWN_HOSTS_TOOL" record "$HOST" "$EVENT_FILE" || status=$?
+    if [[ "$status" -eq 3 ]]; then
+        return
+    fi
+    host_keys_recorded=true
+    if [[ "$status" -ne 0 ]]; then
+        log "WARNING: known_hosts render or push failed; continuing post-install deploy"
+    fi
+}
+
+# Fallback for a by-hand run with no usable event: trust what wait_for_ready accepted.
+capture_host_keys() {
+    if [[ "$host_keys_recorded" == "true" ]]; then
+        return
+    fi
+    if "$KNOWN_HOSTS_TOOL" capture "$HOST"; then
+        log "known_hosts updated from first-use SSH keys"
+    else
+        log "WARNING: known_hosts capture failed; continuing post-install deploy"
+    fi
+    host_keys_recorded=true
+}
+
 reboot_host() {
     local reason=$1
 
@@ -156,7 +195,9 @@ run_standalone_pve_gated_deploy() {
 }
 
 log "event=$EVENT_FILE"
+record_payload_host_keys
 wait_for_ready
+capture_host_keys
 log "starting deploy"
 (
     flock -x 9

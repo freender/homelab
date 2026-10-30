@@ -30,7 +30,7 @@ Deployed only to `arc` (the PDM host itself, `10.0.0.50`).
    writes an event to `/var/lib/homelab-postinstall-webhook/events/`, and
    queues the deploy via `systemd-run`.
 5. **`homelab-postinstall-deploy <host> [event_file]`** does the actual work:
-   waits for SSH readiness (`pve-cluster` active + `pvesh get /version` for
+   records the node's new SSH host keys (see step 7), waits for SSH readiness (`pve-cluster` active + `pvesh get /version` for
    PVE hosts), `git pull --ff-only` in `$REPO_DIR` (`/root/homelab`, needs a
    loaded SSH key — see "`homelab-postinstall-deploy`'s root SSH agent"
    below),
@@ -53,6 +53,22 @@ Deployed only to `arc` (the PDM host itself, `10.0.0.50`).
    token rotation stays with the standalone path in step 5. A re-pin that still
    fails PDM's version check exits non-zero (failed unit). `DRY_RUN=true` in
    `poller.env` makes it log drift without writing.
+
+7. **`homelab-known-hosts`** keeps PVE node host keys trusted on `arc` and
+   `riven` across rebuilds (freender/homelab-ops#281). One file per node in
+   `/var/lib/homelab-postinstall-webhook/host-keys/` is rendered into `arc`'s
+   `/etc/ssh/ssh_known_hosts` under short name, FQDN and mgmt IP, and the same
+   file is pushed to every `known_hosts_push` host (`riven`). A correct key
+   there outranks a stale one in a user's own `known_hosts`, so nobody runs
+   `ssh-keygen -R`. Keys change only on a rebuild:
+   - `record <host> <event>`, before the first SSH: the installer's own keys
+     from the PDM post-hook payload (`ssh-public-host-keys`).
+   - `capture <host>`, only for a by-hand run with no usable event: the keys
+     the node presented to the worker's `accept-new` SSH.
+   - `seed`, on every deploy of this module (`homelab-known-hosts.service`):
+     nodes with nothing stored, read over SSH that must already trust them.
+   A failed render or push logs a warning in the worker and fails a deploy of
+   this module. Re-push by hand with `homelab-known-hosts sync`.
 
 The former `:9443` HTTP listener was retired. The polling watcher is now the
 only automatic trigger, and direct invocation of
@@ -224,7 +240,11 @@ ssh arc "/root/.local/bin/addhomelabkeys"   # force an immediate reload
 - `/etc/systemd/system/homelab-pdm-installation-watch.{service,timer}` (60s poll)
 - `/etc/systemd/system/homelab-ssh-agent.service` — persistent root `ssh-agent -a /root/.ssh/agent.sock`
 - `/etc/systemd/system/homelab-op-ssh-load.{service,timer}` — reloads both keys (`OnBootSec=10s`, `OnUnitActiveSec=7h`)
-- `/etc/homelab-postinstall-webhook/poller.env` — `PDM_TOKEN_ID`/`PDM_TOKEN_SECRET`, `REPO_DIR`, `DRY_RUN`, timeouts
+- `/etc/homelab-postinstall-webhook/poller.env` — `PDM_TOKEN_ID`/`PDM_TOKEN_SECRET`, `REPO_DIR`, `DRY_RUN`, timeouts, `KNOWN_HOSTS_PUSH`
+- `/usr/local/sbin/homelab-known-hosts` + `/etc/systemd/system/homelab-known-hosts.service` (seed oneshot, run by each deploy, no timer)
+- `/etc/homelab-postinstall-webhook/pve-known-hosts.conf` — PVE node names (short, FQDN, mgmt IP), generated from `hosts.conf`
+- `/var/lib/homelab-postinstall-webhook/host-keys/<node>` — trusted host keys per node
+- `/etc/ssh/ssh_known_hosts` — rendered; also pushed to `riven`
 - `/var/lib/homelab-postinstall-webhook/state/<uuid>.queued` — dedup marker, one per queued install
 - `/var/lib/homelab-postinstall-webhook/events/*.json` — raw PDM installation payloads for each queued deploy
 
@@ -232,6 +252,7 @@ ssh arc "/root/.local/bin/addhomelabkeys"   # force an immediate reload
 - `scripts/homelab-pdm-installation-watch.py`
 - `scripts/homelab-pdm-refresh-remote.py`
 - `scripts/homelab-postinstall-deploy.sh`
+- `scripts/homelab-known-hosts.{py,service}`
 - `scripts/homelab-pdm-remote-reconcile.{service,timer}`
 - `scripts/op-ssh-add`
 - `scripts/addhomelabkeys`
@@ -256,5 +277,7 @@ ssh arc "systemctl list-timers homelab-pdm-installation-watch.timer --no-pager"
 ssh arc "journalctl -u homelab-pdm-installation-watch.service -n 20 --no-pager"
 ssh arc "systemctl list-timers homelab-pdm-remote-reconcile.timer --no-pager"
 ssh arc "journalctl -u homelab-pdm-remote-reconcile.service -n 20 --no-pager"
+ssh arc "journalctl -u homelab-known-hosts.service -n 20 --no-pager"
+ssh arc "cat /etc/ssh/ssh_known_hosts" && ssh riven "cat /etc/ssh/ssh_known_hosts"
 ssh arc "test ! -e /etc/systemd/system/homelab-postinstall-webhook.service && test ! -e /usr/local/sbin/homelab-postinstall-webhook"
 ```

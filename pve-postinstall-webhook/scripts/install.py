@@ -53,6 +53,7 @@ DIRECTORIES = (
     ("/etc/homelab-postinstall-webhook", "700"),
     ("/var/lib/homelab-postinstall-webhook/events", "700"),
     ("/var/lib/homelab-postinstall-webhook/state", "755"),
+    ("/var/lib/homelab-postinstall-webhook/host-keys", "755"),
     ("/root/.local/bin", "700"),
     ("/root/.config", "700"),
 )
@@ -61,6 +62,7 @@ POLLER_SCRIPTS = (
     ("homelab-pdm-installation-watch.py", "/usr/local/sbin/homelab-pdm-installation-watch", "755"),
     ("homelab-pdm-refresh-remote.py", "/usr/local/sbin/homelab-pdm-refresh-remote", "755"),
     ("homelab-postinstall-deploy.sh", "/usr/local/sbin/homelab-postinstall-deploy", "755"),
+    ("homelab-known-hosts.py", "/usr/local/sbin/homelab-known-hosts", "755"),
 )
 
 # The agent's environment file is 600: it names the socket path and the service
@@ -78,13 +80,14 @@ UNITS = (
     "homelab-pdm-installation-watch.timer",
     "homelab-pdm-remote-reconcile.service",
     "homelab-pdm-remote-reconcile.timer",
+    "homelab-known-hosts.service",
     "homelab-ssh-agent.service",
     "homelab-op-ssh-load.service",
     "homelab-op-ssh-load.timer",
 )
 
-# The two `.service` oneshots behind the watch and reconcile timers are deliberately
-# absent: enabling them would make them run at boot as well.
+# The `.service` oneshots behind the watch and reconcile timers, and the known_hosts
+# seed, are deliberately absent: enabling them would make them run at boot as well.
 ENABLED_UNITS = (
     "homelab-pdm-installation-watch.timer",
     "homelab-pdm-remote-reconcile.timer",
@@ -92,9 +95,13 @@ ENABLED_UNITS = (
     "homelab-op-ssh-load.timer",
 )
 KEY_LOAD_UNIT = "homelab-op-ssh-load.service"
+KNOWN_HOSTS_UNIT = "homelab-known-hosts.service"
 
 POLLER_ENV_NAME = "env"
 POLLER_ENV_DEST = "/etc/homelab-postinstall-webhook/poller.env"
+
+KNOWN_HOSTS_NAMES_NAME = "pve-known-hosts.conf"
+KNOWN_HOSTS_NAMES_DEST = "/etc/homelab-postinstall-webhook/pve-known-hosts.conf"
 
 
 def install_staged(ctx: InstallContext, entries: tuple[tuple[str, str, str], ...]) -> None:
@@ -135,6 +142,7 @@ def install(ctx: InstallContext) -> None:
 
     log.action("Installing PDM poller config")
     files.install_to(ctx, POLLER_ENV_NAME, POLLER_ENV_DEST, "600")
+    files.install_to(ctx, KNOWN_HOSTS_NAMES_NAME, KNOWN_HOSTS_NAMES_DEST, "644")
 
     log.action("Installing retained systemd units")
     # Reloaded here rather than left to `ensure_running`, because the key-load
@@ -153,10 +161,17 @@ def install(ctx: InstallContext) -> None:
     log.action("Loading SSH keys from 1Password")
     systemd.run_once(ctx, KEY_LOAD_UNIT)
 
+    # Needs the keys just loaded. Seeds only nodes with nothing stored, over SSH that
+    # must already trust them, then re-renders and re-pushes; a failed push fails the
+    # deploy rather than leaving riven silently behind (freender/homelab-ops#281).
+    log.action("Seeding and pushing PVE node SSH known_hosts")
+    systemd.run_once(ctx, KNOWN_HOSTS_UNIT)
+
     log.ok("PDM post-install poller installed")
     log.sub("PDM watch: systemctl list-timers homelab-pdm-installation-watch.timer --no-pager")
     log.sub("SSH agent: systemctl status homelab-ssh-agent.service --no-pager")
     log.sub("SSH key load: systemctl list-timers homelab-op-ssh-load.timer --no-pager")
+    log.sub("Known hosts: journalctl -u homelab-known-hosts.service -n 20 --no-pager")
 
 
 if __name__ == "__main__":

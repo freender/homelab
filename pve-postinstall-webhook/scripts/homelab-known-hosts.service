@@ -1,0 +1,9 @@
+[Unit]
+Description=Seed, render and push the PVE node SSH known_hosts
+After=network-online.target homelab-ssh-agent.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/homelab-postinstall-webhook/poller.env
+ExecStart=/usr/local/sbin/homelab-known-hosts seed

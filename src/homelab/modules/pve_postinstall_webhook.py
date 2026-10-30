@@ -14,6 +14,7 @@ from ..module_support import (
 )
 from ..output import print_sub
 from ..ssh import HostConnection, diff_many
+from .pve_postinstall import build_known_hosts_names
 
 REMOTE_ROOT = "/tmp/homelab-pve-postinstall-webhook"
 FEATURE = "pve-postinstall-webhook"
@@ -24,6 +25,8 @@ REQUIRED_SCRIPTS = [
     "homelab-pdm-installation-watch.py",
     "homelab-pdm-refresh-remote.py",
     "homelab-postinstall-deploy.sh",
+    "homelab-known-hosts.py",
+    "homelab-known-hosts.service",
     "op-ssh-add",
     "addhomelabkeys",
     "op-ssh-agent.conf",
@@ -67,6 +70,26 @@ def validate(root: Path) -> None:
     except op_secrets.OpSecretsError as exc:
         raise ValueError(str(exc)) from exc
 
+    registry = default_registry(root)
+    for host in registry.list_hosts(feature=FEATURE):
+        known_hosts_push_targets(registry, host)
+
+
+def known_hosts_push_targets(registry, host: str) -> str:
+    """`user@hostname` for each `known_hosts_push` host, space-separated."""
+    raw = registry.get(host, f"{FEATURE}.known_hosts_push", [])
+    if not isinstance(raw, list):
+        raise ValueError(f"{FEATURE}.known_hosts_push must be a list for {host}")
+    known = set(registry.list_hosts())
+    targets = []
+    for target in raw:
+        if target not in known:
+            raise ValueError(f"{FEATURE}.known_hosts_push on {host}: unknown host '{target}'")
+        user = registry.get(target, "config.user")
+        hostname = registry.get(target, "config.hostname")
+        targets.append(f"{user}@{hostname}")
+    return " ".join(targets)
+
 
 def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
     registry = default_registry(root)
@@ -75,9 +98,11 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
     deploy_dry_run = "true" if deploy_dry_run_enabled else "false"
     ssh_timeout = str(registry.get(host, f"{FEATURE}.ssh_timeout_seconds", "1200"))
     deploy_timeout = str(registry.get(host, f"{FEATURE}.deploy_timeout_seconds", "3600"))
+    known_hosts_push = known_hosts_push_targets(registry, host)
 
     build_dir = root / "pve-postinstall-webhook" / "build" / host
     prepare_build_dir(build_dir)
+    build_known_hosts_names(registry, build_dir)
 
     connection = HostConnection(
         host,
@@ -101,6 +126,18 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
             (
                 scripts_dir / "homelab-pdm-installation-watch.py",
                 "/usr/local/sbin/homelab-pdm-installation-watch",
+            ),
+            (
+                scripts_dir / "homelab-known-hosts.py",
+                "/usr/local/sbin/homelab-known-hosts",
+            ),
+            (
+                scripts_dir / "homelab-known-hosts.service",
+                "/etc/systemd/system/homelab-known-hosts.service",
+            ),
+            (
+                build_dir / "pve-known-hosts.conf",
+                "/etc/homelab-postinstall-webhook/pve-known-hosts.conf",
             ),
             (
                 scripts_dir / "homelab-pdm-installation-watch.service",
@@ -162,6 +199,7 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
                 deploy_dry_run,
                 ssh_timeout,
                 deploy_timeout,
+                known_hosts_push,
             ),
             mode=0o600,
         )
@@ -197,12 +235,14 @@ def _env_values(
     deploy_dry_run: str,
     ssh_timeout: str,
     deploy_timeout: str,
+    known_hosts_push: str,
 ) -> dict[str, str]:
     return {
         "REPO_DIR": repo_dir,
         "DRY_RUN": deploy_dry_run,
         "SSH_TIMEOUT_SECONDS": ssh_timeout,
         "DEPLOY_TIMEOUT_SECONDS": deploy_timeout,
+        "KNOWN_HOSTS_PUSH": known_hosts_push,
         "SSH_AUTH_SOCK": "/root/.ssh/agent.sock",
         "PDM_BASE_URL": "https://127.0.0.1:8443",
         "PDM_TOKEN_ID": "root@pam!homelab-deploy",

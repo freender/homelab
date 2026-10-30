@@ -101,6 +101,7 @@ def retarget(installer, tmp_path: Path) -> Path:
     )
     installer.UNIT_DIR = under(installer.UNIT_DIR)
     installer.POLLER_ENV_DEST = under(installer.POLLER_ENV_DEST)
+    installer.KNOWN_HOSTS_NAMES_DEST = under(installer.KNOWN_HOSTS_NAMES_DEST)
     return sandbox
 
 
@@ -117,6 +118,9 @@ def make_ctx(installer, tmp_path: Path, poller_env: str = "REPO_DIR=/root/homela
     build_dir = script_dir / "build" / "arc"
     build_dir.mkdir(parents=True)
     (build_dir / installer.POLLER_ENV_NAME).write_text(poller_env, encoding="utf-8")
+    (build_dir / installer.KNOWN_HOSTS_NAMES_NAME).write_text(
+        "ace ace.example.internal 10.0.0.20\n", encoding="utf-8"
+    )
 
     return InstallContext(
         host="arc",
@@ -176,6 +180,9 @@ def test_everything_lands_at_its_pinned_mode(harness) -> None:
     assert mode_of(sandbox / "usr/local/sbin/homelab-postinstall-deploy") == 0o755
     assert mode_of(sandbox / "root/.config/op-ssh-agent.env") == 0o600
     assert mode_of(Path(installer.POLLER_ENV_DEST)) == 0o600
+    assert mode_of(sandbox / "var/lib/homelab-postinstall-webhook/host-keys") == 0o755
+    assert mode_of(sandbox / "usr/local/sbin/homelab-known-hosts") == 0o755
+    assert mode_of(Path(installer.KNOWN_HOSTS_NAMES_DEST)) == 0o644
 
 
 def test_the_poller_env_is_installed_from_the_build_directory(harness) -> None:
@@ -347,3 +354,45 @@ def test_a_missing_rendered_env_fails_the_deploy(
 
     with pytest.raises(InstallError, match="missing source file"):
         installer.install(ctx)
+
+
+def test_the_known_hosts_seed_runs_after_the_keys_are_loaded(harness) -> None:
+    """The seed reads every node's host keys over SSH; before the key load the
+    agent is empty and every node would be skipped as unreachable."""
+    installer, ctx, _sandbox, systemctl, _apt = harness
+
+    installer.install(ctx)
+
+    actions = systemctl.actions()
+    assert actions.index(f"start {installer.KEY_LOAD_UNIT}") < actions.index(
+        f"start {installer.KNOWN_HOSTS_UNIT}"
+    )
+    assert f"enable {installer.KNOWN_HOSTS_UNIT}" not in actions
+
+
+def test_a_failed_known_hosts_push_fails_the_deploy(harness, monkeypatch) -> None:
+    """A push that failed quietly would leave riven on stale keys until the next
+    rebuild, which is exactly the manual step this replaces."""
+    installer, ctx, _sandbox, systemctl, _apt = harness
+    real = systemctl.__call__
+
+    def fail_seed(command, **kwargs):
+        if command[1] == "start" and command[-1] == installer.KNOWN_HOSTS_UNIT:
+            systemctl.calls.append(list(command))
+            return subprocess.CompletedProcess(command, 1, stdout="", stderr="")
+        return real(command, **kwargs)
+
+    monkeypatch.setattr(systemd, "_run", fail_seed)
+
+    with pytest.raises(InstallError, match=installer.KNOWN_HOSTS_UNIT):
+        installer.install(ctx)
+
+
+def test_the_names_map_is_installed_from_the_build_directory(harness) -> None:
+    installer, ctx, _sandbox, _systemctl, _apt = harness
+
+    installer.install(ctx)
+
+    assert Path(installer.KNOWN_HOSTS_NAMES_DEST).read_text(encoding="utf-8") == (
+        "ace ace.example.internal 10.0.0.20\n"
+    )

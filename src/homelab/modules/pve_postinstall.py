@@ -527,6 +527,7 @@ def build_known_hosts_names(registry, build_dir: Path) -> None:
 
     Decided here once from inventory so the node-side script only maps a pmxcfs
     node directory to names. The short name comes first: it is the pmxcfs key.
+    `pve-postinstall-webhook` stages the same file for arc's `homelab-known-hosts`.
     """
     lines = []
     for pve_host in registry.list_hosts(feature="pve-postinstall"):
