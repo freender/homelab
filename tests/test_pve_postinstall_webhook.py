@@ -270,6 +270,18 @@ def test_the_watch_service_is_installed_but_never_enabled(harness) -> None:
     assert "enable homelab-pdm-installation-watch.timer" in systemctl.actions()
 
 
+def test_the_reconcile_timer_is_enabled_but_not_its_service(harness) -> None:
+    """The timer is what re-pins PDM fingerprints after a cluster rejoin; the
+    oneshot behind it must not also run at every boot."""
+    installer, ctx, _sandbox, systemctl, _apt = harness
+
+    installer.install(ctx)
+
+    assert Path(installer.UNIT_DIR, "homelab-pdm-remote-reconcile.service").is_file()
+    assert "enable homelab-pdm-remote-reconcile.timer" in systemctl.actions()
+    assert "enable homelab-pdm-remote-reconcile.service" not in systemctl.actions()
+
+
 def test_a_changed_unit_is_reloaded_before_the_key_load_starts(harness) -> None:
     """`run_once` never passes through `ensure_running`, so a change to the
     key-load service alone would otherwise be started from systemd's cache."""

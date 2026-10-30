@@ -1,0 +1,11 @@
+[Unit]
+Description=Check PDM remote fingerprints against live PVE certificates
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=15min
+AccuracySec=1min
+Unit=homelab-pdm-remote-reconcile.service
+
+[Install]
+WantedBy=timers.target

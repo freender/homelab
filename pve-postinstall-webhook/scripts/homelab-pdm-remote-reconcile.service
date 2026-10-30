@@ -1,0 +1,9 @@
+[Unit]
+Description=Re-pin drifted PVE node fingerprints on PDM remotes
+After=network-online.target homelab-ssh-agent.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/homelab-postinstall-webhook/poller.env
+ExecStart=/usr/local/sbin/homelab-pdm-refresh-remote --reconcile

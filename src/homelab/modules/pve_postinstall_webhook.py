@@ -29,6 +29,8 @@ REQUIRED_SCRIPTS = [
     "op-ssh-agent.conf",
     "homelab-pdm-installation-watch.service",
     "homelab-pdm-installation-watch.timer",
+    "homelab-pdm-remote-reconcile.service",
+    "homelab-pdm-remote-reconcile.timer",
     "homelab-ssh-agent.service",
     "homelab-op-ssh-load.service",
     "homelab-op-ssh-load.timer",
@@ -107,6 +109,14 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
             (
                 scripts_dir / "homelab-pdm-installation-watch.timer",
                 "/etc/systemd/system/homelab-pdm-installation-watch.timer",
+            ),
+            (
+                scripts_dir / "homelab-pdm-remote-reconcile.service",
+                "/etc/systemd/system/homelab-pdm-remote-reconcile.service",
+            ),
+            (
+                scripts_dir / "homelab-pdm-remote-reconcile.timer",
+                "/etc/systemd/system/homelab-pdm-remote-reconcile.timer",
             ),
             (
                 scripts_dir / "op-ssh-add",

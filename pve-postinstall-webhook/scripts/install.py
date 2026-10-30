@@ -76,15 +76,18 @@ UNIT_MODE = "644"
 UNITS = (
     "homelab-pdm-installation-watch.service",
     "homelab-pdm-installation-watch.timer",
+    "homelab-pdm-remote-reconcile.service",
+    "homelab-pdm-remote-reconcile.timer",
     "homelab-ssh-agent.service",
     "homelab-op-ssh-load.service",
     "homelab-op-ssh-load.timer",
 )
 
-# `homelab-pdm-installation-watch.service` is deliberately absent: it is a oneshot
-# the timer invokes, and enabling it would make it run at boot as well.
+# The two `.service` oneshots behind the watch and reconcile timers are deliberately
+# absent: enabling them would make them run at boot as well.
 ENABLED_UNITS = (
     "homelab-pdm-installation-watch.timer",
+    "homelab-pdm-remote-reconcile.timer",
     "homelab-ssh-agent.service",
     "homelab-op-ssh-load.timer",
 )

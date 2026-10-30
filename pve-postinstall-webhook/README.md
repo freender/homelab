@@ -41,6 +41,19 @@ Deployed only to `arc` (the PDM host itself, `10.0.0.50`).
    - Standalone PVE nodes (osiris): gated two-pass — deploy, reboot, wait for
      SSH again, deploy again.
 
+6. **`homelab-pdm-remote-reconcile.timer`** (every 15 min) runs
+   `homelab-pdm-refresh-remote --reconcile`. It reads each PDM `pve` remote's
+   pinned node fingerprints, compares them with every node's live
+   `/etc/pve/local/pve-ssl.pem` over SSH, and re-pins the ones that drifted.
+   This covers cluster nodes (`pve-cluster`), whose certificate changes again
+   at `pvecm add` — after the post-install deploy has already run — and
+   Proxmox's own certificate renewals. PDM's PUT replaces the whole node list,
+   so every node goes back; a node that is unreachable, has a changed SSH host
+   key, or isn't in `hosts.conf` keeps its existing pin. Fingerprints only:
+   token rotation stays with the standalone path in step 5. A re-pin that still
+   fails PDM's version check exits non-zero (failed unit). `DRY_RUN=true` in
+   `poller.env` makes it log drift without writing.
+
 The former `:9443` HTTP listener was retired. The polling watcher is now the
 only automatic trigger, and direct invocation of
 `homelab-postinstall-deploy <host>` remains the manual recovery path. PDM's
@@ -202,7 +215,8 @@ ssh arc "/root/.local/bin/addhomelabkeys"   # force an immediate reload
 
 **On `arc`:**
 - `/usr/local/sbin/homelab-pdm-installation-watch` — PDM API poller (primary trigger path)
-- `/usr/local/sbin/homelab-pdm-refresh-remote` — refreshes a standalone PVE host's PDM remote trust/token post-deploy
+- `/usr/local/sbin/homelab-pdm-refresh-remote` — refreshes a standalone PVE host's PDM remote trust/token post-deploy; `--reconcile` re-pins drifted fingerprints on every PVE remote
+- `/etc/systemd/system/homelab-pdm-remote-reconcile.{service,timer}` (15 min fingerprint check)
 - `/usr/local/sbin/homelab-postinstall-deploy` — waits for SSH, git pulls, runs `./deploy all <host>`
 - `/root/.local/bin/op-ssh-add` — 1Password-backed single-key loader (`main`|`pve`)
 - `/root/.local/bin/addhomelabkeys` — loads both keys into `/root/.ssh/agent.sock`
@@ -218,6 +232,7 @@ ssh arc "/root/.local/bin/addhomelabkeys"   # force an immediate reload
 - `scripts/homelab-pdm-installation-watch.py`
 - `scripts/homelab-pdm-refresh-remote.py`
 - `scripts/homelab-postinstall-deploy.sh`
+- `scripts/homelab-pdm-remote-reconcile.{service,timer}`
 - `scripts/op-ssh-add`
 - `scripts/addhomelabkeys`
 - `scripts/op-ssh-agent.conf` (deploys as `/root/.config/op-ssh-agent.env` on `arc` — named `.conf` here only because `.gitignore` blanket-excludes `**/*.env`; carries no secrets)
@@ -239,5 +254,7 @@ See also the `pve-autoinstall` module, which owns the prepared-answer content
 ```bash
 ssh arc "systemctl list-timers homelab-pdm-installation-watch.timer --no-pager"
 ssh arc "journalctl -u homelab-pdm-installation-watch.service -n 20 --no-pager"
+ssh arc "systemctl list-timers homelab-pdm-remote-reconcile.timer --no-pager"
+ssh arc "journalctl -u homelab-pdm-remote-reconcile.service -n 20 --no-pager"
 ssh arc "test ! -e /etc/systemd/system/homelab-postinstall-webhook.service && test ! -e /usr/local/sbin/homelab-postinstall-webhook"
 ```

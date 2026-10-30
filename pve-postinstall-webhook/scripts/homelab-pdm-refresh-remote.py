@@ -165,23 +165,28 @@ def parse_authid(authid: str) -> tuple[str, str]:
     return user, token_name
 
 
-def read_pve_fingerprint(target: str) -> str:
-    output = run_ssh(
-        target,
-        [
-            "openssl",
-            "x509",
-            "-in",
-            "/etc/pve/local/pve-ssl.pem",
-            "-noout",
-            "-fingerprint",
-            "-sha256",
-        ],
-    )
+FINGERPRINT_COMMAND = [
+    "openssl",
+    "x509",
+    "-in",
+    "/etc/pve/local/pve-ssl.pem",
+    "-noout",
+    "-fingerprint",
+    "-sha256",
+]
+
+
+def parse_fingerprint(output: str) -> str | None:
     match = re.search(r"Fingerprint=([0-9A-Fa-f:]+)", output)
-    if not match:
+    return match.group(1).upper() if match else None
+
+
+def read_pve_fingerprint(target: str) -> str:
+    output = run_ssh(target, FINGERPRINT_COMMAND)
+    fingerprint = parse_fingerprint(output)
+    if fingerprint is None:
         fail("could not parse PVE certificate fingerprint")
-    return match.group(1).upper()
+    return fingerprint
 
 
 def remote_version_ok(remote_id: str) -> bool:
@@ -265,14 +270,103 @@ def maybe_remove_pve_token(target: str, authid: str) -> None:
         pass
 
 
+def load_hosts() -> dict[str, Any]:
+    data = yaml.safe_load((REPO_DIR / "hosts.conf").read_text(encoding="utf-8")) or {}
+    if not isinstance(data, dict):
+        fail("hosts.conf is not a mapping")
+    return data
+
+
+def pve_targets_by_hostname(hosts: dict[str, Any]) -> dict[str, str]:
+    """Map each PVE host's `config.hostname` (how PDM names a node) to its SSH target."""
+    targets: dict[str, str] = {}
+    for config in hosts.values():
+        if not isinstance(config, dict):
+            continue
+        host_config = config.get("config") or {}
+        hostname = host_config.get("hostname")
+        if host_config.get("type") == "pve" and hostname:
+            targets[str(hostname)] = ssh_target(config)
+    return targets
+
+
+def parse_node_entry(entry: str) -> tuple[str, str]:
+    hostname, _, options = entry.partition(",")
+    for option in options.split(","):
+        key, _, value = option.partition("=")
+        if key.strip() == "fingerprint":
+            return hostname.strip(), value.strip()
+    return hostname.strip(), ""
+
+
+def live_fingerprint(target: str) -> str | None:
+    """The node's current pve-ssl.pem fingerprint, or None if it can't be read now."""
+    try:
+        output = run_ssh(target, FINGERPRINT_COMMAND)
+    except subprocess.CalledProcessError as exc:
+        log(f"cannot read fingerprint from {target}: {(exc.stderr or '').strip()}")
+        return None
+    fingerprint = parse_fingerprint(output)
+    if fingerprint is None:
+        log(f"cannot parse fingerprint from {target}")
+    return fingerprint
+
+
+def reconcile_remote(remote: dict[str, Any], targets: dict[str, str], dry_run: bool) -> bool:
+    """Re-pin drifted node fingerprints on one PVE remote. Returns True if it drifted.
+
+    PDM's PUT replaces the whole node list, so every node is sent back. Nodes that
+    are not in hosts.conf or cannot be reached keep their pinned value. A re-pin
+    that still fails PDM's version check exits non-zero so the unit shows failed.
+    """
+    remote_id = str(remote.get("id") or "")
+    entries: list[str] = []
+    drifted: list[str] = []
+    for raw in remote.get("nodes") or []:
+        hostname, pinned = parse_node_entry(str(raw))
+        target = targets.get(hostname)
+        live = live_fingerprint(target) if target else None
+        if live is None or live == pinned.upper():
+            entries.append(str(raw))
+            continue
+        drifted.append(hostname)
+        entries.append(f"{hostname},fingerprint={live}")
+    if not drifted:
+        return False
+    if dry_run:
+        log(f"dry-run: would re-pin {remote_id}: {', '.join(drifted)}")
+        return True
+    log(f"re-pinning {remote_id}: {', '.join(drifted)}")
+    pdm_request("PUT", f"/api2/json/remotes/remote/{remote_id}", {"nodes": entries})
+    if not remote_version_ok(remote_id):
+        fail(f"{remote_id} still fails its version check after re-pin")
+    return True
+
+
+def reconcile(dry_run: bool) -> None:
+    targets = pve_targets_by_hostname(load_hosts())
+    remotes = pdm_request("GET", "/api2/json/remotes/remote") or []
+    drifted = [
+        str(remote.get("id"))
+        for remote in remotes
+        if remote.get("type") == "pve" and reconcile_remote(remote, targets, dry_run)
+    ]
+    log(f"checked; drifted: {', '.join(drifted) or 'none'}")
+
+
 def main() -> None:
     if len(sys.argv) != 2:
-        fail("usage: homelab-pdm-refresh-remote <host>")
-    host = sys.argv[1]
+        fail("usage: homelab-pdm-refresh-remote <host>|--reconcile")
     if not PDM_REMOTE_REFRESH:
         log("disabled by PDM_REMOTE_REFRESH")
         return
+    if sys.argv[1] == "--reconcile":
+        reconcile(dry_run=ENV.get("DRY_RUN", "false").lower() == "true")
+        return
+    refresh_host(sys.argv[1])
 
+
+def refresh_host(host: str) -> None:
     config = load_host(host)
     host_config = config.get("config") or {}
     if host_config.get("type") != "pve" or host_config.get("standalone") is not True:
