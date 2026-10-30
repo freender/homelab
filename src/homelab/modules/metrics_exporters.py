@@ -293,6 +293,25 @@ FILE_SPECS = (
         "/etc/systemd/system/pbs-backup-textfile-exporter.timer",
         feature="pbs_backups",
     ),
+    # PDM remote poll state and pin checks. An explicit inventory flag rather
+    # than a type gate: the PDM host is an LXC guest with no `config.type` of
+    # its own, and the gate is PDM's remotes.cfg and collection state file.
+    FileSpec(
+        "pdm-remote-textfile-exporter.py",
+        "/usr/local/bin/pdm-remote-textfile-exporter",
+        mode="755",
+        feature="pdm_remotes",
+    ),
+    FileSpec(
+        "pdm-remote-textfile-exporter.service",
+        "/etc/systemd/system/pdm-remote-textfile-exporter.service",
+        feature="pdm_remotes",
+    ),
+    FileSpec(
+        "pdm-remote-textfile-exporter.timer",
+        "/etc/systemd/system/pdm-remote-textfile-exporter.timer",
+        feature="pdm_remotes",
+    ),
     FileSpec(
         "pve-patch-statuses.conf",
         "/etc/homelab/pve-patch-statuses.conf",
@@ -477,6 +496,16 @@ def is_pbs_server(root: Path, host: str) -> bool:
     return str(registry.get(host, "config.type", "")) == "pbs"
 
 
+def has_pdm_remotes(root: Path, host: str) -> bool:
+    """Whether this host runs PDM (`metrics-exporters.pdm_remotes: true`)."""
+    registry = default_registry(root)
+    return normalize_bool(
+        registry.get(host, "metrics-exporters.pdm_remotes", None),
+        False,
+        f"metrics-exporters.pdm_remotes must be true or false for {host}",
+    )
+
+
 def has_igpu_exporter(root: Path, host: str) -> bool:
     registry = default_registry(root)
     exporter_config = registry.get(host, "metrics-exporters.intel_gpu_exporter", None)
@@ -584,6 +613,7 @@ def build_file_specs(
     lxc_guest: bool,
     own_kernel: bool,
     has_pbs_backups: bool = False,
+    has_pdm_remotes: bool = False,
 ) -> tuple[FileSpec, ...]:
     # Everything that reads real disks, ZFS or PVE state is bare-metal only; a
     # guest gets just the exporters that work from inside one.
@@ -592,6 +622,7 @@ def build_file_specs(
         "apcupsd": has_apcupsd,
         "igpu": has_igpu,
         "pbs_backups": has_pbs_backups,
+        "pdm_remotes": has_pdm_remotes,
     }
     if not lxc_guest:
         enabled_features.update(
@@ -647,6 +678,12 @@ PBS_BACKUP_EXPORTER_FILES = [
     "pbs-backup-textfile-exporter.timer",
 ]
 
+PDM_REMOTE_EXPORTER_FILES = [
+    "pdm-remote-textfile-exporter.py",
+    "pdm-remote-textfile-exporter.service",
+    "pdm-remote-textfile-exporter.timer",
+]
+
 APCACCESS_SERIAL_CMD = (
     "apcaccess status 2>/dev/null | sed -n "
     "'s/^SERIALNO[[:space:]]*:[[:space:]]*//p' | xargs"
@@ -665,6 +702,7 @@ class ExporterFlags:
     has_hba: bool
     has_pve_replication: bool
     has_pbs_backups: bool = False
+    has_pdm_remotes: bool = False
 
 
 def exporter_flags(root: Path, host: str) -> ExporterFlags:
@@ -687,6 +725,7 @@ def exporter_flags(root: Path, host: str) -> ExporterFlags:
         has_hba=has_hba_exporter(root, host) and not lxc_guest,
         has_pve_replication=is_pve_node(root, host) and not lxc_guest,
         has_pbs_backups=is_pbs_server(root, host),
+        has_pdm_remotes=has_pdm_remotes(root, host),
     )
 
 
@@ -779,6 +818,20 @@ def build_igpu_exporter(registry, common_dir: Path, build_dir: Path, host: str) 
     copy_files(common_dir, build_dir, ["igpu-exporter.py", "igpu-exporter.service"])
 
 
+def build_optional_textfile_exporters(
+    common_dir: Path, build_dir: Path, flags: ExporterFlags
+) -> None:
+    """Copy each script-only textfile exporter whose flag is set."""
+    for enabled, names in (
+        (flags.has_hba, HBA_EXPORTER_FILES),
+        (flags.has_pve_replication, PVE_REPLICATION_EXPORTER_FILES),
+        (flags.has_pbs_backups, PBS_BACKUP_EXPORTER_FILES),
+        (flags.has_pdm_remotes, PDM_REMOTE_EXPORTER_FILES),
+    ):
+        if enabled:
+            copy_files(common_dir, build_dir, names)
+
+
 def render_if_any(values: list, template: Path, destination: Path, key: str) -> None:
     """Render `destination` only when `values` is non-empty.
 
@@ -813,12 +866,7 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
         build_apcupsd_exporter(root, registry, connection, common_dir, build_dir, host, dry_run)
     if flags.has_igpu:
         build_igpu_exporter(registry, common_dir, build_dir, host)
-    if flags.has_hba:
-        copy_files(common_dir, build_dir, HBA_EXPORTER_FILES)
-    if flags.has_pve_replication:
-        copy_files(common_dir, build_dir, PVE_REPLICATION_EXPORTER_FILES)
-    if flags.has_pbs_backups:
-        copy_files(common_dir, build_dir, PBS_BACKUP_EXPORTER_FILES)
+    build_optional_textfile_exporters(common_dir, build_dir, flags)
 
     data = bare_metal_data(root, host, flags.lxc_guest)
     render_if_any(
@@ -852,6 +900,7 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
         lxc_guest=flags.lxc_guest,
         own_kernel=flags.own_kernel,
         has_pbs_backups=flags.has_pbs_backups,
+        has_pdm_remotes=flags.has_pdm_remotes,
     )
     write_file_map(build_dir, file_specs)
 

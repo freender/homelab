@@ -1,0 +1,13 @@
+[Unit]
+Description=Refresh PDM remote textfile metrics
+
+[Timer]
+# PDM collects every 10 min and the rules wait 30-45 min, so five minutes keeps
+# the TLS probes cheap without adding detection lag.
+OnBootSec=3min
+OnUnitActiveSec=5min
+AccuracySec=30s
+Unit=pdm-remote-textfile-exporter.service
+
+[Install]
+WantedBy=timers.target

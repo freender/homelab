@@ -1,0 +1,9 @@
+[Unit]
+Description=Write PDM remote poll and fingerprint metrics for node_exporter textfile collector
+ConditionPathExists=/etc/proxmox-datacenter-manager/remotes.cfg
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/pdm-remote-textfile-exporter

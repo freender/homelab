@@ -77,6 +77,7 @@ def everything():
         has_pve_replication=True,
         has_wrapper=True,
         has_pbs_backups=True,
+        has_pdm_remotes=True,
     )
 
 
@@ -622,6 +623,7 @@ def test_retirement_paths_match_the_orchestrator_destinations(harness: Harness) 
         ("disk-label-textfile-exporter.py", ["disk-labels.prom"]),
         ("pve-replication-textfile-exporter.py", ["pve-replication.prom"]),
         ("pbs-backup-textfile-exporter.py", ["pbs-backups.prom"]),
+        ("pdm-remote-textfile-exporter.py", ["pdm-remotes.prom"]),
     ],
 )
 def test_each_textfile_exporter_names_the_prom_its_script_writes(
@@ -812,3 +814,20 @@ def test_inventory_owns_kernels_exactly_where_one_boots(
     flags = metrics_exporters.exporter_flags(ROOT, host)
 
     assert (flags.lxc_guest, flags.own_kernel) == (lxc_guest, own_kernel)
+
+
+def test_only_the_pdm_host_gets_the_pdm_remote_exporter() -> None:
+    """An explicit flag, not a type gate: arc is an LXC guest with no PDM `config.type`."""
+    registry = metrics_exporters.default_registry(ROOT)
+    flagged = {
+        host
+        for host in registry.list_hosts("metrics-exporters")
+        if metrics_exporters.exporter_flags(ROOT, host).has_pdm_remotes
+    }
+    assert flagged == {"arc"}
+    names = {spec.build_name for spec in specs(lxc_guest=True, has_pdm_remotes=True)}
+    assert {
+        "pdm-remote-textfile-exporter.py",
+        "pdm-remote-textfile-exporter.service",
+        "pdm-remote-textfile-exporter.timer",
+    } <= names

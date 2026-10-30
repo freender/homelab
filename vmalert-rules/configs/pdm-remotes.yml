@@ -1,0 +1,70 @@
+groups:
+  - name: pdm-remotes
+    interval: 1m
+    rules:
+      # From arc's pdm-remote-textfile-exporter. PDM has no notification
+      # subsystem, so a remote it can no longer poll was only ever visible in
+      # its own log. All rules take the default route.
+      #
+      # node_host is the pinned node's short name; it is renamed to `host` so
+      # NodeDown inhibition (equal: [host]) applies -- the scrape already owns
+      # `host="arc"`.
+      #
+      # homelab-pdm-remote-reconcile re-pins drift every 15 min, so this fires
+      # only when it could not (e.g. the node's SSH host key changed, which
+      # reconcile skips).
+      - alert: PdmRemoteFingerprintMismatch
+        expr: |
+          label_replace(homelab_pdm_remote_node_fingerprint_match == 0, "host", "$1", "node_host", "(.*)")
+        for: 45m
+        labels:
+          severity: warning
+        annotations:
+          summary: "PDM pin for {{ $labels.node }} ({{ $labels.remote }}) does not match its certificate"
+          description: "PDM on arc cannot poll {{ $labels.node }}: the pinned fingerprint no longer matches the certificate served on its API port, and the 15-min reconcile did not fix it. Check `journalctl -u homelab-pdm-remote-reconcile.service -n 20` on arc."
+
+      # Three failed 10-min collection runs in a row. Suppressed when every node
+      # of the remote is unreachable, which NodeDown already reports.
+      - alert: PdmRemotePollFailing
+        expr: |
+          homelab_pdm_remote_collection_error == 1
+          unless on(remote) (max by(remote) (homelab_pdm_remote_node_reachable) == 0)
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "PDM cannot poll remote {{ $labels.remote }} ({{ $labels.reason }})"
+          description: "PDM's metric collection for {{ $labels.remote }} has failed for 30 min with a {{ $labels.reason }} error. Read it with `journalctl -u proxmox-datacenter-api --since -30min | grep {{ $labels.remote }}` on arc."
+
+      # The host answers node_exporter but not its PVE/PBS API port:
+      # pveproxy or proxmox-backup-proxy down, or a firewall in the way.
+      - alert: PdmRemoteNodeUnreachable
+        expr: |
+          label_replace(homelab_pdm_remote_node_reachable == 0, "host", "$1", "node_host", "(.*)")
+          and on(host) (min_over_time(up{job="pve-node"}[30m]) == 1)
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.host }} API port unreachable from PDM"
+          description: "{{ $labels.node }} is up but arc cannot open a TLS connection to its API port. Check `systemctl status pveproxy` (or `proxmox-backup-proxy` on xur)."
+
+      - alert: PdmRemoteMetricsStale
+        expr: time() - node_textfile_mtime_seconds{file=~".*/pdm-remotes\\.prom"} > 1800
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "arc PDM remote metrics are stale"
+          description: "pdm-remotes.prom has not been rewritten in 30 min. Check `systemctl status pdm-remote-textfile-exporter.service` on arc."
+
+      - alert: PdmRemoteMetricsMissing
+        expr: |
+          absent_over_time(homelab_pdm_remotes_total{host="arc"}[30m])
+          and on(host) (min_over_time(up{job="pve-node", host="arc"}[30m]) == 1)
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "arc PDM remote metrics missing"
+          description: "arc is up but publishes no homelab_pdm_remotes_total, so PDM polling is unmonitored. A PDM upgrade may have changed metric-collection-state.json or remotes.cfg; the exporter exits non-zero on a parse error (SystemdUnitFailed)."

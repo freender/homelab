@@ -87,11 +87,12 @@ route:
     # point of failure for PBS alerting as well -- one more argument for a
     # dead-man's switch on this stack.
     #
-    # PDM (arc) is deliberately not listed: Proxmox Datacenter Manager 1.1.7 has
+    # PDM (arc) is deliberately not listed: Proxmox Datacenter Manager 1.1.9 has
     # no notification subsystem at all (no notification CLI, no
     # notifications.cfg), so there is nothing to repoint. arc's health has to
     # come from node_exporter/NodeDown instead, which means adding it to
-    # scrape.yml.
+    # scrape.yml, and its remote polling from pdm-remotes.yml, which takes the
+    # default route.
     #
     # jobid/datastore are in group_by so that two different PBS jobs failing do
     # not collapse into one notification; they are simply empty for PVE alerts.

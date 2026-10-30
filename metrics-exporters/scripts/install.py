@@ -107,6 +107,11 @@ TEXTFILE_EXPORTERS = {
         (),
         ("pbs-backups.prom",),
     ),
+    "pdm-remote-textfile-exporter.py": (
+        "pdm-remote-textfile-exporter",
+        (),
+        ("pdm-remotes.prom",),
+    ),
 }
 
 # Optional /etc/homelab configs -> the .prom that goes with them.

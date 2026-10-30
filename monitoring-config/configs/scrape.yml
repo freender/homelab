@@ -42,7 +42,7 @@ scrape_configs:
           host: riven
       # LXC guests that carry no other exporter: node_exporter here exists so
       # NodeDown can answer "is this guest up". xur is the primary PBS, arc is
-      # the PDM host (PDM 1.1.7 has no notification system of its own), and
+      # the PDM host (PDM 1.1.9 has no notification system of its own), and
       # deepstone is the Time Machine target. All three were entirely
       # unmonitored until 2026-08-15.
       - targets: ["xur.freender.internal:9100"]

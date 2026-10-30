@@ -22,6 +22,7 @@ RULE_FILES = (
     "node-down.yml",
     "node-resources.yml",
     "pbs-backups.yml",
+    "pdm-remotes.yml",
     "probe-report.yml",
     "pve-patches.yml",
     "pve-replication.yml",
