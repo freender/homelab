@@ -1,0 +1,119 @@
+#!/usr/bin/env python3
+"""Publish this node's SSH host keys to pmxcfs and render /etc/ssh/ssh_known_hosts.
+
+Each node writes its own public host keys (every type) to
+/etc/pve/nodes/<node>/homelab_ssh_host_keys. Every node then renders all
+published keys into the system known_hosts under each node's short name, FQDN
+and mgmt IP, read from /etc/homelab/pve-known-hosts.conf.
+
+Only a cluster member can write into pmxcfs, and joining one takes the
+fingerprint-checked `pvecm add`, so re-rendering on a timer cannot silently
+accept a changed key (freender/homelab-ops#279). A correct key of the
+negotiated type in the system file wins over a stale one in root's own
+known_hosts, so a rebuilt node needs no `ssh-keygen -R` on its peers.
+"""
+
+from __future__ import annotations
+
+import os
+import socket
+import sys
+from pathlib import Path
+
+NODES_DIR = Path("/etc/pve/nodes")
+PUBLISHED = "homelab_ssh_host_keys"
+HOST_KEY_DIR = Path("/etc/ssh")
+NAMES_CONF = Path("/etc/homelab/pve-known-hosts.conf")
+KNOWN_HOSTS = Path("/etc/ssh/ssh_known_hosts")
+HEADER = "# Managed by homelab pve-postinstall (homelab-pve-known-hosts); do not edit.\n"
+
+
+def _key_line(text: str) -> str | None:
+    """`<type> <base64>` from a public key line, dropping the comment."""
+    fields = text.split()
+    if len(fields) < 2 or not (fields[0].startswith("ssh-") or fields[0].startswith("ecdsa-")):
+        return None
+    return f"{fields[0]} {fields[1]}"
+
+
+def local_host_keys(key_dir: Path) -> str:
+    lines = []
+    for path in sorted(key_dir.glob("ssh_host_*_key.pub")):
+        line = _key_line(path.read_text(encoding="utf-8"))
+        if line:
+            lines.append(line)
+    if not lines:
+        raise RuntimeError(f"no SSH host public keys in {key_dir}")
+    return "".join(f"{line}\n" for line in sorted(lines))
+
+
+def write_if_changed(path: Path, content: str, mode: int | None = None) -> bool:
+    """Write via a temp file and rename, only when the content differs."""
+    try:
+        if path.read_text(encoding="utf-8") == content:
+            return False
+    except FileNotFoundError:
+        pass
+    tmp = path.with_name(f".{path.name}.tmp")
+    tmp.write_text(content, encoding="utf-8")
+    if mode is not None:
+        tmp.chmod(mode)
+    os.replace(tmp, path)
+    return True
+
+
+def read_names(conf: Path) -> dict[str, list[str]]:
+    """`<node> <name>...` per line, the node's short name first."""
+    names: dict[str, list[str]] = {}
+    for raw in conf.read_text(encoding="utf-8").splitlines():
+        fields = raw.split("#", 1)[0].split()
+        if fields:
+            names[fields[0]] = list(dict.fromkeys(fields))
+    return names
+
+
+def render(nodes_dir: Path, names: dict[str, list[str]]) -> tuple[str, list[str]]:
+    """The known_hosts text and the nodes it covers, in node order."""
+    lines: list[str] = []
+    covered: list[str] = []
+    for node_dir in sorted(path for path in nodes_dir.iterdir() if path.is_dir()):
+        published = node_dir / PUBLISHED
+        if not published.is_file():
+            continue
+        node = node_dir.name
+        parsed = (_key_line(raw) for raw in published.read_text(encoding="utf-8").splitlines())
+        keys = [line for line in parsed if line]
+        if not keys:
+            continue
+        host_names = ",".join(names.get(node, [node]))
+        lines.extend(f"{host_names} {key}\n" for key in keys)
+        covered.append(node)
+    return HEADER + "".join(lines), covered
+
+
+def main() -> int:
+    node = socket.gethostname().split(".", 1)[0]
+    node_dir = NODES_DIR / node
+    if not node_dir.is_dir():
+        print(f"{node_dir} missing; is pve-cluster running?", file=sys.stderr)
+        return 1
+
+    status = 0
+    try:
+        if write_if_changed(node_dir / PUBLISHED, local_host_keys(HOST_KEY_DIR)):
+            print(f"published host keys to {node_dir / PUBLISHED}")
+    except (OSError, RuntimeError) as exc:
+        print(f"could not publish host keys: {exc}", file=sys.stderr)
+        status = 1
+
+    content, covered = render(NODES_DIR, read_names(NAMES_CONF))
+    if not covered:
+        print("no published host keys found; leaving known_hosts alone", file=sys.stderr)
+        return 1
+    if write_if_changed(KNOWN_HOSTS, content, 0o644):
+        print(f"rendered {KNOWN_HOSTS} for {' '.join(covered)}")
+    return status
+
+
+if __name__ == "__main__":
+    sys.exit(main())

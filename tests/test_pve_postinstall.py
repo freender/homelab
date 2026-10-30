@@ -297,3 +297,30 @@ def test_rejoin_helper_joins_with_every_link_and_checks_reachability_on_mgmt(tmp
     assert "node_link_args='--link0 10.0.70.20 --link1 10.0.0.20 --link2 10.0.60.20'" in ace
     assert 'echo "pvecm add $cluster_peer $node_link_args"' in script
     assert "</dev/tcp/$node_mgmt/22" in script
+
+
+def test_known_hosts_names_list_short_fqdn_and_mgmt_ip_for_every_pve_node(tmp_path) -> None:
+    root = Path(__file__).resolve().parents[1]
+    pp.build_known_hosts_names(default_registry(root), tmp_path)
+    lines = (tmp_path / "pve-known-hosts.conf").read_text(encoding="utf-8").splitlines()
+
+    assert "ace ace.freender.internal 10.0.0.20" in lines
+    assert "osiris osiris.freender.internal 10.0.0.80" in lines
+    assert [line.split()[0] for line in lines] == default_registry(root).list_hosts(
+        feature="pve-postinstall"
+    )
+
+
+def test_known_hosts_names_drop_a_mgmt_address_that_repeats_the_fqdn(tmp_path) -> None:
+    class Registry:
+        def list_hosts(self, feature: str) -> list[str]:
+            return ["ace"]
+
+        def get(self, host: str, key: str, default: object = None) -> object:
+            return {"config.hostname": "ace.example.internal"}.get(key, default)
+
+    pp.build_known_hosts_names(Registry(), tmp_path)
+
+    assert (tmp_path / "pve-known-hosts.conf").read_text(encoding="utf-8") == (
+        "ace ace.example.internal\n"
+    )

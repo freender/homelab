@@ -3,7 +3,8 @@
 
 Post-install convergence for the PVE nodes: the no-subscription and pve-test repo
 sources, the nag removal hook, the sshd hardening drop-in, the cluster rejoin helper,
-the timezone, ZFS pool import and local zfspool storage, the `local` storage's
+the pmxcfs SSH host-key publisher and its known_hosts timer, the timezone, ZFS pool
+import and local zfspool storage, the `local` storage's
 `import` and `snippets` content types, the ZFS ARC limit, native scrub timers, the
 `openipmi` mask, `/etc/network/interfaces`, declared disk mounts, local postfix, and a
 report of the manual `pvecm add` step on a node that should be clustered and is not.
@@ -73,7 +74,16 @@ REPO_SOURCES = ("proxmox.sources", "pve-test.sources")
 NAG_FILES = ("pve-remove-nag.sh", "no-nag-script")
 SSHD_DROP_IN = "sshd-hardening.conf"
 REJOIN_HELPER = "homelab-pve-cluster-rejoin-helper"
-REQUIRED_FILES = (*REPO_SOURCES, *NAG_FILES, SSHD_DROP_IN, REJOIN_HELPER)
+KNOWN_HOSTS_SCRIPT = "homelab-pve-known-hosts"
+KNOWN_HOSTS_SERVICE = "homelab-pve-known-hosts.service"
+KNOWN_HOSTS_TIMER = "homelab-pve-known-hosts.timer"
+KNOWN_HOSTS_FILES = (
+    KNOWN_HOSTS_SCRIPT,
+    KNOWN_HOSTS_SERVICE,
+    KNOWN_HOSTS_TIMER,
+    "pve-known-hosts.conf",
+)
+REQUIRED_FILES = (*REPO_SOURCES, *NAG_FILES, SSHD_DROP_IN, REJOIN_HELPER, *KNOWN_HOSTS_FILES)
 
 SOURCES_DIR = "/etc/apt/sources.list.d"
 NO_NAG_DEST = "/etc/apt/apt.conf.d/no-nag-script"
@@ -613,6 +623,20 @@ def print_manual_join(settings: Settings, peer: str) -> None:
         log.sub(f"Manual command: pvecm add {peer} {link_args}")
 
 
+def configure_known_hosts(ctx: InstallContext) -> None:
+    """Install the pmxcfs host-key publisher and its 15-minute timer.
+
+    A changed script, unit or name map is run once now, so the deploy converges
+    the system known_hosts instead of waiting for the next timer tick.
+    """
+    changed = [files.install(ctx, name) for name in KNOWN_HOSTS_FILES]
+    systemd.ensure_running(ctx, KNOWN_HOSTS_TIMER, changed=ctx.changes.touched(KNOWN_HOSTS_TIMER))
+    if any(changed):
+        systemd.daemon_reload(ctx)
+        systemd.run_once(ctx, KNOWN_HOSTS_SERVICE)
+        log.ok("Cluster SSH known_hosts rendered")
+
+
 def report_cluster_join(ctx: InstallContext, settings: Settings) -> None:
     """On a node that should be clustered and is not, clean up from a peer and print
     the join command. Never joins: `pvecm add` stays a manual step."""
@@ -687,6 +711,9 @@ def install(ctx: InstallContext) -> None:
 
     log.action("Deploying cluster rejoin helper")
     files.install(ctx, REJOIN_HELPER)
+
+    log.action("Deploying cluster SSH known_hosts publisher")
+    configure_known_hosts(ctx)
 
     log.action("Importing ZFS pools")
     import_pools(ctx, settings.import_pools)

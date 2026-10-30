@@ -1,0 +1,8 @@
+[Unit]
+Description=Publish SSH host keys to pmxcfs and render the cluster known_hosts
+After=pve-cluster.service
+Wants=pve-cluster.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/homelab-pve-known-hosts

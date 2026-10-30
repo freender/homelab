@@ -1,0 +1,11 @@
+[Unit]
+Description=Re-render the cluster SSH known_hosts from pmxcfs
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=15min
+AccuracySec=1min
+Unit=homelab-pve-known-hosts.service
+
+[Install]
+WantedBy=timers.target

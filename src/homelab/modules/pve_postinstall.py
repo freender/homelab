@@ -30,9 +30,14 @@ PVE_FILES = [
     "pve-remove-nag.sh",
     "sshd-hardening.conf",
     "homelab-pve-cluster-rejoin-helper",
+    "homelab-pve-known-hosts",
+    "homelab-pve-known-hosts.service",
+    "homelab-pve-known-hosts.timer",
+    "pve-known-hosts.conf",
 ]
 GENERATED_FILES = {
     "homelab-pve-cluster-rejoin-helper",
+    "pve-known-hosts.conf",
 }
 
 REMOTE_PATHS = {
@@ -42,11 +47,16 @@ REMOTE_PATHS = {
     "pve-remove-nag.sh": "/usr/local/bin/pve-remove-nag.sh",
     "sshd-hardening.conf": "/etc/ssh/sshd_config.d/99-disable-password-auth.conf",
     "homelab-pve-cluster-rejoin-helper": "/usr/local/sbin/homelab-pve-cluster-rejoin-helper",
+    "homelab-pve-known-hosts": "/usr/local/sbin/homelab-pve-known-hosts",
+    "homelab-pve-known-hosts.service": "/etc/systemd/system/homelab-pve-known-hosts.service",
+    "homelab-pve-known-hosts.timer": "/etc/systemd/system/homelab-pve-known-hosts.timer",
+    "pve-known-hosts.conf": "/etc/homelab/pve-known-hosts.conf",
 }
 
 MODES = {
     "pve-remove-nag.sh": "755",
     "homelab-pve-cluster-rejoin-helper": "755",
+    "homelab-pve-known-hosts": "755",
 }
 FILE_SPECS = tuple(
     FileSpec(file_name, REMOTE_PATHS[file_name], MODES.get(file_name, "644"))
@@ -271,6 +281,7 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
 
     copy_static_pve_configs(config_dir, build_dir)
     build_cluster_rejoin_helper(root, build_dir)
+    build_known_hosts_names(default_registry(root), build_dir)
 
     write_file_map(build_dir, FILE_SPECS)
     write_installer_env(build_dir / "env", settings)
@@ -509,6 +520,25 @@ def build_cluster_rejoin_helper(root: Path, build_dir: Path) -> None:
         "\n".join(lines) + "\n",
         encoding="utf-8",
     )
+
+
+def build_known_hosts_names(registry, build_dir: Path) -> None:
+    """Every PVE node's SSH names -- short, FQDN, mgmt IP -- for `homelab-pve-known-hosts`.
+
+    Decided here once from inventory so the node-side script only maps a pmxcfs
+    node directory to names. The short name comes first: it is the pmxcfs key.
+    """
+    lines = []
+    for pve_host in registry.list_hosts(feature="pve-postinstall"):
+        names = dict.fromkeys(
+            (
+                pve_host,
+                str(registry.get(pve_host, "config.hostname")),
+                _mgmt_address(registry, pve_host),
+            )
+        )
+        lines.append(" ".join(names) + "\n")
+    (build_dir / "pve-known-hosts.conf").write_text("".join(lines), encoding="utf-8")
 
 
 def write_installer_env(path: Path, settings: HostSettings) -> None:

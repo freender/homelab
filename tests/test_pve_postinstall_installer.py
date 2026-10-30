@@ -74,6 +74,7 @@ class FakeHost:
             "zfs-scrub-monthly@rpool.timer",
             "zfs-scrub-monthly@vm-flash.timer",
             "postfix.service",
+            "homelab-pve-known-hosts.timer",
         }
         self.active = set(self.enabled)
         self.masked = {"openipmi.service"}
@@ -1026,3 +1027,38 @@ def test_orchestrator_env_round_trips_into_installer_settings(tmp_path: Path) ->
     assert parsed.expected_clustered is False
     assert parsed.cluster_links == ()
     assert parsed.zfs_arc_max == ARC
+
+
+# --- cluster SSH known_hosts -----------------------------------------------------
+
+
+def test_changed_known_hosts_script_is_installed_and_run_once(harness: Harness) -> None:
+    harness.dest("homelab-pve-known-hosts").write_text("old\n", encoding="utf-8")
+
+    ctx = harness.run()
+
+    assert ctx.changes.touched("homelab-pve-known-hosts")
+    assert harness.dest("homelab-pve-known-hosts").read_text(encoding="utf-8") == (
+        "# homelab-pve-known-hosts\n"
+    )
+    assert harness.host.ran("systemctl", "daemon-reload")
+    assert harness.host.ran("systemctl", "start", "homelab-pve-known-hosts.service")
+
+
+def test_new_node_enables_the_known_hosts_timer(harness: Harness) -> None:
+    harness.host.enabled.discard("homelab-pve-known-hosts.timer")
+    harness.host.active.discard("homelab-pve-known-hosts.timer")
+    harness.dest("homelab-pve-known-hosts.timer").unlink()
+
+    harness.run()
+
+    assert harness.host.ran("systemctl", "enable", "--now", "homelab-pve-known-hosts.timer")
+    assert harness.host.ran("systemctl", "start", "homelab-pve-known-hosts.service")
+
+
+def test_failed_known_hosts_render_fails_the_deploy(harness: Harness) -> None:
+    harness.dest("pve-known-hosts.conf").write_text("old\n", encoding="utf-8")
+    harness.host.failing.add("systemctl start homelab-pve-known-hosts.service")
+
+    with pytest.raises(InstallError, match="homelab-pve-known-hosts.service failed"):
+        harness.run()
