@@ -74,11 +74,19 @@ wait_for_ready() {
     ssh-keygen -R "$ssh_hostname" >/dev/null 2>&1 || true
     ssh-keygen -R "$HOST" >/dev/null 2>&1 || true
 
+    # With no keys recorded from the payload, the system known_hosts still holds
+    # the pre-rebuild key, and accept-new refuses a mismatch in any file. Trust
+    # on first use against root's file alone; capture then records the new keys.
+    local -a opts=("${ssh_opts[@]}")
+    if [[ "$host_keys_recorded" != "true" ]]; then
+        opts+=(-o GlobalKnownHostsFile=/dev/null)
+    fi
+
     local deadline ready
     deadline=$(( $(date +%s) + SSH_TIMEOUT_SECONDS ))
     ready=false
     while [[ $(date +%s) -lt $deadline ]]; do
-        if ssh "${ssh_opts[@]}" "$ssh_user@$ssh_hostname" "$ready_command" >/dev/null 2>&1; then
+        if ssh "${opts[@]}" "$ssh_user@$ssh_hostname" "$ready_command" >/dev/null 2>&1; then
             ready=true
             break
         fi

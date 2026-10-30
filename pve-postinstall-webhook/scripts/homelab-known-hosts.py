@@ -43,6 +43,9 @@ NO_KEYS = 3
 SSH_BASE = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5"]
 # The post-install worker's own options: trust on first use after its `-R`.
 SSH_ACCEPT_NEW = ["-o", "StrictHostKeyChecking=accept-new"]
+# capture runs only when the payload gave no keys, so the system file still holds
+# the pre-rebuild ones; it reads root's file alone, as the worker's readiness check does.
+SSH_FIRST_USE = [*SSH_ACCEPT_NEW, "-o", "GlobalKnownHostsFile=/dev/null"]
 SSH_STRICT = ["-o", "StrictHostKeyChecking=yes"]
 USER_KNOWN_HOSTS = ["-o", "UserKnownHostsFile=/root/.ssh/known_hosts"]
 READ_HOST_KEYS = "cat /etc/ssh/ssh_host_*_key.pub"
@@ -226,7 +229,7 @@ def cmd_record(names: dict[str, list[str]], node: str, event_path: Path) -> int:
 def cmd_capture(names: dict[str, list[str]], node: str) -> int:
     target = ssh_target(names, node)
     try:
-        keys = remote_host_keys(target, SSH_ACCEPT_NEW)
+        keys = remote_host_keys(target, SSH_FIRST_USE)
     except (OSError, RuntimeError, subprocess.SubprocessError) as exc:
         warn(f"cannot read host keys from {target}: {describe(exc)}")
         return 1

@@ -171,7 +171,21 @@ def test_capture_uses_the_workers_first_use_trust(tool, monkeypatch):
 
     assert tool.main(["capture", "ace"]) == 0
 
-    assert "StrictHostKeyChecking=accept-new" in ssh.options_for("root@ace.example.internal")
+    options = ssh.options_for("root@ace.example.internal")
+    assert "StrictHostKeyChecking=accept-new" in options
+    assert "GlobalKnownHostsFile=/dev/null" in options
+    assert rendered(tool) == [f"ace,ace.example.internal,10.0.0.20 {ED}"]
+
+
+def test_capture_replaces_a_stale_stored_key(tool, monkeypatch):
+    """A by-hand run after a rebuild: the store still holds the old key, which
+    capture must ignore on the way in and replace on the way out."""
+    tool.STORE.mkdir()
+    (tool.STORE / "ace").write_text(f"{OLD_ED}\n", encoding="utf-8")
+    wire(monkeypatch, tool, FakeSsh({"root@ace.example.internal": f"{ED} root@ace\n"}))
+
+    assert tool.main(["capture", "ace"]) == 0
+
     assert rendered(tool) == [f"ace,ace.example.internal,10.0.0.20 {ED}"]
 
 

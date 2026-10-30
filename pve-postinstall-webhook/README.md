@@ -64,7 +64,9 @@ Deployed only to `arc` (the PDM host itself, `10.0.0.50`).
    - `record <host> <event>`, before the first SSH: the installer's own keys
      from the PDM post-hook payload (`ssh-public-host-keys`).
    - `capture <host>`, only for a by-hand run with no usable event: the keys
-     the node presented to the worker's `accept-new` SSH.
+     the node presented to the worker's `accept-new` SSH. Both that SSH and
+     `capture` skip the system file (`GlobalKnownHostsFile=/dev/null`), which
+     still holds the pre-rebuild key and would otherwise refuse the node.
    - `seed`, on every deploy of this module (`homelab-known-hosts.service`):
      nodes with nothing stored, read over SSH that must already trust them.
    A failed render or push logs a warning in the worker and fails a deploy of
