@@ -384,7 +384,7 @@ def build_cluster_rejoin_helper(root: Path, build_dir: Path) -> None:
         "Runs safe cluster-side cleanup/readiness checks and prints the manual join command.",
         "Run this on an existing cluster node after rebuilding <node> but before manual pvecm add.",
         "",
-        "This helper may run pvecm delnode and remove stale known_hosts entries.",
+        "This helper may run pvecm delnode and remove the node's /etc/pve/nodes directory.",
         "It never runs pvecm add.",
         "EOF",
         "}",
@@ -399,7 +399,6 @@ def build_cluster_rejoin_helper(root: Path, build_dir: Path) -> None:
         "case \"$node\" in",
     ]
     for pve_host in pve_hosts:
-        hostname = str(registry.get(pve_host, "config.hostname"))
         standalone = normalize_bool(
             registry.get(pve_host, "config.standalone", None),
             False,
@@ -409,7 +408,6 @@ def build_cluster_rejoin_helper(root: Path, build_dir: Path) -> None:
         lines.extend(
             [
                 f"    {pve_host})",
-                f"        node_fqdn='{hostname}'",
                 f"        node_mgmt='{_mgmt_address(registry, pve_host)}'",
                 f"        node_link_args='{link_args}'",
                 f"        node_standalone='{str(standalone).lower()}'",
@@ -473,11 +471,6 @@ def build_cluster_rejoin_helper(root: Path, build_dir: Path) -> None:
             "else",
             "    echo \"/etc/pve/nodes/$node absent; skipping\"",
             "fi",
-            "",
-            "echo \"==> Removing stale SSH known_hosts entries\"",
-            "for host in \"$node\" \"$node_fqdn\" \"$node_mgmt\"; do",
-            "    ssh-keygen -R \"$host\" >/dev/null 2>&1 || true",
-            "done",
             "",
             "echo \"==> Waiting for rebuilt node readiness\"",
             "for attempt in $(seq 1 60); do",

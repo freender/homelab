@@ -299,6 +299,15 @@ def test_rejoin_helper_joins_with_every_link_and_checks_reachability_on_mgmt(tmp
     assert "</dev/tcp/$node_mgmt/22" in script
 
 
+def test_rejoin_helper_leaves_known_hosts_to_the_managed_file(tmp_path) -> None:
+    root = Path(__file__).resolve().parents[1]
+    pp.build_cluster_rejoin_helper(root, tmp_path)
+    script = (tmp_path / "homelab-pve-cluster-rejoin-helper").read_text(encoding="utf-8")
+
+    assert "ssh-keygen" not in script
+    assert "known_hosts" not in script
+
+
 def test_known_hosts_names_list_short_fqdn_and_mgmt_ip_for_every_pve_node(tmp_path) -> None:
     root = Path(__file__).resolve().parents[1]
     pp.build_known_hosts_names(default_registry(root), tmp_path)
