@@ -126,7 +126,7 @@ class FakeHost:
             case ["ssh", *_]:
                 self.on_ssh()
             case ["hostname", "-I"]:
-                return done(command, stdout="10.0.0.20 10.0.60.20\n")
+                return done(command, stdout="10.0.0.20 10.0.70.20\n")
         return done(command)
 
     def ran(self, *prefix: str) -> list[list[str]]:
@@ -175,7 +175,7 @@ class Harness:
             "IMPORT_POOLS": "vm-flash",
             "MOUNTS": "",
             "EXPECTED_CLUSTERED": "true",
-            "CLUSTER_LINKS": "10.0.70.20 10.0.0.20 10.0.60.20",
+            "CLUSTER_LINKS": "10.0.70.20 10.0.0.20",
             "ZFS_ARC_MAX": "",
         }
         self.binaries = {"pveversion", "zpool", "pvesm", "newaliases"}
@@ -795,7 +795,7 @@ def test_unclustered_node_cleans_up_from_peer_and_prints_join(harness: Harness, 
     fingerprint = ":".join(digest[i : i + 2] for i in range(0, 64, 2))
     assert (
         f"pvecm add bray.freender.internal --fingerprint {fingerprint} "
-        "--link0 10.0.70.20 --link1 10.0.0.20 --link2 10.0.60.20" in capsys.readouterr().out
+        "--link0 10.0.70.20 --link1 10.0.0.20" in capsys.readouterr().out
     )
     assert not harness.host.ran("pvecm", "add")
 

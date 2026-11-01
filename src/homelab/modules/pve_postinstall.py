@@ -193,13 +193,12 @@ def _cluster_links(registry: _Registry, host: str) -> str:
     """Corosync link addresses in link-number order, space-separated.
 
     The order mirrors the cluster's corosync.conf: link0 is the dedicated corosync
-    NIC on its own switch, link1 management, link2 the storage/migration VLAN. A
-    host without one of the optional NICs simply has fewer links.
+    NIC on its own switch, link1 management. A host without the corosync NIC simply
+    has the one link.
     """
     links = (
         _interface_address(registry, host, "corosync_ip"),
         _mgmt_address(registry, host),
-        _interface_address(registry, host, "storage_ip"),
     )
     return " ".join(link for link in links if link)
 
@@ -331,12 +330,8 @@ def build_network_interfaces_bundle(root: Path, host: str, build_dir: Path) -> N
         ) from exc
     mgmt_iface = str(registry.get(host, "pve-postinstall.interfaces.mgmt_iface", "nic0"))
 
-    # storage_ip/storage_iface are an optional pair: a host with no dedicated
-    # storage NIC (e.g. osiris after its USB storage dongle was retired) omits
-    # both, and the template renders management-only (no nic1/vmbr1 stanza).
-    storage_ip, storage_iface = optional_interface(registry, host, "storage", "nic1")
-    # corosync_ip/corosync_iface: the same optional pair for the dedicated
-    # corosync link on its own isolated switch, rendered as a plain interface.
+    # corosync_ip/corosync_iface: an optional pair for the dedicated corosync link
+    # on its own isolated switch, rendered as a plain interface.
     corosync_ip, corosync_iface = optional_interface(registry, host, "corosync", "nic2")
 
     render_file(
@@ -344,12 +339,35 @@ def build_network_interfaces_bundle(root: Path, host: str, build_dir: Path) -> N
         build_dir / "interfaces",
         NET_MGMT_IP=mgmt_ip,
         NET_GATEWAY=gateway,
-        NET_STORAGE_IP=storage_ip,
         NET_MGMT_IFACE=mgmt_iface,
-        NET_STORAGE_IFACE=storage_iface,
+        NET_BOND_MEMBERS=bond_members(registry, host),
         NET_COROSYNC_IP=corosync_ip,
         NET_COROSYNC_IFACE=corosync_iface,
     )
+
+
+def bond_members(registry, host: str) -> tuple[str, ...]:
+    """`pve-postinstall.interfaces.bond_members`, primary first; `()` when unset.
+
+    The bond is active-backup with the first member as `bond-primary`. That member
+    must be `mgmt_iface`: rebuilds PXE-boot and install on that NIC alone, and the
+    auto-installer's management-MAC filter pins it, so the bond has to prefer it.
+    """
+    raw = registry.get(host, "pve-postinstall.interfaces.bond_members", None)
+    if raw is None:
+        return ()
+    if not isinstance(raw, list) or len(raw) < 2:
+        raise ValueError(f"pve-postinstall.interfaces.bond_members must list 2+ NICs for {host}")
+    members = tuple(str(member) for member in raw)
+    if len(set(members)) != len(members):
+        raise ValueError(f"pve-postinstall.interfaces.bond_members has duplicates for {host}")
+    mgmt_iface = str(registry.get(host, "pve-postinstall.interfaces.mgmt_iface", "nic0"))
+    if members[0] != mgmt_iface:
+        raise ValueError(
+            f"pve-postinstall.interfaces.bond_members must start with mgmt_iface "
+            f"{mgmt_iface!r} (the bond primary) for {host}"
+        )
+    return members
 
 
 def optional_interface(registry, host: str, kind: str, default_iface: str) -> tuple[str, str]:

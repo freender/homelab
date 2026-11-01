@@ -110,7 +110,8 @@ Verified 2026-08-16. Re-check rather than trust if anything looks different.
   shared SSH agent on riven survive the move (freender/homelab-ops#125).
 - **`crs: ha-rebalance-on-start=1`** — placement may change again after the
   node returns.
-- Migration and replication run over VLAN 60 (`10.0.60.0/24`).
+- Migration and replication run over the management network (`10.0.0.0/24`),
+  on each node's active-backup `bond0` (`nic0` primary, `nic1` standby).
 
 Because migration depends on the target node already holding the guest's
 dataset, **ZFS replication state is a hard prerequisite for rebooting a cluster

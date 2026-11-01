@@ -44,19 +44,57 @@ def test_host_settings_clustered_host_uses_mgmt_ip_for_its_only_link() -> None:
     assert settings.cluster_links == "10.0.10.5"
 
 
-def test_host_settings_orders_links_corosync_then_mgmt_then_storage() -> None:
+def test_host_settings_orders_links_corosync_then_mgmt() -> None:
     registry = FakeRegistry(
         {
             "config.type": "pve",
             "pve-postinstall.interfaces.mgmt_ip": "10.0.0.20/24",
-            "pve-postinstall.interfaces.storage_ip": "10.0.60.20/24",
             "pve-postinstall.interfaces.corosync_ip": "10.0.70.20/24",
+            "pve-postinstall.interfaces.bond_members": ["nic0", "nic1"],
         }
     )
 
     settings = pp._host_settings(registry, "ace")
 
-    assert settings.cluster_links == "10.0.70.20 10.0.0.20 10.0.60.20"
+    assert settings.cluster_links == "10.0.70.20 10.0.0.20"
+
+
+def test_bond_members_unset_is_empty() -> None:
+    assert pp.bond_members(FakeRegistry({}), "osiris") == ()
+
+
+def test_bond_members_returns_primary_first() -> None:
+    registry = FakeRegistry({"pve-postinstall.interfaces.bond_members": ["nic0", "nic1"]})
+
+    assert pp.bond_members(registry, "ace") == ("nic0", "nic1")
+
+
+def test_bond_members_primary_follows_a_custom_mgmt_iface() -> None:
+    registry = FakeRegistry(
+        {
+            "pve-postinstall.interfaces.mgmt_iface": "nic3",
+            "pve-postinstall.interfaces.bond_members": ["nic3", "nic0"],
+        }
+    )
+
+    assert pp.bond_members(registry, "ace") == ("nic3", "nic0")
+
+
+@pytest.mark.parametrize(
+    ("members", "message"),
+    [
+        ("nic0 nic1", "must list 2"),
+        (["nic0"], "must list 2"),
+        (["nic0", "nic0"], "duplicates"),
+        (["nic1", "nic0"], "must start with mgmt_iface 'nic0'"),
+    ],
+    ids=["not-a-list", "single", "duplicate", "primary-not-mgmt"],
+)
+def test_bond_members_rejects_bad_input(members, message) -> None:
+    registry = FakeRegistry({"pve-postinstall.interfaces.bond_members": members})
+
+    with pytest.raises(ValueError, match=message):
+        pp.bond_members(registry, "ace")
 
 
 def test_host_settings_clustered_host_without_mgmt_ip_falls_back_to_hostname() -> None:
@@ -294,7 +332,7 @@ def test_rejoin_helper_joins_with_every_link_and_checks_reachability_on_mgmt(tmp
 
     ace = script[script.index("    ace)") : script.index(";;", script.index("    ace)"))]
     assert "node_mgmt='10.0.0.20'" in ace
-    assert "node_link_args='--link0 10.0.70.20 --link1 10.0.0.20 --link2 10.0.60.20'" in ace
+    assert "node_link_args='--link0 10.0.70.20 --link1 10.0.0.20'" in ace
     assert 'echo "pvecm add $cluster_peer $node_link_args"' in script
     assert "</dev/tcp/$node_mgmt/22" in script
 

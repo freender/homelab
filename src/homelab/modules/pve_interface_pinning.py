@@ -20,6 +20,7 @@ from ..module_support import (
 from ..output import print_sub
 from ..ssh import build_files, diff_many
 from .pve_guest.spec import parse_nets
+from .pve_postinstall import bond_members
 
 REMOTE_ROOT = "/tmp/homelab-pve-interface-pinning"
 INSTALLER = "scripts/install.py"
@@ -95,13 +96,13 @@ def validate_postinstall_alignment(registry, host: str, pins: tuple[InterfacePin
     """Guard against pve-interface-pinning and pve-postinstall drifting apart.
 
     /etc/network/interfaces is rendered by pve-postinstall from two independent
-    hosts.conf keys (`pve-postinstall.interfaces.mgmt_iface`/`storage_iface`) that are
+    hosts.conf keys (`pve-postinstall.interfaces.mgmt_iface`/`bond_members`) that are
     never cross-checked against the interface names this module actually pins by MAC
     (`pve-interface-pinning.interfaces[].name`). If they disagree, the rendered
     /etc/network/interfaces references an interface name systemd-networkd never
-    creates, and the host comes back from its next reboot unreachable. Both keys
-    default to the same "nic0"/"nic1" strings, so this drift is otherwise invisible
-    until an operator changes one side without the other.
+    creates, and the host comes back from its next reboot unreachable. Both sides
+    use the same "nic0"/"nic1" strings, so this drift is otherwise invisible until
+    an operator changes one side without the other.
     """
     try:
         interfaces_config = registry.get(host, "pve-postinstall.interfaces")
@@ -119,16 +120,18 @@ def validate_postinstall_alignment(registry, host: str, pins: tuple[InterfacePin
     _require_iface_pinned(host, "mgmt_iface", mgmt_iface, pinned_names)
     _require_role_matches_iface(host, "management", "mgmt_iface", mgmt_iface, pins_by_role)
 
-    # storage_iface/corosync_iface only need to align when the host actually
-    # declares the matching *_ip; a host without that NIC omits both and has
-    # nothing to cross-check here.
-    for kind, default_iface in (("storage", "nic1"), ("corosync", "nic2")):
-        if registry.get(host, f"pve-postinstall.interfaces.{kind}_ip", None) is None:
-            continue
-        key = f"{kind}_iface"
-        iface = str(registry.get(host, f"pve-postinstall.interfaces.{key}", default_iface))
-        _require_iface_pinned(host, key, iface, pinned_names)
-        _require_role_matches_iface(host, kind, key, iface, pins_by_role)
+    # The bond primary is mgmt_iface (checked above); every other member is a
+    # standby NIC pinned under the `backup` role.
+    for member in bond_members(registry, host)[1:]:
+        _require_iface_pinned(host, "bond_members", member, pinned_names)
+        _require_role_matches_iface(host, "backup", "bond_members", member, pins_by_role)
+
+    # corosync_iface only needs to align when the host declares corosync_ip; a
+    # host without that NIC omits both and has nothing to cross-check here.
+    if registry.get(host, "pve-postinstall.interfaces.corosync_ip", None) is not None:
+        iface = str(registry.get(host, "pve-postinstall.interfaces.corosync_iface", "nic2"))
+        _require_iface_pinned(host, "corosync_iface", iface, pinned_names)
+        _require_role_matches_iface(host, "corosync", "corosync_iface", iface, pins_by_role)
 
 
 def _require_iface_pinned(host: str, key: str, iface: str, pinned_names: set[str]) -> None:

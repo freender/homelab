@@ -213,4 +213,4 @@ groups:
           severity: critical
         annotations:
           summary: "{{ $labels.host }} 10G NIC is {{ $value }}C"
-          description: "The 10G NIC ({{ $labels.chip_name }}, {{ $labels.chip }}) on {{ $labels.host }} is at or above its 95C caution threshold, with only 10C left to the 105C maximum. Storage and replication traffic on VLAN 60 rides this card. Check `journalctl -k | grep {{ $labels.chip_name }}` for resets and fix the airflow before it starts dropping links."
+          description: "The 10G NIC ({{ $labels.chip_name }}, {{ $labels.chip }}) on {{ $labels.host }} is at or above its 95C caution threshold, with only 10C left to the 105C maximum. Management, guest, migration and replication traffic (bond0) rides this card. Check `journalctl -k | grep {{ $labels.chip_name }}` for resets and fix the airflow before it starts dropping links."

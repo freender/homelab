@@ -13,29 +13,29 @@ auto lo
 iface lo inet loopback
 
 iface {{ NET_MGMT_IFACE }} inet manual
-{%- if NET_STORAGE_IFACE %}
+{%- for member in NET_BOND_MEMBERS[1:] %}
 
-iface {{ NET_STORAGE_IFACE }} inet manual
+iface {{ member }} inet manual
+{%- endfor %}
+{%- if NET_BOND_MEMBERS %}
+
+auto bond0
+iface bond0 inet manual
+	bond-slaves {{ NET_BOND_MEMBERS | join(" ") }}
+	bond-miimon 100
+	bond-mode active-backup
+	bond-primary {{ NET_BOND_MEMBERS[0] }}
 {%- endif %}
 
 auto vmbr0
 iface vmbr0 inet static
 	address {{ NET_MGMT_IP }}
 	gateway {{ NET_GATEWAY }}
-	bridge-ports {{ NET_MGMT_IFACE }}
+	bridge-ports {{ "bond0" if NET_BOND_MEMBERS else NET_MGMT_IFACE }}
 	bridge-stp off
 	bridge-fd 0
 	bridge-vlan-aware yes
 	bridge-vids 2-4094
-{%- if NET_STORAGE_IFACE %}
-
-auto vmbr1
-iface vmbr1 inet static
-	address {{ NET_STORAGE_IP }}
-	bridge-ports {{ NET_STORAGE_IFACE }}
-	bridge-stp off
-	bridge-fd 0
-{%- endif %}
 {%- if NET_COROSYNC_IFACE %}
 
 auto {{ NET_COROSYNC_IFACE }}

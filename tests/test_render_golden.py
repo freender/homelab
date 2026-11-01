@@ -78,20 +78,32 @@ def test_interfaces_render_is_complete_and_addressed(host: str, tmp_path: Path) 
 
     mgmt_ip = str(registry.get(host, "pve-postinstall.interfaces.mgmt_ip"))
     gateway = str(registry.get(host, "pve-postinstall.interfaces.gateway"))
-    storage_ip = registry.get(host, "pve-postinstall.interfaces.storage_ip", None)
+    mgmt_iface = str(registry.get(host, "pve-postinstall.interfaces.mgmt_iface", "nic0"))
+    members = pve_postinstall.bond_members(registry, host)
 
     # The management address and gateway are what we come back on after a reboot.
     assert mgmt_ip in rendered, f"{host}: mgmt_ip {mgmt_ip} missing from rendered interfaces"
     assert gateway in rendered, f"{host}: gateway {gateway} missing from rendered interfaces"
-    # storage_ip is optional: a host with no dedicated storage NIC omits it and
-    # renders management-only, with no vmbr1 stanza at all.
-    if storage_ip is not None:
-        assert str(storage_ip) in rendered, f"{host}: storage_ip {storage_ip} missing"
-        assert re.search(r"^\s*auto vmbr1\b", rendered, re.MULTILINE), f"{host}: no vmbr1 iface"
+    # VLAN 60 is retired (homelab-ops#289): no host renders a second bridge.
+    assert not re.search(r"^\s*auto vmbr1\b", rendered, re.MULTILINE), f"{host}: stray vmbr1"
+
+    # bond_members is optional: with it, vmbr0 rides an active-backup bond0 that
+    # prefers mgmt_iface; without it, vmbr0 bridges mgmt_iface directly.
+    bridge_ports = re.search(r"^\tbridge-ports (\S+)$", rendered, re.MULTILINE)
+    assert bridge_ports, f"{host}: vmbr0 has no bridge-ports"
+    if members:
+        bond = (
+            "auto bond0\niface bond0 inet manual\n"
+            f"\tbond-slaves {' '.join(members)}\n\tbond-miimon 100\n"
+            f"\tbond-mode active-backup\n\tbond-primary {mgmt_iface}\n"
+        )
+        assert bond in rendered, f"{host}: bond0 stanza missing or wrong"
+        assert bridge_ports.group(1) == "bond0", f"{host}: vmbr0 not on bond0"
+        for member in members:
+            assert f"iface {member} inet manual\n" in rendered, f"{host}: {member} not manual"
     else:
-        assert not re.search(
-            r"^\s*auto vmbr1\b", rendered, re.MULTILINE
-        ), f"{host}: unexpected vmbr1 iface with no storage_ip configured"
+        assert "bond0" not in rendered, f"{host}: unexpected bond0 with no bond_members"
+        assert bridge_ports.group(1) == mgmt_iface, f"{host}: vmbr0 not on {mgmt_iface}"
 
     # corosync_ip is optional the same way; when set it renders a plain static iface
     # (no bridge) on corosync_iface, which is what corosync.conf's link addresses bind to.
@@ -226,6 +238,42 @@ def test_postinstall_alignment_guard_actually_fires_on_drift() -> None:
 
     with pytest.raises(ValueError, match="mgmt_iface"):
         pve_interface_pinning.validate_postinstall_alignment(registry, host, drifted)
+
+
+def _bonded_hosts() -> list[str]:
+    registry = default_registry(ROOT)
+    return [host for host in _interface_hosts() if pve_postinstall.bond_members(registry, host)]
+
+
+def test_there_are_bonded_hosts_to_cover() -> None:
+    # Guard the guard: the bond branch of the render test above would go untested
+    # if no host declared bond_members.
+    assert _bonded_hosts(), "expected at least one host with pve-postinstall bond_members"
+
+
+@pytest.mark.parametrize("drift", ["rename", "unpinned"])
+def test_postinstall_alignment_guard_fires_on_bond_member_drift(drift: str) -> None:
+    host = _bonded_hosts()[0]
+    registry = default_registry(ROOT)
+    pins = pve_interface_pinning.normalize_interface_pins(registry, host)
+    if drift == "rename":
+        # nic1 keeps a pin but loses the `backup` role to some other NIC.
+        pins = tuple(
+            pve_interface_pinning.InterfacePin(
+                name="nic9" if pin.role == "backup" else pin.name,
+                role=pin.role,
+                mac=pin.mac,
+                wake_on_lan=pin.wake_on_lan,
+            )
+            for pin in pins
+        ) + (pve_interface_pinning.InterfacePin("nic1", "x", "00:00:00:00:00:01", False),)
+        match = "role='backup'"
+    else:
+        pins = tuple(pin for pin in pins if pin.role != "backup")
+        match = "bond_members='nic1'.*has no matching"
+
+    with pytest.raises(ValueError, match=match):
+        pve_interface_pinning.validate_postinstall_alignment(registry, host, pins)
 
 
 def _corosync_hosts() -> list[str]:
