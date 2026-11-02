@@ -28,4 +28,4 @@ services:
       - /mnt/cache/appdata/grafana:/var/lib/grafana:rw
       - /mnt/cache/appdata/grafana/config:/etc/grafana:rw
     restart: always
-    mem_limit: 1g
+    mem_limit: 2g
