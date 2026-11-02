@@ -50,6 +50,7 @@ Hosts with update schedules configured:
   /etc/systemd/system/
     - homelab-docker-update.service
     - homelab-docker-update.timer
+    - homelab-docker-boot.service
 
 tower:
   /mnt/cache/appdata/scripts/  # Managed by User Scripts plugin
@@ -61,7 +62,7 @@ Docker auto-update is handled by `homelab-docker-update.timer`, rendered from `h
 
 After a successful pull/update run, `start.sh` prunes unused Docker images only. It skips pruning when any stack failed or when any stopped container exists, and it never prunes Docker networks or volumes. Use `--no-prune` to disable image pruning for a run.
 
-Docker boot/start orchestration is intentionally not managed here. Containers should use native Docker restart policies for boot, reboot, and HA migration recovery.
+Containers still rely on native Docker restart policies (`restart: always`) for boot, reboot, and HA migration recovery. On the same hosts as the update timer, `homelab-docker-boot.service` additionally runs `start.sh --no-pull` once after dockerd's own restore. dockerd does not order `network_mode: service:` dependencies, so a container joining another's namespace (qbittorrent behind gluetun) can fail its restore start and is never retried; Compose's `up -d` honours `depends_on` and starts it. The unit is enabled by the deploy but never started by it, and `homelab-docker-update.service` is ordered after it so a `Persistent=` catch-up at boot waits for it instead of losing the lock.
 
 ## Traefik Sync
 

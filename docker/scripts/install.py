@@ -4,9 +4,10 @@
 Installs Docker Engine from download.docker.com with its daemon config, then the
 appdata helper scripts (`start.sh`, `rm.sh`, `rebuild.sh`, `docker-common.sh`),
 the env file they read, and -- on hosts with a `docker.update_schedule` -- the
-`homelab-docker-update` service and timer. Every destination except the apt
-source comes from `build/<host>/file-map.conf`, derived from the same
-`FileSpec`s the dry-run diffs against.
+`homelab-docker-update` service and timer plus the `homelab-docker-boot`
+service. Every destination except the apt source comes from
+`build/<host>/file-map.conf`, derived from the same `FileSpec`s the dry-run
+diffs against.
 
 Worth knowing before reading:
 
@@ -31,6 +32,11 @@ Worth knowing before reading:
   which adds execute and never removes write, so they had drifted to 775 and 777
   on several hosts. `start.sh` is the update service's `ExecStart` and runs as
   root; a group- or world-writable copy of it is root for whoever can write it.
+* **The boot service is enabled, never started.** It runs `start.sh --no-pull`
+  once per boot so Compose starts what dockerd's restore could not order (a
+  `network_mode: service:` container racing the one it joins). Starting it from a
+  deploy would `compose up` every stack on the host. The update service is ordered
+  after it, so a `Persistent=` catch-up at boot waits instead of losing the lock.
 * **A disabled timer keeps its unit files.** Same as the bash: the orchestrator
   stops rendering them and this stops the timer, but nothing is removed.
 * **A redeploy retries a failed update run** -- see `systemd.recover_failed` for
@@ -51,6 +57,7 @@ from homelab_install.errors import InstallError
 
 UPDATE_SERVICE = "homelab-docker-update.service"
 UPDATE_TIMER = "homelab-docker-update.timer"
+BOOT_SERVICE = "homelab-docker-boot.service"
 HELPER_FILES = ("start.sh", "rm.sh", "rebuild.sh", "docker-common.sh", "env")
 TIMER_FLAG = "ENABLE_DOCKER_UPDATE_TIMER"
 GROUP_USER = "DOCKER_GROUP_USER"
@@ -208,11 +215,15 @@ def install(ctx: InstallContext) -> None:
 
     if not timer_enabled:
         systemd.ensure_stopped(ctx, UPDATE_TIMER)
+        systemd.ensure_stopped(ctx, BOOT_SERVICE)
         return
 
     # Both, never short-circuited: a changed timer must not skip the service.
     changed = [files.install(ctx, unit) for unit in (UPDATE_SERVICE, UPDATE_TIMER)]
+    if files.install(ctx, BOOT_SERVICE) and not any(changed):
+        systemd.daemon_reload(ctx)
     systemd.ensure_running(ctx, UPDATE_TIMER, changed=any(changed))
+    systemd.enable(ctx, BOOT_SERVICE)
     systemd.recover_failed(ctx, UPDATE_SERVICE)
 
 

@@ -1,0 +1,15 @@
+[Unit]
+Description=Homelab docker compose up after boot
+Wants=network-online.target
+After=network-online.target docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/mnt/cache/appdata/start.sh --no-pull
+TimeoutStartSec=15min
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

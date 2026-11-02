@@ -35,6 +35,7 @@ HA_SWARM_DEFAULTS = {
 TEMPLATE_FILES = [
     "homelab-docker-update.service",
     "homelab-docker-update.timer",
+    "homelab-docker-boot.service",
 ]
 
 SWARM_OVERLAY_NAME = "net_overlay"
@@ -44,6 +45,11 @@ SWARM_EXPECTED_NODES = "tower helm neo"
 REMOTE_APPDATA = "/mnt/cache/appdata"
 UPDATE_SERVICE = "homelab-docker-update.service"
 UPDATE_TIMER = "homelab-docker-update.timer"
+# `start.sh --no-pull` once after dockerd's own restore. The daemon does not order
+# `network_mode: service:` dependencies at boot, so a container sharing another's
+# namespace can lose the race, fail to start, and never be retried (qbittorrent
+# behind gluetun, homelab-ops#290). Compose honours `depends_on`; the daemon does not.
+BOOT_SERVICE = "homelab-docker-boot.service"
 
 
 def swarm_env_values(host: str, swarm_defaults: dict) -> dict[str, str]:
@@ -83,6 +89,7 @@ HELPER_SPECS = (
 UPDATE_UNIT_SPECS = (
     FileSpec(UPDATE_SERVICE, f"/etc/systemd/system/{UPDATE_SERVICE}", "644"),
     FileSpec(UPDATE_TIMER, f"/etc/systemd/system/{UPDATE_TIMER}", "644"),
+    FileSpec(BOOT_SERVICE, f"/etc/systemd/system/{BOOT_SERVICE}", "644"),
 )
 # The engine's static files, copied verbatim from `docker/configs/` and the same on
 # every docker host (freender/homelab-ops#151). The apt source line is not here: it
@@ -101,7 +108,8 @@ ENGINE_CONFIGS = tuple(spec.build_name for spec in ENGINE_SPECS)
 
 
 def file_specs(update_timer: bool) -> tuple[FileSpec, ...]:
-    """The units are managed only where the update timer is configured."""
+    """The units are managed only where the update timer is configured: those are
+    the hosts that already run `start.sh` as root every night."""
     return ENGINE_SPECS + HELPER_SPECS + (UPDATE_UNIT_SPECS if update_timer else ())
 
 
@@ -175,6 +183,7 @@ def render_build(
             build_dir / UPDATE_TIMER,
             DOCKER_UPDATE_SCHEDULE=update_schedule,
         )
+        render_file(templates_dir / BOOT_SERVICE, build_dir / BOOT_SERVICE)
 
     write_env_file(
         build_dir / "env",

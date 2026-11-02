@@ -24,6 +24,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 INSTALLER_PATH = REPO_ROOT / "docker" / "scripts" / "install.py"
 SERVICE = docker.UPDATE_SERVICE
 TIMER = docker.UPDATE_TIMER
+BOOT = docker.BOOT_SERVICE
 ENGINE_UNITS = ("containerd.service", "docker.service")
 SOURCE = "deb [arch=amd64 signed-by={key}] https://download.docker.com/linux/debian trixie stable\n"
 
@@ -52,6 +53,7 @@ def test_file_map_matches_what_was_rendered(tmp_path: Path, schedule: str, has_u
     assert set(file_map) == rendered == {spec.build_name for spec in specs}
     assert (SERVICE in file_map) is has_units
     assert (TIMER in file_map) is has_units
+    assert (BOOT in file_map) is has_units
 
 
 def test_helper_scripts_are_pinned_executable_and_the_env_is_not(tmp_path: Path) -> None:
@@ -74,6 +76,26 @@ def test_the_update_service_runs_the_start_script_the_map_installs(tmp_path: Pat
 
     service = (build_dir / SERVICE).read_text(encoding="utf-8")
     assert f"ExecStart={file_map['start.sh'][0]}\n" in service
+
+
+def test_the_boot_service_runs_the_start_script_without_pulling(tmp_path: Path) -> None:
+    """A boot must not wait on, or fail on, a registry."""
+    build_dir, _ = render(tmp_path, "*-*-* 23:30:00")
+    file_map = _parse_file_map(build_dir / "file-map.conf")
+
+    boot = (build_dir / BOOT).read_text(encoding="utf-8")
+    assert f"ExecStart={file_map['start.sh'][0]} --no-pull\n" in boot
+    assert "After=network-online.target docker.service\n" in boot
+    assert "WantedBy=multi-user.target\n" in boot
+    assert file_map[BOOT] == (f"/etc/systemd/system/{BOOT}", "644")
+
+
+def test_the_update_service_waits_for_the_boot_run(tmp_path: Path) -> None:
+    """A `Persistent=` catch-up firing at boot would otherwise lose start.sh's lock."""
+    build_dir, _ = render(tmp_path, "*-*-* 23:30:00")
+    service = (build_dir / SERVICE).read_text(encoding="utf-8")
+    after = next(line for line in service.splitlines() if line.startswith("After="))
+    assert BOOT in after.split("=", 1)[1].split()
 
 
 def test_helper_scripts_are_copied_verbatim(tmp_path: Path) -> None:
@@ -174,6 +196,7 @@ def test_file_names_agree_across_the_wire() -> None:
     installer = load_installer()
     assert installer.UPDATE_SERVICE == docker.UPDATE_SERVICE
     assert installer.UPDATE_TIMER == docker.UPDATE_TIMER
+    assert installer.BOOT_SERVICE == docker.BOOT_SERVICE
     assert set(installer.HELPER_FILES) == {spec.build_name for spec in docker.HELPER_SPECS}
     engine = {installer.KEYRING_FILE, installer.DAEMON_CONFIG, *installer.DROP_INS}
     assert engine == set(docker.ENGINE_CONFIGS)
@@ -194,7 +217,7 @@ def load_installer():
 
 class FakeSystemctl:
     def __init__(self) -> None:
-        self.enabled = {TIMER, *ENGINE_UNITS}
+        self.enabled = {TIMER, BOOT, *ENGINE_UNITS}
         self.active = {TIMER, *ENGINE_UNITS}
         self.failed: set[str] = set()
         self.fail_on_start: set[str] = set()
@@ -215,6 +238,10 @@ class FakeSystemctl:
         elif verb == "start" and unit in self.fail_on_start:
             self.failed.add(unit)
             code = 1
+        elif verb == "enable":
+            self.enabled.add(unit)
+            if "--now" in command:
+                self.active.add(unit)
         elif verb == "disable":
             self.enabled.discard(unit)
             self.active.discard(unit)
@@ -385,7 +412,32 @@ def test_a_fresh_host_gets_every_file_at_its_mode(host_for) -> None:
         assert mode_of(host.dest(name)) == 0o755
     assert mode_of(host.dest("env")) == 0o644
     assert mode_of(host.dest(SERVICE)) == 0o644
+    assert mode_of(host.dest(BOOT)) == 0o644
     assert f"enable --now {TIMER}" in host.systemctl.actions()
+    assert f"enable {BOOT}" in host.systemctl.actions()
+
+
+def test_the_boot_service_is_enabled_but_never_started(host_for) -> None:
+    """Starting it from a deploy would `compose up` every stack on the host."""
+    host = host_for()
+    host.systemctl.enabled.discard(BOOT)
+    host.deploy()
+    host.deploy()
+
+    assert not any(
+        call[1] in ("start", "restart") and call[-1] == BOOT for call in host.systemctl.calls
+    )
+    assert not any("--now" in call and call[-1] == BOOT for call in host.systemctl.calls)
+    assert BOOT in host.systemctl.enabled
+
+
+def test_a_changed_boot_service_reloads_without_restarting_the_timer(host_for) -> None:
+    host = host_for()
+    host.deploy()
+    (host.build_dir / BOOT).write_text("# new\n", encoding="utf-8")
+    host.deploy()
+
+    assert host.systemctl.actions() == ["daemon-reload"]
 
 
 def test_a_group_writable_start_script_is_tightened_without_a_rewrite(host_for) -> None:
@@ -449,13 +501,13 @@ def test_no_schedule_stops_the_timer_and_leaves_its_files(host_for) -> None:
 
     host.deploy()
 
-    assert host.systemctl.actions() == [f"disable --now {TIMER}"]
+    assert host.systemctl.actions() == [f"disable --now {TIMER}", f"disable --now {BOOT}"]
     assert unit_file.exists()
 
 
 def test_no_schedule_on_a_host_without_the_timer_does_nothing(host_for) -> None:
     host = host_for(timer=False)
-    host.systemctl.enabled.discard(TIMER)
+    host.systemctl.enabled -= {TIMER, BOOT}
     host.systemctl.active.discard(TIMER)
     host.deploy()
 
