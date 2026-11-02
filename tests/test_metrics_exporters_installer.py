@@ -623,6 +623,7 @@ def test_retirement_paths_match_the_orchestrator_destinations(harness: Harness) 
         ("disk-label-textfile-exporter.py", ["disk-labels.prom"]),
         ("pve-replication-textfile-exporter.py", ["pve-replication.prom"]),
         ("pbs-backup-textfile-exporter.py", ["pbs-backups.prom"]),
+        ("pbs-remote-textfile-exporter.py", ["pbs-remotes.prom"]),
         ("pdm-remote-textfile-exporter.py", ["pdm-remotes.prom"]),
     ],
 )

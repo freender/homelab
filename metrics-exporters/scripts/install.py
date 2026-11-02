@@ -107,6 +107,11 @@ TEXTFILE_EXPORTERS = {
         (),
         ("pbs-backups.prom",),
     ),
+    "pbs-remote-textfile-exporter.py": (
+        "pbs-remote-textfile-exporter",
+        (),
+        ("pbs-remotes.prom",),
+    ),
     "pdm-remote-textfile-exporter.py": (
         "pdm-remote-textfile-exporter",
         (),

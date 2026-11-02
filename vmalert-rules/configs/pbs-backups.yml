@@ -80,6 +80,43 @@ groups:
           summary: "{{ $labels.host }} PBS backup metrics are stale"
           description: "pbs-backups.prom on {{ $labels.host }} has not been rewritten in over 30 minutes, so backup freshness is frozen at its last value and PbsBackupStale cannot fire. Check `systemctl status pbs-backup-textfile-exporter.service` on {{ $labels.host }}."
 
+      # From xur's pbs-remote-textfile-exporter (hourly): each remote's
+      # effective privileges for the auth-id xur uses there. The push account
+      # must stay add-only offsite (Backup/Read only), so a compromised xur
+      # cannot delete DR history; any Prune, Modify or Admin grant on either
+      # offsite PBS is a security change, not drift.
+      - alert: PbsRemoteExcessPrivileges
+        expr: homelab_pbs_remote_excess_privilege == 1
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.auth_id }} holds {{ $labels.privilege }} on PBS remote {{ $labels.remote }}"
+          description: "The PBS behind xur's remote {{ $labels.remote }} grants {{ $labels.auth_id }} {{ $labels.privilege }} on {{ $labels.path }}. xur's offsite accounts must hold only DatastoreBackup/DatastoreReader, or a compromised xur can delete offsite history. Remove the grant in that PBS (Configuration -> Access Control -> Permissions), then run `./deploy pbs-server cinci` / `cottonwood` with the offsite key to confirm."
+
+      # The check itself is blind: login, fingerprint or tunnel failing. A
+      # remote that is merely down also fails its push job, so this waits long
+      # enough to be about the check, not a tunnel blip.
+      - alert: PbsRemoteCheckFailing
+        expr: |
+          homelab_pbs_remote_check_ok == 0
+          and on(host) (min_over_time(up{job="pve-node", host="xur"}[30m]) == 1)
+        for: 6h
+        labels:
+          severity: warning
+        annotations:
+          summary: "xur cannot read its privileges on PBS remote {{ $labels.remote }}"
+          description: "xur has failed for 6h to log in to remote {{ $labels.remote }} as {{ $labels.auth_id }} and read its permissions, so the add-only offsite check is blind there. `journalctl -u pbs-remote-textfile-exporter.service -n 20` on xur names the cause (fingerprint mismatch, HTTP 401, timeout)."
+
+      - alert: PbsRemoteMetricsStale
+        expr: time() - node_textfile_mtime_seconds{file=~".*/pbs-remotes\\.prom"} > 10800
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.host }} PBS remote privilege metrics are stale"
+          description: "pbs-remotes.prom on {{ $labels.host }} has not been rewritten in 3h (the timer is hourly), so PbsRemoteExcessPrivileges cannot fire. Check `systemctl status pbs-remote-textfile-exporter.timer` on {{ $labels.host }}."
+
       - alert: PbsBackupMetricsMissing
         expr: |
           absent_over_time(homelab_pbs_groups_total{host="xur"}[30m])
@@ -90,3 +127,14 @@ groups:
         annotations:
           summary: "xur PBS backup metrics missing"
           description: "xur is up but has published no homelab_pbs_groups_total for 30 minutes, so backup freshness is unmonitored. The pbs-backup-textfile-exporter may never have run or been removed by a metrics-exporters deploy."
+
+      - alert: PbsRemoteMetricsMissing
+        expr: |
+          absent_over_time(homelab_pbs_remotes_total{host="xur"}[3h])
+          and on(host) (min_over_time(up{job="pve-node", host="xur"}[30m]) == 1)
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "xur PBS remote privilege metrics missing"
+          description: "xur is up but has published no homelab_pbs_remotes_total for 3h, so the add-only offsite check is not running. The pbs-remote-textfile-exporter may never have run or been removed by a metrics-exporters deploy."

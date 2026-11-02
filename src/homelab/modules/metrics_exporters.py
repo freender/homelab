@@ -293,6 +293,25 @@ FILE_SPECS = (
         "/etc/systemd/system/pbs-backup-textfile-exporter.timer",
         feature="pbs_backups",
     ),
+    # Each remote's effective privileges for its own auth-id, read over the
+    # network with remote.cfg's credentials, so the add-only offsite grant is
+    # watched without the offsite key. Same PBS gate, its own hourly timer.
+    FileSpec(
+        "pbs-remote-textfile-exporter.py",
+        "/usr/local/bin/pbs-remote-textfile-exporter",
+        mode="755",
+        feature="pbs_backups",
+    ),
+    FileSpec(
+        "pbs-remote-textfile-exporter.service",
+        "/etc/systemd/system/pbs-remote-textfile-exporter.service",
+        feature="pbs_backups",
+    ),
+    FileSpec(
+        "pbs-remote-textfile-exporter.timer",
+        "/etc/systemd/system/pbs-remote-textfile-exporter.timer",
+        feature="pbs_backups",
+    ),
     # PDM remote poll state and pin checks. An explicit inventory flag rather
     # than a type gate: the PDM host is an LXC guest with no `config.type` of
     # its own, and the gate is PDM's remotes.cfg and collection state file.
@@ -676,6 +695,9 @@ PBS_BACKUP_EXPORTER_FILES = [
     "pbs-backup-textfile-exporter.py",
     "pbs-backup-textfile-exporter.service",
     "pbs-backup-textfile-exporter.timer",
+    "pbs-remote-textfile-exporter.py",
+    "pbs-remote-textfile-exporter.service",
+    "pbs-remote-textfile-exporter.timer",
 ]
 
 PDM_REMOTE_EXPORTER_FILES = [

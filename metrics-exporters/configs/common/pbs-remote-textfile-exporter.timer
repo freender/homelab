@@ -1,0 +1,13 @@
+[Unit]
+Description=Refresh PBS remote privilege textfile metrics
+
+[Timer]
+# Hourly: each run logs in to every remote, which lands in that remote's
+# auth.log, and a grant change is not something minutes of lag would matter for.
+OnBootSec=10min
+OnUnitActiveSec=1h
+AccuracySec=1min
+Unit=pbs-remote-textfile-exporter.service
+
+[Install]
+WantedBy=timers.target

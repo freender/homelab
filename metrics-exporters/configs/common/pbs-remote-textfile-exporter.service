@@ -1,0 +1,9 @@
+[Unit]
+Description=Write PBS remote privilege metrics for node_exporter textfile collector
+ConditionPathExists=/etc/proxmox-backup/remote.cfg
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/pbs-remote-textfile-exporter
