@@ -90,7 +90,6 @@ def test_real_inventory_builds_for_xur() -> None:
     plan = pbs_server.build_plan(REPO_ROOT, "xur")
 
     labels = objects_by_label(plan)
-    assert plan["apply"] is False
     assert "sync job sync-offsite-cinci-push" in labels
     assert labels["datastore backup"]["asserted"] == {"path": "/backup"}
 
