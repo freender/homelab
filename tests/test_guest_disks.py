@@ -72,9 +72,14 @@ def spec_of(disks: dict, kind: str = "qemu"):
     return parse_guest("vm", vm_block(disks), {"ace": False})
 
 
-def test_helm_renders_scratch_with_nofail_and_appdata_without() -> None:
-    registry = default_registry(ROOT)
-    spec = parse_guest("helm", registry.get("helm", "pve-guest"), pve_nodes(registry))
+def test_renders_scratch_with_nofail_and_appdata_without() -> None:
+    spec = spec_of(
+        OS
+        | {
+            "scsi1": {"role": "scratch", "size": "8G"},
+            "scsi2": {"role": "appdata", "size": "8G"},
+        }
+    )
 
     mounts = guest_disks.plan_mounts(spec)
 
@@ -824,5 +829,4 @@ def test_the_real_orchestrator_render_parses_on_the_guest() -> None:
 
     assert inst.parse_disks(text) == [
         inst.Wanted("scsi2", "appdata", "/mnt/cache/appdata", "defaults,noatime"),
-        inst.Wanted("scsi1", "scratch", "/mnt/scratch", "defaults,noatime,nofail"),
     ]

@@ -22,6 +22,6 @@ services:
       GEOIPUPDATE_EDITION_IDS: 'GeoLite2-ASN GeoLite2-City GeoLite2-Country'
       GEOIPUPDATE_FREQUENCY: '72'
     volumes:
-      - /mnt/scratch/geoipupdate:/usr/share/GeoIP
+      - /mnt/cache/appdata/geoipupdate:/usr/share/GeoIP
     networks:
       net.internal: {}

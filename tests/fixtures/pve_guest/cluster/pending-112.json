@@ -56,10 +56,6 @@
   "value": "vm-flash:vm-112-disk-1,discard=on,iothread=1,size=32G,ssd=1"
  },
  {
-  "key": "scsi1",
-  "value": "vm-flash:vm-112-disk-2,discard=on,iothread=1,size=64G,ssd=1"
- },
- {
   "key": "scsi2",
   "value": "vm-flash:vm-112-disk-3,discard=on,iothread=1,size=64G,ssd=1"
  },

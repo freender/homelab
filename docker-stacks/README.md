@@ -84,7 +84,8 @@ means the stack is not host-invariant, so split it into `<host>.yml` files inste
 Currently templated: `exporters`, `hawser`, `cloudflared`.
 
 `vmagent` and `geoipupdate` went per-host when helm, a VM, moved their regenerable
-data to `/mnt/scratch/<stack>` while the LXCs keep it under appdata.
+data to a scratch disk. That disk is retired and the data is back under appdata, so
+they could be templated again.
 
 `traefik` and `alloy` stay per-host because their differences are **role asymmetry,
 not drift**:

@@ -49,14 +49,17 @@ services:
     restart: always
     mem_limit: 1g
     user: '1000:1000'
+    # helm's docker group: acquis.yaml reads traefik-helm's stdout through the
+    # socket, since Traefik writes access logs to stdout, not a file.
+    group_add: ['989']
     environment:
       TZ: 'America/New_York'
-      COLLECTIONS: 'crowdsecurity/traefik crowdsecurity/http-cve'
+      COLLECTIONS: 'crowdsecurity/linux crowdsecurity/traefik crowdsecurity/http-cve'
       POSTOVERFLOWS: 'crowdsecurity/rdns'
     volumes:
       - /mnt/cache/appdata/crowdsec/data:/var/lib/crowdsec/data
       - /mnt/cache/appdata/crowdsec:/etc/crowdsec
-      - /mnt/scratch/traefik/logs:/var/log/traefik:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
     # The `crowdsec` alias keeps the bouncer endpoint in fileConfig.yml working
     # now that the container is host-suffixed like every other service.
     networks:
@@ -191,8 +194,7 @@ services:
       # fileConfig.yml, and a single-file bind mount keeps serving the old inode
       # until restart (homelab-ops#199). traefik.yml points at dynamic/fileConfig.yml.
       - /mnt/cache/appdata/traefik:/etc/traefik/dynamic:ro
-      - /mnt/scratch/traefik/logs:/etc/traefik/logs:rw
-      - /mnt/scratch/traefik/plugins-storage:/plugins-storage:rw
+      - /mnt/cache/appdata/traefik/plugins-storage:/plugins-storage:rw
     networks:
       net.internal: {}
       net_overlay: {}

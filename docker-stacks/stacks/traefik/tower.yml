@@ -39,7 +39,7 @@ services:
     mem_limit: 1g
     environment:
       TZ: 'America/New_York'
-      COLLECTIONS: 'crowdsecurity/traefik crowdsecurity/http-cve'
+      COLLECTIONS: 'crowdsecurity/linux crowdsecurity/traefik crowdsecurity/http-cve'
       POSTOVERFLOWS: 'crowdsecurity/rdns'
     # tower runs crowdsec as root with a plugin chown; helm/neo run it as
     # 1000:1000. Two different fixes for the same problem -- unverified, kept.
@@ -50,7 +50,9 @@ services:
     volumes:
       - /mnt/cache/appdata/crowdsec/data:/var/lib/crowdsec/data
       - /mnt/cache/appdata/crowdsec:/etc/crowdsec
-      - /mnt/cache/appdata/traefik/logs:/var/log/traefik:ro
+      # acquis.yaml reads traefik-tower's stdout through the socket, since
+      # Traefik writes access logs to stdout, not a file.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
     networks:
       net.internal:
         aliases:
@@ -184,7 +186,6 @@ services:
       # fileConfig.yml, and a single-file bind mount keeps serving the old inode
       # until restart (homelab-ops#199). traefik.yml points at dynamic/fileConfig.yml.
       - /mnt/cache/appdata/traefik:/etc/traefik/dynamic:ro
-      - /mnt/cache/appdata/traefik/logs:/etc/traefik/logs:rw
       - /mnt/cache/appdata/traefik/plugins-storage:/plugins-storage:rw
     networks:
       net.internal: {}

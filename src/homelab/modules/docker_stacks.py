@@ -246,8 +246,15 @@ def appdata_root_for(root: Path, host: str) -> str:
     return str(registry.get(host, "docker-stacks.appdata_root", DEFAULT_APPDATA_ROOT)).strip()
 
 
-def is_vm(root: Path, host: str) -> bool:
-    return is_qemu_guest(default_registry(root), host)
+def is_vm_with_scratch(root: Path, host: str) -> bool:
+    """A VM that declares a scratch disk, the only place its regenerable data can go."""
+    registry = default_registry(root)
+    if not is_qemu_guest(registry, host):
+        return False
+    disks = registry.get(host, "pve-guest.disks", None) or {}
+    return any(
+        isinstance(disk, dict) and disk.get("role") == "scratch" for disk in disks.values()
+    )
 
 
 def compose_document(root: Path, host: str, stack: str) -> dict:
@@ -312,13 +319,14 @@ def _describe(violations: set[ScratchViolation]) -> str:
 
 
 def check_vm_scratch_placement(root: Path, hosts: list[str]) -> None:
-    """On a VM, regenerable data belongs on the scratch disk, not under appdata.
+    """On a VM with a scratch disk, regenerable data belongs there, not under appdata.
 
     `exclude-path` is file-level and does nothing for a VM's block backup, so a
     path `appdata.txt` excludes on an LXC is backed up in full on a VM unless it
-    lives on the backup=0 scratch disk (homelab-ops#154).
+    lives on the backup=0 scratch disk (homelab-ops#154). A VM without a scratch
+    disk keeps it under appdata and accepts that it is backed up.
     """
-    vm_hosts = [host for host in hosts if is_vm(root, host)]
+    vm_hosts = [host for host in hosts if is_vm_with_scratch(root, host)]
     if not vm_hosts:
         return
     entries = backup_excludes.load_profile(root, APPDATA_EXCLUDE_PROFILE)

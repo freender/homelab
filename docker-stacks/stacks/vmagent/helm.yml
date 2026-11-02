@@ -25,6 +25,6 @@ services:
       # Host-local HA long-lived token for the home-assistant scrape job; source of
       # record is 1Password. Must exist before `up`, or docker creates a directory.
       - /mnt/cache/appdata/vmagent/ha_token:/etc/vmagent/ha_token:ro
-      - /mnt/scratch/vmagent:/vmagent-data
+      - /mnt/cache/appdata/vmagent/data:/vmagent-data
     networks:
       net_overlay: {}

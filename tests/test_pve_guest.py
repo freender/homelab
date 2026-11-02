@@ -100,7 +100,7 @@ def test_every_declared_guest_is_in_sync_with_the_fixture() -> None:
 
 
 def test_hand_written_vmids_all_resolve() -> None:
-    assert validate_inventory(default_registry(ROOT)) == (8, 21)
+    assert validate_inventory(default_registry(ROOT)) == (8, 20)
 
 
 def test_every_impact_label_on_a_changed_helm_spec() -> None:
@@ -110,8 +110,8 @@ def test_every_impact_label_on_a_changed_helm_spec() -> None:
     raw["memory"] = 8192  # needs reboot
     raw["balloon"] = 4096  # applies live
     raw["disks"]["scsi0"]["size"] = "40G"  # grow: applies live
-    raw["disks"]["scsi1"]["size"] = "32G"  # shrink: refused
-    raw["disks"]["scsi1"]["backup"] = False  # config only
+    raw["disks"]["scsi2"]["size"] = "32G"  # shrink: refused
+    raw["disks"]["scsi2"]["backup"] = False  # config only
     raw["disks"]["scsi3"] = {"role": "data", "size": "10G", "mount": "/mnt/data"}  # new disk
     raw["net"]["net0"]["tag"] = 10  # applies live
     raw["net"]["net1"] = {"name": "nic1", "mac": "BC:24:11:00:00:01"}
@@ -130,8 +130,8 @@ def test_every_impact_label_on_a_changed_helm_spec() -> None:
         ("balloon", "4096", "6144", drift.LIVE),
         ("startup", "order=5", "-", drift.LIVE),
         ("scsi0.size", "40G", "32G", drift.LIVE),
-        ("scsi1.size", "32G", "64G", "refused (shrink)"),
-        ("scsi1.backup", "no", "yes", drift.CONFIG),
+        ("scsi2.size", "32G", "64G", "refused (shrink)"),
+        ("scsi2.backup", "no", "yes", drift.CONFIG),
         ("scsi3", "new data disk", "-", drift.LIVE),
         ("net0.tag", "10", "40", drift.LIVE),
         ("net1", "new nic1 BC:24:11:00:00:01", "-", drift.LIVE),
@@ -343,7 +343,7 @@ def test_report_lists_diffs_and_pending_changes() -> None:
     }
     entries["memory"] = {"key": "memory", "value": "6144", "pending": "8192"}
     entries["cores"] = {"key": "cores", "value": 2, "pending": 4}
-    entries["scsi1"] = {**entries["scsi1"], "delete": 1}
+    entries["scsi2"] = {**entries["scsi2"], "delete": 1}
 
     def runner(node: str, command: str) -> str:
         return json.dumps(list(entries.values()))
@@ -355,8 +355,8 @@ def test_report_lists_diffs_and_pending_changes() -> None:
     assert report[2:] == [
         "  pending cores: 2 -> 4",
         "  pending memory: 6144 -> 8192",
-        "  pending scsi1: "
-        f"{entries['scsi1']['value']} -> (delete)",
+        "  pending scsi2: "
+        f"{entries['scsi2']['value']} -> (delete)",
     ]
 
 
@@ -980,7 +980,7 @@ def test_cli_check_pve_guests(monkeypatch: pytest.MonkeyPatch, capsys) -> None:
     from homelab import cli
 
     cli.check_pve_guests(ROOT)
-    assert "8 pve-guest spec(s) valid; 21 hand-written vmid(s) match" in capsys.readouterr().out
+    assert "8 pve-guest spec(s) valid; 20 hand-written vmid(s) match" in capsys.readouterr().out
 
     def broken(registry):
         raise ValueError("helm: pve-guest.vmid must be a positive integer")
@@ -1086,46 +1086,46 @@ def test_vm_disk_options_and_sizes() -> None:
     spec = real_specs()["helm"]
     current = fixture_live("cluster", 112)
     current["scsi0"] = "vm-flash:vm-112-disk-1,iothread=1,size=32G,ssd=0"
-    current["scsi1"] = "vm-flash:vm-112-disk-2,discard=on,iothread=1,ssd=1"
+    current["scsi2"] = "vm-flash:vm-112-disk-3,discard=on,iothread=1,ssd=1"
     assert _rows(drift.disk_diffs(spec, current)) == [
         ("scsi0.discard", "on", "-", drift.REBOOT),
         ("scsi0.ssd", "1", "0", drift.REBOOT),
-        ("scsi1.size", "64G", "none", drift.LIVE),
+        ("scsi2.size", "64G", "none", drift.LIVE),
     ]
 
 
 def test_a_restored_vm_points_at_its_unused_disk_not_a_new_one() -> None:
-    """The shape an in-place qmrestore leaves (#160): scsi1 gone, its data in unused0."""
+    """The shape an in-place qmrestore leaves (#160): scsi2 gone, its data in unused0."""
     raw = copy.deepcopy(default_registry(ROOT).get("helm", "pve-guest"))
     raw["disks"]["scsi3"] = {"role": "data", "size": "8G", "storage": "other", "mount": "/d"}
     spec = parse_guest("helm", raw, NODES)
     current = fixture_live("cluster", 112)
-    del current["scsi1"]
-    current["unused0"] = "vm-flash:vm-112-disk-2"
+    del current["scsi2"]
+    current["unused0"] = "vm-flash:vm-112-disk-3"
 
     rows = drift.disk_diffs(spec, current)
 
     assert _rows(rows) == [
-        ("scsi1", "reattach unused0", "-", drift.CONFIG),
+        ("scsi2", "reattach unused0", "-", drift.CONFIG),
         ("scsi3", "new data disk", "-", drift.LIVE),
     ]
     assert [row.fix for row in rows] == [
-        "qm set 112 --scsi1 vm-flash:vm-112-disk-2,discard=on,iothread=1,ssd=1",
+        "qm set 112 --scsi2 vm-flash:vm-112-disk-3,discard=on,iothread=1,ssd=1",
         None,
     ]
     unmanaged = drift.unmanaged_diffs(spec, current)
-    assert _rows(unmanaged) == [("unused0", "-", "vm-flash:vm-112-disk-2", drift.UNMANAGED)]
+    assert _rows(unmanaged) == [("unused0", "-", "vm-flash:vm-112-disk-3", drift.UNMANAGED)]
 
 
 def test_an_unused_disk_on_another_storage_is_not_offered() -> None:
     spec = real_specs()["helm"]
     current = fixture_live("cluster", 112)
-    del current["scsi1"]
-    current["unused0"] = "other:vm-112-disk-2"
+    del current["scsi2"]
+    current["unused0"] = "other:vm-112-disk-3"
     (row,) = drift.disk_diffs(spec, current)
     assert (row.key, row.want, row.impact, row.fix) == (
-        "scsi1",
-        "new scratch disk",
+        "scsi2",
+        "new appdata disk",
         drift.LIVE,
         None,
     )
@@ -1134,9 +1134,9 @@ def test_an_unused_disk_on_another_storage_is_not_offered() -> None:
 def test_an_ambiguous_reattach_names_every_candidate_and_no_command() -> None:
     spec = real_specs()["helm"]
     current = fixture_live("cluster", 112)
-    del current["scsi1"]
+    del current["scsi2"]
     current["unused10"] = "vm-flash:vm-112-disk-9"
-    current["unused2"] = "vm-flash:vm-112-disk-2"
+    current["unused2"] = "vm-flash:vm-112-disk-3"
     (row,) = drift.disk_diffs(spec, current)
     assert (row.want, row.impact, row.fix) == (
         "reattach one of unused2, unused10",
@@ -1178,17 +1178,17 @@ def test_report_prints_the_reattach_command_under_its_row() -> None:
     entries = [
         entry
         for entry in json.loads((FIXTURES / "cluster" / "pending-112.json").read_text())
-        if entry["key"] != "scsi1"
+        if entry["key"] != "scsi2"
     ]
-    entries.append({"key": "unused0", "value": "vm-flash:vm-112-disk-2"})
+    entries.append({"key": "unused0", "value": "vm-flash:vm-112-disk-3"})
 
     report = live.guest_report(spec, view, lambda _node, _command: json.dumps(entries))
 
     assert report[1:] == [
-        "  " + drift.format_diff(drift.diff("scsi1", "reattach unused0", None, drift.CONFIG)),
-        "    $ qm set 112 --scsi1 vm-flash:vm-112-disk-2,discard=on,iothread=1,ssd=1",
+        "  " + drift.format_diff(drift.diff("scsi2", "reattach unused0", None, drift.CONFIG)),
+        "    $ qm set 112 --scsi2 vm-flash:vm-112-disk-3,discard=on,iothread=1,ssd=1",
         "  "
-        + drift.format_diff(drift.diff("unused0", None, "vm-flash:vm-112-disk-2", drift.UNMANAGED)),
+        + drift.format_diff(drift.diff("unused0", None, "vm-flash:vm-112-disk-3", drift.UNMANAGED)),
     ]
 
 

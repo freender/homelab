@@ -24,7 +24,6 @@ services:
     # neo has no geoipupdate stack and no endpoints.json, so it mounts neither.
     volumes:
       - /var/log:/var/log
-      - /mnt/cache/appdata/traefik/logs:/traefik/logs
       - /var/run/docker.sock:/var/run/docker.sock
       - /mnt/cache/appdata/alloy/config.alloy:/etc/alloy/config.alloy
       - /mnt/cache/appdata/alloy/data:/var/lib/alloy/data

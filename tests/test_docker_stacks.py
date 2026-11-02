@@ -306,7 +306,8 @@ def test_real_repo_placement_is_consistent() -> None:
 
 @pytest.fixture
 def vm_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """`vm` is a qemu guest, `ct` an LXC; both run the same two stacks."""
+    """`vm` is a qemu guest with scratch, `bare` one without, `ct` an LXC; all run
+    the same two stacks."""
     _write(tmp_path / "backup-excludes" / "appdata.txt", "/app/cache\n/*/logs\n# note\n")
     _write(
         tmp_path / "docker-stacks" / "stacks" / "app" / "compose.yml.j2",
@@ -320,7 +321,13 @@ def vm_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
         tmp_path / "docker-stacks" / "stacks" / "web" / "compose.yml.j2",
         "services:\n  web-{{ HOST }}:\n    image: busybox\n",
     )
-    kinds = {"vm": "qemu", "ct": "lxc"}
+    kinds = {"vm": "qemu", "bare": "qemu", "ct": "lxc"}
+    os_disk = {"scsi0": {"role": "os", "size": "8G"}}
+    disks = {
+        "vm": os_disk | {"scsi1": {"role": "scratch", "size": "8G"}},
+        "bare": os_disk | {"scsi1": {"role": "appdata", "size": "8G"}},
+        "ct": {"rootfs": {"role": "os", "size": "8G"}, "mp0": {"role": "scratch"}},
+    }
 
     class Registry:
         def list_hosts(self, feature: str | None = None) -> list[str]:
@@ -331,6 +338,8 @@ def vm_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
                 return ["app", "web"]
             if key == "pve-guest.kind":
                 return kinds[host]
+            if key == "pve-guest.disks":
+                return disks[host]
             return default
 
     monkeypatch.setattr(docker_stacks, "default_registry", lambda _root: Registry())
@@ -416,7 +425,14 @@ def test_vm_scratch_honours_appdata_root(
 
 def test_no_vm_host_skips_loading_the_profile(vm_repo: Path) -> None:
     (vm_repo / "backup-excludes" / "appdata.txt").unlink()
-    docker_stacks.check_vm_scratch_placement(vm_repo, ["ct"])
+    docker_stacks.check_vm_scratch_placement(vm_repo, ["ct", "bare"])
+
+
+def test_vm_without_scratch_keeps_excluded_data_under_appdata(vm_repo: Path) -> None:
+    _add_volume(vm_repo, "/mnt/cache/appdata/web/logs:/logs")
+    docker_stacks.check_vm_scratch_placement(vm_repo, ["bare", "ct"])
+    with pytest.raises(ValueError, match="vm web/web-vm"):
+        docker_stacks.check_vm_scratch_placement(vm_repo, ["vm", "bare"])
 
 
 def test_real_repo_has_no_vm_scratch_violations() -> None:
