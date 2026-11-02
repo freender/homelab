@@ -19,6 +19,10 @@ module never edits `/etc/proxmox-backup` behind the daemon's locks.
   lists what would change and fails only on errors an apply could not fix.
 * **An applied change is read back.** Anything still drifting after the writes
   fails the deploy instead of reporting success.
+* **A container-hosted PBS is reached through `docker exec`.** The plan's
+  `container` prefixes every call; the orchestrator keeps such hosts report-only.
+* **`add_only` accounts are checked on every ACL path.** A role outside the
+  allowed set, on any path, is an error rather than a warning.
 """
 
 from __future__ import annotations
@@ -42,9 +46,12 @@ CLIENT = "proxmox-backup-debug"
 ACL_PATH = "/access/acl"
 USERS_PATH = "/access/users"
 
+# `docker exec <container>` for a PBS in Docker; set once per run by `install`.
+_prefix: list[str] = []
+
 
 def api(command: str, path: str, *args: str) -> str:
-    cmd = [CLIENT, "api", command, path, *args]
+    cmd = [*_prefix, CLIENT, "api", command, path, *args]
     if command == "get":
         cmd += ["--output-format", "json"]
     result = _run(cmd, check=False, capture_output=True, text=True)
@@ -236,12 +243,33 @@ def check_users(state: Run, expected: list[str]) -> None:
         log.warn(f"unmanaged user {extra} (reported, not removed)")
 
 
+def check_add_only(state: Run, add_only: dict) -> None:
+    accounts = add_only.get("auth_ids", [])
+    if not accounts:
+        return
+    allowed = set(add_only.get("roles", []))
+    # The account's tokens (`xur-sync@pbs!t`) are held to the same limit.
+    violations = [
+        entry
+        for entry in api_get(ACL_PATH) or []
+        if entry["ugid"].split("!", 1)[0] in accounts and entry["roleid"] not in allowed
+    ]
+    for entry in violations:
+        state.errors.append(
+            f"add-only account {entry['ugid']} holds {entry['roleid']} on {entry['path']}; "
+            f"only {sorted(allowed)} are allowed"
+        )
+    if not violations:
+        log.sub(f"add-only {', '.join(accounts)}: no role beyond {sorted(allowed)} on any path")
+
+
 def converge(plan: dict) -> Run:
     state = Run(plan)
     for obj in plan["objects"]:
         state.converge(obj)
     converge_acls(state, plan["acls"])
     check_users(state, plan["users"])
+    check_add_only(state, plan.get("add_only", {}))
     return state
 
 
@@ -260,10 +288,18 @@ def load_plan(ctx: InstallContext) -> dict:
 
 
 def install(ctx: InstallContext) -> None:
+    global _prefix
     log.header("PBS Server Config")
-    if not _which(CLIENT):
-        raise InstallError(f"{CLIENT} not found; is this a PBS host?")
     plan = load_plan(ctx)
+    container = plan.get("container") or ""
+    if container:
+        if not _which("docker"):
+            raise InstallError(f"docker not found; cannot reach PBS container {container}")
+        _prefix = ["docker", "exec", container]
+    else:
+        if not _which(CLIENT):
+            raise InstallError(f"{CLIENT} not found; is this a PBS host?")
+        _prefix = []
 
     # Always a read-only pass first: an error anywhere means nothing is written.
     log.action("Checking PBS config drift")

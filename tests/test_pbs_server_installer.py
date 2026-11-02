@@ -72,9 +72,12 @@ class FakePbs:
         self.users: list[dict] = []
         self.writes: list[list[str]] = []
         self.ignore_writes = False
+        self.prefixes: set[tuple[str, ...]] = set()
 
     def __call__(self, cmd: list[str], **_: object) -> subprocess.CompletedProcess:
-        command, path, args = cmd[2], cmd[3], cmd[4:]
+        start = cmd.index(installer.CLIENT)
+        self.prefixes.add(tuple(cmd[:start]))
+        command, path, args = cmd[start + 2], cmd[start + 3], cmd[start + 4 :]
         if command == "get":
             return self.result(json.dumps(self.get(path)))
         self.writes.append(cmd)
@@ -256,6 +259,7 @@ def pbs(monkeypatch: pytest.MonkeyPatch) -> FakePbs:
     fake = converged_pbs()
     monkeypatch.setattr(installer, "_run", fake)
     monkeypatch.setattr(installer, "_which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(installer, "_prefix", [])
     return fake
 
 
@@ -460,6 +464,71 @@ def test_refuses_without_pbs_client(
     monkeypatch.setattr(installer, "_which", lambda name: None)
     with pytest.raises(InstallError, match="PBS host"):
         run(tmp_path, make_plan())
+
+
+def test_container_routes_every_call_through_docker_exec(
+    pbs: FakePbs, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # A container host has no local PBS client; only docker is required.
+    monkeypatch.setattr(installer, "_which", lambda name: {"docker": "/usr/bin/docker"}.get(name))
+    run(tmp_path, make_plan(container="zavala"))
+
+    assert pbs.prefixes == {("docker", "exec", "zavala")}
+
+
+def test_container_without_docker_is_refused(
+    pbs: FakePbs, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(installer, "_which", lambda name: None)
+    with pytest.raises(InstallError, match="docker not found"):
+        run(tmp_path, make_plan(container="zavala"))
+    assert pbs.prefixes == set()
+
+
+def test_local_pbs_runs_the_client_directly(pbs: FakePbs, tmp_path: Path) -> None:
+    run(tmp_path, make_plan())
+    assert pbs.prefixes == {()}
+
+
+ADD_ONLY = {"auth_ids": ["xur-sync@pbs"], "roles": ["DatastoreBackup", "DatastoreReader"]}
+
+
+def test_add_only_account_within_its_roles_passes(pbs: FakePbs, tmp_path: Path) -> None:
+    pbs.acls.append(acl("/datastore/backup", "xur-sync@pbs", "DatastoreBackup"))
+    pbs.acls.append(acl("/datastore/backup", "xur-sync@pbs", "DatastoreReader"))
+    # Out-of-scope grants to other accounts are not this check's business.
+    pbs.acls.append(acl("/", "root@pam!pdm", "Admin"))
+
+    assert installer.converge(make_plan(add_only=ADD_ONLY)).errors == []
+
+
+@pytest.mark.parametrize(
+    ("path", "ugid", "role"),
+    [
+        ("/", "xur-sync@pbs", "Admin"),
+        ("/datastore/backup", "xur-sync@pbs", "DatastorePowerUser"),
+        ("/datastore", "xur-sync@pbs!tok", "DatastoreAdmin"),
+    ],
+)
+def test_add_only_role_beyond_the_limit_on_any_path_fails(
+    pbs: FakePbs, tmp_path: Path, path: str, ugid: str, role: str
+) -> None:
+    pbs.acls.append(acl(path, ugid, role))
+    pbs.collections["/config/sync"]["push"]["schedule"] = "01:00"
+
+    with pytest.raises(InstallError, match="nothing written"):
+        run(tmp_path, make_plan(apply=True, add_only=ADD_ONLY))
+    errors = installer.converge(make_plan(add_only=ADD_ONLY)).errors
+    assert errors == [
+        f"add-only account {ugid} holds {role} on {path}; "
+        "only ['DatastoreBackup', 'DatastoreReader'] are allowed"
+    ]
+    assert pbs.writes == []
+
+
+def test_add_only_matches_the_account_not_a_name_prefix(pbs: FakePbs) -> None:
+    pbs.acls.append(acl("/", "xur-sync@pbs2", "Admin"))
+    assert installer.converge(make_plan(add_only=ADD_ONLY)).errors == []
 
 
 def test_list_values_render_as_repeated_options() -> None:

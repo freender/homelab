@@ -114,6 +114,39 @@ def test_refuses_non_pbs_hosts(monkeypatch: pytest.MonkeyPatch) -> None:
         plan_for(monkeypatch, variant(), host_type="pve")
 
 
+def test_container_hosts_pbs_on_a_non_pbs_host(monkeypatch: pytest.MonkeyPatch) -> None:
+    plan = plan_for(monkeypatch, variant(container="zavala"), host_type="ubuntu")
+
+    assert plan["container"] == "zavala"
+    assert plan["apply"] is False
+    assert plan_for(monkeypatch, variant())["container"] == ""
+
+
+def test_container_is_report_only(monkeypatch: pytest.MonkeyPatch) -> None:
+    with pytest.raises(ValueError, match="report-only"):
+        plan_for(monkeypatch, variant(container="zavala", apply=True), host_type="ubuntu")
+
+
+@pytest.mark.parametrize("host", ["cinci", "cottonwood"])
+def test_real_inventory_offsite_hosts_are_report_only_and_add_only(host: str) -> None:
+    plan = pbs_server.build_plan(REPO_ROOT, host)
+
+    assert plan["container"]
+    assert plan["apply"] is False
+    assert "xur-sync@pbs" in plan["add_only"]["auth_ids"]
+    assert plan["add_only"]["roles"] == ["DatastoreBackup", "DatastoreReader"]
+
+
+def test_add_only_must_name_declared_users(monkeypatch: pytest.MonkeyPatch) -> None:
+    assert plan_for(monkeypatch, variant(add_only=["pve-backup@pbs"]))["add_only"] == {
+        "auth_ids": ["pve-backup@pbs"],
+        "roles": ["DatastoreBackup", "DatastoreReader"],
+    }
+    assert plan_for(monkeypatch, variant())["add_only"]["auth_ids"] == []
+    with pytest.raises(ValueError, match="add_only names undeclared users"):
+        plan_for(monkeypatch, variant(add_only=["xur-sync@pbs"]))
+
+
 def test_asserted_path_is_split_from_written_props(monkeypatch: pytest.MonkeyPatch) -> None:
     datastore = objects_by_label(plan_for(monkeypatch, variant()))["datastore backup"]
 
@@ -255,6 +288,22 @@ def test_unmanaged_scopes_list_declared_names_per_collection(
 
     assert sorted(scopes["/config/remote"]["known"]) == ["cottonwood-push", "zavala-push"]
     assert scopes["/config/sync"]["list_args"] == ["--sync-direction", "all"]
+
+
+def test_unmanaged_scopes_cover_kinds_with_nothing_declared(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = variant(remotes={}, sync_jobs={})
+    scopes = {scope["path"]: scope for scope in plan_for(monkeypatch, config)["unmanaged"]}
+
+    assert scopes["/config/sync"] == {
+        "path": "/config/sync",
+        "key": "id",
+        "list_args": ["--sync-direction", "all"],
+        "known": [],
+    }
+    assert scopes["/config/remote"]["known"] == []
+    assert scopes["/config/verify"]["known"] == []
 
 
 def test_rejects_names_with_whitespace(monkeypatch: pytest.MonkeyPatch) -> None:

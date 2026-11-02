@@ -19,6 +19,13 @@ required fields: a property the inventory stops declaring is deleted, not left
 behind the way a partial `set` would.
 
 `apply: false` (the default) makes a live deploy a read-only drift report.
+
+`container` names the Docker container a PBS runs in on a non-PBS host (the
+offsite zavala and ikora). Every API call then goes through `docker exec`, and
+such a host is report-only: these sit on third-party sites, so the repo audits
+them and never writes. `add_only` names accounts that may hold only
+`ADD_ONLY_ROLES` on *any* ACL path, `/` included, so xur's push account cannot
+regain prune or delete rights offsite unnoticed.
 """
 
 from __future__ import annotations
@@ -37,6 +44,8 @@ MODULE_DIR = "pbs-server"
 REMOTE_ROOT = "/tmp/homelab-pbs-server"
 PLAN_NAME = "plan.json"
 ACL_SCOPE = "/datastore"
+
+ADD_ONLY_ROLES = ("DatastoreBackup", "DatastoreReader")
 
 KEEP = ("keep-last", "keep-hourly", "keep-daily", "keep-weekly", "keep-monthly", "keep-yearly")
 
@@ -220,7 +229,12 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
     prepare_build_dir(build_dir)
     (build_dir / PLAN_NAME).write_text(json.dumps(plan, indent=2) + "\n", encoding="utf-8")
 
-    mode = "apply" if plan["apply"] else "report drift (apply: false)"
+    if plan["apply"]:
+        mode = "apply"
+    elif plan["container"]:
+        mode = f"report drift (container {plan['container']}, report-only)"
+    else:
+        mode = "report drift (apply: false)"
     if dry_run:
         print_sub(f"[DRY-RUN] Would {mode} on {host}:{REMOTE_ROOT}/")
         print_sub(f"Managed objects: {len(plan['objects'])}, ACLs: {len(plan['acls']['grants'])}")
@@ -246,11 +260,10 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
 
 def build_plan(root: Path, host: str) -> dict[str, object]:
     registry = default_registry(root)
-    if str(registry.get(host, "config.type", "")) != "pbs":
-        raise ValueError(f"{MODULE_DIR} supports PBS hosts only: {host}")
     config = registry.get(host, MODULE_DIR, {}) or {}
     if not isinstance(config, dict):
         raise ValueError(f"{MODULE_DIR} must be a mapping for {host}")
+    container, apply = host_mode(str(registry.get(host, "config.type", "")), config, host)
 
     sections = {kind.section: section_items(config, kind, host) for kind in SECTION_KINDS}
     if not sections[DATASTORE.section]:
@@ -266,14 +279,38 @@ def build_plan(root: Path, host: str) -> dict[str, object]:
     ]
     objects += notification_objects(config.get("notifications"), host)
     return {
-        "apply": normalize_bool(
-            config.get("apply"), False, f"{MODULE_DIR}.apply must be boolean for {host}"
-        ),
+        "apply": apply,
+        "container": container,
         "objects": objects,
         "unmanaged": unmanaged_scopes(objects),
         "acls": acl_plan(config, users, host),
         "users": users,
+        "add_only": add_only_plan(config, users, host),
     }
+
+
+def host_mode(host_type: str, config: dict, host: str) -> tuple[str, bool]:
+    """(container, apply): a container-hosted PBS may sit on any host type and
+    is always report-only."""
+    raw = config.get("container")
+    container = "" if raw in (None, "") else check_name(raw, f"{MODULE_DIR}.container", host)
+    if not container and host_type != "pbs":
+        raise ValueError(f"{MODULE_DIR} supports PBS hosts only, or set container: {host}")
+    apply = normalize_bool(
+        config.get("apply"), False, f"{MODULE_DIR}.apply must be boolean for {host}"
+    )
+    if apply and container:
+        raise ValueError(f"{MODULE_DIR}: a container-hosted PBS is report-only; drop apply: {host}")
+    return container, apply
+
+
+def add_only_plan(config: dict, users: list[str], host: str) -> dict[str, list[str]]:
+    key = f"{MODULE_DIR}.add_only"
+    auth_ids = name_list(config.get("add_only"), key, host)
+    unknown = sorted(set(auth_ids) - set(users))
+    if unknown:
+        raise ValueError(f"{key} names undeclared users {unknown} for {host}")
+    return {"auth_ids": auth_ids, "roles": list(ADD_ONLY_ROLES)}
 
 
 def section_items(config: dict, kind: Kind, host: str) -> dict[str, dict]:
@@ -416,15 +453,18 @@ def notification_objects(config: object, host: str) -> list[dict[str, object]]:
 
 
 def unmanaged_scopes(objects: list[dict[str, object]]) -> list[dict[str, object]]:
-    """Collections whose undeclared entries are reported, with the names declared."""
-    scopes: dict[str, dict[str, object]] = {}
+    """Collections whose undeclared entries are reported, with the names declared.
+    Every section kind is listed even when none is declared, so a sync job or
+    remote that appears on a host which should have none is still reported."""
+    scopes = {kind.path: scope(kind.path, kind.key, list(kind.list_args)) for kind in SECTION_KINDS}
     for obj in objects:
-        scope = scopes.setdefault(
-            obj["path"],
-            {"path": obj["path"], "key": obj["key"], "list_args": obj["list_args"], "known": []},
-        )
-        scope["known"].append(obj["id"])
+        entry = scopes.setdefault(obj["path"], scope(obj["path"], obj["key"], obj["list_args"]))
+        entry["known"].append(obj["id"])
     return list(scopes.values())
+
+
+def scope(path: str, key: str, list_args: list[str]) -> dict[str, object]:
+    return {"path": path, "key": key, "list_args": list_args, "known": []}
 
 
 def name_list(value: object, key: str, host: str) -> list[str]:
