@@ -1,48 +1,58 @@
 services:
-  qbittorrent:
-    image: ghcr.io/binhex/arch-qbittorrentvpn:5.1
-    container_name: qbittorrent
-    init: true
-    stop_grace_period: 20s
+  gluetun:
+    image: ghcr.io/qdm12/gluetun:v3
+    container_name: gluetun
     networks:
-      net.internal: {}
-      net_overlay: {}
+      net.internal:
+        aliases:
+          - qbittorrent
+      net_overlay:
+        aliases:
+          - qbittorrent
     restart: always
-    privileged: true
-    mem_limit: 5g
-    cpus: 4
+    cap_add:
+      - NET_ADMIN
     env_file:
       - .env
-    sysctls:
-      - net.ipv4.conf.all.src_valid_mark=1
     volumes:
-      - /mnt/cache/appdata/qbittorrent:/config
-      - /mnt/cache/downloads:/downloads
+      - /mnt/cache/appdata/qbittorrent/gluetun:/gluetun
     environment:
-      VPN_ENABLED: yes
-      VPN_PROV: protonvpn
-      VPN_CLIENT: wireguard
-      STRICT_PORT_FORWARD: yes
-      ENABLE_PRIVOXY: no
-      ENABLE_SOCKS: no
-      SOCKS_USER: admin
-      SOCKS_PASS: socks
-      LAN_NETWORK: 10.0.40.0/24
-      WEBUI_PORT: 8180
-      DEBUG: false
-      VPN_USER: ${VPN_USER}
-      VPN_PASS: ${VPN_PASS}
-      ENABLE_STARTUP_SCRIPTS: no
-      USERSPACE_WIREGUARD: no
-      NAME_SERVERS: 1.1.1.1,1.0.0.1
-      PUID: 1000
-      PGID: 1000
-      UMASK: 000
+      VPN_SERVICE_PROVIDER: protonvpn
+      VPN_TYPE: wireguard
+      WIREGUARD_IMPLEMENTATION: kernelspace
+      SERVER_COUNTRIES: United States
+      VPN_PORT_FORWARDING: 'on'
+      VPN_PORT_FORWARDING_UP_COMMAND: >-
+        wget -qO- --retry-connrefused --tries=60 --waitretry=5
+        --post-data 'json={"listen_port":{{PORT}}}'
+        http://127.0.0.1:8180/api/v2/app/setPreferences
     labels:
       traefik.enable: 'true'
       traefik.http.routers.qbittorrent.entryPoints: 'https'
       traefik.http.routers.qbittorrent.middlewares: 'allow-local@file'
+      traefik.http.routers.qbittorrent.rule: Host(`qbittorrent.${DOMAIN}`)
       traefik.http.services.qbittorrent.loadbalancer.server.port: '8180'
+
+  qbittorrent:
+    image: lscr.io/linuxserver/qbittorrent:latest
+    container_name: qbittorrent
+    network_mode: service:gluetun
+    depends_on:
+      gluetun:
+        condition: service_healthy
+        restart: true
+    restart: always
+    mem_limit: 5g
+    cpus: 4
+    volumes:
+      - /mnt/cache/appdata/qbittorrent:/config
+      - /mnt/cache/downloads:/downloads
+    environment:
+      PUID: 1000
+      PGID: 1000
+      UMASK: '000'
+      WEBUI_PORT: 8180
+      DOCKER_MODS: ghcr.io/vuetorrent/vuetorrent-lsio-mod:latest
 
 networks:
   net.internal:
