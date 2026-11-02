@@ -1,0 +1,23 @@
+services:
+  recyclarr:
+    image: ghcr.io/recyclarr/recyclarr:8
+    container_name: recyclarr
+    user: '1000:1000'
+    env_file:
+      - .env
+    networks:
+      net.internal: {}
+    restart: always
+    mem_limit: 512m
+    read_only: true
+    tmpfs: /tmp
+    security_opt: ['no-new-privileges:true']
+    volumes:
+      - /mnt/cache/appdata/recyclarr:/config
+    environment:
+      TZ: 'America/New_York'
+      CRON_SCHEDULE: '0 5 * * *'
+
+networks:
+  net.internal:
+    external: true
