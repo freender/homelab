@@ -5,7 +5,7 @@ networks:
 services:
   vmalert:
     container_name: vmalert
-    image: victoriametrics/vmalert:v1.117.1
+    image: victoriametrics/vmalert:v1.155.0
     user: 1000:1000
     volumes:
       - /mnt/cache/appdata/vmalert/rules:/etc/vmalert/rules:ro

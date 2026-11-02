@@ -19,7 +19,7 @@ services:
       POSTGRES_INITDB_ARGS: --data-checksums
 
   immich-redis:
-    image: redis:8.6.3-alpine
+    image: redis:8.10.3-alpine
     container_name: immich-redis
     networks:
       net.internal: {}

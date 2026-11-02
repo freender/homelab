@@ -7,7 +7,7 @@ networks:
 services:
   victoria-logs:
     container_name: victoria-logs
-    image: victoriametrics/victoria-logs:v1.47.0
+    image: victoriametrics/victoria-logs:v1.53.0
     user: 1000:1000
     volumes:
       - /mnt/scratch/victoria-logs:/victoria-logs-data

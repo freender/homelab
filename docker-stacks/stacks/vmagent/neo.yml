@@ -4,7 +4,7 @@ networks:
 
 services:
   vmagent-neo:
-    image: victoriametrics/vmagent:v1.117.1
+    image: victoriametrics/vmagent:v1.155.0
     container_name: vmagent-neo
     init: true
     stop_grace_period: 20s

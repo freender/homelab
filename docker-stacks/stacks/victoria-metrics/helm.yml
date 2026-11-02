@@ -7,7 +7,7 @@ networks:
 services:
   victoria-metrics:
     container_name: victoria-metrics
-    image: victoriametrics/victoria-metrics:v1.117.1
+    image: victoriametrics/victoria-metrics:v1.155.0
     user: 1000:1000
     volumes:
       - /mnt/scratch/victoria-metrics:/victoria-metrics-data
