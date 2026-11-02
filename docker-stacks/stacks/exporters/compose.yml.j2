@@ -12,7 +12,7 @@ services:
     image: gcr.io/cadvisor/cadvisor:latest
     container_name: cadvisor-{{ HOST }}
     init: true
-    stop_grace_period: 20s
+    stop_grace_period: 2s
     restart: always
     mem_limit: 512m
     privileged: true
