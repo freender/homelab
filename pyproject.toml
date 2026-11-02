@@ -145,6 +145,7 @@ also_copy = [
     "metrics-exporters",
     "monitoring-config",
     "pbs-client-backup",
+    "pbs-server",
     "pve-autoinstall",
     "pve-backup",
     "pve-gpu-passthrough",

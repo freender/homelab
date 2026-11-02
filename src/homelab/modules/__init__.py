@@ -16,6 +16,7 @@ from .keepalived import deploy as deploy_keepalived
 from .metrics_exporters import deploy as deploy_metrics_exporters
 from .monitoring_config import deploy as deploy_monitoring_config
 from .pbs_client_backup import deploy as deploy_pbs_client_backup
+from .pbs_server import deploy as deploy_pbs_server
 from .pve_autoinstall import deploy as deploy_pve_autoinstall
 from .pve_backup import deploy as deploy_pve_backup
 from .pve_gpu_passthrough import deploy as deploy_pve_gpu_passthrough
@@ -83,6 +84,10 @@ MODULES: dict[str, ModuleDefinition] = {
     "pbs-client-backup": ModuleDefinition(
         name="PBS Client Backup",
         deploy=deploy_pbs_client_backup,
+    ),
+    "pbs-server": ModuleDefinition(
+        name="PBS Server Config",
+        deploy=deploy_pbs_server,
     ),
     "pve-backup": ModuleDefinition(
         name="PVE Backup",
@@ -167,6 +172,8 @@ MODULE_ORDER = [
     # persists its own staged key so a direct module deploy remains rebuild-safe.
     "pbs-client-backup",
     "pve-backup",
+    # Report-only until `pbs-server.apply: true`; converges xur's own jobs and ACLs.
+    "pbs-server",
     "apcupsd",
     "metrics-exporters",
     "monitoring-config",
