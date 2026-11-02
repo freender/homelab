@@ -6,6 +6,7 @@ services:
     stop_grace_period: 20s
     networks:
       net.internal: {}
+      net_overlay: {}
     restart: always
     user: "1000:1000"
     mem_limit: 1g
@@ -15,6 +16,8 @@ services:
       TZ: America/New_York
 networks:
   net.internal:
+    external: true
+  net_overlay:
     external: true
 
 

@@ -9,7 +9,6 @@ services:
     restart: always
     mem_limit: 1g
     volumes:
-      - /mnt/cache/downloads:/downloads
       - /mnt/cache/appdata/prowlarr:/config
     environment:
       PUID: 1000

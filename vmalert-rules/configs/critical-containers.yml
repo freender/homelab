@@ -37,9 +37,9 @@ groups:
         labels: {severity: critical, category: docker, site: home, host: tower, name: plex}
         annotations: {summary: "tower / plex is missing", description: "Critical container has not been seen by cAdvisor for 5 minutes."}
       - alert: CriticalContainerMissing
-        expr: absent_over_time(container_last_seen{job="cadvisor", host="tower", name="seerr"}[5m]) and on(host) (min_over_time(up{job="pve-node"}[10m]) == 1)
-        labels: {severity: critical, category: docker, site: home, host: tower, name: seerr}
-        annotations: {summary: "tower / seerr is missing", description: "Critical container has not been seen by cAdvisor for 5 minutes."}
+        expr: absent_over_time(container_last_seen{job="cadvisor", host="helm", name="seerr"}[5m]) and on(host) (min_over_time(up{job="pve-node"}[10m]) == 1)
+        labels: {severity: critical, category: docker, site: home, host: helm, name: seerr}
+        annotations: {summary: "helm / seerr is missing", description: "Critical container has not been seen by cAdvisor for 5 minutes."}
       - alert: CriticalContainerMissing
         expr: absent_over_time(container_last_seen{job="cadvisor", host="tower", name="socket-proxy-tower"}[5m]) and on(host) (min_over_time(up{job="pve-node"}[10m]) == 1)
         labels: {severity: critical, category: docker, site: home, host: tower, name: socket-proxy-tower}

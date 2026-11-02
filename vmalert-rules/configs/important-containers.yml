@@ -49,9 +49,9 @@ groups:
         labels: {severity: warning, category: docker, site: home, host: tower, name: bazarr4k}
         annotations: {summary: "tower / bazarr4k is missing", description: "Important app container has not been seen by cAdvisor for 5 minutes."}
       - alert: ImportantContainerMissing
-        expr: absent_over_time(container_last_seen{job="cadvisor", host="tower", name="prowlarr"}[5m]) and on(host) (min_over_time(up{job="pve-node"}[10m]) == 1)
-        labels: {severity: warning, category: docker, site: home, host: tower, name: prowlarr}
-        annotations: {summary: "tower / prowlarr is missing", description: "Important app container has not been seen by cAdvisor for 5 minutes."}
+        expr: absent_over_time(container_last_seen{job="cadvisor", host="helm", name="prowlarr"}[5m]) and on(host) (min_over_time(up{job="pve-node"}[10m]) == 1)
+        labels: {severity: warning, category: docker, site: home, host: helm, name: prowlarr}
+        annotations: {summary: "helm / prowlarr is missing", description: "Important app container has not been seen by cAdvisor for 5 minutes."}
       - alert: ImportantContainerMissing
         expr: absent_over_time(container_last_seen{job="cadvisor", host="tower", name="sabnzbd"}[5m]) and on(host) (min_over_time(up{job="pve-node"}[10m]) == 1)
         labels: {severity: warning, category: docker, site: home, host: tower, name: sabnzbd}
@@ -61,17 +61,17 @@ groups:
         labels: {severity: warning, category: docker, site: home, host: tower, name: qbittorrent}
         annotations: {summary: "tower / qbittorrent is missing", description: "Important app container has not been seen by cAdvisor for 5 minutes."}
       - alert: ImportantContainerMissing
-        expr: absent_over_time(container_last_seen{job="cadvisor", host="tower", name="tautulli"}[5m]) and on(host) (min_over_time(up{job="pve-node"}[10m]) == 1)
-        labels: {severity: warning, category: docker, site: home, host: tower, name: tautulli}
-        annotations: {summary: "tower / tautulli is missing", description: "Important app container has not been seen by cAdvisor for 5 minutes."}
+        expr: absent_over_time(container_last_seen{job="cadvisor", host="helm", name="tautulli"}[5m]) and on(host) (min_over_time(up{job="pve-node"}[10m]) == 1)
+        labels: {severity: warning, category: docker, site: home, host: helm, name: tautulli}
+        annotations: {summary: "helm / tautulli is missing", description: "Important app container has not been seen by cAdvisor for 5 minutes."}
       - alert: ImportantContainerMissing
         expr: absent_over_time(container_last_seen{job="cadvisor", host="tower", name="jellyfin"}[5m]) and on(host) (min_over_time(up{job="pve-node"}[10m]) == 1)
         labels: {severity: warning, category: docker, site: home, host: tower, name: jellyfin}
         annotations: {summary: "tower / jellyfin is missing", description: "Important app container has not been seen by cAdvisor for 5 minutes."}
       - alert: ImportantContainerMissing
-        expr: absent_over_time(container_last_seen{job="cadvisor", host="tower", name="nzbhydra"}[5m]) and on(host) (min_over_time(up{job="pve-node"}[10m]) == 1)
-        labels: {severity: warning, category: docker, site: home, host: tower, name: nzbhydra}
-        annotations: {summary: "tower / nzbhydra is missing", description: "Important app container has not been seen by cAdvisor for 5 minutes."}
+        expr: absent_over_time(container_last_seen{job="cadvisor", host="helm", name="nzbhydra"}[5m]) and on(host) (min_over_time(up{job="pve-node"}[10m]) == 1)
+        labels: {severity: warning, category: docker, site: home, host: helm, name: nzbhydra}
+        annotations: {summary: "helm / nzbhydra is missing", description: "Important app container has not been seen by cAdvisor for 5 minutes."}
       - alert: ImportantContainerMissing
         expr: absent_over_time(container_last_seen{job="cadvisor", host="tower", name="alloy-tower"}[5m]) and on(host) (min_over_time(up{job="pve-node"}[10m]) == 1)
         labels: {severity: warning, category: docker, site: home, host: tower, name: alloy-tower}
@@ -93,13 +93,13 @@ groups:
         labels: {severity: warning, category: docker, site: home, host: tower, name: hawser-tower}
         annotations: {summary: "tower / hawser-tower is missing", description: "Important app container has not been seen by cAdvisor for 5 minutes."}
       - alert: ImportantContainerMissing
-        expr: absent_over_time(container_last_seen{job="cadvisor", host="tower", name="varken"}[5m]) and on(host) (min_over_time(up{job="pve-node"}[10m]) == 1)
-        labels: {severity: warning, category: docker, site: home, host: tower, name: varken}
-        annotations: {summary: "tower / varken is missing", description: "Important app container has not been seen by cAdvisor for 5 minutes."}
+        expr: absent_over_time(container_last_seen{job="cadvisor", host="helm", name="varken"}[5m]) and on(host) (min_over_time(up{job="pve-node"}[10m]) == 1)
+        labels: {severity: warning, category: docker, site: home, host: helm, name: varken}
+        annotations: {summary: "helm / varken is missing", description: "Important app container has not been seen by cAdvisor for 5 minutes."}
       - alert: ImportantContainerMissing
-        expr: absent_over_time(container_last_seen{job="cadvisor", host="tower", name="watchstate"}[5m]) and on(host) (min_over_time(up{job="pve-node"}[10m]) == 1)
-        labels: {severity: warning, category: docker, site: home, host: tower, name: watchstate}
-        annotations: {summary: "tower / watchstate is missing", description: "Important app container has not been seen by cAdvisor for 5 minutes."}
+        expr: absent_over_time(container_last_seen{job="cadvisor", host="helm", name="watchstate"}[5m]) and on(host) (min_over_time(up{job="pve-node"}[10m]) == 1)
+        labels: {severity: warning, category: docker, site: home, host: helm, name: watchstate}
+        annotations: {summary: "helm / watchstate is missing", description: "Important app container has not been seen by cAdvisor for 5 minutes."}
       - alert: ImportantContainerMissing
         expr: absent_over_time(container_last_seen{job="cadvisor", host="helm", name="alloy-helm"}[5m]) and on(host) (min_over_time(up{job="pve-node"}[10m]) == 1)
         labels: {severity: warning, category: docker, site: home, host: helm, name: alloy-helm}
