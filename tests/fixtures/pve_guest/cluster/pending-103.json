@@ -1,0 +1,82 @@
+[
+ {
+  "key": "agent",
+  "value": "enabled=1"
+ },
+ {
+  "key": "balloon",
+  "value": 0
+ },
+ {
+  "key": "bios",
+  "value": "ovmf"
+ },
+ {
+  "key": "boot",
+  "value": "order=scsi0"
+ },
+ {
+  "key": "cores",
+  "value": 8
+ },
+ {
+  "key": "cpu",
+  "value": "x86-64-v3"
+ },
+ {
+  "key": "efidisk0",
+  "value": "vm-flash:vm-103-disk-0,efitype=4m,pre-enrolled-keys=0,size=1M"
+ },
+ {
+  "key": "hostpci0",
+  "value": "mapping=pci-gpu-nvidia,pcie=1"
+ },
+ {
+  "key": "machine",
+  "value": "q35"
+ },
+ {
+  "key": "memory",
+  "value": "16384"
+ },
+ {
+  "key": "name",
+  "value": "glint"
+ },
+ {
+  "key": "net0",
+  "value": "virtio=BC:24:11:9A:5C:E2,bridge=vmbr0,firewall=1,tag=40"
+ },
+ {
+  "key": "numa",
+  "value": 0
+ },
+ {
+  "key": "onboot",
+  "value": 0
+ },
+ {
+  "key": "ostype",
+  "value": "l26"
+ },
+ {
+  "key": "scsi0",
+  "value": "vm-flash:vm-103-disk-1,discard=on,iothread=1,size=32G,ssd=1"
+ },
+ {
+  "key": "scsi1",
+  "value": "vm-flash:vm-103-disk-2,discard=on,iothread=1,size=32G,ssd=1"
+ },
+ {
+  "key": "scsihw",
+  "value": "virtio-scsi-single"
+ },
+ {
+  "key": "sockets",
+  "value": 1
+ },
+ {
+  "key": "tablet",
+  "value": 0
+ }
+]

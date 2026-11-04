@@ -88,7 +88,7 @@ def real_specs():
 
 def test_every_declared_guest_is_in_sync_with_the_fixture() -> None:
     specs = real_specs()
-    assert len(specs) == 8, "the eight managed guests (void is deferred, #148)"
+    assert len(specs) == 9, "the nine managed guests (void is deferred, #148)"
     runner = FixtureRunner()
     views: dict = {}
     for spec in specs.values():
@@ -100,7 +100,7 @@ def test_every_declared_guest_is_in_sync_with_the_fixture() -> None:
 
 
 def test_hand_written_vmids_all_resolve() -> None:
-    assert validate_inventory(default_registry(ROOT)) == (8, 20)
+    assert validate_inventory(default_registry(ROOT)) == (9, 20)
 
 
 def test_every_impact_label_on_a_changed_helm_spec() -> None:
@@ -980,7 +980,7 @@ def test_cli_check_pve_guests(monkeypatch: pytest.MonkeyPatch, capsys) -> None:
     from homelab import cli
 
     cli.check_pve_guests(ROOT)
-    assert "8 pve-guest spec(s) valid; 20 hand-written vmid(s) match" in capsys.readouterr().out
+    assert "9 pve-guest spec(s) valid; 20 hand-written vmid(s) match" in capsys.readouterr().out
 
     def broken(registry):
         raise ValueError("helm: pve-guest.vmid must be a positive integer")
