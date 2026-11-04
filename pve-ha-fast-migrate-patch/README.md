@@ -48,12 +48,31 @@ All four are checked before any is touched, and validated by loading them as the
 daemons do; a failed validation restores every file patched in that run. The
 upstream HA simulator suite (`ha-tester.pl`, 153 cases) passes unchanged.
 
+## Why This Stays Migration-Only
+
+The general "wake on any change" version was built and tried on 2026-11-04
+(homelab-ops#296) and **self-fenced all three nodes, six hard resets in 16
+minutes**. `watchdog-mux` only pets `/dev/watchdog` on an epoll *timeout*
+iteration, while each HA round pets the mux by writing to its socket: once rounds
+go sub-second, socket events arrive faster than 1/s, the `WDIOC_KEEPALIVE` ioctl
+is never reached, and the softdog (10s) resets a node whose daemons are perfectly
+healthy. Full post-mortem:
+`archive/retired-modules/top-level/pve-ha-wake-on-change-patch/README.md`.
+
+This module survives because its wakes are **one-shot per migration event** — a
+worker exiting, a result appearing, a uid changing — so it adds a handful of
+early rounds per migration and never a sustained sub-second cadence. That is a
+property to preserve, not an accident: never widen a wake condition here to
+something that can retrigger every second (a file version that moves every round,
+a timestamp, an unconditional poll) without first fixing `watchdog-mux` to pet
+the watchdog on a time basis.
+
 ## Upstream Tracking
 
-Local, migration-only variant. The general version (wake on any change, meant for
-upstream) is homelab-ops#296. Once that or an equivalent lands, the original
-blocks stop matching, the installer refuses with `failed-unexpected-*`, and this
-module should be retired.
+Local, migration-only variant. Anything general enough for upstream needs the
+`watchdog-mux` keepalive fix landed first (homelab-ops#296). Once an equivalent
+is in the package, the original blocks stop matching, the installer refuses with
+`failed-unexpected-*`, and this module should be retired.
 
 ## Operational Files
 
