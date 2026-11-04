@@ -101,6 +101,10 @@ groups:
         labels: {severity: warning, category: docker, site: home, host: helm, name: watchstate}
         annotations: {summary: "helm / watchstate is missing", description: "Important app container has not been seen by cAdvisor for 5 minutes."}
       - alert: ImportantContainerMissing
+        expr: absent_over_time(container_last_seen{job="cadvisor", host="helm", name="recyclarr"}[5m]) and on(host) (min_over_time(up{job="pve-node"}[10m]) == 1)
+        labels: {severity: warning, category: docker, site: home, host: helm, name: recyclarr}
+        annotations: {summary: "helm / recyclarr is missing", description: "Important app container has not been seen by cAdvisor for 5 minutes."}
+      - alert: ImportantContainerMissing
         expr: absent_over_time(container_last_seen{job="cadvisor", host="helm", name="alloy-helm"}[5m]) and on(host) (min_over_time(up{job="pve-node"}[10m]) == 1)
         labels: {severity: warning, category: docker, site: home, host: helm, name: alloy-helm}
         annotations: {summary: "helm / alloy-helm is missing", description: "Important app container has not been seen by cAdvisor for 5 minutes."}
