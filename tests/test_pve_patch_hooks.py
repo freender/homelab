@@ -9,7 +9,11 @@ ROOT = Path(__file__).resolve().parents[1]
 PATCH_INSTALLERS = (
     "pve-zfs-large-block-patch/scripts/install.sh",
     "pve-lxc-pre-replication-patch/scripts/install.sh",
+    "pve-ha-fast-migrate-patch/scripts/install.sh",
 )
+# Installers that predate per-patch checksum directories and so still clean up
+# the shared flat records; patches added since never wrote one.
+LEGACY_CHECKSUM_INSTALLERS = PATCH_INSTALLERS[:2]
 
 
 @pytest.mark.parametrize("installer", PATCH_INSTALLERS)
@@ -29,7 +33,7 @@ def test_direct_patch_deploy_remains_unconditional(installer: str) -> None:
 
     # The hook is gated, but the installer itself must converge a missing patch.
     direct_invocation = '"${PATCH_SCRIPT}"'
-    if "lxc-" in installer:
+    if "lxc-" in installer or "ha-" in installer:
         direct_invocation += " --restart-services"
     assert text.rstrip().endswith(direct_invocation)
 
@@ -58,7 +62,7 @@ def test_each_patch_owns_its_target_checksum_record() -> None:
         assert checksum_dir == f"/var/lib/homelab/pve-patches/target-checksums/{state_id.group(1)}"
 
 
-@pytest.mark.parametrize("installer", PATCH_INSTALLERS)
+@pytest.mark.parametrize("installer", LEGACY_CHECKSUM_INSTALLERS)
 def test_installer_removes_the_shared_legacy_checksum_records(installer: str) -> None:
     text = (ROOT / installer).read_text(encoding="utf-8")
     installer_body = text.split("<<'SCRIPT'", 1)[0]

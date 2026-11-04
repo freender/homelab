@@ -51,6 +51,24 @@ PVE_PATCH_STATUSES = (
             ),
         ),
     ),
+    (
+        "pve-ha-fast-migrate-patch",
+        "ha-fast-migrate",
+        "/var/lib/homelab/pve-ha-fast-migrate-patch/status",
+        "patched,already-patched",
+        (
+            (
+                "/usr/share/perl5/PVE/HA/Env.pm",
+                "homelab-ha-fast-migrate: only the PVE2 environment",
+            ),
+            (
+                "/usr/share/perl5/PVE/HA/Env/PVE2.pm",
+                "homelab-ha-fast-migrate: optionally end the wait early",
+            ),
+            ("/usr/share/perl5/PVE/HA/LRM.pm", "homelab-ha-fast-migrate: end the LRM round early"),
+            ("/usr/share/perl5/PVE/HA/CRM.pm", "homelab-ha-fast-migrate: end the CRM round early"),
+        ),
+    ),
 )
 
 # node_exporter flags shared by every host.

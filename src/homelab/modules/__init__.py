@@ -21,6 +21,7 @@ from .pve_autoinstall import deploy as deploy_pve_autoinstall
 from .pve_backup import deploy as deploy_pve_backup
 from .pve_gpu_passthrough import deploy as deploy_pve_gpu_passthrough
 from .pve_guest import deploy as deploy_pve_guest
+from .pve_ha_fast_migrate_patch import deploy as deploy_pve_ha_fast_migrate_patch
 from .pve_http_boot import deploy as deploy_pve_http_boot
 from .pve_interface_pinning import deploy as deploy_pve_interface_pinning
 from .pve_lxc_pre_replication_patch import deploy as deploy_pve_lxc_pre_replication_patch
@@ -142,6 +143,10 @@ MODULES: dict[str, ModuleDefinition] = {
         name="PVE LXC Pre-Replication Patch",
         deploy=deploy_pve_lxc_pre_replication_patch,
     ),
+    "pve-ha-fast-migrate-patch": ModuleDefinition(
+        name="PVE HA Fast-Migrate Patch",
+        deploy=deploy_pve_ha_fast_migrate_patch,
+    ),
     "pve-gpu-passthrough": ModuleDefinition(
         name="GPU Passthrough Configs",
         deploy=deploy_pve_gpu_passthrough,
@@ -180,6 +185,7 @@ MODULE_ORDER = [
     "vmalert-rules",
     "pve-zfs-large-block-patch",
     "pve-lxc-pre-replication-patch",
+    "pve-ha-fast-migrate-patch",
     "pve-gpu-passthrough",
     "keepalived",
     "ssh-config",

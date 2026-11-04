@@ -149,6 +149,7 @@ also_copy = [
     "pve-autoinstall",
     "pve-backup",
     "pve-gpu-passthrough",
+    "pve-ha-fast-migrate-patch",
     "pve-http-boot",
     "pve-interface-pinning",
     "pve-lxc-pre-replication-patch",

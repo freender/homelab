@@ -242,6 +242,7 @@ upstream fixes ship:
 
 - [pve-zfs-large-block-patch](pve-zfs-large-block-patch/): Bug 4603 - Add support for migrating ZFS datasets with large_blocks
 - [pve-lxc-pre-replication-patch](pve-lxc-pre-replication-patch/): pre-replication hook for LXC guests
+- [pve-ha-fast-migrate-patch](pve-ha-fast-migrate-patch/): end HA manager rounds early while a migration is handed over
 
 Revert these local patches and remove the modules after the corresponding
 Proxmox fixes are included upstream.
