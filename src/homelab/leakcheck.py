@@ -64,6 +64,7 @@ _VENDOR_DOMAINS = frozenset(
         "grafana.com",
         "kernel.org",
         "microsoft.com",
+        "nvidia.com",
         "opencode.ai",
         "openssh.com",
         "proxmox.com",

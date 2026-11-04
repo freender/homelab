@@ -144,6 +144,7 @@ also_copy = [
     "keepalived",
     "metrics-exporters",
     "monitoring-config",
+    "nvidia-gpu",
     "pbs-client-backup",
     "pbs-server",
     "pve-autoinstall",

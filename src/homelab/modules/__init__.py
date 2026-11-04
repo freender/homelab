@@ -15,6 +15,7 @@ from .guest_disks import deploy as deploy_guest_disks
 from .keepalived import deploy as deploy_keepalived
 from .metrics_exporters import deploy as deploy_metrics_exporters
 from .monitoring_config import deploy as deploy_monitoring_config
+from .nvidia_gpu import deploy as deploy_nvidia_gpu
 from .pbs_client_backup import deploy as deploy_pbs_client_backup
 from .pbs_server import deploy as deploy_pbs_server
 from .pve_autoinstall import deploy as deploy_pve_autoinstall
@@ -101,6 +102,10 @@ MODULES: dict[str, ModuleDefinition] = {
     "monitoring-config": ModuleDefinition(
         name="VictoriaMetrics and Alertmanager Config",
         deploy=deploy_monitoring_config,
+    ),
+    "nvidia-gpu": ModuleDefinition(
+        name="NVIDIA GPU Driver and Container Toolkit",
+        deploy=deploy_nvidia_gpu,
     ),
     "pve-autoinstall": ModuleDefinition(
         name="PVE Automated Install (PDM Answers)",
@@ -196,6 +201,9 @@ MODULE_ORDER = [
     "guest-disks",
     "zfs-automation",
     "docker",
+    # The toolkit's `--gpus` hook is used by Docker, so it follows the engine,
+    # and comes before any stack that reserves a GPU.
+    "nvidia-gpu",
     # Engine, swarm membership and the overlay must exist before any stack that
     # attaches to net_overlay is reconciled.
     "docker-stacks",
