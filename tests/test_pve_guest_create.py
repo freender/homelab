@@ -16,7 +16,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from homelab.hosts import HostRegistry
+from homelab.hosts import HostRegistry, default_registry
 from homelab.modules.pve_guest import build, create, live
 from homelab.modules.pve_guest.spec import parse_guest
 
@@ -276,6 +276,15 @@ def write_root(tmp_path: Path, block: dict, keys: tuple[str, ...] = (KEY,), fqdn
     }
     (tmp_path / "hosts.conf").write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
     return tmp_path
+
+
+@pytest.fixture(autouse=True)
+def fresh_default_registry() -> None:
+    """`create_guest` reads `default_registry(root)`, cached by root path. A serial
+    mutmut sweep pins one `--basetemp` that each in-process pytest session wipes
+    and renumbers, so a `tmp_path` can come back holding a different hosts.conf
+    while the cache still answers with the old one."""
+    default_registry.cache_clear()
 
 
 def registry(root: Path) -> HostRegistry:

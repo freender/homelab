@@ -797,6 +797,8 @@ def test_protection_is_managed_only_where_declared() -> None:
     assert "protection" not in parse_guest("g", base_ct(), NODES).scalars
     assert parse_guest("g", base_ct() | {"protection": True}, NODES).scalars["protection"] == "1"
     assert parse_guest("g", base_vm() | {"protection": False}, NODES).scalars["protection"] == "0"
+    # A bare `protection:` (YAML null) is declared, and means off.
+    assert parse_guest("g", base_vm() | {"protection": None}, NODES).scalars["protection"] == "0"
 
 
 def test_unknown_keys_are_all_listed() -> None:
