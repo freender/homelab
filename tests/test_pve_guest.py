@@ -88,7 +88,7 @@ def real_specs():
 
 def test_every_declared_guest_is_in_sync_with_the_fixture() -> None:
     specs = real_specs()
-    assert len(specs) == 9, "the nine managed guests (void is deferred, #148)"
+    assert len(specs) == 10, "every guest on the cluster and osiris"
     runner = FixtureRunner()
     views: dict = {}
     for spec in specs.values():
@@ -96,11 +96,12 @@ def test_every_declared_guest_is_in_sync_with_the_fixture() -> None:
         if key not in views:
             views[key] = live.read_cluster(runner, live.query_nodes(spec, NODES))
         report = live.guest_report(spec, views[key], runner)
-        assert report == [f"{spec.kind} {spec.vmid} on {spec.home_node}, running: in sync"]
+        state = "stopped" if spec.host == "void" else "running"
+        assert report == [f"{spec.kind} {spec.vmid} on {spec.home_node}, {state}: in sync"]
 
 
 def test_hand_written_vmids_all_resolve() -> None:
-    assert validate_inventory(default_registry(ROOT)) == (9, 20)
+    assert validate_inventory(default_registry(ROOT)) == (10, 22)
 
 
 def test_every_impact_label_on_a_changed_helm_spec() -> None:
@@ -953,6 +954,9 @@ def _plans(*plans: dict) -> dict:
         ({"pve-backup": {"pbs_setup": {"jobs": [{"exclude": "201, 200"}]}}}, {},
          "vmid 200 \\(vm\\) lives on bray, not osiris"),
         ({"pve-backup": {"pbs_setup": {"jobs": [{"vmid": "201"}, {"storage": "x"}]}}}, {}, None),
+        ({}, {"pve-backup": {"pbs_setup": {"jobs": [{"exclude": "200"}]}}}, None),
+        ({}, {"pve-backup": {"pbs_setup": {"jobs": [{"exclude": "200,201"}]}}},
+         "vmid 201 \\(ct\\) lives on osiris, not ace or bray or clovis"),
         ({}, _plans({"vmid": 201, "dataset": "vm-flash/subvol-201-disk-1"}), None),
         ({}, _plans({"vmid": 201, "dataset": "vm-flash/subvol-202-disk-1"}),
          "is not vmid 201's"),
@@ -980,7 +984,7 @@ def test_cli_check_pve_guests(monkeypatch: pytest.MonkeyPatch, capsys) -> None:
     from homelab import cli
 
     cli.check_pve_guests(ROOT)
-    assert "9 pve-guest spec(s) valid; 20 hand-written vmid(s) match" in capsys.readouterr().out
+    assert "10 pve-guest spec(s) valid; 22 hand-written vmid(s) match" in capsys.readouterr().out
 
     def broken(registry):
         raise ValueError("helm: pve-guest.vmid must be a positive integer")

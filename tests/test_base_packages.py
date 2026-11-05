@@ -51,12 +51,12 @@ def test_runs_first() -> None:
 def test_enabled_on_every_apt_managed_host() -> None:
     """Every host that apt can reach must carry the feature.
 
-    macOS (exo), the Arch-based Pi-KVM appliance and the Home Assistant OS VM
-    (zion) are the only legitimate exclusions; anything else missing is the
-    drift this module was written to stop.
+    macOS (exo), the Arch-based Pi-KVM appliance, the Home Assistant OS VM
+    (zion) and the Windows VM (void) are the only legitimate exclusions;
+    anything else missing is the drift this module was written to stop.
     """
     registry = default_registry(ROOT)
-    non_apt = {"exo", "pi-kvm", "zion"}
+    non_apt = {"exo", "pi-kvm", "zion", "void"}
     expected = {host for host in registry.list_hosts() if host not in non_apt}
     actual = set(registry.list_hosts(feature="base-packages"))
     assert actual == expected, f"missing base-packages: {sorted(expected - actual)}"
@@ -68,6 +68,7 @@ def test_non_apt_hosts_are_excluded() -> None:
     assert "exo" not in enabled
     assert "pi-kvm" not in enabled
     assert "zion" not in enabled
+    assert "void" not in enabled
 
 
 def test_extra_packages_appended_after_baseline(tmp_path: Path) -> None:

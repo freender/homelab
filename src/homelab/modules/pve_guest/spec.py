@@ -29,6 +29,9 @@ class Profile:
     efidisk: dict[str, str]
     disk_opts: dict[str, str]
     net_model: str | None
+    # `./guest create` builds Debian cloud-init guests only; other profiles are
+    # declared for the inventory checks and the drift report.
+    creatable: bool = True
 
 
 PROFILES: dict[str, Profile] = {
@@ -49,6 +52,25 @@ PROFILES: dict[str, Profile] = {
         efidisk={"efitype": "4m", "pre-enrolled-keys": "0"},
         disk_opts={"discard": "on", "iothread": "1", "ssd": "1"},
         net_model="virtio",
+    ),
+    "windows-vm": Profile(
+        kind="qemu",
+        settings={
+            "machine": "q35",
+            "bios": "ovmf",
+            "cpu": "host",
+            "sockets": "1",
+            "numa": "0",
+            "scsihw": "virtio-scsi-single",
+            "ostype": "win11",
+            "agent": "enabled=1",
+            "tablet": "0",
+            "onboot": "0",
+        },
+        efidisk={"efitype": "4m", "pre-enrolled-keys": "1", "ms-cert": "2023k"},
+        disk_opts={"discard": "on", "iothread": "1", "ssd": "1"},
+        net_model="virtio",
+        creatable=False,
     ),
     "docker-ct": Profile(
         kind="lxc",

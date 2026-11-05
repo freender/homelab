@@ -28,7 +28,7 @@ from ...output import print_action, print_ok, print_sub, print_warn
 from . import build
 from .inventory import pve_nodes
 from .live import NodeUnreachable, Runner, guest_report, query_nodes, read_cluster, ssh_runner
-from .spec import FEATURE, GuestSpec, parse_guest
+from .spec import FEATURE, PROFILES, GuestSpec, parse_guest
 
 AGENT_TIMEOUT = 600
 CLOUD_INIT_TIMEOUT = 900
@@ -75,6 +75,8 @@ def load_target(registry: HostRegistry, host: str) -> Target:
     if raw is None:
         raise ValueError(f"{host} has no {FEATURE} block")
     spec = parse_guest(host, raw, nodes)
+    if not PROFILES[spec.profile].creatable:
+        raise ValueError(f"{host}: profile {spec.profile} is not built by guest create")
     fqdn = registry.get(host, "config.hostname", None)
     if not fqdn or not str(fqdn).startswith(f"{host}."):
         raise ValueError(f"{host}: config.hostname must be the guest's fqdn ({host}.<domain>)")

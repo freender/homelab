@@ -301,6 +301,9 @@ def test_load_target_needs_a_block_and_an_fqdn(tmp_path: Path) -> None:
         create.load_target(registry(write_root(tmp_path, VM_BLOCK, fqdn="other.x")), "wftest")
     with pytest.raises(ValueError, match="ace has no pve-guest block"):
         create.load_target(registry(write_root(tmp_path, VM_BLOCK)), "ace")
+    windows = VM_BLOCK | {"profile": "windows-vm"}
+    with pytest.raises(ValueError, match="profile windows-vm is not built by guest create"):
+        create.load_target(registry(write_root(tmp_path, windows)), "wftest")
 
 
 def test_sites_put_the_home_node_first_and_ask_each_standalone_node() -> None:

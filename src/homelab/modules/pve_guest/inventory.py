@@ -66,21 +66,26 @@ def check_vmid_references(registry: HostRegistry, guests: dict[str, GuestSpec]) 
 
 
 def _check_reference(
-    by_vmid: dict[int, GuestSpec], where: str, vmid: int, kind: str | None, node: str | None
+    by_vmid: dict[int, GuestSpec],
+    where: str,
+    vmid: int,
+    kind: str | None,
+    nodes: tuple[str, ...] | None,
 ) -> None:
     spec = by_vmid.get(vmid)
     if spec is None:
         raise ValueError(f"{where}: vmid {vmid} is not a declared {FEATURE} guest")
     if kind is not None and spec.kind != kind:
         raise ValueError(f"{where}: vmid {vmid} ({spec.host}) is {spec.kind}, expected {kind}")
-    if node is not None and spec.home_node != node:
+    if nodes is not None and spec.home_node not in nodes:
         raise ValueError(
-            f"{where}: vmid {vmid} ({spec.host}) lives on {spec.home_node}, not {node}"
+            f"{where}: vmid {vmid} ({spec.host}) lives on {spec.home_node}, "
+            f"not {' or '.join(nodes)}"
         )
 
 
 def vmid_references(registry: HostRegistry, host: str):
-    """(where, vmid, required kind, required home node) for each hand-written vmid."""
+    """(where, vmid, required kind, allowed home nodes) for each hand-written vmid."""
     yield from _migratable_lxc_references(registry, host)
     yield from _restore_references(registry, host)
     yield from _backup_job_references(registry, host)
@@ -102,17 +107,24 @@ def _restore_references(registry: HostRegistry, host: str):
     vmids = registry.get(host, "pve-backup.restore_lxc_configs.vmids", None) or []
     for index, vmid in enumerate(vmids):
         where = f"{host}: pve-backup.restore_lxc_configs.vmids[{index}]"
-        yield where, _vmid(vmid, where), "lxc", host
+        yield where, _vmid(vmid, where), "lxc", (host,)
 
 
 def _backup_job_references(registry: HostRegistry, host: str):
+    """A standalone node's job backs up its own guests; a cluster node's job lives in
+    the shared jobs.cfg and backs up guests on every cluster node."""
     jobs = registry.get(host, "pve-backup.pbs_setup.jobs", None) or []
+    nodes = pve_nodes(registry)
+    if nodes.get(host, True):
+        scope: tuple[str, ...] = (host,)
+    else:
+        scope = tuple(node for node, standalone in nodes.items() if not standalone)
     for index, job in enumerate(jobs):
         for field in ("vmid", "exclude"):
             where = f"{host}: pve-backup.pbs_setup.jobs[{index}].{field}"
             for item in str(job.get(field) or "").split(","):
                 if item.strip():
-                    yield where, _vmid(item.strip(), where), None, host
+                    yield where, _vmid(item.strip(), where), None, scope
 
 
 def _vmid(value: object, where: str) -> int:
