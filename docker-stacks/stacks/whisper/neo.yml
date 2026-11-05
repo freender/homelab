@@ -1,0 +1,24 @@
+services:
+  whisper:
+    # CPU build; small int8 benchmarked at ~0.85 s on neo's Alder Lake cores
+    # (homelab-ops#298). The Iris Xe/OpenVINO path matched it at the cost of a
+    # self-built image, so it is not used. Slower when neo runs on ace.
+    image: lscr.io/linuxserver/faster-whisper:v3.8.1-ls12
+    container_name: whisper-neo
+    stop_grace_period: 20s
+    restart: always
+    ports:
+      - '10300:10300'
+    volumes:
+      - /mnt/cache/appdata/whisper/data:/config
+    environment:
+      PUID: 1000
+      PGID: 1000
+      WHISPER_MODEL: small
+      WHISPER_LANG: en
+      WHISPER_BEAM: 1
+      WYO_WHISPER_COMPUTE_TYPE: int8
+      # Silence otherwise transcribes as "Thank you.", which the agent answers.
+      WYO_WHISPER_VAD_FILTER: "true"
+      # Keep in sync with glint.yml and the zion Whisper app's initial_prompt.
+      WYO_WHISPER_INITIAL_PROMPT: "Turn on the office lights. Turn off the bedroom lamp. What's the temperature in the living room? Areas: Balcony, Bathroom, Bedroom, Entrance, Guest Bathroom, Living Room, Office, Laundry Room, Closet, Garage."

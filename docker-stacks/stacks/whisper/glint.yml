@@ -4,7 +4,7 @@ services:
     # not worth a ~10 GB self-built image and an HA token on glint, because the
     # static prompt below already fixed the real-voice misses (homelab-ops#303).
     image: lscr.io/linuxserver/faster-whisper:gpu-v3.8.1-ls74
-    container_name: whisper
+    container_name: whisper-glint
     stop_grace_period: 20s
     restart: always
     ports:
