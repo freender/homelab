@@ -1,0 +1,32 @@
+services:
+  whisper:
+    # LSIO over upstream Dockerfile.gpu: upstream's --hass-token name-biasing was
+    # not worth a ~10 GB self-built image and an HA token on glint, because the
+    # static prompt below already fixed the real-voice misses (homelab-ops#303).
+    image: lscr.io/linuxserver/faster-whisper:gpu-v3.8.1-ls74
+    container_name: whisper
+    stop_grace_period: 20s
+    restart: always
+    ports:
+      - '10300:10300'
+    volumes:
+      - /mnt/cache/appdata/whisper/data:/config
+    environment:
+      PUID: 1000
+      PGID: 1000
+      WHISPER_MODEL: large-v3
+      WHISPER_LANG: en
+      WHISPER_BEAM: 1
+      WYO_WHISPER_COMPUTE_TYPE: float16
+      # Silence otherwise transcribes as "Thank you.", which the agent answers.
+      WYO_WHISPER_VAD_FILTER: "true"
+      # Example sentences are what help; a bare name list made results worse.
+      # Edit the area list here when an HA area is added or renamed.
+      WYO_WHISPER_INITIAL_PROMPT: "Turn on the office lights. Turn off the bedroom lamp. What's the temperature in the living room? Areas: Balcony, Bathroom, Bedroom, Entrance, Guest Bathroom, Living Room, Office, Laundry Room, Closet, Garage."
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
