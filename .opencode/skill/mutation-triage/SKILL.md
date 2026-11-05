@@ -16,16 +16,18 @@ ratchet rules). This skill owns the *loop*.
 ## The loop
 
 ```bash
-.venv/bin/python -m pip install -c constraints.txt '.[mutation]'   # one-off; not in dev
+.venv/bin/python -m pip install -c constraints.txt -e '.[dev,mutation]'   # one-off; mutation is not in dev
 PYTHONPATH=src .venv/bin/python -m homelab.cli mutants 'homelab.op_secrets.*'   # sweep one file
 PYTHONPATH=src .venv/bin/python -m homelab.cli survivors op_secrets             # what changed
 PYTHONPATH=src .venv/bin/python -m homelab.cli survivors op_secrets cleanup     # one function
 ```
 
-`PYTHONPATH=src` with `-m homelab.cli` is **load-bearing**; the bare `homelab` console
-script resolves the repo to `.venv/lib/...` (non-editable install) and reports "nothing
-scored". Setting it on the parent is safe because `mutmut_env()` pops `PYTHONPATH` back
-off for the mutmut children, which must not see the real `src/`. `survivors` reads the
+Keep the install editable (`-e`): a regular one copies a stale package into
+site-packages, which `repo_root()` refuses with "not a repo checkout". `PYTHONPATH=src`
+is belt-and-braces on top of that. Setting it on the parent is safe because
+`mutmut_env()` pops `PYTHONPATH` back off for the mutmut children, and mutmut's own
+`setup_source_paths()` strips the real `src/` (the editable `.pth` entry included) from
+their `sys.path` — they must not see it. `survivors` reads the
 existing `mutants/` tree — a gitignored working copy of the repo where results accumulate
 across runs — and never sweeps, so it is instant and safe to rerun.
 

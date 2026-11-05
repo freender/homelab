@@ -23,6 +23,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterator
 from pathlib import Path
 
+import click
 import pytest
 
 from homelab.cli import execute_module, repo_root
@@ -156,3 +157,18 @@ def test_repo_root_is_the_checkout_containing_hosts_conf() -> None:
     # this repo if repo_root() really points at it.
     assert (repo_root() / "hosts.conf").is_file()
     assert repo_root() == Path(__file__).resolve().parents[1]
+
+
+def test_repo_root_refuses_a_site_packages_copy(tmp_path: Path) -> None:
+    # A non-editable install puts the package at .venv/lib/python3.x/site-packages/
+    # homelab/, two levels above which there is no hosts.conf. That copy is stale code;
+    # it must stop here rather than run (freender/homelab-ops#314).
+    installed = tmp_path / "lib" / "python3.13" / "site-packages" / "homelab" / "cli.py"
+    installed.parent.mkdir(parents=True)
+    installed.touch()
+
+    with pytest.raises(click.ClickException, match="not a repo checkout"):
+        repo_root(str(installed))
+
+    (tmp_path / "lib" / "python3.13" / "hosts.conf").touch()
+    assert repo_root(str(installed)) == tmp_path / "lib" / "python3.13"

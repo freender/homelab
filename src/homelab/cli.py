@@ -23,8 +23,23 @@ from .output import print_action, print_error, print_header, print_ok, print_sub
 from .ssh import offline_mode
 
 
-def repo_root() -> Path:
-    return Path(__file__).resolve().parents[2]
+def repo_root(package_file: str = __file__) -> Path:
+    """The checkout this package was imported from.
+
+    Only true when `homelab` is imported from `src/` (the launchers' `PYTHONPATH`, or
+    an editable install). A regular install copies the package into site-packages, so
+    the computed root would be `.venv/lib/python3.x` — and the code running would be
+    whatever was installed last, not the working tree. Refuse that instead of failing
+    later on a missing `hosts.conf` (freender/homelab-ops#314).
+    """
+    root = Path(package_file).resolve().parents[2]
+    if not (root / "hosts.conf").is_file():
+        raise click.ClickException(
+            f"homelab was imported from {Path(package_file).resolve().parent}, not a repo "
+            "checkout. Run via ./deploy or ./validate, set PYTHONPATH=src, or reinstall "
+            "editable: .venv/bin/python -m pip install -c constraints.txt -e '.[dev]'"
+        )
+    return root
 
 
 def _module_available(name: str) -> bool:

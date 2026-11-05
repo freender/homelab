@@ -82,7 +82,9 @@ first and `./validate` last — it is the slowest and repeats them all. After an
 check that push's Actions run and inspect failures immediately if any job is red.
 
 **Never install or upgrade a dev tool without `-c constraints.txt`** — CI and the venv
-pin the same versions, and `tests/test_dev_constraints.py` fails when they drift. Change
+pin the same versions, and `tests/test_dev_constraints.py` fails when they drift. Install
+the package itself editable (`-e`, per the `constraints.txt` header): a regular install
+copies stale code into site-packages, and `repo_root()` refuses to run from there. Change
 a version by regenerating the file (its header says how), not by hand-editing one line.
 
 The `deploy-module` skill carries the test coverage map (golden renders, pause semantics,

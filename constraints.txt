@@ -3,7 +3,8 @@
 # Without it the two drifted silently (pytest-cov 7.1.0 locally vs 6.3.0 in CI, with
 # different subprocess-coverage hooks), so a CI failure could not be reproduced here.
 #
-# Install:     python -m pip install -c constraints.txt '.[dev,mutation]'
+# Install:     python -m pip install -c constraints.txt -e '.[dev,mutation]'
+#              (-e: a regular install copies a stale package into site-packages)
 # Regenerate:  clean python3.13 venv, same install without -c, then
 #              pip freeze --exclude homelab --exclude pip
 # tests/test_dev_constraints.py fails when the running interpreter disagrees.
