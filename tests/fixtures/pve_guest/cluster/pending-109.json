@@ -13,7 +13,7 @@
  },
  {
   "key": "cores",
-  "value": 2
+  "value": 6
  },
  {
   "key": "cpu",
@@ -29,7 +29,7 @@
  },
  {
   "key": "memory",
-  "value": "4096"
+  "value": "5120"
  },
  {
   "key": "name",
