@@ -94,6 +94,105 @@ services:
       retries: 3
       start_period: 5s
 
+  # Sentinel-managed Redis that replaces the kop mesh (homelab-ops#318). Runs
+  # beside traefik-redis-neo until the cutover; nothing reads it before then.
+  # redis.conf is seeded once, after which Sentinel's CONFIG REWRITE owns it.
+  # The image entrypoint is bypassed on purpose: it appends --loadmodule for the
+  # bundled modules, CONFIG REWRITE persists those, and the next start loads them
+  # twice and aborts (homelab-ops#320). It also does not chown a bind-mounted /data.
+  traefik-kv-neo:
+    image: redis:8.10.3-alpine
+    container_name: traefik-kv-neo
+    init: true
+    stop_grace_period: 20s
+    restart: always
+    mem_limit: 1g
+    env_file:
+      - .env
+    environment:
+      TZ: 'America/New_York'
+      ANNOUNCE: traefik-kv-neo
+      SEED_REPLICAOF: 'traefik-kv-tower'
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        if [ ! -f /data/redis.conf ]; then
+          cat > /data/redis.conf <<EOF
+        port 6379
+        dir /data
+        requirepass $${REDIS_PASS}
+        masterauth $${REDIS_PASS}
+        notify-keyspace-events AKE
+        replica-serve-stale-data no
+        replica-announce-ip $${ANNOUNCE}
+        appendonly yes
+        appendfsync everysec
+        EOF
+          [ -n "$${SEED_REPLICAOF}" ] && echo "replicaof $${SEED_REPLICAOF} 6379" >> /data/redis.conf
+        fi
+        sed -i '/^loadmodule /d' /data/redis.conf
+        chown -R redis:redis /data
+        chmod 600 /data/*.conf
+        exec setpriv --reuid redis --regid redis --clear-groups redis-server /data/redis.conf
+    volumes:
+      - /mnt/cache/appdata/traefik/redis:/data
+    networks:
+      net_overlay: {}
+    healthcheck:
+      # Same PONG grep as traefik-redis-neo: redis-cli exits 0 on auth errors.
+      test: ["CMD-SHELL", "REDISCLI_AUTH=\"$$REDIS_PASS\" redis-cli ping 2>/dev/null | grep -q PONG"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+
+  # No requirepass on Sentinel: traefik-kop has no Sentinel-password option.
+  traefik-sentinel-neo:
+    image: redis:8.10.3-alpine
+    container_name: traefik-sentinel-neo
+    init: true
+    stop_grace_period: 20s
+    restart: always
+    mem_limit: 256m
+    env_file:
+      - .env
+    environment:
+      TZ: 'America/New_York'
+      ANNOUNCE: traefik-sentinel-neo
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        if [ ! -f /data/sentinel.conf ]; then
+          cat > /data/sentinel.conf <<EOF
+        port 26379
+        dir /data
+        sentinel resolve-hostnames yes
+        sentinel announce-hostnames yes
+        sentinel announce-ip $${ANNOUNCE}
+        sentinel monitor traefik traefik-kv-tower 6379 2
+        sentinel auth-pass traefik $${REDIS_PASS}
+        sentinel down-after-milliseconds traefik 5000
+        sentinel failover-timeout traefik 15000
+        sentinel parallel-syncs traefik 1
+        EOF
+        fi
+        sed -i '/^loadmodule /d' /data/sentinel.conf
+        chown -R redis:redis /data
+        chmod 600 /data/*.conf
+        exec setpriv --reuid redis --regid redis --clear-groups redis-server /data/sentinel.conf --sentinel
+    volumes:
+      - /mnt/cache/appdata/traefik/sentinel:/data
+    networks:
+      net_overlay: {}
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -p 26379 ping 2>/dev/null | grep -q PONG"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+
   traefik-kop-neo-to-tower:
     image: ghcr.io/jittering/traefik-kop:latest
     container_name: traefik-kop-neo-to-tower
