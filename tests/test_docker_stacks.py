@@ -245,8 +245,8 @@ def test_alertmanager_compose_substitutes_every_template_placeholder() -> None:
 
 def test_crowdsec_is_reachable_as_plain_crowdsec_on_every_host(tmp_path: Path) -> None:
     """Traefik reaches Crowdsec via `crowdsecLapiHost: crowdsec:8080` in
-    fileConfig.yml -- a file this module does not manage, which traefik-sync
-    copies unchanged from tower to helm and neo. One shared name must therefore
+    fileConfig.yml -- a file this module does not manage, which fileconfig-sync
+    writes unchanged to tower, helm and neo. One shared name must therefore
     resolve to the LOCAL LAPI on all three hosts:
 
       * the container is host-suffixed, so it needs the `crowdsec` alias;
@@ -278,7 +278,7 @@ def test_crowdsec_is_reachable_as_plain_crowdsec_on_every_host(tmp_path: Path) -
 
 
 def test_traefik_file_provider_is_a_directory_mount(tmp_path: Path) -> None:
-    """traefik-sync replaces fileConfig.yml rather than rewriting it, and a
+    """fileconfig-sync replaces fileConfig.yml rather than rewriting it, and a
     single-file bind mount keeps the container on the old inode until restart,
     so a node silently routes on stale config (homelab-ops#199). Mounting the
     parent directory lets Traefik's watcher see the replacement.

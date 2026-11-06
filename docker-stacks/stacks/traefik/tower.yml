@@ -1,6 +1,6 @@
-# tower is the traefik-sync SOURCE: it runs ACME, owns acme.json read-write, and
-# serves /source to the helm and neo clients. That asymmetry is intentional --
-# do not "normalize" acme.json to :ro here.
+# tower is a cert FOLLOWER: it runs no ACME resolver and mounts no acme.json.
+# It serves the cert helm's traefik-cert-exporter-helm publishes into the
+# Sentinel Redis (homelab-ops#318).
 networks:
   net.internal:
     name: net.internal
@@ -206,12 +206,9 @@ services:
       - .env
     environment:
       TZ: 'America/New_York'
-      CF_DNS_API_TOKEN: ${TRAEFIK_DNS_API}
     volumes:
       - /mnt/cache/appdata/traefik/traefik.yml:/etc/traefik/traefik.yml:ro
-      # rw: tower is the ACME issuer and the traefik-sync source of truth.
-      - /mnt/cache/appdata/traefik/acme.json:/etc/traefik/acme.json
-      # Directory, not the single file: traefik-sync (and most editors) replace
+      # Directory, not the single file: fileconfig-sync (and most editors) replace
       # fileConfig.yml, and a single-file bind mount keeps serving the old inode
       # until restart (homelab-ops#199). traefik.yml points at dynamic/fileConfig.yml.
       - /mnt/cache/appdata/traefik:/etc/traefik/dynamic:ro
@@ -239,21 +236,3 @@ services:
     depends_on:
       crowdsec-tower:
         condition: service_started
-
-  traefik-sync-tower:
-    image: ghcr.io/freender/traefik-sync:main
-    container_name: traefik-sync-tower
-    init: true
-    stop_grace_period: 20s
-    restart: always
-    mem_limit: 128m
-    environment:
-      TZ: 'America/New_York'
-      MODE: server
-      SERVE_PATH: /source
-      LISTEN_PORT: 8080
-      API_TOKEN: ${TRAEFIK_SYNC_API_TOKEN}
-    volumes:
-      - /mnt/cache/appdata/traefik:/source:ro
-    networks:
-      net_overlay: {}

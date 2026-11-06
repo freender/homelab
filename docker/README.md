@@ -64,13 +64,12 @@ After a successful pull/update run, `start.sh` prunes unused Docker images only.
 
 Containers still rely on native Docker restart policies (`restart: always`) for boot, reboot, and HA migration recovery. On the same hosts as the update timer, `homelab-docker-boot.service` additionally runs `start.sh --no-pull` once after dockerd's own restore. dockerd does not order `network_mode: service:` dependencies, so a container joining another's namespace (qbittorrent behind gluetun) can fail its restore start and is never retried; Compose's `up -d` honours `depends_on` and starts it. The unit is enabled by the deploy but never started by it, and `homelab-docker-update.service` is ordered after it so a `Persistent=` catch-up at boot waits for it instead of losing the lock.
 
-## Traefik Sync
+## Traefik Certificates And Dynamic Config
 
-- `tower` runs `traefik-sync-tower` in source mode on `net_overlay`
-- `helm` runs `traefik-sync-helm` in client mode
-- `neo` runs `traefik-sync-neo` in client mode
-- Clients pull `acme.json` and `fileConfig.yml` over overlay HTTP from `http://traefik-sync-tower:8080`
-- Auth uses `TRAEFIK_SYNC_API_TOKEN` in the Traefik stack `.env`
+- `helm` is the only ACME issuer; `traefik-cert-exporter-helm` publishes its cert into the
+  Sentinel-managed Redis, and every Traefik serves it from there (homelab-ops#318)
+- `tower` and `neo` run no resolver and mount no `acme.json`
+- `fileConfig.yml` is written to all three nodes by `fileconfig-sync` in homelab-ops
 - `start.sh` is deployed to all docker hosts, including `neo`, so Traefik stack updates can be applied with `cd /mnt/cache/appdata && ./start.sh`
 
 ### Manual Usage

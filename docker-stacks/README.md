@@ -90,8 +90,9 @@ they could be templated again.
 `traefik` and `alloy` stay per-host because their differences are **role asymmetry,
 not drift**:
 
-- **tower is the traefik-sync source.** It runs ACME and mounts `acme.json`
-  read-write; helm and neo are clients and mount it `:ro`. Do not "normalize" this.
+- **helm is the only ACME issuer.** It mounts `acme.json` read-write and runs
+  `traefik-cert-exporter-helm`, which publishes the cert into the Sentinel Redis.
+  tower and neo run no resolver and mount no `acme.json`. Do not "normalize" this.
 - **Each host runs its own `traefik-kv-<host>` / `traefik-sentinel-<host>` /
   `traefik-kop-<host>`** around one Sentinel-managed Redis (homelab-ops#318). The
   differences between hosts are the container names and the one-time seed: tower's kv
@@ -159,7 +160,7 @@ service carries the `-<host>` suffix, and every kop instance names its target:
 
 **The `crowdsec` rename is only safe because of the alias.** Traefik reaches
 Crowdsec through `crowdsecLapiHost: crowdsec:8080` in `fileConfig.yml` — a file
-this module does not manage, which traefik-sync copies *unchanged* from tower to
+this module does not manage, which fileconfig-sync writes *unchanged* to tower,
 helm and neo. One shared name must resolve to the **local** LAPI on all three
 hosts, so each crowdsec container keeps `aliases: [crowdsec]` on `net.internal`
 (a per-host bridge) and is deliberately **not** attached to `net_overlay` — on the

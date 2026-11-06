@@ -1,5 +1,6 @@
-# helm is a traefik-sync CLIENT: it receives certs from tower and mounts
-# acme.json :ro. Only tower runs ACME.
+# helm is the ACME issuer (homelab-ops#318): it owns acme.json read-write and
+# runs traefik-cert-exporter-helm, which publishes the cert into the Sentinel
+# Redis that every Traefik reads. tower and neo run no resolver.
 networks:
   net.internal:
     name: net.internal
@@ -217,8 +218,9 @@ services:
       CF_DNS_API_TOKEN: ${TRAEFIK_DNS_API}
     volumes:
       - /mnt/cache/appdata/traefik/traefik.yml:/etc/traefik/traefik.yml:ro
-      - /mnt/cache/appdata/traefik/acme.json:/etc/traefik/acme.json:ro
-      # Directory, not the single file: traefik-sync (and most editors) replace
+      # rw: helm is the ACME issuer.
+      - /mnt/cache/appdata/traefik/acme.json:/etc/traefik/acme.json
+      # Directory, not the single file: fileconfig-sync (and most editors) replace
       # fileConfig.yml, and a single-file bind mount keeps serving the old inode
       # until restart (homelab-ops#199). traefik.yml points at dynamic/fileConfig.yml.
       - /mnt/cache/appdata/traefik:/etc/traefik/dynamic:ro
@@ -247,30 +249,23 @@ services:
       crowdsec-helm:
         condition: service_started
 
-  traefik-sync-helm:
-    image: ghcr.io/freender/traefik-sync:main
-    container_name: traefik-sync-helm
+  # Publishes helm's ACME cert into the Sentinel master, wherever it is, so
+  # every Traefik serves the same cert from Redis (homelab-ops#321).
+  traefik-cert-exporter-helm:
+    image: ghcr.io/freender/traefik-cert-exporter:main
+    container_name: traefik-cert-exporter-helm
     init: true
     stop_grace_period: 20s
     restart: always
     mem_limit: 128m
+    user: 1000:1000
+    env_file:
+      - .env
     environment:
       TZ: 'America/New_York'
-      MODE: client
-      SYNC_PROTOCOL: http
-      SOURCE_URL: http://traefik-sync-tower:8080
-      API_TOKEN: ${TRAEFIK_SYNC_API_TOKEN}
-      LOCAL_PATH: /data
-      SYNC_INTERVAL: 60
-      CONTAINER_NAME: traefik-helm
-      RESTART_DELAY: 5
-      FILE_OWNER: 1000
-      FILE_GROUP: 1000
+      REDIS_SENTINEL_ADDRS: traefik-sentinel-tower:26379,traefik-sentinel-helm:26379,traefik-sentinel-neo:26379
+      REDIS_SENTINEL_MASTER: traefik
     volumes:
-      - /mnt/cache/appdata/traefik:/data
-      - /var/run/docker.sock:/var/run/docker.sock
+      - /mnt/cache/appdata/traefik/acme.json:/acme/acme.json:ro
     networks:
       net_overlay: {}
-    depends_on:
-      traefik-helm:
-        condition: service_started
