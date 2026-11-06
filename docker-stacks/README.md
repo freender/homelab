@@ -106,14 +106,8 @@ not drift**:
 These survived the convention pass because verifying them needs the live hosts, not
 the repo. They are called out in comments at the point they occur:
 
-- `socket-proxy-helm` alone publishes `2375` and runs `privileged: true`; neo serves
-  the same swarm endpoints with neither.
-- `socket-proxy-tower` sets `POST: 1` where helm and neo set `POST: 0`, and omits the
-  swarm read variables.
 - `crowdsec-tower` runs as root with a plugin `chown` entrypoint; helm and neo run it
   as `1000:1000`.
-- `traefik` on helm and neo mounts `docker.sock` directly as well as using the socket
-  proxy; tower does not.
 
 ## Host gate
 

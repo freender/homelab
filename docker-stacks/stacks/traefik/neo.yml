@@ -8,33 +8,6 @@ networks:
     external: true
 
 services:
-  # Dependencies - start these first
-  socket-proxy-neo:
-    image: ghcr.io/linuxserver/socket-proxy:latest
-    container_name: socket-proxy-neo
-    init: true
-    stop_grace_period: 20s
-    restart: always
-    mem_limit: 1g
-    environment:
-      TZ: 'America/New_York'
-      DISABLE_IPV6: 1
-      CONTAINERS: 1
-      POST: 0
-      SWARM: 1
-      VERSION: 1
-      INFO: 1
-      EVENTS: 1
-      NETWORKS: 1
-      SERVICES: 1
-      TASKS: 1
-      NODES: 1
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-    networks:
-      net.internal: {}
-      net_overlay: {}
-
   crowdsec-neo:
     image: ghcr.io/crowdsecurity/crowdsec:latest
     container_name: crowdsec-neo

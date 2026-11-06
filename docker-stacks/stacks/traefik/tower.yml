@@ -8,28 +8,6 @@ networks:
     external: true
 
 services:
-  # Dependencies - start these first
-  socket-proxy-tower:
-    image: ghcr.io/linuxserver/socket-proxy:latest
-    container_name: socket-proxy-tower
-    init: true
-    stop_grace_period: 20s
-    restart: always
-    mem_limit: 1g
-    environment:
-      TZ: 'America/New_York'
-      DISABLE_IPV6: 1
-      CONTAINERS: 1
-      # POST: 1 here vs POST: 0 on helm/neo -- unverified divergence, left as-is.
-      POST: 1
-      INFO: 1
-      EVENTS: 1
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-    networks:
-      net.internal: {}
-      net_overlay: {}
-
   crowdsec-tower:
     image: ghcr.io/crowdsecurity/crowdsec:latest
     container_name: crowdsec-tower

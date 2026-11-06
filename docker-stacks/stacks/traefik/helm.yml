@@ -8,40 +8,6 @@ networks:
     external: true
 
 services:
-  # Dependencies - start these first
-  socket-proxy-helm:
-    image: ghcr.io/linuxserver/socket-proxy:latest
-    container_name: socket-proxy-helm
-    init: true
-    stop_grace_period: 20s
-    restart: always
-    mem_limit: 1g
-    # FLAGGED: helm is the only host that publishes 2375 and runs this
-    # privileged. neo serves the same swarm endpoints with neither. Left in
-    # place because something may depend on the published port -- verify before
-    # removing.
-    privileged: true
-    ports:
-      - '2375:2375'
-    environment:
-      TZ: 'America/New_York'
-      DISABLE_IPV6: 1
-      CONTAINERS: 1
-      POST: 0
-      SWARM: 1
-      VERSION: 1
-      INFO: 1
-      EVENTS: 1
-      NETWORKS: 1
-      SERVICES: 1
-      TASKS: 1
-      NODES: 1
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-    networks:
-      net.internal: {}
-      net_overlay: {}
-
   crowdsec-helm:
     image: ghcr.io/crowdsecurity/crowdsec:latest
     container_name: crowdsec-helm

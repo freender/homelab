@@ -107,14 +107,14 @@ groups:
       - alert: ContainerMemoryNearLimit
         expr: |
           (
-            container_memory_working_set_bytes{job="cadvisor", host=~"tower|helm|neo", name!="", name!~"cadvisor.*|node-exporter.*|socket-proxy.*", image!=""}
+            container_memory_working_set_bytes{job="cadvisor", host=~"tower|helm|neo", name!="", name!~"cadvisor.*|node-exporter.*", image!=""}
             /
-            container_spec_memory_limit_bytes{job="cadvisor", host=~"tower|helm|neo", name!="", name!~"cadvisor.*|node-exporter.*|socket-proxy.*", image!=""}
+            container_spec_memory_limit_bytes{job="cadvisor", host=~"tower|helm|neo", name!="", name!~"cadvisor.*|node-exporter.*", image!=""}
           ) > 0.90
           and
-          container_spec_memory_limit_bytes{job="cadvisor", host=~"tower|helm|neo", name!="", name!~"cadvisor.*|node-exporter.*|socket-proxy.*", image!=""} > 0
+          container_spec_memory_limit_bytes{job="cadvisor", host=~"tower|helm|neo", name!="", name!~"cadvisor.*|node-exporter.*", image!=""} > 0
           and
-          container_spec_memory_limit_bytes{job="cadvisor", host=~"tower|helm|neo", name!="", name!~"cadvisor.*|node-exporter.*|socket-proxy.*", image!=""} < 1000000000000000
+          container_spec_memory_limit_bytes{job="cadvisor", host=~"tower|helm|neo", name!="", name!~"cadvisor.*|node-exporter.*", image!=""} < 1000000000000000
         for: 10m
         labels:
           severity: warning
