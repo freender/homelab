@@ -253,7 +253,6 @@ def test_keepalived_build_uses_caller_supplied_tmpfs_path(
         "keepalived.virtual_router_id": 10,
         "keepalived.priority": 100,
         "keepalived.advert_interval": 1,
-        "keepalived.preempt_delay": 0,
         "keepalived.unicast_peers": ["10.0.0.11"],
         "keepalived.virtual_ips": ["10.0.0.15/24"],
     }

@@ -32,7 +32,6 @@ class KeepalivedConfig:
     virtual_router_id: int
     priority: int
     advert_interval: int
-    preempt_delay: int
     unicast_src_ip: str
     unicast_peers: tuple[str, ...]
     virtual_ips: tuple[str, ...]
@@ -112,25 +111,22 @@ def normalize_healthcheck(root: Path, registry, host: str) -> tuple[str, str]:
     )
 
 
-def normalize_vrrp_numbers(registry, host: str) -> tuple[int, int, int, int]:
-    """`(virtual_router_id, priority, advert_interval, preempt_delay)`, range-checked.
+def normalize_vrrp_numbers(registry, host: str) -> tuple[int, int, int]:
+    """`(virtual_router_id, priority, advert_interval)`, range-checked.
 
-    These four decide the VIP election. A zero VRID or priority would be accepted
+    These three decide the VIP election. A zero VRID or priority would be accepted
     by keepalived and produce a silently broken instance, so they are rejected here.
     """
     virtual_router_id = int(registry.get(host, "keepalived.virtual_router_id", 0))
     priority = int(registry.get(host, "keepalived.priority", 0))
     advert_interval = int(registry.get(host, "keepalived.advert_interval", 1))
-    preempt_delay = int(registry.get(host, "keepalived.preempt_delay", 0))
     if virtual_router_id < 1:
         raise ValueError(f"keepalived.virtual_router_id must be >= 1 for {host}")
     if priority < 1:
         raise ValueError(f"keepalived.priority must be >= 1 for {host}")
     if advert_interval < 1:
         raise ValueError(f"keepalived.advert_interval must be >= 1 for {host}")
-    if preempt_delay < 0 or preempt_delay > 1000:
-        raise ValueError(f"keepalived.preempt_delay must be between 0 and 1000 for {host}")
-    return virtual_router_id, priority, advert_interval, preempt_delay
+    return virtual_router_id, priority, advert_interval
 
 
 def require_non_empty_list(registry, host: str, key: str) -> tuple[str, ...]:
@@ -166,9 +162,7 @@ def normalize_config(root: Path, registry, host: str) -> KeepalivedConfig:
         registry.get(host, "keepalived.unicast_src_ip", ""),
         f"keepalived.unicast_src_ip is required for {host}",
     )
-    virtual_router_id, priority, advert_interval, preempt_delay = normalize_vrrp_numbers(
-        registry, host
-    )
+    virtual_router_id, priority, advert_interval = normalize_vrrp_numbers(registry, host)
 
     return KeepalivedConfig(
         instance_name=instance_name,
@@ -178,7 +172,6 @@ def normalize_config(root: Path, registry, host: str) -> KeepalivedConfig:
         virtual_router_id=virtual_router_id,
         priority=priority,
         advert_interval=advert_interval,
-        preempt_delay=preempt_delay,
         unicast_src_ip=unicast_src_ip,
         unicast_peers=require_non_empty_list(registry, host, "unicast_peers"),
         virtual_ips=require_non_empty_list(registry, host, "virtual_ips"),
@@ -204,7 +197,6 @@ def build_host_artifacts(root: Path, host: str, build_dir: Path) -> HostArtifact
         VIRTUAL_ROUTER_ID=str(config.virtual_router_id),
         PRIORITY=str(config.priority),
         ADVERT_INTERVAL=str(config.advert_interval),
-        PREEMPT_DELAY=str(config.preempt_delay),
         UNICAST_SRC_IP=config.unicast_src_ip,
         UNICAST_PEERS="\n".join(f"        {peer}" for peer in config.unicast_peers),
         VIRTUAL_IPS="\n".join(f"        {vip}" for vip in config.virtual_ips),
