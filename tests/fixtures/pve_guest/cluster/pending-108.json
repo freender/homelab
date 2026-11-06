@@ -40,7 +40,7 @@
   "value": "vm-flash:subvol-108-disk-4,mp=/mnt/cache/obsidian,backup=1,size=0T"
  },
  {
-  "key": "mp5",
+  "key": "mp4",
   "value": "vm-flash:subvol-108-disk-6,mp=/mnt/cache/games,backup=1,size=0T"
  },
  {
