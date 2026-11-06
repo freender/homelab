@@ -136,80 +136,42 @@ Optional per-host keys:
 4. Report stacks present on the host but absent from the repo. They are **never
    removed** — repo coverage is intentionally partial.
 
-## Pending one-time rename migration
+## Renaming a container
 
-Eight containers are renamed by the current definitions so that every multi-host
-service carries the `-<host>` suffix, and every kop instance names its target:
-
-| Host | Old container | New container | Stack |
-| --- | --- | --- | --- |
-| tower | `geoipupdate` | `geoipupdate-tower` | geoipupdate |
-| tower | `cloudflared` | `cloudflared-tower` | cloudflared |
-| tower | `traefik-kop-tower` | `traefik-kop-tower-to-helm` | traefik |
-| helm | `geoipupdate` | `geoipupdate-helm` | geoipupdate |
-| helm | `cloudflared` | `cloudflared-helm` | cloudflared |
-| helm | `crowdsec` | `crowdsec-helm` | traefik |
-| helm | `traefik-kop-helm` | `traefik-kop-helm-to-tower` | traefik |
-| neo | `crowdsec` | `crowdsec-neo` | traefik |
-
-**The `crowdsec` rename is only safe because of the alias.** Traefik reaches
-Crowdsec through `crowdsecLapiHost: crowdsec:8080` in `fileConfig.yml` — a file
-this module does not manage, which fileconfig-sync writes *unchanged* to tower,
-helm and neo. One shared name must resolve to the **local** LAPI on all three
-hosts, so each crowdsec container keeps `aliases: [crowdsec]` on `net.internal`
-(a per-host bridge) and is deliberately **not** attached to `net_overlay` — on the
-overlay that name would resolve across the swarm mesh and a host could stream
-decisions from another host's LAPI. tower has run exactly this pattern
-(`crowdsec-tower` + alias) in production all along, which is what makes the helm
-and neo renames safe. `test_crowdsec_is_reachable_as_plain_crowdsec_on_every_host`
-enforces all three properties.
-
-**Alert rules move with the container.** `vmalert-rules/configs/*-containers.yml`
-key on exact container names, so a rename that misses them produces a permanent
-false "container missing" alert *and* leaves the new container unmonitored. All
-eight are already updated; `test_alert_rules_track_container_renames` fails the
-build if a future rename forgets. The `cinci` and `cottonwood` copies of
-`crowdsec`/`cloudflared`/`geoipupdate` are third-party hosts and deliberately keep
-their unsuffixed names.
+Every multi-host service carries the `-<host>` suffix. Renaming one is a migration,
+not an edit.
 
 **A rename changes the Compose *service key*, not just `container_name`.** Compose
 identifies containers by the `com.docker.compose.service` label, so the old
-container becomes an orphan of the project — and `docker compose up -d` does not
-remove orphans, it starts the new container *alongside* the old one. Two crowdsec
-LAPI instances would share one SQLite database; an orphaned cloudflared would
-keep serving the tunnel as an unmanaged extra connector.
+container becomes an orphan of the project. `docker compose up -d` does not remove
+orphans. It starts the new container *alongside* the old one. Two crowdsec LAPI
+instances would share one SQLite database, and an orphaned cloudflared would keep
+serving the tunnel as an unmanaged extra connector.
 
-The installer refuses to let this happen: before copying anything it compares the
-running containers' service labels against the incoming definition, and if any
-service has been renamed away it **skips the stack, leaves the host copy untouched,
-and fails the deploy** with the exact `docker rm -f` to run. The migration cannot be
-half-done by accident.
+The installer refuses to let this happen. Before copying anything, it compares the
+running containers' service labels against the incoming definition. If any service
+has been renamed away, it **skips the stack, leaves the host copy untouched, and
+fails the deploy** with the exact `docker rm -f` to run. Remove the old container,
+then deploy. Take the `traefik` hosts one at a time, never `all`, and start with one
+that does not hold the keepalived VIP.
 
-### Runbook
+**Alert rules move with the container.** `vmalert-rules/configs/*-containers.yml`
+key on exact container names, so a rename that misses them produces a permanent
+false "container missing" alert *and* leaves the new container unmonitored.
+`test_alert_rules_track_container_renames` fails the build if a rename forgets. The
+`cinci` and `cottonwood` copies of `crowdsec`/`cloudflared`/`geoipupdate` are
+third-party hosts and deliberately keep their unsuffixed names.
 
-Do the standalone stacks first — they are single-container and prove the flow:
-
-```bash
-ssh tower 'docker rm -f geoipupdate cloudflared'
-./deploy docker-stacks tower        # recreates them suffixed
-```
-
-`traefik` is the one to be careful with. Its compose changed for every service, so
-the deploy restarts that host's whole Traefik stack, including the container
-answering the keepalived VIP:
-
-```bash
-# 1. confirm which host currently holds the VIP, and start with one that does not
-# 2. on that host only:
-ssh helm 'docker rm -f crowdsec traefik-kop-helm'
-./deploy docker-stacks helm
-# tower additionally:   docker rm -f traefik-kop-tower
-# neo additionally:     docker rm -f crowdsec
-# 3. verify routing and cert sync before moving to the next host
-```
-
-Never run `./deploy docker-stacks all` for this migration — take the Traefik hosts
-one at a time.
+**Crowdsec keeps a plain `crowdsec` alias.** Traefik reaches Crowdsec through
+`crowdsecLapiHost: crowdsec:8080` in `fileConfig.yml`. This module does not manage
+that file, and fileconfig-sync writes it *unchanged* to tower, helm and neo. One
+shared name must resolve to the **local** LAPI on all three hosts, so each crowdsec
+container keeps `aliases: [crowdsec]` on `net.internal` (a per-host bridge) and is
+deliberately **not** attached to `net_overlay`. On the overlay, that name would
+resolve across the swarm and a host could stream decisions from another host's
+LAPI. The alias also makes a botched rename silent, because old and new both answer
+to `crowdsec`. `test_crowdsec_is_reachable_as_plain_crowdsec_on_every_host` enforces
+all three properties.
 
 ## The appdata directory must already exist
 
