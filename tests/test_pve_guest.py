@@ -101,7 +101,7 @@ def test_every_declared_guest_is_in_sync_with_the_fixture() -> None:
 
 
 def test_hand_written_vmids_all_resolve() -> None:
-    assert validate_inventory(default_registry(ROOT)) == (10, 22)
+    assert validate_inventory(default_registry(ROOT)) == (10, 21)
 
 
 def test_every_impact_label_on_a_changed_helm_spec() -> None:
@@ -986,7 +986,7 @@ def test_cli_check_pve_guests(monkeypatch: pytest.MonkeyPatch, capsys) -> None:
     from homelab import cli
 
     cli.check_pve_guests(ROOT)
-    assert "10 pve-guest spec(s) valid; 22 hand-written vmid(s) match" in capsys.readouterr().out
+    assert "10 pve-guest spec(s) valid; 21 hand-written vmid(s) match" in capsys.readouterr().out
 
     def broken(registry):
         raise ValueError("helm: pve-guest.vmid must be a positive integer")

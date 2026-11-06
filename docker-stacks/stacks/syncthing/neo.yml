@@ -17,7 +17,6 @@ services:
     volumes:
       - /mnt/cache/appdata/syncthing:/config
       - /mnt/cache/obsidian:/obsidian
-      - /mnt/cache/logseq:/logseq
       - /mnt/cache/documents:/documents
       - /mnt/cache/drop:/drop
     environment:
