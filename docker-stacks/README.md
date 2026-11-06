@@ -92,8 +92,11 @@ not drift**:
 
 - **tower is the traefik-sync source.** It runs ACME and mounts `acme.json`
   read-write; helm and neo are clients and mount it `:ro`. Do not "normalize" this.
-- **traefik-kop is a directional mesh** — each host pushes to the *other* hosts'
-  redis, so `REDIS_ADDR` and the kop config path are genuinely per-host.
+- **Each host runs its own `traefik-kv-<host>` / `traefik-sentinel-<host>` /
+  `traefik-kop-<host>`** around one Sentinel-managed Redis (homelab-ops#318). The
+  differences between hosts are the container names and the one-time seed: tower's kv
+  seeds as master and helm/neo seed `replicaof traefik-kv-tower`. After that, Sentinel
+  owns the role.
 - **alloy** differs by real mounts (neo has no `geoipupdate` stack, so no geoip
   mount) and by an explicit `--server.http.listen-addr` that tower does not carry.
 

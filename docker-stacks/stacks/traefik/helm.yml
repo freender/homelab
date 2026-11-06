@@ -73,36 +73,8 @@ services:
       retries: 3
       start_period: 20s
 
-  traefik-redis-helm:
-    image: redis:8.10.3-alpine
-    container_name: traefik-redis-helm
-    init: true
-    stop_grace_period: 20s
-    restart: always
-    mem_limit: 1g
-    env_file:
-      - .env
-    environment:
-      TZ: 'America/New_York'
-    command: /bin/sh -c "redis-server --requirepass $${REDIS_PASS}"
-    networks:
-      net.internal: {}
-      net_overlay: {}
-    healthcheck:
-      # CMD-SHELL, not CMD: the exec form passed the literal string
-      # "${REDIS_PASS}" as the password, so this check authenticated with a
-      # wrong password on every run. It still passed, because `redis-cli`
-      # exits 0 on NOAUTH/WRONGPASS -- it only reports transport failure.
-      # Grepping for PONG is what actually distinguishes "answering" from
-      # "rejecting us". REDISCLI_AUTH keeps the password out of argv.
-      test: ["CMD-SHELL", "REDISCLI_AUTH=\"$$REDIS_PASS\" redis-cli ping 2>/dev/null | grep -q PONG"]
-      interval: 10s
-      timeout: 3s
-      retries: 3
-      start_period: 5s
-
-  # Sentinel-managed Redis that replaces the kop mesh (homelab-ops#318). Runs
-  # beside traefik-redis-helm until the cutover; nothing reads it before then.
+  # Sentinel-managed Redis holding every host's routes (homelab-ops#318). Each
+  # Traefik reads it through the Sentinels; each traefik-kop-<host> writes to it.
   # redis.conf is seeded once, after which Sentinel's CONFIG REWRITE owns it.
   # The image entrypoint is bypassed on purpose: it appends --loadmodule for the
   # bundled modules, CONFIG REWRITE persists those, and the next start loads them
@@ -147,7 +119,8 @@ services:
     networks:
       net_overlay: {}
     healthcheck:
-      # Same PONG grep as traefik-redis-helm: redis-cli exits 0 on auth errors.
+      # Grep for PONG, not the exit code: redis-cli exits 0 on NOAUTH/WRONGPASS.
+      # REDISCLI_AUTH keeps the password out of argv.
       test: ["CMD-SHELL", "REDISCLI_AUTH=\"$$REDIS_PASS\" redis-cli ping 2>/dev/null | grep -q PONG"]
       interval: 10s
       timeout: 3s
@@ -200,12 +173,12 @@ services:
       retries: 3
       start_period: 5s
 
-  # Named for its target: this instance publishes helm's routes into tower's
-  # redis. Every kop container is <host>-to-<peer> so the mesh direction is
-  # readable without opening REDIS_ADDR.
-  traefik-kop-helm-to-tower:
+  # Publishes this host's labelled containers into the Sentinel master, wherever
+  # it currently is -- so no depends_on on the local kv (homelab-ops#319).
+  # REDIS_PASS comes from env_file; kop has no Sentinel-password option.
+  traefik-kop-helm:
     image: ghcr.io/jittering/traefik-kop:latest
-    container_name: traefik-kop-helm-to-tower
+    container_name: traefik-kop-helm
     hostname: helm
     init: true
     stop_grace_period: 20s
@@ -216,8 +189,8 @@ services:
     environment:
       TZ: 'America/New_York'
       KOP_HOSTNAME: helm
-      REDIS_ADDR: traefik-redis-tower:6379
-      REDIS_PASSWORD: $${REDIS_PASS}
+      REDIS_SENTINEL_ADDRS: traefik-sentinel-tower:26379,traefik-sentinel-helm:26379,traefik-sentinel-neo:26379
+      REDIS_SENTINEL_MASTER: traefik
       SKIP_REPLACE: 1
       KOP_POLL_INTERVAL: 60
       DOCKER_CONFIG: /config.yaml
@@ -225,41 +198,7 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - /mnt/cache/appdata/traefik/kop/config.yaml:/config.yaml:ro
     networks:
-      net.internal: {}
       net_overlay: {}
-    depends_on:
-      traefik-redis-helm:
-        condition: service_healthy
-        restart: true
-
-  traefik-kop-helm-to-neo:
-    image: ghcr.io/jittering/traefik-kop:latest
-    container_name: traefik-kop-helm-to-neo
-    hostname: helm
-    init: true
-    stop_grace_period: 20s
-    restart: always
-    mem_limit: 1g
-    env_file:
-      - .env
-    environment:
-      TZ: 'America/New_York'
-      KOP_HOSTNAME: helm
-      REDIS_ADDR: traefik-redis-neo:6379
-      REDIS_PASSWORD: $${REDIS_PASS}
-      SKIP_REPLACE: 1
-      KOP_POLL_INTERVAL: 60
-      DOCKER_CONFIG: /config.yaml
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-      - /mnt/cache/appdata/traefik/kop/config.yaml:/config.yaml:ro
-    networks:
-      net.internal: {}
-      net_overlay: {}
-    depends_on:
-      traefik-redis-helm:
-        condition: service_healthy
-        restart: true
 
   traefik-helm:
     image: ghcr.io/traefik/traefik:latest
@@ -276,17 +215,7 @@ services:
     environment:
       TZ: 'America/New_York'
       CF_DNS_API_TOKEN: ${TRAEFIK_DNS_API}
-    command: >
-      sh -c '
-        until nc -w 1 traefik-redis-helm 6379 < /dev/null; do
-          echo "Waiting for Redis...";
-          sleep 2;
-        done;
-        echo "Redis is up, starting Traefik";
-        exec traefik
-      '
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
       - /mnt/cache/appdata/traefik/traefik.yml:/etc/traefik/traefik.yml:ro
       - /mnt/cache/appdata/traefik/acme.json:/etc/traefik/acme.json:ro
       # Directory, not the single file: traefik-sync (and most editors) replace
@@ -315,16 +244,7 @@ services:
       retries: 3
       start_period: 15s
     depends_on:
-      socket-proxy-helm:
-        condition: service_started
       crowdsec-helm:
-        condition: service_started
-      traefik-redis-helm:
-        condition: service_healthy
-        restart: true
-      traefik-kop-helm-to-tower:
-        condition: service_started
-      traefik-kop-helm-to-neo:
         condition: service_started
 
   traefik-sync-helm:
