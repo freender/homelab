@@ -3,7 +3,7 @@ services:
     # CPU build; small int8 benchmarked at ~0.85 s on neo's Alder Lake cores
     # (homelab-ops#298). The Iris Xe/OpenVINO path matched it at the cost of a
     # self-built image, so it is not used. Slower when neo runs on ace.
-    image: lscr.io/linuxserver/faster-whisper:v3.8.1-ls12
+    image: lscr.io/linuxserver/faster-whisper:latest
     container_name: whisper-neo
     stop_grace_period: 20s
     restart: always

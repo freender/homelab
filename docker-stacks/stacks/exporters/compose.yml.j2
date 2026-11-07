@@ -10,9 +10,8 @@ networks:
 services:
   cadvisor-{{ HOST }}:
     # ghcr.io, not gcr.io: upstream stopped publishing to gcr.io after v0.55.1,
-    # so `gcr.io/cadvisor/cadvisor:latest` is a dead floating tag. Pinned because
-    # ghcr has no `latest`; bump via Renovate (homelab-ops#292).
-    image: ghcr.io/google/cadvisor:v0.60.6
+    # so `gcr.io/cadvisor/cadvisor:latest` is a dead floating tag.
+    image: ghcr.io/google/cadvisor:latest
     container_name: cadvisor-{{ HOST }}
     init: true
     stop_grace_period: 2s

@@ -3,7 +3,7 @@ services:
     # LSIO over upstream Dockerfile.gpu: upstream's --hass-token name-biasing was
     # not worth a ~10 GB self-built image and an HA token on glint, because the
     # static prompt below already fixed the real-voice misses (homelab-ops#303).
-    image: lscr.io/linuxserver/faster-whisper:gpu-v3.8.1-ls74
+    image: lscr.io/linuxserver/faster-whisper:gpu
     container_name: whisper-glint
     stop_grace_period: 20s
     restart: always
