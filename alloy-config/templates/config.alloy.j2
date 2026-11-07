@@ -1,0 +1,184 @@
+// Rendered by the alloy-config module for {{ HOST }} -- edit the template in the
+// homelab repo, not this file. Ships Docker container logs, Traefik access and
+// runtime logs, and /var/log/*log to VictoriaLogs on helm.
+
+// Docker Container Logs
+discovery.docker "containers" {
+	host = "unix:///var/run/docker.sock"
+}
+
+discovery.relabel "docker_relabel" {
+	targets = discovery.docker.containers.targets
+
+	rule {
+		source_labels = ["__meta_docker_container_name"]
+		regex         = "/traefik-{{ HOST }}"
+		action        = "drop"
+	}
+
+	rule {
+		source_labels = ["__meta_docker_container_name"]
+		target_label  = "container_name"
+	}
+
+	rule {
+		source_labels = ["container_name"]
+		regex         = "^/(.*)"
+		replacement   = "$1"
+		target_label  = "container_name"
+	}
+
+	rule {
+		source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+		target_label  = "service"
+	}
+
+	rule {
+		replacement  = "docker"
+		target_label = "job"
+	}
+
+	rule {
+		replacement  = "{{ HOST }}"
+		target_label = "host"
+	}
+}
+
+loki.source.docker "docker_logs" {
+	host       = "unix:///var/run/docker.sock"
+	targets    = discovery.relabel.docker_relabel.output
+	forward_to = [loki.write.victorialogs.receiver]
+}
+
+// Traefik access logs from Docker stdout/stderr. Traefik emits JSON access
+// log lines when accessLog.filePath is omitted. The component names keep the
+// host suffix they had before this was templated: Alloy keys tail positions by
+// component ID, so renaming would re-read or skip Traefik's log history.
+discovery.relabel "traefik_{{ HOST }}_relabel" {
+	targets = discovery.docker.containers.targets
+
+	rule {
+		source_labels = ["__meta_docker_container_name"]
+		regex         = "/traefik-{{ HOST }}"
+		action        = "keep"
+	}
+
+	rule {
+		replacement  = "traefik-{{ HOST }}"
+		target_label = "docker_container"
+	}
+
+	rule {
+		replacement  = "traefik"
+		target_label = "container_name"
+	}
+
+	rule {
+		replacement  = "{{ HOST }}"
+		target_label = "host"
+	}
+}
+
+loki.source.docker "traefik_{{ HOST }}_logs" {
+	host       = "unix:///var/run/docker.sock"
+	targets    = discovery.relabel.traefik_{{ HOST }}_relabel.output
+	forward_to = [loki.process.traefik_stdout_pipeline.receiver, loki.process.traefik_runtime_pipeline.receiver]
+}
+
+loki.process "traefik_stdout_pipeline" {
+	stage.match {
+		selector = `{container_name="traefik"} !~ "\"ClientHost\""`
+		action   = "drop"
+	}
+
+	stage.json {
+		expressions = {
+			remote_ip = "ClientHost",
+		}
+	}
+{%- if GEOIP %}
+
+	stage.geoip {
+		db      = "/etc/alloy/geoip/GeoLite2-ASN.mmdb"
+		db_type = "asn"
+		source  = "remote_ip"
+	}
+
+	stage.labels {
+		values = {
+			geoip_autonomous_system_number       = "",
+			geoip_autonomous_system_organization = "",
+			host                                 = "",
+		}
+	}
+{%- else %}
+
+	stage.labels {
+		values = {
+			host = "",
+		}
+	}
+{%- endif %}
+
+	forward_to = [loki.relabel.traefik_access_labels.receiver]
+}
+
+loki.relabel "traefik_access_labels" {
+	rule {
+		replacement  = "traefik-access"
+		target_label = "job"
+	}
+
+	forward_to = [loki.write.victorialogs.receiver]
+}
+
+loki.process "traefik_runtime_pipeline" {
+	stage.match {
+		selector = `{container_name="traefik"} |~ "\"ClientHost\""`
+		action   = "drop"
+	}
+
+	forward_to = [loki.relabel.traefik_runtime_labels.receiver]
+}
+
+loki.relabel "traefik_runtime_labels" {
+	rule {
+		replacement  = "traefik-runtime"
+		target_label = "job"
+	}
+
+	forward_to = [loki.write.victorialogs.receiver]
+}
+
+// Linux System Logs
+local.file_match "system_logs" {
+	path_targets = [
+		{__path__ = "/var/log/*log"},
+	]
+	sync_period = "10s"
+}
+
+loki.source.file "system_log_source" {
+	targets    = local.file_match.system_logs.targets
+	forward_to = [loki.process.system_logs_pipeline.receiver]
+}
+
+// static_labels, not labels: stage.labels reads values from extracted fields,
+// so `job = "varlogs"` there looked up a field named varlogs and set nothing.
+loki.process "system_logs_pipeline" {
+	stage.static_labels {
+		values = {
+			job  = "varlogs",
+			host = "{{ HOST }}",
+		}
+	}
+
+	forward_to = [loki.write.victorialogs.receiver]
+}
+
+// VictoriaLogs on helm, reached by container name over net_overlay.
+loki.write "victorialogs" {
+	endpoint {
+		url = "http://victoria-logs:9428/insert/loki/api/v1/push"
+	}
+}

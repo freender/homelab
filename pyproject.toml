@@ -134,6 +134,7 @@ also_copy = [
     "mutation-baseline.json",
     "roll",
     "backup-excludes",
+    "alloy-config",
     "apcupsd",
     "apt-upgrade",
     "base-packages",
