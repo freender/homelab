@@ -6,7 +6,7 @@ networks:
 
 services:
   alloy-neo:
-    image: grafana/alloy:v1.21.3
+    image: grafana/alloy:latest
     container_name: alloy-neo
     init: true
     stop_grace_period: 60s
