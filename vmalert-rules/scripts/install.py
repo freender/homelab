@@ -8,8 +8,8 @@ render -- which is what `files.install_from` arrived for.
 Three things here are not file copying, and they are the reason this module is
 worth more than its line count:
 
-* **Rules are validated before they are installed**, by running the pinned
-  vmalert image against the staged directory with `-dryRun`. A syntactically bad
+* **Rules are validated before they are installed**, by running the image the
+  live vmalert container uses against the staged directory with `-dryRun`. A syntactically bad
   rule file that reached the destination would be rejected by the running vmalert
   at reload, leaving it serving the *old* rules with no obvious signal -- alerting
   silently frozen at the last good config is the worst failure this module has.
@@ -40,7 +40,6 @@ from homelab_install.errors import InstallError
 RULES_DEST_DIR = Path("/mnt/cache/appdata/vmalert/rules")
 RULES_MODE = "644"
 CONTAINER = "vmalert"
-VMALERT_IMAGE = "victoriametrics/vmalert:v1.117.1"
 
 # Indirection point for tests, matching packages.py / systemd.py.
 _run = subprocess.run
@@ -94,14 +93,32 @@ def verify_destination_is_managed(expected: tuple[str, ...]) -> None:
             raise InstallError(f"unmanaged active vmalert rule: {path}")
 
 
-def validate_rules(rules_dir: Path) -> None:
-    """Dry-run the staged rules through the pinned vmalert image.
+def container_image() -> str:
+    """The image tag the running vmalert container uses.
 
-    The image is pinned to the tag the container itself runs: validating against
-    a different version could accept syntax the running vmalert rejects, which
-    would defeat the point of checking at all.
+    Read live rather than pinned here: a hard-coded tag drifted from v1.117.1 to
+    a container on v1.155.0 unnoticed, and validating against a different
+    version could accept syntax the running vmalert rejects.
     """
-    log.sub("Validating staged vmalert rules...")
+    result = _run(
+        ["docker", "inspect", "--format", "{{.Config.Image}}", CONTAINER],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        raise InstallError(f"container is missing: {CONTAINER}")
+
+    image = (result.stdout or "").strip()
+    if not image:
+        raise InstallError(f"could not read the image of {CONTAINER}")
+    return image
+
+
+def validate_rules(rules_dir: Path) -> None:
+    """Dry-run the staged rules through the image the vmalert container runs."""
+    image = container_image()
+    log.sub(f"Validating staged vmalert rules with {image}...")
     result = _run(
         [
             "docker",
@@ -109,7 +126,7 @@ def validate_rules(rules_dir: Path) -> None:
             "--rm",
             "-v",
             f"{rules_dir}:/rules:ro",
-            VMALERT_IMAGE,
+            image,
             "-rule=/rules/*.yml",
             "-dryRun",
         ],

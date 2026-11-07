@@ -66,13 +66,25 @@ def make_ctx(tmp_path: Path, rules: dict[str, str], expected: tuple[str, ...]) -
 class FakeDocker:
     """Records docker invocations and lets a test fail the validation run."""
 
-    def __init__(self, dry_run_code: int = 0, restart_code: int = 0) -> None:
+    def __init__(
+        self,
+        dry_run_code: int = 0,
+        restart_code: int = 0,
+        inspect_code: int = 0,
+        image: str = "victoriametrics/vmalert:v9.9.9",
+    ) -> None:
         self.dry_run_code = dry_run_code
         self.restart_code = restart_code
+        self.inspect_code = inspect_code
+        self.image = image
         self.calls: list[list[str]] = []
 
     def __call__(self, command: list[str], **kwargs) -> subprocess.CompletedProcess:
         self.calls.append(list(command))
+        if command[:2] == ["docker", "inspect"]:
+            return subprocess.CompletedProcess(
+                command, self.inspect_code, stdout=f"{self.image}\n", stderr=""
+            )
         if command[:2] == ["docker", "run"]:
             return subprocess.CompletedProcess(
                 command, self.dry_run_code, stdout="", stderr="bad rule at line 3"
@@ -181,19 +193,51 @@ def test_validation_surfaces_the_reason(
     assert "bad rule at line 3" in capsys.readouterr().out
 
 
-def test_validation_pins_the_image_the_container_runs(
+def test_validation_uses_the_image_the_container_runs(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Validating against a different version could accept syntax the running
-    vmalert rejects, which defeats the point of checking."""
+    vmalert rejects, which defeats the point of checking. A hard-coded tag had
+    drifted 38 minor versions behind the container."""
     installer = load_installer()
     _setup(tmp_path, installer)
-    fake = _docker(monkeypatch, installer, FakeDocker())
+    fake = _docker(monkeypatch, installer, FakeDocker(image="victoriametrics/vmalert:v1.155.0"))
 
     installer.validate_rules(tmp_path / "rules")
 
-    assert installer.VMALERT_IMAGE in fake.calls[0]
-    assert "-dryRun" in fake.calls[0]
+    assert fake.calls[0] == [
+        "docker", "inspect", "--format", "{{.Config.Image}}", "vmalert",
+    ]
+    run = fake.calls[1]
+    assert run[:2] == ["docker", "run"]
+    assert "victoriametrics/vmalert:v1.155.0" in run
+    assert "-dryRun" in run
+
+
+def test_validation_refuses_when_vmalert_is_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No container means no version to validate against; guessing one would
+    reintroduce the drift this lookup exists to remove."""
+    installer = load_installer()
+    _setup(tmp_path, installer)
+    fake = _docker(monkeypatch, installer, FakeDocker(inspect_code=1))
+
+    with pytest.raises(InstallError, match="container is missing: vmalert"):
+        installer.validate_rules(tmp_path / "rules")
+
+    assert not any(call[:2] == ["docker", "run"] for call in fake.calls)
+
+
+def test_validation_refuses_an_empty_image(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    installer = load_installer()
+    _setup(tmp_path, installer)
+    _docker(monkeypatch, installer, FakeDocker(image=""))
+
+    with pytest.raises(InstallError, match="could not read the image of vmalert"):
+        installer.validate_rules(tmp_path / "rules")
 
 
 def test_changed_rules_are_installed_and_vmalert_restarted(
