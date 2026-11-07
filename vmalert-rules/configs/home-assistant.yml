@@ -43,3 +43,25 @@ groups:
         annotations:
           summary: "Zigbee2MQTT on zion is down"
           description: "The Zigbee2MQTT bridge has reported offline to Home Assistant for 5 minutes, so no Zigbee device is controllable. Check `ssh zion 'ha apps info 45df7312_zigbee2mqtt'` and its logs for an adapter disconnect, and that the coordinator dongle-m.freender.internal:6638 answers."
+
+      # HA counts entities stuck "unavailable" for 24h+ itself, in the template
+      # sensor.unavailable_entities_24h (homelab-ops homeassistant/config/packages/
+      # health.yaml). The export's per-entity entity_available cannot do this: it
+      # also reads 0 for "unknown", which every never-pressed button is. Entities
+      # unavailable on purpose carry HA's "No unavailable alert" label and are not
+      # counted. The names are in the sensor's attributes, not in the metric.
+      #
+      # HA resets last_changed on restart, so the 24h runs from the later of the
+      # entity going unavailable and the last HA restart. Gated on the HA scrape
+      # so a zion outage reports as HomeAssistantDown only.
+      - alert: HomeAssistantEntitiesUnavailable
+        expr: |
+          homeassistant_sensor_state{job="home-assistant", entity="sensor.unavailable_entities_24h"} > 0
+          and on() (min_over_time(up{job="home-assistant"}[10m]) == 1)
+        for: 15m
+        labels:
+          severity: warning
+          host: zion
+        annotations:
+          summary: "{{ $value }} Home Assistant entities unavailable for 24h+"
+          description: "Home Assistant reports {{ $value }} entities unavailable for 24 hours or more. List them with `ha-ctl state sensor.unavailable_entities_24h` (attribute entities). If one is unavailable on purpose, give it the 'No unavailable alert' label in HA instead of silencing this."
