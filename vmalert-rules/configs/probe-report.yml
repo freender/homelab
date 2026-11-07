@@ -30,3 +30,18 @@ groups:
         annotations:
           summary: "riven daily probe report has not completed in 26h"
           description: "No successful probe report run on riven has been recorded in 26 hours, so problems it would have reported are going unseen. Check the report's user timer and its journal on riven."
+
+      # The daily probe report tracks each finding a rule could have caught as an
+      # alert-gap ticket, and pushes the age of the oldest one not yet covered by a
+      # rule or accepted as a known issue. This keeps a gap from being reported daily
+      # and never acted on: after 14 days it pages until it is promoted or accepted.
+      #
+      # Pushed once per run, so the window matches ProbeReportStale's 26h. No host-up
+      # gate: a missing sample makes the rule fall silent rather than fire.
+      - alert: AlertGapUnpromoted
+        expr: last_over_time(homelab_alert_gap_oldest_age_seconds{host="riven"}[26h]) > 14 * 86400
+        labels:
+          severity: warning
+        annotations:
+          summary: "riven probe report has an alert gap unpromoted for 14+ days"
+          description: "The oldest open alert-gap ticket is {{ $value | humanizeDuration }} old. Add a vmalert rule that covers it, or mark it as a known issue."
