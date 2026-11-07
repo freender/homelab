@@ -12,7 +12,10 @@ ZFS replication or migration receives into an already-mounted target dataset.
 > migrations on 2026-11-07 corrupted Docker `identity-cache.db`/`local-kv.db`
 > and containerd `meta.db`; warm-target live files differed from the
 > `__replicate_*` snapshot until `drop_caches`. Retire again only once a shipped
-> kernel carries the fix and the mmap reproducer is clean on every node.
+> kernel carries the fix, the mmap reproducer is clean on every node, and the fix
+> no longer drops pages under the teardown lock. Plain 8eb65b0 (proposed for
+> ZFS 2.4.5) deadlocks receive against concurrent mmap faults (zfsonlinux
+> `1330a64`).
 
 ## Patched File
 
