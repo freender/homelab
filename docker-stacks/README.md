@@ -81,7 +81,7 @@ Use `compose.yml.j2` when every host running the stack wants byte-identical conf
 apart from its own name. `{% if HOST == ... %}` is rejected by a test: a conditional
 means the stack is not host-invariant, so split it into `<host>.yml` files instead.
 
-Currently templated: `exporters`, `hawser`, `cloudflared`.
+Currently templated: `exporters`, `cloudflared`.
 
 `vmagent` and `geoipupdate` went per-host when helm, a VM, moved their regenerable
 data to a scratch disk. That disk is retired and the data is back under appdata, so
