@@ -161,6 +161,7 @@ also_copy = [
     "pve-postinstall-webhook",
     "pve-upgrade",
     "pve-zfs-large-block-patch",
+    "pve-zfs-migration-sync-patch",
     "secrets",
     "ssh-config",
     "ubuntu-setup",
