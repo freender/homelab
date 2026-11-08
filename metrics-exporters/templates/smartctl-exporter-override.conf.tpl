@@ -3,12 +3,12 @@
 # arguments at all. ExecStart must be cleared first: it is a non-list
 # directive, so an unreset second assignment would be a startup error.
 #
-# All four flags below are the upstream defaults except --smartctl.interval;
-# they are stated explicitly rather than relied on so a future upstream default
-# change cannot silently alter behaviour here:
-#   --smartctl.interval=10s        matches the 10s scrape_interval of the
-#                                  pve-smartctl job in vmagent/scrape.yml on
-#                                  helm (upstream default is 60s).
+# All four flags below are upstream defaults. They are stated explicitly
+# rather than relied on so a future upstream default change cannot silently
+# alter behaviour here:
+#   --smartctl.interval=60s        matches the 60s scrape_interval of the
+#                                  pve-smartctl job in monitoring-config's
+#                                  scrape.yml; change the two together.
 #   --smartctl.powermode-check     load-bearing on hosts whose disks spin
 #                                  down: "standby" makes the exporter skip
 #                                  (not wake) a spun-down disk.
@@ -29,4 +29,4 @@
 TimeoutStartSec=300
 ExecStartPre=/usr/local/bin/homelab-smartctl-wait-devices {{ SMARTCTL_PATH }}
 ExecStart=
-ExecStart=/usr/bin/smartctl_exporter --web.listen-address=:9633 --smartctl.path={{ SMARTCTL_PATH }} --smartctl.interval=10s --smartctl.powermode-check=standby
+ExecStart=/usr/bin/smartctl_exporter --web.listen-address=:9633 --smartctl.path={{ SMARTCTL_PATH }} --smartctl.interval=60s --smartctl.powermode-check=standby
