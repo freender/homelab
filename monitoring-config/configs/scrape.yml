@@ -140,6 +140,12 @@ scrape_configs:
         labels:
           host: tower
           name: plex
+      # Seerr publishes no LAN port, so it is probed by container name over
+      # net_overlay, which blackbox-exporter shares. Still bypasses Traefik.
+      - targets: ["http://seerr:5055/api/v1/status"]
+        labels:
+          host: helm
+          name: seerr
 
   # apcupsd's NIS server stalls for 2-15 s while its USB poll holds the UPS lock
   # (freender/homelab-ops#228). The chain must stay ordered: apcaccess gives up

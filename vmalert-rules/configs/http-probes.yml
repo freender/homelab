@@ -20,15 +20,33 @@ groups:
           summary: "Plex is not responding"
           description: "{{ $labels.endpoint }} has failed its HTTP check for 5 minutes."
 
+      # Same shape as Plex. Warning, not critical: requests can wait, playback
+      # cannot.
+      - alert: ServiceUnreachable
+        expr: probe_success{job="blackbox-http", name="seerr"} == 0
+        for: 5m
+        labels: {severity: warning, category: http, site: home, host: helm, name: seerr}
+        annotations:
+          summary: "Seerr is not responding"
+          description: "{{ $labels.endpoint }} has failed its HTTP check for 5 minutes."
+
       # The probe itself going quiet (blackbox-exporter down, or vmagent unable
       # to reach it) leaves ServiceUnreachable blind, not firing. It must carry
       # no `name` label, so it routes to the private chat, not the Plex channel.
       # absent_over_time() copies equality matchers into its result, so
       # `name="plex"` would add that label. The regex matcher `name=~"plex"` is
-      # not copied.
+      # not copied. One rule per probe: a single `name=~"plex|seerr"` rule
+      # would only fire when every probe is gone at once.
       - alert: HttpProbeMissing
         expr: absent_over_time(probe_success{job="blackbox-http", name=~"plex"}[10m])
         labels: {severity: warning, category: http, site: home, host: helm, probe: plex}
         annotations:
           summary: "Plex HTTP probe has no data"
           description: "No probe_success for plex from blackbox-exporter on helm for 10 minutes, so ServiceUnreachable cannot fire. Check the blackbox-exporter container and the blackbox-http scrape job."
+
+      - alert: HttpProbeMissing
+        expr: absent_over_time(probe_success{job="blackbox-http", name=~"seerr"}[10m])
+        labels: {severity: warning, category: http, site: home, host: helm, probe: seerr}
+        annotations:
+          summary: "Seerr HTTP probe has no data"
+          description: "No probe_success for seerr from blackbox-exporter on helm for 10 minutes, so ServiceUnreachable cannot fire. Check the blackbox-exporter container and the blackbox-http scrape job."
