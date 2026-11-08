@@ -14,6 +14,13 @@ services:
     mem_limit: 1g
     environment:
       TZ: 'America/New_York'
+    # Explicit listen-addr binds Alloy's HTTP server to all interfaces so vmagent
+    # can scrape it over net_overlay (homelab-ops#346). No host port is published.
+    command:
+      - 'run'
+      - '--server.http.listen-addr=0.0.0.0:12345'
+      - '--storage.path=/var/lib/alloy/data'
+      - '/etc/alloy/config.alloy'
     volumes:
       - /var/log:/var/log
       - /mnt/cache/appdata/geoipupdate:/etc/alloy/geoip

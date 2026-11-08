@@ -99,7 +99,7 @@ not drift**:
   seeds as master and helm/neo seed `replicaof traefik-kv-tower`. After that, Sentinel
   owns the role.
 - **alloy** differs by real mounts (neo has no `geoipupdate` stack, so no geoip
-  mount) and by an explicit `--server.http.listen-addr` that tower does not carry.
+  mount) only; all three bind `--server.http.listen-addr=0.0.0.0:12345` for scraping.
 
 ### Known divergences, deliberately not normalized
 

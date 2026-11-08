@@ -27,6 +27,7 @@ RULE_FILES = (
     "home-assistant.yml",
     "http-probes.yml",
     "important-containers.yml",
+    "monitoring-stack.yml",
     "nic-link.yml",
     "node-down.yml",
     "node-resources.yml",

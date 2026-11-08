@@ -15,7 +15,7 @@ services:
     environment:
       TZ: 'America/New_York'
     # Explicit listen-addr binds Alloy's HTTP server to all interfaces so it can
-    # be scraped; tower deliberately does not carry this. See README.
+    # be scraped by vmagent over net_overlay (homelab-ops#346).
     command:
       - 'run'
       - '--server.http.listen-addr=0.0.0.0:12345'

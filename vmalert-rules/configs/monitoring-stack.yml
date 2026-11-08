@@ -1,0 +1,123 @@
+groups:
+  - name: monitoring-stack
+    interval: 1m
+    rules:
+      # The monitoring stack watching itself (homelab-ops#346). These catch a
+      # component degrading while helm is up. helm itself going down, or
+      # VictoriaMetrics/vmalert/Alertmanager dying outright, silences every rule
+      # here; that case belongs to Watchdog's external dead-man's switch.
+      #
+      # vmagent-helm and vmagent-neo both scrape every target and
+      # VictoriaMetrics deduplicates them into one series, so a single `up`
+      # sample can come from either agent. max_over_time() makes this fire only
+      # when every sample in the window was down, not when one agent hiccups.
+      # Gated on the host being up so a host outage is NodeDown's alone.
+      - alert: MonitoringTargetDown
+        expr: |
+          max_over_time(up{job=~"victoria-logs|victoria-metrics|vmagent|vmalert|alertmanager|alloy"}[5m]) == 0
+          and on(host) (avg_over_time(up{job="pve-node"}[10m]) >= 0.95)
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.instance }} on {{ $labels.host }} is not scrapeable"
+          description: "{{ $labels.endpoint }} ({{ $labels.job }}) has answered no scrape for 5 minutes while {{ $labels.host }} is up. Check `docker ps` and its logs on {{ $labels.host }}."
+
+      # vmagent buffers to disk when VictoriaMetrics will not take writes. 0 when
+      # healthy; a sustained backlog means metrics are arriving late and, once
+      # maxDiskUsagePerURL (5GB) fills, are dropped.
+      - alert: VmagentRemoteWriteBacklog
+        expr: vmagent_remotewrite_pending_data_bytes > 10 * 1024 * 1024
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.instance }} has {{ $value | humanize1024 }}B queued for VictoriaMetrics"
+          description: "{{ $labels.instance }} cannot keep up with remote write to VictoriaMetrics. Check victoria-metrics on helm and the overlay path from {{ $labels.host }}."
+
+      - alert: VmagentRemoteWriteDropping
+        expr: increase(vmagent_remotewrite_packets_dropped_total[15m]) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.instance }} is dropping metrics"
+          description: "{{ $labels.instance }} dropped {{ $value }} remote-write packets in 15m. Those samples are lost, not delayed."
+
+      # A bad scrape.yml is rejected and vmagent keeps the old one, so a
+      # monitoring-config deploy can "succeed" without taking effect.
+      - alert: VmagentConfigReloadFailed
+        expr: vm_promscrape_config_last_reload_successful{job="vmagent"} == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.instance }} rejected its scrape config"
+          description: "{{ $labels.instance }} is still running its previous scrape.yml. See its logs for the parse error."
+
+      - alert: VictoriaMetricsRowsIgnored
+        expr: sum by (instance, host, reason) (increase(vm_rows_ignored_total{job="victoria-metrics"}[15m])) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "VictoriaMetrics ignored {{ $value }} rows ({{ $labels.reason }})"
+          description: "Samples were rejected at ingest for reason {{ $labels.reason }}. Find the offending source in victoria-metrics' logs."
+
+      - alert: VictoriaLogsRowsDropped
+        expr: sum by (instance, host, reason) (increase(vl_rows_dropped_total{job="victoria-logs"}[15m])) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "VictoriaLogs dropped {{ $value }} log rows ({{ $labels.reason }})"
+          description: "Log entries were rejected at ingest for reason {{ $labels.reason }}. Check victoria-logs' logs for the sender."
+
+      # vmalert overwrites `alertname` with the rule's own name, so the source
+      # metric's alertname/recording label is moved to `rule` first. Covers
+      # vmalert-logs too, where a broken LogsQL query surfaces as these errors.
+      - alert: VmalertRuleErrors
+        expr: |
+          sum by (instance, host, group, rule) (
+            label_replace(increase(vmalert_alerting_rules_errors_total{job="vmalert"}[15m]), "rule", "$1", "alertname", "(.*)")
+            or
+            label_replace(increase(vmalert_recording_rules_errors_total{job="vmalert"}[15m]), "rule", "$1", "recording", "(.*)")
+          ) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.instance }} rule {{ $labels.rule }} is failing to evaluate"
+          description: "{{ $labels.rule }} (group {{ $labels.group }}) errored {{ $value }} times in 15m, so it is not alerting. Check /api/v1/rules on {{ $labels.instance }} for lastError."
+
+      - alert: VmalertNotifierErrors
+        expr: sum by (instance, host) (increase(vmalert_alerts_send_errors_total{job="vmalert"}[15m])) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.instance }} cannot reach Alertmanager"
+          description: "{{ $labels.instance }} failed to send {{ $value }} alerts to Alertmanager in 15m."
+
+      # If the failing integration is the main Telegram bot this alert cannot
+      # arrive through it either; it still shows in Alertmanager's UI, and a
+      # failure of the Plex bot does arrive here.
+      - alert: AlertmanagerNotificationsFailing
+        expr: sum by (instance, host, integration, reason) (increase(alertmanager_notifications_failed_total{job="alertmanager"}[15m])) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "Alertmanager {{ $labels.integration }} notifications failing ({{ $labels.reason }})"
+          description: "{{ $value }} {{ $labels.integration }} notifications failed in 15m with reason {{ $labels.reason }}."
+
+      - alert: AlertmanagerConfigReloadFailed
+        expr: alertmanager_config_last_reload_successful{job="alertmanager"} == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Alertmanager rejected its config"
+          description: "Alertmanager is still routing with its previous config. See its logs for the error."
+
+      - alert: AlloyLogsDropped
+        expr: sum by (instance, host, reason) (increase(loki_write_dropped_entries_total{job="alloy"}[15m])) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.instance }} dropped {{ $value }} log entries ({{ $labels.reason }})"
+          description: "Alloy on {{ $labels.host }} could not deliver log entries to VictoriaLogs (reason {{ $labels.reason }}). They are lost."

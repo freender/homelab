@@ -205,15 +205,104 @@ scrape_configs:
         labels:
           host: zion
 
+  # The monitoring stack itself (homelab-ops#346), scraped by container name
+  # over net_overlay. Several of these share `host: helm`, so `instance` is the
+  # container name rather than the host -- otherwise vmalert and vmalert-logs
+  # would collide on one series. Alerts on these jobs: monitoring-stack.yml.
   - job_name: victoria-logs
     scrape_interval: 10s
     scrape_timeout: 8s
     relabel_configs:
       - source_labels: [__address__]
         target_label: endpoint
-      - source_labels: [host]
+      - source_labels: [__address__]
+        regex: '([^:]+):.*'
         target_label: instance
     static_configs:
       - targets: ["victoria-logs:9428"]
         labels:
           host: helm
+
+  - job_name: victoria-metrics
+    scrape_interval: 10s
+    scrape_timeout: 8s
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: endpoint
+      - source_labels: [__address__]
+        regex: '([^:]+):.*'
+        target_label: instance
+    static_configs:
+      - targets: ["victoria-metrics:8428"]
+        labels:
+          host: helm
+
+  - job_name: vmagent
+    scrape_interval: 10s
+    scrape_timeout: 8s
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: endpoint
+      - source_labels: [__address__]
+        regex: '([^:]+):.*'
+        target_label: instance
+    static_configs:
+      - targets: ["vmagent-helm:8429"]
+        labels:
+          host: helm
+      - targets: ["vmagent-neo:8429"]
+        labels:
+          host: neo
+
+  - job_name: vmalert
+    scrape_interval: 10s
+    scrape_timeout: 8s
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: endpoint
+      - source_labels: [__address__]
+        regex: '([^:]+):.*'
+        target_label: instance
+    static_configs:
+      - targets: ["vmalert:8880"]
+        labels:
+          host: helm
+      - targets: ["vmalert-logs:8880"]
+        labels:
+          host: helm
+
+  - job_name: alertmanager
+    scrape_interval: 10s
+    scrape_timeout: 8s
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: endpoint
+      - source_labels: [__address__]
+        regex: '([^:]+):.*'
+        target_label: instance
+    static_configs:
+      - targets: ["alertmanager:9093"]
+        labels:
+          host: helm
+
+  # Alloy exports its own `host` label (the loki.write endpoint); with the
+  # default honor_labels: false it lands as `exported_host` and ours wins.
+  - job_name: alloy
+    scrape_interval: 10s
+    scrape_timeout: 8s
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: endpoint
+      - source_labels: [__address__]
+        regex: '([^:]+):.*'
+        target_label: instance
+    static_configs:
+      - targets: ["alloy-tower:12345"]
+        labels:
+          host: tower
+      - targets: ["alloy-helm:12345"]
+        labels:
+          host: helm
+      - targets: ["alloy-neo:12345"]
+        labels:
+          host: neo
