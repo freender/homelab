@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import importlib.util
+import re
 import subprocess
 from pathlib import Path
 
 import pytest
+import yaml
 
 from homelab.modules import monitoring_config
 from homelab_install.context import InstallContext
@@ -461,11 +463,115 @@ def test_template_regex_repeat_counts_fit_go_regexp() -> None:
     the failing call. A 3500-character cap delivered the probe report as a bare
     header.
     """
-    import re
-
     configs = Path(__file__).resolve().parents[1] / "monitoring-config" / "configs"
     template = (configs / "alertmanager.yml.tpl").read_text(encoding="utf-8")
     counts = [int(n) for n in re.findall(r"\{(\d+)(?:,\d*)?\}", template)]
     assert counts, "no regex repeat counts found; the pattern no longer matches the template"
     too_big = [n for n in counts if n > 1000]
     assert not too_big, f"repeat count(s) over Go's 1000 limit: {too_big}"
+
+
+# ---------------------------------------------------------------------------
+# Scrape-time drops vs. the rules that read them (freender/homelab-ops#359)
+#
+# A metric_relabel_configs drop is silent: a rule on a dropped metric evaluates
+# to nothing and never fires. These tests replay the real scrape.yml drops
+# against every metric name the real vmalert rules mention.
+# ---------------------------------------------------------------------------
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+SCRAPE_CONFIG = REPO_ROOT / "monitoring-config" / "configs" / "scrape.yml"
+RULES_DIR = REPO_ROOT / "vmalert-rules" / "configs"
+
+# A keep-list only answers for its own exporter's families: cadvisor dropping
+# node_* says nothing, because cadvisor never exports node_*.
+KEEP_LIST_PREFIXES = {"cadvisor": "container_", "home-assistant": "homeassistant_"}
+
+_SELECTOR = re.compile(r"([a-zA-Z_:][a-zA-Z0-9_:]*)\s*\{([^}]*)\}")
+_EQUALITY_MATCHER = re.compile(r'(\w+)\s*=\s*"([^"]*)"')
+_IDENTIFIER = re.compile(r"[a-zA-Z_:][a-zA-Z0-9_:]*")
+
+
+def scrape_jobs() -> list[dict]:
+    return yaml.safe_load(SCRAPE_CONFIG.read_text(encoding="utf-8"))["scrape_configs"]
+
+
+def survives(relabels: list[dict], labels: dict[str, str]) -> bool:
+    """vmagent's keep/drop semantics: anchored regex over ';'-joined labels."""
+    for relabel in relabels:
+        joined = relabel.get("separator", ";").join(
+            labels.get(name, "") for name in relabel["source_labels"]
+        )
+        hit = re.fullmatch(relabel["regex"], joined) is not None
+        if relabel["action"] == "drop" and hit:
+            return False
+        if relabel["action"] == "keep" and not hit:
+            return False
+    return True
+
+
+def referenced_series(expr: str) -> list[tuple[str, dict[str, str]]]:
+    """Every name{...} selector with its equality matchers, plus bare names.
+
+    Function names, keywords and label names come along as "bare names" too.
+    That is harmless: drops here are exact names and keep-lists are checked
+    only against their own prefix, so a stray `rate` or `host` never matches.
+    """
+    found = [
+        (name, dict(_EQUALITY_MATCHER.findall(matchers)))
+        for name, matchers in _SELECTOR.findall(expr)
+    ]
+    rest = re.sub(r'"[^"]*"', " ", _SELECTOR.sub(" ", expr))
+    found.extend((name, {}) for name in _IDENTIFIER.findall(rest))
+    return found
+
+
+def rule_exprs() -> list[tuple[str, str]]:
+    exprs = []
+    for rule_file in sorted(RULES_DIR.glob("*.yml")):
+        for group in yaml.safe_load(rule_file.read_text(encoding="utf-8"))["groups"]:
+            exprs.extend((rule_file.name, rule["expr"]) for rule in group["rules"])
+    return exprs
+
+
+def test_relabel_rules_use_only_modelled_actions() -> None:
+    """survives() models keep and drop only, so anything else would go unchecked."""
+    for job in scrape_jobs():
+        relabels = job.get("metric_relabel_configs", [])
+        assert all(r["action"] in ("keep", "drop") for r in relabels), job["job_name"]
+        if any(r["action"] == "keep" for r in relabels):
+            assert job["job_name"] in KEEP_LIST_PREFIXES, (
+                f"{job['job_name']} has a keep-list; add its family prefix to KEEP_LIST_PREFIXES"
+            )
+
+
+def test_the_drops_really_drop() -> None:
+    """Keeps the guard below from passing vacuously on a regex that matches nothing."""
+    jobs = {job["job_name"]: job.get("metric_relabel_configs", []) for job in scrape_jobs()}
+
+    systemd = {"__name__": "node_systemd_unit_state"}
+    assert not survives(jobs["pve-node"], {**systemd, "state": "active"})
+    assert survives(jobs["pve-node"], {**systemd, "state": "failed"})
+    assert not survives(jobs["cadvisor"], {"__name__": "container_fs_usage_bytes"})
+    assert not survives(jobs["home-assistant"], {"__name__": "homeassistant_entity_available"})
+    assert not survives(jobs["vmagent"], {"__name__": "flag"})
+
+
+def test_no_vmalert_rule_reads_a_metric_the_scrape_config_drops() -> None:
+    exprs = rule_exprs()
+    assert len(exprs) > 50, "rule discovery found too few rules; the glob or layout changed"
+
+    dropped = []
+    for job in scrape_jobs():
+        relabels = job.get("metric_relabel_configs", [])
+        if not relabels:
+            continue
+        prefix = KEEP_LIST_PREFIXES.get(job["job_name"])
+        for rule_file, expr in exprs:
+            for name, labels in referenced_series(expr):
+                if prefix is not None and not name.startswith(prefix):
+                    continue
+                if not survives(relabels, {"__name__": name, **labels}):
+                    dropped.append(f"{rule_file}: {name}{labels or ''} by {job['job_name']}")
+
+    assert not dropped, "\n".join(sorted(set(dropped)))

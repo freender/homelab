@@ -2,6 +2,10 @@ global:
   scrape_interval: 10s
   scrape_timeout: 8s
 
+# metric_relabel_configs below drop series nothing reads, to keep VictoriaMetrics
+# at 1y retention inside helm's appdata disk (freender/homelab-ops#347, ~26k of
+# 67k series). test_monitoring_config.py fails if a vmalert rule names a metric
+# these drop; Grafana dashboards live in homelab-ops and are checked by hand.
 scrape_configs:
   - job_name: pve-node
     relabel_configs:
@@ -9,6 +13,15 @@ scrape_configs:
         target_label: endpoint
       - source_labels: [host]
         target_label: instance
+    # Rules read only state="failed"; the other four states are 4/5 of the
+    # largest family in the TSDB.
+    metric_relabel_configs:
+      - source_labels: [__name__, state]
+        regex: 'node_systemd_unit_state;(activating|active|deactivating|inactive)'
+        action: drop
+      - source_labels: [__name__]
+        regex: 'node_scrape_collector_duration_seconds'
+        action: drop
     static_configs:
       - targets: ["ace.freender.internal:9100"]
         labels:
@@ -98,6 +111,12 @@ scrape_configs:
         target_label: endpoint
       - source_labels: [host]
         target_label: instance
+    # Keep-list: the families rules and dashboards read. Add a family here
+    # before writing a rule or panel on it.
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        regex: 'container_(last_seen|start_time_seconds|spec_memory_limit_bytes|memory_working_set_bytes|cpu_usage_seconds_total|network_receive_bytes_total|network_transmit_bytes_total)'
+        action: keep
     static_configs:
       - targets: ["tower-cadvisor:8080"]
         labels:
@@ -200,6 +219,13 @@ scrape_configs:
         target_label: endpoint
       - source_labels: [host]
         target_label: instance
+    # Keep-list, same rule as cadvisor: per-entity bookkeeping families
+    # (entity_available, state_change_*, last_updated_time_seconds,
+    # entity_info) are dropped.
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        regex: 'homeassistant_(binary_sensor_state|sensor_state|sensor_data_size_mib|sensor_unit_percent)'
+        action: keep
     static_configs:
       - targets: ["zion.freender.internal:8123"]
         labels:
@@ -218,6 +244,10 @@ scrape_configs:
       - source_labels: [__address__]
         regex: '([^:]+):.*'
         target_label: instance
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        regex: 'flag'
+        action: drop
     static_configs:
       - targets: ["victoria-logs:9428"]
         labels:
@@ -232,6 +262,10 @@ scrape_configs:
       - source_labels: [__address__]
         regex: '([^:]+):.*'
         target_label: instance
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        regex: 'flag'
+        action: drop
     static_configs:
       - targets: ["victoria-metrics:8428"]
         labels:
@@ -246,6 +280,10 @@ scrape_configs:
       - source_labels: [__address__]
         regex: '([^:]+):.*'
         target_label: instance
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        regex: 'flag'
+        action: drop
     static_configs:
       - targets: ["vmagent-helm:8429"]
         labels:
@@ -263,6 +301,10 @@ scrape_configs:
       - source_labels: [__address__]
         regex: '([^:]+):.*'
         target_label: instance
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        regex: 'flag'
+        action: drop
     static_configs:
       - targets: ["vmalert:8880"]
         labels:
