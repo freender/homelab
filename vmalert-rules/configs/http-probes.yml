@@ -9,16 +9,18 @@ groups:
       #
       # No host-up gate, unlike the container rules: an unreachable Plex is
       # exactly what the Plex channel wants to hear about, whatever the cause.
-      # `for: 5m` keeps routine HA migrations and restarts out of that external
-      # channel: over 30 days, tower's routine Plex gaps were 0.8-4 minutes.
+      # `for: 2m` keeps routine HA migrations out of that external channel: a
+      # tower restart-migration costs ~21s of Plex downtime (2026-11-04,
+      # ct-outage-report plus an external poller; homelab-ops#296). A node
+      # failure (HA fencing, then a cold start) does page, as it should.
       # A tower outage past 10m is still inhibited by NodeDown (equal: host).
       - alert: ServiceUnreachable
         expr: probe_success{job="blackbox-http", name="plex"} == 0
-        for: 5m
+        for: 2m
         labels: {severity: critical, category: http, site: home, host: tower, name: plex}
         annotations:
           summary: "Plex is not responding"
-          description: "{{ $labels.endpoint }} has failed its HTTP check for 5 minutes."
+          description: "{{ $labels.endpoint }} has failed its HTTP check for 2 minutes."
 
       # Same shape as Plex. Warning, not critical: requests can wait, playback
       # cannot.
