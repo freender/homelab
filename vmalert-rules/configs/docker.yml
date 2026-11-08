@@ -7,7 +7,8 @@ groups:
       # every pve-node target on every host, so keeping it here would page
       # twice for one outage.
       #
-      # Gated on the host having been continuously scrapeable for 10 minutes
+      # Gated on the host having been scrapeable for 10 minutes (>= 95% of
+      # scrapes; see critical-containers.yml for why it isn't every scrape)
       # so that this means what its name says: cAdvisor is broken while its
       # host is fine. Without the gate every LXC restart fired it at the 2m
       # mark -- tower/helm/neo restarts are ~5 minutes and there were 11 of
@@ -17,7 +18,7 @@ groups:
       - alert: DockerMetricsTargetDown
         expr: |
           up{job="cadvisor", host=~"tower|helm|neo"} == 0
-          and on(host) (min_over_time(up{job="pve-node"}[10m]) == 1)
+          and on(host) (avg_over_time(up{job="pve-node"}[10m]) >= 0.95)
         for: 2m
         labels:
           severity: critical

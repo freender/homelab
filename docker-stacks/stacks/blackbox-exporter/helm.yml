@@ -1,0 +1,21 @@
+networks:
+  net_overlay:
+    external: true
+
+services:
+  # HTTP probes for user-facing services (vmalert-rules/configs/http-probes.yml).
+  # Uses the image's bundled config, whose `http_2xx` module is all the probes
+  # need. On net_overlay so both vmagent-helm and vmagent-neo can scrape it; the
+  # probes themselves go out over the LAN to the service's published port,
+  # independent of the overlay and of Traefik.
+  blackbox-exporter:
+    container_name: blackbox-exporter
+    image: prom/blackbox-exporter:v0.29.1
+    init: true
+    stop_grace_period: 2s
+    restart: always
+    mem_limit: 64m
+    environment:
+      TZ: 'America/New_York'
+    networks:
+      net_overlay: {}
