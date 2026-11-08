@@ -119,6 +119,7 @@ MOUNT_OPTIONS = "nosuid,nodev,nofail,x-systemd.device-timeout=60,x-systemd.mount
 
 ZFS_CONF = "/etc/modprobe.d/zfs.conf"
 ZFS_ARC_MAX_PARAM = "/sys/module/zfs/parameters/zfs_arc_max"
+CRON_SCRUB_PROPERTY = "org.debian:periodic-scrub"
 
 ALIASES = "/etc/aliases"
 ALIASES_DB = "/etc/aliases.db"
@@ -473,8 +474,9 @@ def configure_zfs_arc(ctx: InstallContext, zfs_arc_max: str) -> None:
 def configure_scrub_timers(ctx: InstallContext) -> None:
     """Scrub every pool monthly through PVE's native per-pool timers.
 
-    Replaces the single `zfs-scrub.timer` and any weekly instance, so a pool is never
-    scrubbed on two schedules.
+    Replaces the single `zfs-scrub.timer` and any weekly instance, and opts each pool
+    out of zfsutils-linux's second-Sunday cron scrub, so a pool is never scrubbed on
+    two schedules.
     """
     if not _which("zpool"):
         log.warn("zpool not found; skipping native scrub timer setup")
@@ -490,6 +492,28 @@ def configure_scrub_timers(ctx: InstallContext) -> None:
     for pool in pools.stdout.split():
         systemd.ensure_stopped(ctx, f"zfs-scrub-weekly@{pool}.timer")
         systemd.ensure_running(ctx, f"zfs-scrub-monthly@{pool}.timer", changed=False)
+        disable_cron_scrub(ctx, pool)
+
+
+def disable_cron_scrub(ctx: InstallContext, pool: str) -> None:
+    """Opt a pool out of `/etc/cron.d/zfsutils-linux`'s scrub without editing that conffile.
+
+    Debian's cron script skips a pool whose root dataset sets this property to
+    `disable`; the native `zfs-scrub@.service` ignores it.
+    """
+    current = _run(
+        ["zfs", "get", "-H", "-o", "value", CRON_SCRUB_PROPERTY, pool],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if current.returncode == 0 and current.stdout.strip() == "disable":
+        return
+    if _run(["zfs", "set", f"{CRON_SCRUB_PROPERTY}=disable", pool], check=False).returncode:
+        log.warn(f"failed to disable the zfsutils cron scrub on {pool}")
+        return
+    ctx.changes.record(f"cron-scrub:{pool}")
+    log.ok(f"zfsutils cron scrub disabled on {pool}")
 
 
 def install_interfaces(ctx: InstallContext) -> None:

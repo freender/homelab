@@ -79,6 +79,7 @@ class FakeHost:
         self.active = set(self.enabled)
         self.masked = {"openipmi.service"}
         self.unit_files = {"postfix.service", "openipmi.service", "zfs-scrub-monthly@.timer"}
+        self.cron_scrub = {pool: "disable" for pool in self.pools}
         self.failing: set[str] = set()
         self.clustered = True
         self.certificate = ""
@@ -101,6 +102,10 @@ class FakeHost:
                 return done(command, 0 if pool in self.pools else 1)
             case ["zpool", "import", "-f", pool]:
                 self.pools.add(pool)
+            case ["zfs", "get", "-H", "-o", "value", "org.debian:periodic-scrub", pool]:
+                return done(command, stdout=f"{self.cron_scrub.get(pool, '-')}\n")
+            case ["zfs", "set", setting, pool]:
+                self.cron_scrub[pool] = setting.split("=", 1)[1]
             case ["pvesm", "status", "--storage", storage]:
                 return done(command, 0 if storage in self.storages else 1)
             case ["pvesm", "add", "zfspool", storage, *_]:
@@ -137,6 +142,7 @@ class FakeHost:
         readonly = (
             ("timedatectl", "show"),
             ("zpool", "list"),
+            ("zfs", "get"),
             ("pvesm", "status"),
             ("pvecm", "status"),
             ("systemctl", "is-enabled"),
@@ -656,12 +662,41 @@ def test_scrub_timers_move_to_native_monthly(harness: Harness) -> None:
     assert "systemctl enable --now zfs-scrub-monthly@vm-flash.timer" in actions
 
 
+def test_cron_scrub_is_disabled_on_every_pool(harness: Harness, capsys) -> None:
+    harness.host.cron_scrub = {"rpool": "-"}
+
+    ctx = harness.run()
+
+    assert harness.host.cron_scrub == {"rpool": "disable", "vm-flash": "disable"}
+    assert ctx.changes.touched("cron-scrub:rpool", "cron-scrub:vm-flash")
+    assert "zfsutils cron scrub disabled on rpool" in capsys.readouterr().out
+
+
+def test_cron_scrub_already_disabled_is_left_alone(harness: Harness) -> None:
+    harness.run()
+
+    assert not harness.host.ran("zfs", "set")
+
+
+def test_cron_scrub_set_failure_warns_and_records_nothing(harness: Harness, capsys) -> None:
+    harness.host.cron_scrub = {}
+    harness.host.failing.add("zfs set")
+
+    ctx = harness.run()
+
+    assert "failed to disable the zfsutils cron scrub on vm-flash" in capsys.readouterr().out
+    assert not ctx.changes.touched("cron-scrub:rpool", "cron-scrub:vm-flash")
+
+
 def test_scrub_timers_skipped_without_native_template(harness: Harness) -> None:
     harness.host.unit_files.discard("zfs-scrub-monthly@.timer")
+
+    harness.host.cron_scrub = {}
 
     harness.run()
 
     assert not harness.host.ran("zpool", "list", "-H")
+    assert not harness.host.ran("zfs", "set")
 
 
 def test_openipmi_is_masked(harness: Harness) -> None:
