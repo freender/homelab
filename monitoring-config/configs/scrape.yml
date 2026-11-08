@@ -75,12 +75,11 @@ scrape_configs:
         labels:
           host: ghost
 
-  # SMART data changes slowly and every rule reading it waits 5m or longer, so
-  # 60s is enough. Must match --smartctl.interval in metrics-exporters'
-  # smartctl-exporter-override.conf.tpl.
+  # 10s keeps disk temperatures at full resolution. Must match
+  # --smartctl.interval in metrics-exporters' smartctl-exporter-override.conf.tpl.
   - job_name: pve-smartctl
-    scrape_interval: 60s
-    scrape_timeout: 50s
+    scrape_interval: 10s
+    scrape_timeout: 8s
     relabel_configs:
       - source_labels: [__address__]
         target_label: endpoint

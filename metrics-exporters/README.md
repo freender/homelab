@@ -510,7 +510,7 @@ from it implicitly, but this package does stay current once installed.
 The packaged unit is `smartctl_exporter.service` (underscore) and its `ExecStart`
 takes no arguments, so the module installs a drop-in at
 `/etc/systemd/system/smartctl_exporter.service.d/override.conf` to set the flags
-it needs — notably `--smartctl.interval=60s` (matching the `pve-smartctl`
+it needs — notably `--smartctl.interval=10s` (matching the `pve-smartctl`
 `scrape_interval` in `monitoring-config/configs/scrape.yml`) and
 `--smartctl.powermode-check=standby`, which keeps the exporter from waking disks
 that have spun down. `--smartctl.path` is per-host: hosts
