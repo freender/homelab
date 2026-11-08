@@ -22,15 +22,16 @@ groups:
           summary: "Plex is not responding"
           description: "{{ $labels.endpoint }} has failed its HTTP check for 2 minutes."
 
-      # Same shape as Plex. Warning, not critical: requests can wait, playback
-      # cannot.
+      # Same shape and wait as Plex. helm is a VM that live-migrates, so a
+      # routine move costs Seerr no downtime and 2m leaves plenty of margin.
+      # Warning, not critical: requests can wait, playback cannot.
       - alert: ServiceUnreachable
         expr: probe_success{job="blackbox-http", name="seerr"} == 0
-        for: 5m
+        for: 2m
         labels: {severity: warning, category: http, site: home, host: helm, name: seerr}
         annotations:
           summary: "Seerr is not responding"
-          description: "{{ $labels.endpoint }} has failed its HTTP check for 5 minutes."
+          description: "{{ $labels.endpoint }} has failed its HTTP check for 2 minutes."
 
       # The probe itself going quiet (blackbox-exporter down, or vmagent unable
       # to reach it) leaves ServiceUnreachable blind, not firing. It must carry
