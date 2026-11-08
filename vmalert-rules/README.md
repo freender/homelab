@@ -14,6 +14,19 @@ live file changes and restarts vmalert only when a rule changes.
 Alertmanager routing and runtime notification credentials are not managed by
 this module.
 
+## Log rules
+
+`configs/logs/*.yml` are LogsQL rules for the separate `vmalert-logs`
+container, which queries VictoriaLogs (homelab-ops#348). They install to
+`/mnt/cache/appdata/vmalert-logs/rules` and are validated with
+`-rule.defaultRuleType=vlogs` against the image `vmalert-logs` runs. The
+unmanaged-file refusal and restart-only-on-change apply to each directory on its
+own, and both sets are validated before either is installed. Rules rename
+`_HOSTNAME` to `host` so the existing routing and host-down inhibition apply.
+
+The `vmalert-logs` container must exist before this module can deploy, since
+validation reads its image: deploy `docker-stacks` first on a fresh helm.
+
 `reboot.yml` and `apt-updates.yml` use `for:` durations measured in hours and
 days rather than minutes, because a pending kernel or an unapplied update is a
 scheduling reminder, not an incident. That is safe here: vmalert runs with

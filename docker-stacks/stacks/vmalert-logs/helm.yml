@@ -1,0 +1,28 @@
+networks:
+  net_overlay:
+    external: true
+
+# LogsQL alerting against VictoriaLogs (homelab-ops#348). A second vmalert rather
+# than per-group datasources: the metrics vmalert's only datasource is
+# VictoriaMetrics, and slow LogsQL cannot delay metric alerts here. Alert state
+# persists to VictoriaMetrics like the metrics vmalert's.
+services:
+  vmalert-logs:
+    container_name: vmalert-logs
+    image: victoriametrics/vmalert:v1.155.0
+    user: 1000:1000
+    volumes:
+      - /mnt/cache/appdata/vmalert-logs/rules:/etc/vmalert/rules:ro
+    command:
+      - "-datasource.url=http://victoria-logs:9428"
+      - "-rule.defaultRuleType=vlogs"
+      - "-notifier.url=http://alertmanager:9093"
+      - "-rule=/etc/vmalert/rules/*.yml"
+      - "-remoteWrite.url=http://victoria-metrics:8428"
+      - "-remoteRead.url=http://victoria-metrics:8428"
+    ports:
+      - 8881:8880
+    restart: always
+    mem_limit: 256m
+    networks:
+      - net_overlay

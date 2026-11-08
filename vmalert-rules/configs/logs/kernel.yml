@@ -1,0 +1,27 @@
+# LogsQL rules, evaluated by vmalert-logs against VictoriaLogs (homelab-ops#348).
+# vmalert prepends `_time:<interval>` unless the expr sets its own. The journal
+# field `_HOSTNAME` is renamed to `host` so the existing Alertmanager routing and
+# host-down inhibition apply.
+groups:
+  - name: logs-host
+    type: vlogs
+    interval: 5m
+    rules:
+      # The kernel OOM killer fired on a host or inside a CT/VM cgroup. Metrics only
+      # show memory pressure; the kill itself exists only in the journal.
+      - alert: KernelOomKill
+        expr: '{_HOSTNAME=~".+"} _TRANSPORT:=kernel "Killed process" | stats by (_HOSTNAME) count() as kills | rename _HOSTNAME as host'
+        labels:
+          severity: warning
+        annotations:
+          summary: "OOM killer fired {{ $value }}x on {{ $labels.host }}"
+          description: "The kernel killed {{ $value }} process(es) on {{ $labels.host }} in the last 5m. Find them with `{_HOSTNAME=\"{{ $labels.host }}\"} \"Killed process\"` in VictoriaLogs; the oom_memcg names the CT/VM."
+
+      # Disk/controller errors the kernel logs before SMART or ZFS counters move.
+      - alert: KernelIoErrors
+        expr: '{_HOSTNAME=~".+"} _TRANSPORT:=kernel ("I/O error" OR "critical medium error" OR "blk_update_request" OR "failed command") | stats by (_HOSTNAME) count() as errors | filter errors:>3 | rename _HOSTNAME as host'
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $value }} kernel I/O errors on {{ $labels.host }}"
+          description: "Kernel block-layer/ATA errors on {{ $labels.host }} in the last 5m. Check the journal, then `smartctl` / `zpool status` on that host."

@@ -10,6 +10,14 @@ from ..ssh import diff_many
 MODULE_DIR = "vmalert-rules"
 REMOTE_ROOT = "/tmp/homelab-vmalert-rules"
 REMOTE_RULES_DIR = "/mnt/cache/appdata/vmalert/rules"
+# LogsQL rules for the vmalert-logs container (homelab-ops#348), from configs/logs/.
+# Staged with the rest of configs/, so they arrive as rules/logs/.
+REMOTE_LOG_RULES_DIR = "/mnt/cache/appdata/vmalert-logs/rules"
+LOG_RULES_SUBDIR = "logs"
+LOG_RULE_FILES = (
+    "kernel.yml",
+    "zion.yml",
+)
 RULE_FILES = (
     "apt-updates.yml",
     "boot-entries.yml",
@@ -55,14 +63,19 @@ def deploy(
     )
 
 
-def validate(root: Path, hosts: list[str]) -> None:
-    configs_dir = root / MODULE_DIR / "configs"
-    actual_files = tuple(sorted(path.name for path in configs_dir.glob("*.yml")))
-    if actual_files != RULE_FILES:
+def _require_exact_files(directory: Path, expected: tuple[str, ...], label: str) -> None:
+    actual_files = tuple(sorted(path.name for path in directory.glob("*.yml")))
+    if actual_files != expected:
         raise ValueError(
-            f"{MODULE_DIR} configs must be exactly {', '.join(RULE_FILES)}; "
+            f"{MODULE_DIR} {label} must be exactly {', '.join(expected)}; "
             f"found {', '.join(actual_files) or 'none'}"
         )
+
+
+def validate(root: Path, hosts: list[str]) -> None:
+    configs_dir = root / MODULE_DIR / "configs"
+    _require_exact_files(configs_dir, RULE_FILES, "configs")
+    _require_exact_files(configs_dir / LOG_RULES_SUBDIR, LOG_RULE_FILES, "configs/logs")
     if not (root / MODULE_DIR / "scripts" / "install.py").is_file():
         raise ValueError(f"missing installer: {root / MODULE_DIR / 'scripts' / 'install.py'}")
 
@@ -74,10 +87,12 @@ def validate(root: Path, hosts: list[str]) -> None:
 def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
     connection = connection_for_host(root, host)
     configs_dir = root / MODULE_DIR / "configs"
-    for message in diff_many(
-        connection,
-        [(configs_dir / rule_file, f"{REMOTE_RULES_DIR}/{rule_file}") for rule_file in RULE_FILES],
-    ):
+    pairs = [(configs_dir / name, f"{REMOTE_RULES_DIR}/{name}") for name in RULE_FILES]
+    pairs += [
+        (configs_dir / LOG_RULES_SUBDIR / name, f"{REMOTE_LOG_RULES_DIR}/{name}")
+        for name in LOG_RULE_FILES
+    ]
+    for message in diff_many(connection, pairs):
         print_sub(message)
 
     if dry_run:
@@ -98,7 +113,11 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
         # asserts configs/ matches it exactly, and the installer asserts the
         # staged bundle does too. The bash kept a second, hand-maintained list
         # remotely, which had drifted to six of sixteen entries.
-        env={**force_env(force), "VMALERT_RULES": " ".join(RULE_FILES)},
+        env={
+            **force_env(force),
+            "VMALERT_RULES": " ".join(RULE_FILES),
+            "VMALERT_LOG_RULES": " ".join(LOG_RULE_FILES),
+        },
         require_root=True,
         interpreter="python3",
         remote_subdirs=("rules", "scripts", "src"),

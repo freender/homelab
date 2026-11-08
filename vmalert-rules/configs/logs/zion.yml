@@ -1,0 +1,16 @@
+groups:
+  - name: logs-zion
+    type: vlogs
+    interval: 5m
+    rules:
+      # homelab-ops#353: if enp6s19 loses `--mdns resolve` (VM rebuild, network
+      # reset), the UDM mDNS proxy echoes zion's records between VLANs and
+      # systemd-resolved renames itself forever (~680 lines/min). 0 when healthy.
+      - alert: ZionMdnsHostnameConflictLoop
+        expr: '_time:15m {_HOSTNAME="zion",_SYSTEMD_UNIT="systemd-resolved.service"} "Hostname conflict" | stats count() as conflicts | filter conflicts:>5'
+        labels:
+          severity: warning
+          host: zion
+        annotations:
+          summary: "zion mDNS hostname-conflict loop ({{ $value }} in 15m)"
+          description: "systemd-resolved on zion keeps renaming its mDNS hostname. Reapply `ssh zion ha network update enp6s19 --mdns resolve` (homelab-ops#353)."

@@ -26,40 +26,66 @@ than being listed here. The bash hardcoded six `require_file` calls and the
 module had since grown to sixteen; the list had been stale for ten files and
 nobody noticed, because the copy loop globbed the directory and never consulted
 it. Keeping one list, in the orchestrator that already validates it, is the fix.
+
+Two rule sets share all of the above (homelab-ops#348): the metrics rules for
+`vmalert`, and the LogsQL rules in `rules/logs/` for `vmalert-logs`, which
+queries VictoriaLogs. Both are validated before either is installed, so a bad
+log rule cannot leave the metric rules half-deployed, and each container is
+restarted only when its own set changed.
 """
 
 from __future__ import annotations
 
 import subprocess
+from dataclasses import dataclass
 from pathlib import Path
 
 from homelab_install import files, log, run
 from homelab_install.context import InstallContext
 from homelab_install.errors import InstallError
 
-RULES_DEST_DIR = Path("/mnt/cache/appdata/vmalert/rules")
 RULES_MODE = "644"
-CONTAINER = "vmalert"
 
 # Indirection point for tests, matching packages.py / systemd.py.
 _run = subprocess.run
 
 
-def expected_rules(ctx: InstallContext) -> tuple[str, ...]:
+@dataclass(frozen=True)
+class RuleSet:
+    env_key: str
+    staged: str
+    dest_dir: Path
+    container: str
+    validate_flags: tuple[str, ...] = ()
+
+
+RULE_SETS = (
+    RuleSet("VMALERT_RULES", "rules", Path("/mnt/cache/appdata/vmalert/rules"), "vmalert"),
+    RuleSet(
+        "VMALERT_LOG_RULES",
+        "rules/logs",
+        Path("/mnt/cache/appdata/vmalert-logs/rules"),
+        "vmalert-logs",
+        ("-rule.defaultRuleType=vlogs",),
+    ),
+)
+
+
+def expected_rules(ctx: InstallContext, env_key: str) -> tuple[str, ...]:
     """The rule files the orchestrator says it staged.
 
     Refusing on an empty value rather than falling back to "whatever is in the
-    directory" is deliberate: a missing `VMALERT_RULES` means the orchestrator
-    did not render one, and globbing instead would turn a broken deploy into a
+    directory" is deliberate: a missing list means the orchestrator did not
+    render one, and globbing instead would turn a broken deploy into a
     successful-looking one that installs an arbitrary subset.
     """
-    names = tuple(ctx.deploy_env.get("VMALERT_RULES", "").split())
+    names = tuple(ctx.deploy_env.get(env_key, "").split())
     if not names:
-        raise InstallError("VMALERT_RULES is empty; refusing to run")
+        raise InstallError(f"{env_key} is empty; refusing to run")
     return names
 
 
-def verify_staged(rules_dir: Path, expected: tuple[str, ...]) -> None:
+def verify_staged(rules_dir: Path, expected: tuple[str, ...], env_key: str) -> None:
     """Fail unless the staged directory is exactly the expected set.
 
     Catches a partial upload, which is the failure the bash's stale `require_file`
@@ -80,45 +106,45 @@ def verify_staged(rules_dir: Path, expected: tuple[str, ...]) -> None:
     if unexpected:
         problems.append(f"unexpected: {', '.join(unexpected)}")
     if problems:
-        raise InstallError(f"staged rules do not match VMALERT_RULES ({'; '.join(problems)})")
+        raise InstallError(f"staged rules do not match {env_key} ({'; '.join(problems)})")
 
 
-def verify_destination_is_managed(expected: tuple[str, ...]) -> None:
+def verify_destination_is_managed(dest_dir: Path, expected: tuple[str, ...]) -> None:
     """Refuse if the live rules directory holds a rule this module does not own."""
-    if not RULES_DEST_DIR.is_dir():
-        raise InstallError(f"vmalert rules directory is missing: {RULES_DEST_DIR}")
+    if not dest_dir.is_dir():
+        raise InstallError(f"vmalert rules directory is missing: {dest_dir}")
 
-    for path in sorted(RULES_DEST_DIR.glob("*.yml")):
+    for path in sorted(dest_dir.glob("*.yml")):
         if path.name not in expected:
             raise InstallError(f"unmanaged active vmalert rule: {path}")
 
 
-def container_image() -> str:
-    """The image tag the running vmalert container uses.
+def container_image(container: str) -> str:
+    """The image tag the running container uses.
 
     Read live rather than pinned here: a hard-coded tag drifted from v1.117.1 to
     a container on v1.155.0 unnoticed, and validating against a different
     version could accept syntax the running vmalert rejects.
     """
     result = _run(
-        ["docker", "inspect", "--format", "{{.Config.Image}}", CONTAINER],
+        ["docker", "inspect", "--format", "{{.Config.Image}}", container],
         check=False,
         capture_output=True,
         text=True,
     )
     if result.returncode != 0:
-        raise InstallError(f"container is missing: {CONTAINER}")
+        raise InstallError(f"container is missing: {container}")
 
     image = (result.stdout or "").strip()
     if not image:
-        raise InstallError(f"could not read the image of {CONTAINER}")
+        raise InstallError(f"could not read the image of {container}")
     return image
 
 
-def validate_rules(rules_dir: Path) -> None:
-    """Dry-run the staged rules through the image the vmalert container runs."""
-    image = container_image()
-    log.sub(f"Validating staged vmalert rules with {image}...")
+def validate_rules(rule_set: RuleSet, rules_dir: Path) -> None:
+    """Dry-run the staged rules through the image their container runs."""
+    image = container_image(rule_set.container)
+    log.sub(f"Validating staged {rule_set.container} rules with {image}...")
     result = _run(
         [
             "docker",
@@ -128,6 +154,7 @@ def validate_rules(rules_dir: Path) -> None:
             f"{rules_dir}:/rules:ro",
             image,
             "-rule=/rules/*.yml",
+            *rule_set.validate_flags,
             "-dryRun",
         ],
         check=False,
@@ -138,39 +165,47 @@ def validate_rules(rules_dir: Path) -> None:
         # vmalert reports the offending file and line on stderr; without it the
         # operator gets "validation failed" and no way to find the bad rule.
         log.sub((result.stderr or result.stdout or "").strip() or "<vmalert returned nothing>")
-        raise InstallError(f"vmalert rejected the staged rules (exit {result.returncode})")
+        raise InstallError(
+            f"{rule_set.container} rejected the staged rules (exit {result.returncode})"
+        )
 
 
-def restart_vmalert() -> None:
-    result = _run(["docker", "restart", CONTAINER], check=False, capture_output=True, text=True)
+def restart_container(container: str) -> None:
+    result = _run(["docker", "restart", container], check=False, capture_output=True, text=True)
     if result.returncode != 0:
         log.sub((result.stderr or "").strip() or "<docker returned nothing>")
-        raise InstallError(f"failed to restart {CONTAINER} (exit {result.returncode})")
-    log.ok(f"{CONTAINER} restarted")
+        raise InstallError(f"failed to restart {container} (exit {result.returncode})")
+    log.ok(f"{container} restarted")
 
 
-def install(ctx: InstallContext) -> None:
-    log.header("vmalert Rules")
-
-    expected = expected_rules(ctx)
-    rules_dir = ctx.script_dir / "rules"
-
-    verify_staged(rules_dir, expected)
-    verify_destination_is_managed(expected)
-    validate_rules(rules_dir)
-
+def install_rule_set(ctx: InstallContext, rule_set: RuleSet, expected: tuple[str, ...]) -> None:
+    rules_dir = ctx.script_dir / rule_set.staged
     changed = False
     for name in expected:
-        if files.install_from(
-            ctx, rules_dir / name, str(RULES_DEST_DIR / name), RULES_MODE
-        ):
+        if files.install_from(ctx, rules_dir / name, str(rule_set.dest_dir / name), RULES_MODE):
             changed = True
 
     if changed:
-        log.sub("Restarting vmalert to load updated rules...")
-        restart_vmalert()
+        log.sub(f"Restarting {rule_set.container} to load updated rules...")
+        restart_container(rule_set.container)
     else:
-        log.ok("vmalert rules unchanged")
+        log.ok(f"{rule_set.container} rules unchanged")
+
+
+def install(ctx: InstallContext, rule_sets: tuple[RuleSet, ...] = RULE_SETS) -> None:
+    log.header("vmalert Rules")
+
+    plan = []
+    for rule_set in rule_sets:
+        expected = expected_rules(ctx, rule_set.env_key)
+        rules_dir = ctx.script_dir / rule_set.staged
+        verify_staged(rules_dir, expected, rule_set.env_key)
+        verify_destination_is_managed(rule_set.dest_dir, expected)
+        validate_rules(rule_set, rules_dir)
+        plan.append((rule_set, expected))
+
+    for rule_set, expected in plan:
+        install_rule_set(ctx, rule_set, expected)
 
 
 if __name__ == "__main__":
