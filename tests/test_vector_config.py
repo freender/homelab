@@ -183,9 +183,9 @@ def test_shadow_alone_picks_the_tenant(
 def test_real_inventory_is_shadowed_until_cutover() -> None:
     """Shrinks host by host during the cutover; removed with the last shadow key
     (homelab-ops#367)."""
-    for host in ("tower", "helm"):
-        assert vector_config.shadow_enabled(ROOT, host) is True
-    assert vector_config.shadow_enabled(ROOT, "neo") is False
+    assert vector_config.shadow_enabled(ROOT, "tower") is True
+    for host in ("helm", "neo"):
+        assert vector_config.shadow_enabled(ROOT, host) is False
 
 
 def vector_binary() -> str | None:
