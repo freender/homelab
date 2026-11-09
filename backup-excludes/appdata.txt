@@ -14,7 +14,6 @@
 /traefik/logs
 /traefik/plugins-storage
 /scripts/logs
-/alloy/data
 /vector/data
 /geoipupdate
 /immich/backups
