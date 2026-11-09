@@ -180,14 +180,6 @@ def test_shadow_alone_picks_the_tenant(
         assert sinks[name].get("tenant_id") == ("1" if shadow else None)
 
 
-def test_real_inventory_is_shadowed_until_cutover() -> None:
-    """Shrinks host by host during the cutover; removed with the last shadow key
-    (homelab-ops#367)."""
-    assert vector_config.shadow_enabled(ROOT, "tower") is True
-    for host in ("helm", "neo"):
-        assert vector_config.shadow_enabled(ROOT, host) is False
-
-
 def vector_binary() -> str | None:
     found = os.environ.get("VECTOR_BIN") or shutil.which("vector")
     if found:

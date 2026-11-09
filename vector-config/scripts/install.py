@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Remote installer for the vector-config module (freender/homelab-ops#366).
 
-The same shape as `alloy-config`: check the staged config against the image the
-running container uses, install only if the bytes differ, reload only if they
-did.
+The same shape as the retired `alloy-config`: check the staged config against
+the image the running container uses, install only if the bytes differ, reload
+only if they did.
 
 * **Validated and unit-tested in the running image.** `vector validate
   --no-environment` checks the config without touching the Docker socket or
@@ -68,7 +68,7 @@ def container_image(container: str) -> str:
 
 
 def require_live(dest: str) -> None:
-    """A mount check, not a bootstrap check -- see alloy-config's twin.
+    """A mount check, not a bootstrap check -- see monitoring-config's twin.
 
     Writing through a missing appdata mount would succeed against the empty
     directory underneath while the container kept its old config.

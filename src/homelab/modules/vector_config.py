@@ -75,8 +75,8 @@ def geoip_enabled(root: Path, host: str) -> bool:
 
 
 def shadow_enabled(root: Path, host: str) -> bool:
-    """`shadow: true` sends this host's logs to VictoriaLogs tenant 1, beside Alloy,
-    until cutover (homelab-ops#367) removes the key."""
+    """`shadow: true` sends this host's logs to VictoriaLogs tenant 1, so a new
+    host can run beside another shipper before cutover (homelab-ops#366, #367)."""
     value = default_registry(root).get(host, f"{MODULE_DIR}.shadow", False)
     if not isinstance(value, bool):
         raise ValueError(f"{host}: {MODULE_DIR}.shadow must be true or false, got {value!r}")

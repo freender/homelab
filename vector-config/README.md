@@ -1,8 +1,9 @@
 # Vector Config
 
 Repo-managed `vector.yaml` for the Vector log shipper on every host that runs the
-`vector` Docker stack (tower, helm, neo). It replaces `alloy-config`
-(homelab-ops#362). Two templates are rendered per host:
+`vector` Docker stack (tower, helm, neo). It replaced `alloy-config`
+(homelab-ops#362, archived under `archive/retired-modules/`). Two templates are
+rendered per host:
 
 - `templates/vector.yaml.j2`: the config.
 - `templates/vector.test.yaml.j2`: `vector test` unit tests for its transforms.
@@ -15,10 +16,10 @@ Both take:
   GeoLite2 ASN database only exists where that stack writes it. Derived from
   `docker-stacks` placement, not set separately.
 - `SHADOW`: the per-host `vector-config.shadow` key (default `false`). When true,
-  both sinks write to VictoriaLogs tenant `AccountID=1`, so Vector can run beside
-  Alloy without Grafana, `log-spikes` or vmalert (all on tenant 0) seeing any line
-  twice. Cutover (homelab-ops#367) removes the key one host at a time. To read
-  shadow data, query with `curl -H 'AccountID: 1' …`.
+  both sinks write to VictoriaLogs tenant `AccountID=1`, so a host can run Vector
+  beside another shipper without Grafana, `log-spikes` or vmalert (all on tenant
+  0) seeing any line twice. The Alloy cutover (homelab-ops#367) removed it from
+  every host. To read shadow data, query with `curl -H 'AccountID: 1' …`.
 
 ## What it ships
 
@@ -33,7 +34,9 @@ Everything goes to VictoriaLogs' **Loki** endpoint on helm. That endpoint parses
 JSON lines into fields, which is where every Traefik access field the dashboard
 reads comes from. Vector passes the line through raw. On GeoIP hosts it only adds
 `geoip_autonomous_system_number` and `geoip_autonomous_system_organization`
-to the JSON line, so they arrive as plain fields, not stream fields.
+to the JSON line, so they arrive as plain fields, not stream fields. Blank
+container lines are dropped, as Alloy did; VictoriaLogs would otherwise store each
+one as `missing _msg field` (homelab-ops#367).
 
 ```bash
 ./deploy --dry-run vector-config all
@@ -67,6 +70,9 @@ deploy, because Vector keeps running the old config when a reload is rejected.
   otherwise create a directory. Create `/mnt/cache/appdata/vector/data` and copy
   the rendered `build/<host>/vector.yaml` into place, then deploy
   `docker-stacks`, then this module.
+- **The GeoIP table is read at start and on reload.** A database `geoipupdate`
+  replaces is picked up at the next SIGHUP or restart, not by itself. A swap
+  plus SIGHUP was checked live on helm (homelab-ops#367).
 
 ## Alerts
 

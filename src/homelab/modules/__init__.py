@@ -5,7 +5,6 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from ..deploy import DeploySession
-from .alloy_config import deploy as deploy_alloy_config
 from .apcupsd import deploy as deploy_apcupsd
 from .apt_upgrade import deploy as deploy_apt_upgrade
 from .base_packages import deploy as deploy_base_packages
@@ -55,10 +54,6 @@ class ModuleDefinition:
 
 
 MODULES: dict[str, ModuleDefinition] = {
-    "alloy-config": ModuleDefinition(
-        name="Alloy Log Shipping Config",
-        deploy=deploy_alloy_config,
-    ),
     "apcupsd": ModuleDefinition(
         name="apcupsd",
         deploy=deploy_apcupsd,
@@ -229,10 +224,8 @@ MODULE_ORDER = [
     # Engine, swarm membership and the overlay must exist before any stack that
     # attaches to net_overlay is reconciled.
     "docker-stacks",
-    # Validates against and reloads the running alloy-<host> container, so it
+    # Validates against and reloads the running vector-<host> container, so it
     # follows the stack that creates it.
-    "alloy-config",
-    # Same for vector-<host>.
     "vector-config",
     # apt-upgrade last, after everything that could install a package it would
     # then upgrade. It was preceded by apt-security-updates until that module

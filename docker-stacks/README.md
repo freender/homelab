@@ -87,7 +87,7 @@ Currently templated: `exporters`, `cloudflared`.
 data to a scratch disk. That disk is retired and the data is back under appdata, so
 they could be templated again.
 
-`traefik` and `alloy` stay per-host because their differences are **role asymmetry,
+`traefik` and `vector` stay per-host because their differences are **role asymmetry,
 not drift**:
 
 - **helm is the only ACME issuer.** It mounts `acme.json` read-write and runs
@@ -98,9 +98,8 @@ not drift**:
   differences between hosts are the container names and the one-time seed: tower's kv
   seeds as master and helm/neo seed `replicaof traefik-kv-tower`. After that, Sentinel
   owns the role.
-- **alloy** differs by real mounts (neo has no `geoipupdate` stack, so no geoip
-  mount) only; all three bind `--server.http.listen-addr=0.0.0.0:12345` for scraping.
-- **vector** has the same asymmetry as alloy: neo has no GeoIP mount.
+- **vector** differs by real mounts only: neo has no `geoipupdate` stack, so no
+  GeoIP mount.
 
 ### Known divergences, deliberately not normalized
 

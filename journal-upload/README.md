@@ -3,7 +3,7 @@
 Ships each host's systemd journal to VictoriaLogs with Debian's
 `systemd-journal-upload` (package `systemd-journal-remote`). Debian 13 has no
 rsyslog, so the journal is the only place host, kernel, ZFS, PBS and failed
-`homelab-*` unit messages exist; Alloy ships container logs only.
+`homelab-*` unit messages exist; Vector ships container logs only.
 
 The module renders one drop-in, `/etc/systemd/journal-upload.conf.d/homelab.conf`:
 
@@ -27,7 +27,7 @@ On systemd 257 the uploader cannot send custom headers (`VL-Stream-Fields` and
 the tenant headers need v258), so journal entries carry no `job` or `host`
 label. They keep VictoriaLogs' journald defaults: stream fields `_MACHINE_ID`,
 `_HOSTNAME`, `_SYSTEMD_UNIT`, a `level` derived from `PRIORITY`, and no `__*`
-metadata fields. `_HOSTNAME` is the short host name, the same value Alloy puts in
+metadata fields. `_HOSTNAME` is the short host name, the same value Vector puts in
 `host`.
 
 ```logsql

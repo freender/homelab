@@ -329,22 +329,6 @@ scrape_configs:
         labels:
           host: helm
 
-  # Alloy exports its own `host` label (the loki.write endpoint); with the
-  # default honor_labels: false it lands as `exported_host` and ours wins.
-  - job_name: alloy
-    scrape_interval: 10s
-    scrape_timeout: 8s
-    relabel_configs:
-      - source_labels: [__address__]
-        target_label: endpoint
-      - source_labels: [__address__]
-        regex: '([^:]+):.*'
-        target_label: instance
-    static_configs:
-      - targets: ["alloy-tower:12345"]
-        labels:
-          host: tower
-
   # Vector's internal metrics carry their own `host` (the container ID); with the
   # default honor_labels: false it lands as `exported_host` and ours wins. The
   # keep-list drops ~1400 histogram and adaptive-concurrency series per host that

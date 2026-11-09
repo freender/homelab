@@ -85,10 +85,6 @@ groups:
         labels: {severity: warning, category: docker, site: home, host: helm, name: nzbhydra}
         annotations: {summary: "helm / nzbhydra is missing", description: "Important app container has not been seen by cAdvisor for 5 minutes."}
       - alert: ImportantContainerMissing
-        expr: absent_over_time(container_last_seen{job="cadvisor", host="tower", name="alloy-tower"}[5m]) and on(host) (avg_over_time(up{job="pve-node"}[10m]) >= 0.95)
-        labels: {severity: warning, category: docker, site: home, host: tower, name: alloy-tower}
-        annotations: {summary: "tower / alloy-tower is missing", description: "Important app container has not been seen by cAdvisor for 5 minutes."}
-      - alert: ImportantContainerMissing
         expr: absent_over_time(container_last_seen{job="cadvisor", host="tower", name="vector-tower"}[5m]) and on(host) (avg_over_time(up{job="pve-node"}[10m]) >= 0.95)
         labels: {severity: warning, category: docker, site: home, host: tower, name: vector-tower}
         annotations: {summary: "tower / vector-tower is missing", description: "Important app container has not been seen by cAdvisor for 5 minutes."}

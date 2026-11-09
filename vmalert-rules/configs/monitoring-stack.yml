@@ -14,7 +14,7 @@ groups:
       # Gated on the host being up so a host outage is NodeDown's alone.
       - alert: MonitoringTargetDown
         expr: |
-          max_over_time(up{job=~"victoria-logs|victoria-metrics|vmagent|vmalert|alertmanager|alloy|vector"}[5m]) == 0
+          max_over_time(up{job=~"victoria-logs|victoria-metrics|vmagent|vmalert|alertmanager|vector"}[5m]) == 0
           and on(host) (avg_over_time(up{job="pve-node"}[10m]) >= 0.95)
         for: 1m
         labels:
@@ -113,14 +113,6 @@ groups:
         annotations:
           summary: "Alertmanager rejected its config"
           description: "Alertmanager is still routing with its previous config. See its logs for the error."
-
-      - alert: AlloyLogsDropped
-        expr: sum by (instance, host, reason) (increase(loki_write_dropped_entries_total{job="alloy"}[15m])) > 0
-        labels:
-          severity: warning
-        annotations:
-          summary: "{{ $labels.instance }} dropped {{ $value }} log entries ({{ $labels.reason }})"
-          description: "Alloy on {{ $labels.host }} could not deliver log entries to VictoriaLogs (reason {{ $labels.reason }}). They are lost."
 
       # Vector (homelab-ops#366). The sinks buffer to disk with when_full: block,
       # so an outage stalls delivery rather than dropping; real loss shows up only
