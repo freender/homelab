@@ -68,6 +68,10 @@
   "value": "virtio-scsi-single"
  },
  {
+  "key": "serial0",
+  "value": "socket"
+ },
+ {
   "key": "sockets",
   "value": 1
  },

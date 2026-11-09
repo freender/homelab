@@ -118,7 +118,7 @@ def test_every_impact_label_on_a_changed_helm_spec() -> None:
     raw["net"]["net1"] = {"name": "nic1", "mac": "BC:24:11:00:00:01"}
     raw["ha"] = {"nodes": {"clovis": 3, "ace": 1}, "strict": False}
     raw["replication"]["schedule"] = "*/5"
-    raw["extra"] = {"startup": "order=5"}
+    raw["extra"] = {**raw.get("extra", {}), "startup": "order=5"}
     spec = parse_guest("helm", raw, NODES)
 
     view = live.read_cluster(FixtureRunner(), ["clovis"])
