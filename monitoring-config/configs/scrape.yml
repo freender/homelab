@@ -347,9 +347,6 @@ scrape_configs:
       - targets: ["alloy-helm:12345"]
         labels:
           host: helm
-      - targets: ["alloy-neo:12345"]
-        labels:
-          host: neo
 
   # Vector's internal metrics carry their own `host` (the container ID); with the
   # default honor_labels: false it lands as `exported_host` and ours wins. The

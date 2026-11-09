@@ -42,6 +42,11 @@ transforms:
     source: |
       name = string!(.container_name)
       msg = string(.message) ?? ""
+      # Alloy never shipped blank lines; VictoriaLogs would store them as
+      # "missing _msg field" (homelab-ops#367).
+      if strip_whitespace(msg) == "" {
+        abort
+      }
       job = "docker"
       if name == "traefik-{{ HOST }}" {
         name = "traefik"

@@ -28,6 +28,16 @@ tests:
               assert!(!exists(.stream))
               assert!(!exists(.source_type))
 
+  - name: blank container line is dropped
+    inputs:
+      - insert_at: docker_shape
+        type: log
+        log_fields:
+          message: "  "
+          container_name: radarr
+    no_outputs_from:
+      - docker_shape
+
   - name: another host's traefik stays an ordinary container
     inputs:
       - insert_at: docker_shape
