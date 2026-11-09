@@ -14,7 +14,7 @@ groups:
       # Gated on the host being up so a host outage is NodeDown's alone.
       - alert: MonitoringTargetDown
         expr: |
-          max_over_time(up{job=~"victoria-logs|victoria-metrics|vmagent|vmalert|alertmanager|alloy"}[5m]) == 0
+          max_over_time(up{job=~"victoria-logs|victoria-metrics|vmagent|vmalert|alertmanager|alloy|vector"}[5m]) == 0
           and on(host) (avg_over_time(up{job="pve-node"}[10m]) >= 0.95)
         for: 1m
         labels:
@@ -121,3 +121,44 @@ groups:
         annotations:
           summary: "{{ $labels.instance }} dropped {{ $value }} log entries ({{ $labels.reason }})"
           description: "Alloy on {{ $labels.host }} could not deliver log entries to VictoriaLogs (reason {{ $labels.reason }}). They are lost."
+
+      # Vector (homelab-ops#366). The sinks buffer to disk with when_full: block,
+      # so an outage stalls delivery rather than dropping; real loss shows up only
+      # as unintentional discards.
+      - alert: VectorLogsDiscarded
+        expr: sum by (instance, host, component_id) (increase(vector_component_discarded_events_total{job="vector", intentional="false"}[15m])) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.instance }} discarded {{ $value }} log events in {{ $labels.component_id }}"
+          description: "Vector on {{ $labels.host }} dropped events it did not mean to drop. They are lost. Check `docker logs vector-{{ $labels.host }}`."
+
+      # A delivery outage does not raise component_errors_total: retries that
+      # eventually succeed only count here (measured in #365). A VictoriaLogs
+      # restart retries for seconds; errors in every 5m window for 15m is a
+      # real outage, with lines piling up in the disk buffer.
+      - alert: VectorDeliveryFailing
+        expr: sum by (instance, host, component_id) (increase(vector_http_client_errors_total{job="vector"}[5m])) > 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.instance }} cannot deliver logs to VictoriaLogs ({{ $labels.component_id }})"
+          description: "Vector on {{ $labels.host }} has been retrying pushes to victoria-logs for 15 minutes; logs are queued in its disk buffer. Check victoria-logs on helm and the overlay path from {{ $labels.host }}."
+
+      # docker_logs never retries a failed first container listing (upstream
+      # #16806), leaving Vector up and scrapeable while it reads nothing. Its
+      # per-container errors are not used (they fire on every routine container
+      # removal), nor containers_watched_total (it undercounts), nor a line rate
+      # (neo has logged as few as 2 Docker lines in an hour). Instead: the source
+      # creates one received-events series per container on its first line, and
+      # they live until Vector restarts, so an up Vector with none for 2h never
+      # started reading.
+      - alert: VectorDockerSourceDead
+        expr: up{job="vector"} == 1 unless on(host) vector_component_received_events_total{job="vector", component_type="docker_logs"}
+        for: 2h
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.instance }} has read no container logs since it started"
+          description: "Vector on {{ $labels.host }} is up but its docker_logs source has delivered nothing for 2 hours, so no Docker logs reach VictoriaLogs. Check `docker logs vector-{{ $labels.host }}` for docker_logs errors, then restart it."

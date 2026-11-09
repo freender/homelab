@@ -1,0 +1,29 @@
+networks:
+  net.internal:
+    external: true
+  net_overlay:
+    external: true
+
+services:
+  vector-helm:
+    # Pinned: docker_logs keeps no checkpoint, so every image change costs a short
+    # log gap (homelab-ops#363). Bump on purpose.
+    image: timberio/vector:0.61.0-debian
+    container_name: vector-helm
+    restart: always
+    stop_grace_period: 60s
+    mem_limit: 512m
+    environment:
+      TZ: 'America/New_York'
+    # The config is owned by the vector-config module, which reloads it with
+    # SIGHUP. Metrics on :9598 are scraped over net_overlay; no host port.
+    command: ["--config", "/etc/vector/vector.yaml"]
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /var/log:/var/log:ro
+      - /mnt/cache/appdata/geoipupdate:/etc/vector/geoip:ro
+      - /mnt/cache/appdata/vector/vector.yaml:/etc/vector/vector.yaml:ro
+      - /mnt/cache/appdata/vector/data:/var/lib/vector
+    networks:
+      net.internal: {}
+      net_overlay: {}

@@ -1,0 +1,139 @@
+# Rendered by the vector-config module for {{ HOST }} -- edit the template in the
+# homelab repo, not this file. Ships Docker container logs, Traefik access and
+# runtime logs, and /var/log/*log to VictoriaLogs on helm.
+{%- if SHADOW %}
+#
+# SHADOW: writes to VictoriaLogs tenant AccountID=1 beside Alloy (homelab-ops#366),
+# so Grafana, log-spikes and vmalert (tenant 0) never see these lines twice.
+{%- endif %}
+data_dir: /var/lib/vector
+{%- if GEOIP %}
+
+enrichment_tables:
+  asn:
+    type: geoip
+    path: /etc/vector/geoip/GeoLite2-ASN.mmdb
+{%- endif %}
+
+sources:
+  # docker_logs keeps no checkpoint: lines written while Vector is down are lost
+  # (homelab-ops#363). Config changes reload by SIGHUP, which only rebuilds
+  # changed components, so a deploy that leaves this source alone keeps it reading.
+  docker:
+    type: docker_logs
+    exclude_containers: [vector-{{ HOST }}]
+
+  varlogs:
+    type: file
+    include: ["/var/log/*log"]
+    # Without this a new host ships the whole history of /var/log on first start.
+    read_from: end
+
+  internal:
+    type: internal_metrics
+
+transforms:
+  # One Docker watcher; Traefik is split out by name, then access vs runtime by
+  # the same rule Alloy used: an access line is JSON carrying "ClientHost".
+  # The line itself stays raw: VictoriaLogs' Loki endpoint parses JSON into fields.
+  docker_shape:
+    type: remap
+    inputs: [docker]
+    source: |
+      name = string!(.container_name)
+      msg = string(.message) ?? ""
+      job = "docker"
+      if name == "traefik-{{ HOST }}" {
+        name = "traefik"
+        job = "traefik-runtime"
+        if contains(msg, "\"ClientHost\"") {
+          job = "traefik-access"
+{%- if GEOIP %}
+          parsed, err = parse_json(msg)
+          if err == null && is_object(parsed) && is_string(parsed.ClientHost) {
+            rec, err = get_enrichment_table_record("asn", {"ip": parsed.ClientHost})
+            if err == null {
+              parsed.geoip_autonomous_system_number = rec.autonomous_system_number
+              parsed.geoip_autonomous_system_organization = rec.autonomous_system_organization
+              msg = encode_json(parsed)
+            }
+          }
+{%- endif %}
+        }
+      }
+      . = {
+        "timestamp": .timestamp,
+        "message": msg,
+        "job": job,
+        "host": "{{ HOST }}",
+        "container_name": name,
+      }
+
+  varlogs_shape:
+    type: remap
+    inputs: [varlogs]
+    source: |
+      . = {
+        "timestamp": .timestamp,
+        "message": .message,
+        "job": "varlogs",
+        "host": "{{ HOST }}",
+      }
+
+sinks:
+  vlogs_docker:
+    type: loki
+    inputs: [docker_shape]
+    endpoint: http://victoria-logs:9428
+    path: /insert/loki/api/v1/push
+    encoding:
+      codec: text
+    labels:
+      job: "{% raw %}{{ job }}{% endraw %}"
+      host: "{% raw %}{{ host }}{% endraw %}"
+      container_name: "{% raw %}{{ container_name }}{% endraw %}"
+    remove_label_fields: true
+    out_of_order_action: accept
+    healthcheck:
+      enabled: false
+{%- if SHADOW %}
+    # The Loki sink ignores request.headers; VictoriaLogs maps X-Scope-OrgID to AccountID.
+    tenant_id: "1"
+{%- endif %}
+    buffer:
+      type: disk
+      max_size: 268435488
+      when_full: block
+
+  # A sink of its own: varlogs has no container_name, and a label template that
+  # fails to render counts as a sink error.
+  vlogs_varlogs:
+    type: loki
+    inputs: [varlogs_shape]
+    endpoint: http://victoria-logs:9428
+    path: /insert/loki/api/v1/push
+    encoding:
+      codec: text
+    labels:
+      job: "{% raw %}{{ job }}{% endraw %}"
+      host: "{% raw %}{{ host }}{% endraw %}"
+    remove_label_fields: true
+    out_of_order_action: accept
+    healthcheck:
+      enabled: false
+{%- if SHADOW %}
+    tenant_id: "1"
+{%- endif %}
+    # The file source checkpoints only acknowledged lines; docker_logs cannot ack,
+    # so acknowledgements are on here only.
+    acknowledgements:
+      enabled: true
+    buffer:
+      type: disk
+      max_size: 268435488
+      when_full: block
+
+  metrics:
+    type: prometheus_exporter
+    inputs: [internal]
+    address: 0.0.0.0:9598

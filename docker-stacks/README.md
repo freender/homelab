@@ -100,6 +100,7 @@ not drift**:
   owns the role.
 - **alloy** differs by real mounts (neo has no `geoipupdate` stack, so no geoip
   mount) only; all three bind `--server.http.listen-addr=0.0.0.0:12345` for scraping.
+- **vector** has the same asymmetry as alloy: neo has no GeoIP mount.
 
 ### Known divergences, deliberately not normalized
 

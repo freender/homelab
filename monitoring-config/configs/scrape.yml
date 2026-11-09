@@ -350,3 +350,31 @@ scrape_configs:
       - targets: ["alloy-neo:12345"]
         labels:
           host: neo
+
+  # Vector's internal metrics carry their own `host` (the container ID); with the
+  # default honor_labels: false it lands as `exported_host` and ours wins. The
+  # keep-list drops ~1400 histogram and adaptive-concurrency series per host that
+  # nothing reads.
+  - job_name: vector
+    scrape_interval: 10s
+    scrape_timeout: 8s
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: endpoint
+      - source_labels: [__address__]
+        regex: '([^:]+):.*'
+        target_label: instance
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        regex: 'vector_(component_(received|sent|discarded)_events_total|component_errors_total|http_client_errors_total|buffer_size_(bytes|events)|uptime_seconds|reloaded_total|build_info)'
+        action: keep
+    static_configs:
+      - targets: ["vector-tower:9598"]
+        labels:
+          host: tower
+      - targets: ["vector-helm:9598"]
+        labels:
+          host: helm
+      - targets: ["vector-neo:9598"]
+        labels:
+          host: neo

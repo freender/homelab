@@ -36,6 +36,7 @@ from .pve_zfs_large_block_patch import deploy as deploy_pve_zfs_large_block_patc
 from .pve_zfs_migration_sync_patch import deploy as deploy_pve_zfs_migration_sync_patch
 from .ssh_config import deploy as deploy_ssh_config
 from .ubuntu_setup import deploy as deploy_ubuntu_setup
+from .vector_config import deploy as deploy_vector_config
 from .vmalert_rules import deploy as deploy_vmalert_rules
 from .wsl_conf import deploy as deploy_wsl_conf
 from .zfs_automation import deploy as deploy_zfs_automation
@@ -177,6 +178,10 @@ MODULES: dict[str, ModuleDefinition] = {
     ),
     "ssh-config": ModuleDefinition(name="SSH Config", deploy=deploy_ssh_config),
     "ubuntu-setup": ModuleDefinition(name="Ubuntu OS Setup", deploy=deploy_ubuntu_setup),
+    "vector-config": ModuleDefinition(
+        name="Vector Log Shipping Config",
+        deploy=deploy_vector_config,
+    ),
     "vmalert-rules": ModuleDefinition(name="vmalert Rules", deploy=deploy_vmalert_rules),
     "wsl-conf": ModuleDefinition(name="WSL Conf", deploy=deploy_wsl_conf),
     "zfs-automation": ModuleDefinition(name="ZFS Automation", deploy=deploy_zfs_automation),
@@ -227,6 +232,8 @@ MODULE_ORDER = [
     # Validates against and reloads the running alloy-<host> container, so it
     # follows the stack that creates it.
     "alloy-config",
+    # Same for vector-<host>.
+    "vector-config",
     # apt-upgrade last, after everything that could install a package it would
     # then upgrade. It was preceded by apt-security-updates until that module
     # was archived; apt-upgrade is now the single apt mechanism for the fleet.

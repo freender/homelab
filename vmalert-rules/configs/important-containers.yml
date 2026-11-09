@@ -89,6 +89,10 @@ groups:
         labels: {severity: warning, category: docker, site: home, host: tower, name: alloy-tower}
         annotations: {summary: "tower / alloy-tower is missing", description: "Important app container has not been seen by cAdvisor for 5 minutes."}
       - alert: ImportantContainerMissing
+        expr: absent_over_time(container_last_seen{job="cadvisor", host="tower", name="vector-tower"}[5m]) and on(host) (avg_over_time(up{job="pve-node"}[10m]) >= 0.95)
+        labels: {severity: warning, category: docker, site: home, host: tower, name: vector-tower}
+        annotations: {summary: "tower / vector-tower is missing", description: "Important app container has not been seen by cAdvisor for 5 minutes."}
+      - alert: ImportantContainerMissing
         expr: absent_over_time(container_last_seen{job="cadvisor", host="tower", name="cloudflared-tower"}[5m]) and on(host) (avg_over_time(up{job="pve-node"}[10m]) >= 0.95)
         labels: {severity: warning, category: docker, site: home, host: tower, name: cloudflared-tower}
         annotations: {summary: "tower / cloudflared-tower is missing", description: "Important app container has not been seen by cAdvisor for 5 minutes."}
@@ -112,6 +116,10 @@ groups:
         expr: absent_over_time(container_last_seen{job="cadvisor", host="helm", name="alloy-helm"}[5m]) and on(host) (avg_over_time(up{job="pve-node"}[10m]) >= 0.95)
         labels: {severity: warning, category: docker, site: home, host: helm, name: alloy-helm}
         annotations: {summary: "helm / alloy-helm is missing", description: "Important app container has not been seen by cAdvisor for 5 minutes."}
+      - alert: ImportantContainerMissing
+        expr: absent_over_time(container_last_seen{job="cadvisor", host="helm", name="vector-helm"}[5m]) and on(host) (avg_over_time(up{job="pve-node"}[10m]) >= 0.95)
+        labels: {severity: warning, category: docker, site: home, host: helm, name: vector-helm}
+        annotations: {summary: "helm / vector-helm is missing", description: "Important app container has not been seen by cAdvisor for 5 minutes."}
       - alert: ImportantContainerMissing
         expr: absent_over_time(container_last_seen{job="cadvisor", host="helm", name="cloudfirewall"}[5m]) and on(host) (avg_over_time(up{job="pve-node"}[10m]) >= 0.95)
         labels: {severity: warning, category: docker, site: home, host: helm, name: cloudfirewall}
@@ -148,6 +156,10 @@ groups:
         expr: absent_over_time(container_last_seen{job="cadvisor", host="neo", name="alloy-neo"}[5m]) and on(host) (avg_over_time(up{job="pve-node"}[10m]) >= 0.95)
         labels: {severity: warning, category: docker, site: home, host: neo, name: alloy-neo}
         annotations: {summary: "neo / alloy-neo is missing", description: "Important app container has not been seen by cAdvisor for 5 minutes."}
+      - alert: ImportantContainerMissing
+        expr: absent_over_time(container_last_seen{job="cadvisor", host="neo", name="vector-neo"}[5m]) and on(host) (avg_over_time(up{job="pve-node"}[10m]) >= 0.95)
+        labels: {severity: warning, category: docker, site: home, host: neo, name: vector-neo}
+        annotations: {summary: "neo / vector-neo is missing", description: "Important app container has not been seen by cAdvisor for 5 minutes."}
       - alert: ImportantContainerMissing
         expr: absent_over_time(container_last_seen{job="cadvisor", host="neo", name="cloudflared-neo"}[5m]) and on(host) (avg_over_time(up{job="pve-node"}[10m]) >= 0.95)
         labels: {severity: warning, category: docker, site: home, host: neo, name: cloudflared-neo}

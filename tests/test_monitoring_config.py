@@ -485,7 +485,11 @@ RULES_DIR = REPO_ROOT / "vmalert-rules" / "configs"
 
 # A keep-list only answers for its own exporter's families: cadvisor dropping
 # node_* says nothing, because cadvisor never exports node_*.
-KEEP_LIST_PREFIXES = {"cadvisor": "container_", "home-assistant": "homeassistant_"}
+KEEP_LIST_PREFIXES = {
+    "cadvisor": "container_",
+    "home-assistant": "homeassistant_",
+    "vector": "vector_",
+}
 
 _SELECTOR = re.compile(r"([a-zA-Z_:][a-zA-Z0-9_:]*)\s*\{([^}]*)\}")
 _EQUALITY_MATCHER = re.compile(r'(\w+)\s*=\s*"([^"]*)"')
@@ -555,6 +559,8 @@ def test_the_drops_really_drop() -> None:
     assert not survives(jobs["cadvisor"], {"__name__": "container_fs_usage_bytes"})
     assert not survives(jobs["home-assistant"], {"__name__": "homeassistant_entity_available"})
     assert not survives(jobs["vmagent"], {"__name__": "flag"})
+    assert not survives(jobs["vector"], {"__name__": "vector_component_latency_seconds_bucket"})
+    assert survives(jobs["vector"], {"__name__": "vector_http_client_errors_total"})
 
 
 def test_no_vmalert_rule_reads_a_metric_the_scrape_config_drops() -> None:

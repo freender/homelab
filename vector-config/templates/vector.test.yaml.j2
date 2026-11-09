@@ -1,0 +1,132 @@
+# Rendered by the vector-config module for {{ HOST }}. The installer runs
+# `vector test` with these against the staged vector.yaml, in the image the
+# running vector-{{ HOST }} container uses, before anything is installed.
+tests:
+  - name: ordinary container becomes the docker shape
+    inputs:
+      - insert_at: docker_shape
+        type: log
+        log_fields:
+          message: "level=error msg=boom"
+          container_name: radarr
+          container_id: abc123
+          host: 0123456789ab
+          image: linuxserver/radarr
+          stream: stdout
+          source_type: docker
+    outputs:
+      - extract_from: docker_shape
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.job, "docker")
+              assert_eq!(.host, "{{ HOST }}")
+              assert_eq!(.container_name, "radarr")
+              assert_eq!(.message, "level=error msg=boom")
+              assert!(!exists(.container_id))
+              assert!(!exists(.image))
+              assert!(!exists(.stream))
+              assert!(!exists(.source_type))
+
+  - name: another host's traefik stays an ordinary container
+    inputs:
+      - insert_at: docker_shape
+        type: log
+        log_fields:
+          message: '{"ClientHost":"10.0.10.5"}'
+          container_name: traefik-elsewhere
+    outputs:
+      - extract_from: docker_shape
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.job, "docker")
+              assert_eq!(.container_name, "traefik-elsewhere")
+
+  - name: traefik line without ClientHost is runtime
+    inputs:
+      - insert_at: docker_shape
+        type: log
+        log_fields:
+          message: '{"level":"warn","msg":"router not found"}'
+          container_name: traefik-{{ HOST }}
+    outputs:
+      - extract_from: docker_shape
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.job, "traefik-runtime")
+              assert_eq!(.container_name, "traefik")
+              assert_eq!(.message, "{\"level\":\"warn\",\"msg\":\"router not found\"}")
+
+  - name: traefik access line with a private ClientHost passes through raw
+    inputs:
+      - insert_at: docker_shape
+        type: log
+        log_fields:
+          message: '{"ClientHost":"10.0.10.5","DownstreamStatus":404,"RequestPath":"/x"}'
+          container_name: traefik-{{ HOST }}
+    outputs:
+      - extract_from: docker_shape
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.job, "traefik-access")
+              assert_eq!(.container_name, "traefik")
+              assert_eq!(.message, "{\"ClientHost\":\"10.0.10.5\",\"DownstreamStatus\":404,\"RequestPath\":\"/x\"}")
+
+  - name: traefik access line with a public ClientHost
+    inputs:
+      - insert_at: docker_shape
+        type: log
+        log_fields:
+          message: '{"ClientHost":"8.8.8.8","DownstreamStatus":401,"RequestPath":"/y"}'
+          container_name: traefik-{{ HOST }}
+    outputs:
+      - extract_from: docker_shape
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.job, "traefik-access")
+              p = object!(parse_json!(.message))
+              assert_eq!(p.DownstreamStatus, 401)
+{%- if GEOIP %}
+              assert_eq!(p.geoip_autonomous_system_number, 15169)
+              assert_eq!(p.geoip_autonomous_system_organization, "Google LLC")
+{%- else %}
+              assert!(!exists(p.geoip_autonomous_system_number))
+{%- endif %}
+
+  - name: non-JSON line mentioning ClientHost does not break the transform
+    inputs:
+      - insert_at: docker_shape
+        type: log
+        log_fields:
+          message: 'error: bad "ClientHost" header'
+          container_name: traefik-{{ HOST }}
+    outputs:
+      - extract_from: docker_shape
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.job, "traefik-access")
+              assert_eq!(.message, "error: bad \"ClientHost\" header")
+
+  - name: varlogs line
+    inputs:
+      - insert_at: varlogs_shape
+        type: log
+        log_fields:
+          message: "dpkg: status installed foo"
+          file: /var/log/dpkg.log
+          host: 0123456789ab
+          source_type: file
+    outputs:
+      - extract_from: varlogs_shape
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.job, "varlogs")
+              assert_eq!(.host, "{{ HOST }}")
+              assert_eq!(.message, "dpkg: status installed foo")
+              assert!(!exists(.file))
