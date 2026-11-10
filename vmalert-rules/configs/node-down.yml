@@ -25,14 +25,16 @@ groups:
       # ghost is excluded deliberately: it is a roaming laptop reachable only
       # over WireGuard, so `up == 0` there means "away", not "down". This
       # matches its exclusion from SystemdUnitMetricsMissing in
-      # systemd-failed.yml.
+      # systemd-failed.yml. glint is excluded for the same reason: the GPU VM
+      # has onboot off and yields the RTX card to void for VR sessions, so it
+      # is off by design much of the time.
       #
       # The host lists in this file do duplicate scrape.yml's pve-node targets,
       # which is the pattern systemd-failed.yml warns against ("a hand-
       # maintained second copy of it that can only drift out of sync"). Here
       # the duplication is load-bearing and cannot be collapsed into one
       # selector: on-prem gets 10m/critical, offsite gets 1h/warning, and ghost
-      # gets nothing. The failure mode is silent -- a host added to scrape.yml
+      # and glint get nothing. The failure mode is silent -- a host added to scrape.yml
       # simply never gets a down alert -- so `./validate` enforces the pairing
       # instead (check_node_down_coverage): it fails if a pve-node target is
       # covered by neither rule here and is not declared as an exclusion below.
@@ -40,6 +42,7 @@ groups:
       # Exclusions are machine-readable, one host per marker line:
       #
       # nodedown-exclude: ghost
+      # nodedown-exclude: glint
       - alert: NodeDown
         expr: up{job="pve-node", host=~"ace|bray|clovis|osiris|tower|helm|neo|riven|xur|arc|deepstone"} == 0
         for: 10m

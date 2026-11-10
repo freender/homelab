@@ -2,7 +2,13 @@
 
 Repo-managed configuration shared by the VictoriaMetrics monitoring stack:
 
-- One canonical `scrape.yml`, deployed to `vmagent-helm` and `vmagent-neo`.
+- One canonical `scrape.yml`, deployed to `vmagent-helm` and `vmagent-neo`,
+  rendered from `templates/scrape.yml.j2`. The `pve-node`, `pve-smartctl`,
+  `apcupsd` and `intel-gpu` targets are generated from hosts.conf: every host
+  `metrics-exporters` deploys to, filtered by the same exporter flags that
+  module installs from (`lxc_guest`, `apcupsd.role`, `intel_gpu_exporter`).
+  `metrics-exporters.scrape_host` overrides `config.hostname` as the scrape
+  address. Every other job is hand-written in the template.
 - The secret-free Alertmanager template, deployed only to the host with
   `monitoring-config.alertmanager: true`.
 

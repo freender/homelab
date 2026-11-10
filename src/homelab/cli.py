@@ -17,7 +17,7 @@ from . import crap, mutants, op_secrets
 from .deploy import DeploySession
 from .hosts import HostLookupError, HostRegistry, default_registry, validate_hosts_data
 from .leakcheck import check_env_example_placeholders, check_public_repo_leaks, tracked_files
-from .modules import MODULES, ordered_modules
+from .modules import MODULES, monitoring_config, ordered_modules
 from .modules.pve_upgrade import CONFIRM_ENV as CONFIRM_UPGRADE_ENV
 from .output import print_action, print_error, print_header, print_ok, print_sub, print_warn
 from .ssh import offline_mode
@@ -123,20 +123,13 @@ def check_stack_placement(root: Path) -> None:
     )
 
 
-def _pve_node_scrape_jobs(scrape_path: Path) -> list[dict]:
-    """The `pve-node` scrape jobs in scrape.yml, ignoring every other job."""
-    data = yaml.safe_load(scrape_path.read_text(encoding="utf-8")) or {}
-    return [
-        job
-        for job in data.get("scrape_configs") or []
-        if job.get("job_name") == "pve-node"
-    ]
-
-
-def _scraped_pve_nodes(scrape_path: Path) -> set[str]:
+def _scraped_pve_nodes(scrape_text: str) -> set[str]:
     """Hosts the `pve-node` scrape job actually targets, by their `host` label."""
+    data = yaml.safe_load(scrape_text) or {}
     scraped: set[str] = set()
-    for job in _pve_node_scrape_jobs(scrape_path):
+    for job in data.get("scrape_configs") or []:
+        if job.get("job_name") != "pve-node":
+            continue
         for static in job.get("static_configs") or []:
             host = (static.get("labels") or {}).get("host")
             if host:
@@ -167,6 +160,9 @@ def _nodedown_covered_hosts(rules_text: str) -> set[str]:
 def check_node_down_coverage(root: Path) -> None:
     """Cross-check NodeDown's host lists against the pve-node targets in scrape.yml.
 
+    scrape.yml is rendered from hosts.conf (metrics-exporters hosts), so this reads
+    the render rather than a file on disk.
+
     NodeDown/NodeDownOffsite enumerate hosts explicitly because the two carry
     different urgency (on-prem 10m/critical vs offsite 1h/warning) and ghost is
     excluded outright, so they cannot be collapsed into a single selector driven by
@@ -178,12 +174,11 @@ def check_node_down_coverage(root: Path) -> None:
     that way: an uncovered target is a monitoring blind spot, and a rule naming a host
     nobody scrapes is a stale selector that can never fire.
     """
-    scrape_path = root / "monitoring-config" / "configs" / "scrape.yml"
     rules_path = root / "vmalert-rules" / "configs" / "node-down.yml"
-    if not scrape_path.exists() or not rules_path.exists():
+    if not monitoring_config.scrape_template(root).exists() or not rules_path.exists():
         return
 
-    scraped = _scraped_pve_nodes(scrape_path)
+    scraped = _scraped_pve_nodes(monitoring_config.render_scrape_config(root))
     rules_text = rules_path.read_text(encoding="utf-8")
     covered = _nodedown_covered_hosts(rules_text)
 
@@ -203,8 +198,8 @@ def check_node_down_coverage(root: Path) -> None:
     if stale:
         raise click.ClickException(
             f"node-down.yml alerts on host(s) scrape.yml does not scrape: {', '.join(stale)}. "
-            "Remove them from node-down.yml, or add the target to "
-            "monitoring-config/configs/scrape.yml."
+            "Remove them from node-down.yml, or enable metrics-exporters for the host "
+            "in hosts.conf."
         )
 
     for host in sorted(excluded - scraped):

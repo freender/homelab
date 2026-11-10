@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 
 from ..build import write_env_file
@@ -8,12 +9,68 @@ from ..hosts import default_registry
 from ..module_support import connection_for_host, normalize_bool, run_module_deploy
 from ..output import print_sub
 from ..ssh import build_files, diff_many
+from ..templates import render_template_text
+from .metrics_exporters import exporter_flags
 
 MODULE_DIR = "monitoring-config"
 REMOTE_ROOT = "/tmp/homelab-monitoring-config"
 REMOTE_SCRAPE_CONFIG = "/mnt/cache/appdata/vmagent/scrape.yml"
 REMOTE_ALERTMANAGER_CONFIG = "/mnt/cache/appdata/alertmanager/alertmanager.yml.tpl"
-CONFIG_FILES = ("alertmanager.yml.tpl", "scrape.yml")
+CONFIG_FILES = ("alertmanager.yml.tpl",)
+SCRAPE_TEMPLATE = "scrape.yml.j2"
+SCRAPE_CONFIG_NAME = "scrape.yml"
+EXPORTER_FEATURE = "metrics-exporters"
+
+# Exporter ports, one per host-derived scrape job.
+NODE_EXPORTER_PORT = 9100
+SMARTCTL_EXPORTER_PORT = 9633
+APCUPSD_EXPORTER_PORT = 9162
+IGPU_EXPORTER_PORT = 9400
+
+
+@dataclass(frozen=True)
+class ScrapeTarget:
+    host: str
+    address: str
+
+
+def scrape_targets(root: Path) -> dict[str, list[ScrapeTarget]]:
+    """The host-derived scrape jobs, from the hosts metrics-exporters deploys to.
+
+    Which exporters a host runs is decided once, by `exporter_flags`, so the scrape
+    config cannot disagree with what metrics-exporters actually installed.
+    `metrics-exporters.scrape_host` overrides `config.hostname` for a host whose
+    SSH address is not the name it should be scraped by (arc's is a bare IP).
+    """
+    registry = default_registry(root)
+    jobs: dict[str, list[ScrapeTarget]] = {
+        "pve-node": [],
+        "pve-smartctl": [],
+        "apcupsd": [],
+        "intel-gpu": [],
+    }
+    for host in registry.list_hosts(EXPORTER_FEATURE):
+        name = str(
+            registry.get(host, f"{EXPORTER_FEATURE}.scrape_host", None)
+            or registry.get(host, "config.hostname")
+        )
+        flags = exporter_flags(root, host)
+        jobs["pve-node"].append(ScrapeTarget(host, f"{name}:{NODE_EXPORTER_PORT}"))
+        if not flags.lxc_guest:
+            jobs["pve-smartctl"].append(ScrapeTarget(host, f"{name}:{SMARTCTL_EXPORTER_PORT}"))
+        if flags.has_apcupsd:
+            jobs["apcupsd"].append(ScrapeTarget(host, f"{name}:{APCUPSD_EXPORTER_PORT}"))
+        if flags.has_igpu:
+            jobs["intel-gpu"].append(ScrapeTarget(host, f"{name}:{IGPU_EXPORTER_PORT}"))
+    return jobs
+
+
+def scrape_template(root: Path) -> Path:
+    return root / MODULE_DIR / "templates" / SCRAPE_TEMPLATE
+
+
+def render_scrape_config(root: Path) -> str:
+    return render_template_text(scrape_template(root), targets=scrape_targets(root))
 
 
 def deploy(
@@ -42,9 +99,9 @@ def validate(root: Path) -> None:
             f"found {', '.join(actual_files) or 'none'}"
         )
 
-    installer = root / MODULE_DIR / "scripts" / "install.py"
-    if not installer.is_file():
-        raise ValueError(f"missing installer: {installer}")
+    for required in (root / MODULE_DIR / "scripts" / "install.py", scrape_template(root)):
+        if not required.is_file():
+            raise ValueError(f"missing required file: {required}")
 
     alertmanager_template = (configs_dir / "alertmanager.yml.tpl").read_text(encoding="utf-8")
     # The installer substitutes globally, so a chat ID may back more than one receiver
@@ -74,6 +131,9 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
     build_dir = root / MODULE_DIR / "build" / host
     prepare_build_dir(build_dir)
 
+    scrape_config = build_dir / SCRAPE_CONFIG_NAME
+    scrape_config.write_text(render_scrape_config(root), encoding="utf-8")
+
     manages_alertmanager = alertmanager_enabled(root, host)
     # The destinations go down the wire rather than being repeated in the
     # installer: this module diffs against them before staging, so a second copy
@@ -91,7 +151,7 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
     )
 
     connection = connection_for_host(root, host)
-    diff_pairs = [(configs_dir / "scrape.yml", REMOTE_SCRAPE_CONFIG)]
+    diff_pairs = [(scrape_config, REMOTE_SCRAPE_CONFIG)]
     if manages_alertmanager:
         diff_pairs.append(
             (configs_dir / "alertmanager.yml.tpl", REMOTE_ALERTMANAGER_CONFIG)

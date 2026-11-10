@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 import yaml
 
+from homelab.hosts import default_registry
 from homelab.modules import monitoring_config
 from homelab_install.context import InstallContext
 from homelab_install.errors import InstallError
@@ -16,7 +17,9 @@ from homelab_install.errors import InstallError
 def write_module_files(root: Path) -> None:
     configs_dir = root / "monitoring-config" / "configs"
     configs_dir.mkdir(parents=True)
-    (configs_dir / "scrape.yml").write_text("scrape_configs: []\n", encoding="utf-8")
+    templates_dir = root / "monitoring-config" / "templates"
+    templates_dir.mkdir()
+    (templates_dir / "scrape.yml.j2").write_text("scrape_configs: []\n", encoding="utf-8")
     (configs_dir / "alertmanager.yml.tpl").write_text(
         "chat_id: __TELEGRAM_CHATID__\n"
         "chat_id: __TELEGRAM_CHATID_PLEX__\n"
@@ -36,6 +39,14 @@ def test_validate_requires_exact_configs_and_placeholders(tmp_path: Path) -> Non
         "{}\n", encoding="utf-8"
     )
     with pytest.raises(ValueError, match="configs must be exactly"):
+        monitoring_config.validate(tmp_path)
+
+
+def test_validate_requires_the_scrape_template(tmp_path: Path) -> None:
+    write_module_files(tmp_path)
+    (tmp_path / "monitoring-config" / "templates" / "scrape.yml.j2").unlink()
+
+    with pytest.raises(ValueError, match=r"missing required file: .*scrape\.yml\.j2"):
         monitoring_config.validate(tmp_path)
 
 
@@ -143,7 +154,9 @@ def make_ctx(tmp_path: Path, env: dict[str, str]) -> InstallContext:
 
 
 def stage(tmp_path: Path, name: str, content: str) -> Path:
-    path = tmp_path / "configs" / name
+    """scrape.yml is rendered per host into build/; everything else is static configs/."""
+    subdir = "build" if name == "scrape.yml" else "configs"
+    path = tmp_path / subdir / name
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
     return path
@@ -480,7 +493,6 @@ def test_template_regex_repeat_counts_fit_go_regexp() -> None:
 # ---------------------------------------------------------------------------
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-SCRAPE_CONFIG = REPO_ROOT / "monitoring-config" / "configs" / "scrape.yml"
 RULES_DIR = REPO_ROOT / "vmalert-rules" / "configs"
 
 # A keep-list only answers for its own exporter's families: cadvisor dropping
@@ -497,7 +509,8 @@ _IDENTIFIER = re.compile(r"[a-zA-Z_:][a-zA-Z0-9_:]*")
 
 
 def scrape_jobs() -> list[dict]:
-    return yaml.safe_load(SCRAPE_CONFIG.read_text(encoding="utf-8"))["scrape_configs"]
+    rendered = monitoring_config.render_scrape_config(REPO_ROOT)
+    return yaml.safe_load(rendered)["scrape_configs"]
 
 
 def survives(relabels: list[dict], labels: dict[str, str]) -> bool:
@@ -581,3 +594,141 @@ def test_no_vmalert_rule_reads_a_metric_the_scrape_config_drops() -> None:
                     dropped.append(f"{rule_file}: {name}{labels or ''} by {job['job_name']}")
 
     assert not dropped, "\n".join(sorted(set(dropped)))
+
+
+# ---------------------------------------------------------------------------
+# Host-derived scrape targets (freender/homelab-ops#379)
+#
+# pve-node, pve-smartctl, apcupsd and intel-gpu are rendered from hosts.conf so
+# a host that runs an exporter cannot go unscraped. The labels are what vmalert
+# rules and Grafana panels select on, so they are pinned exactly.
+# ---------------------------------------------------------------------------
+
+HOST_DERIVED_JOBS = ("pve-node", "pve-smartctl", "apcupsd", "intel-gpu")
+
+
+def rendered_targets(root: Path) -> dict[str, list[tuple[str, dict]]]:
+    jobs = yaml.safe_load(monitoring_config.render_scrape_config(root))["scrape_configs"]
+    return {
+        job["job_name"]: [
+            (target, static.get("labels") or {})
+            for static in job.get("static_configs") or []
+            for target in static["targets"]
+        ]
+        for job in jobs
+    }
+
+
+def test_the_real_inventory_renders_the_expected_targets() -> None:
+    """Golden: what today's hosts.conf must render. Equal to the hand-written file
+    this replaced plus glint, which ran node_exporter unscraped until #379."""
+    jobs = rendered_targets(REPO_ROOT)
+
+    def by_host(job: str) -> dict[str, str]:
+        return {labels["host"]: target for target, labels in jobs[job]}
+
+    lan = "freender.internal"
+    assert by_host("pve-node") == {
+        **{h: f"{h}.{lan}:9100" for h in (
+            "ace", "bray", "clovis", "osiris", "arc", "xur", "deepstone", "neo",
+            "tower", "riven", "helm", "glint", "ghost",
+        )},
+        "cottonwood": "cottonwood.internal:9100",
+        "cinci": "cinci.internal:9100",
+    }
+    assert by_host("pve-smartctl") == {
+        **{h: f"{h}.{lan}:9633" for h in ("ace", "bray", "clovis", "osiris")},
+        "cottonwood": "cottonwood.internal:9633",
+        "cinci": "cinci.internal:9633",
+    }
+    assert by_host("apcupsd") == {h: f"{h}.{lan}:9162" for h in ("bray", "osiris")}
+    assert by_host("intel-gpu") == {h: f"{h}.{lan}:9400" for h in ("ace", "bray", "clovis")}
+
+
+def test_every_metrics_exporters_host_has_exactly_one_node_target() -> None:
+    """The issue's minimum guarantee, kept as a guard against a template edit
+    that drops or duplicates the loop."""
+    hosts = default_registry(REPO_ROOT).list_hosts("metrics-exporters")
+    scraped = [labels["host"] for _, labels in rendered_targets(REPO_ROOT)["pve-node"]]
+    assert sorted(scraped) == sorted(hosts)
+
+
+def test_host_derived_targets_carry_only_the_host_label() -> None:
+    """endpoint and instance come from relabel_configs; any extra static label
+    would add a dimension every rule and panel would have to aggregate away."""
+    jobs = rendered_targets(REPO_ROOT)
+    for job in HOST_DERIVED_JOBS:
+        assert jobs[job], f"{job} rendered no targets"
+        assert all(set(labels) == {"host"} for _, labels in jobs[job]), job
+
+
+def write_inventory(root: Path, hosts: dict) -> None:
+    (root / "hosts.conf").write_text(yaml.safe_dump(hosts, sort_keys=False), encoding="utf-8")
+
+
+def inventory_host(hostname: str, **features) -> dict:
+    config = {"hostname": hostname, "user": "root", "sshkey": "infra", "type": "ubuntu"}
+    return {"config": config, "features": features}
+
+
+def test_scrape_targets_follow_the_exporter_flags(tmp_path: Path) -> None:
+    write_inventory(
+        tmp_path,
+        {
+            "metal": inventory_host(
+                "metal.lan",
+                **{
+                    "metrics-exporters": {"intel_gpu_exporter": {"x": 1}},
+                    "apcupsd": {"role": "master"},
+                },
+            ),
+            "ups-slave": inventory_host(
+                "slave.lan", **{"metrics-exporters": None, "apcupsd": {"role": "slave"}}
+            ),
+            "guest": inventory_host(
+                "10.0.0.9",
+                **{"metrics-exporters": {"lxc_guest": True, "scrape_host": "guest.lan"}},
+            ),
+            "gated": inventory_host("gated.lan", **{"metrics-exporters": {"deploy": False}}),
+            "bare": inventory_host("bare.lan"),
+        },
+    )
+
+    targets = {
+        job: [(t.host, t.address) for t in entries]
+        for job, entries in monitoring_config.scrape_targets(tmp_path).items()
+    }
+
+    assert targets == {
+        "pve-node": [
+            ("metal", "metal.lan:9100"),
+            ("ups-slave", "slave.lan:9100"),
+            ("guest", "guest.lan:9100"),
+        ],
+        "pve-smartctl": [("metal", "metal.lan:9633"), ("ups-slave", "slave.lan:9633")],
+        "apcupsd": [("metal", "metal.lan:9162")],
+        "intel-gpu": [("metal", "metal.lan:9400")],
+    }
+
+
+def test_deploy_host_renders_the_scrape_config_into_the_build_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The installer reads build/<host>/scrape.yml; configs/ no longer has one."""
+    write_module_files(tmp_path)
+    (tmp_path / "monitoring-config" / "templates" / "scrape.yml.j2").write_text(
+        "{% for t in targets['pve-node'] %}{{ t.host }}={{ t.address }}\n{% endfor %}",
+        encoding="utf-8",
+    )
+    write_inventory(tmp_path, {"helm": inventory_host("helm.lan", **{"metrics-exporters": None})})
+    diffed: list = []
+    monkeypatch.setattr(monitoring_config, "connection_for_host", lambda root, host: None)
+    monkeypatch.setattr(
+        monitoring_config, "diff_many", lambda conn, pairs: diffed.extend(pairs) or []
+    )
+
+    monitoring_config.deploy_host(tmp_path, "helm", dry_run=True, force=False)
+
+    rendered = tmp_path / "monitoring-config" / "build" / "helm" / "scrape.yml"
+    assert rendered.read_text(encoding="utf-8") == "helm=helm.lan:9100\n"
+    assert diffed == [(rendered, monitoring_config.REMOTE_SCRAPE_CONFIG)]

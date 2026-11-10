@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """Remote installer for the monitoring-config module (freender/homelab-ops#30).
 
-Two config files, installed only after the container that will consume them has
-agreed to parse them. The shape is the one `vmalert-rules` established -- validate
-against the pinned image, install only if the bytes differ, bounce only if they
-did -- with one asymmetry worth knowing before reading:
+Two config files -- `scrape.yml`, rendered from hosts.conf into `build/<host>/`,
+and the static Alertmanager template under `configs/` -- installed only after the
+container that will consume them has agreed to parse them. The shape is the one
+`vmalert-rules` established -- validate against the pinned image, install only if
+the bytes differ, bounce only if they did -- with one asymmetry worth knowing
+before reading:
 
 * **vmagent is reloaded.** It re-reads `scrape.yml` over its own HTTP endpoint, so
   a reload keeps every in-flight scrape and the target state behind it.
@@ -222,7 +224,7 @@ def recreate_alertmanager(compose: Path) -> None:
 
 
 def install_scrape_config(ctx: InstallContext, dest: str, container: str) -> None:
-    src = require_staged(ctx.script_dir / "configs" / SCRAPE_CONFIG_NAME, "vmagent scrape config")
+    src = require_staged(ctx.build_dir / SCRAPE_CONFIG_NAME, "vmagent scrape config")
     require_live(dest, "live vmagent scrape config")
 
     validate_scrape_config(container_image(container), src)

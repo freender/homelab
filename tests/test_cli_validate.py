@@ -13,14 +13,19 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def _write_node_down_pair(root: Path, scraped: list[str], covered: str, extra: str = "") -> None:
-    """Build the minimal scrape.yml / node-down.yml pair the coverage check reads."""
-    scrape = root / "monitoring-config" / "configs"
+    """Build the minimal scrape template / node-down.yml pair the coverage check reads.
+
+    The template carries literal targets and the inventory is empty, so the render
+    is exactly the YAML written here.
+    """
+    (root / "hosts.conf").write_text("{}\n", encoding="utf-8")
+    scrape = root / "monitoring-config" / "templates"
     scrape.mkdir(parents=True, exist_ok=True)
     targets = "\n".join(
         f'      - targets: ["{host}:9100"]\n        labels:\n          host: {host}'
         for host in scraped
     )
-    (scrape / "scrape.yml").write_text(
+    (scrape / "scrape.yml.j2").write_text(
         f"scrape_configs:\n  - job_name: pve-node\n    static_configs:\n{targets}\n",
         encoding="utf-8",
     )
@@ -126,7 +131,7 @@ def test_validate_warns_when_pytest_missing(monkeypatch, tmp_path: Path) -> None
 
 
 def test_node_down_coverage_accepts_the_live_repo_config() -> None:
-    """The real scrape.yml/node-down.yml pair must stay in sync, not just synthetic ones."""
+    """The rendered scrape.yml and node-down.yml must stay in sync, not just synthetic ones."""
     cli.check_node_down_coverage(ROOT)
 
 

@@ -1,3 +1,12 @@
+{#- Host-derived targets come from hosts.conf via monitoring_config.scrape_targets;
+    every other job is hand-written below. -#}
+{%- macro static_configs(entries) -%}
+{%- for entry in entries %}
+      - targets: ["{{ entry.address }}"]
+        labels:
+          host: {{ entry.host }}
+{%- endfor %}
+{%- endmacro -%}
 global:
   scrape_interval: 10s
   scrape_timeout: 8s
@@ -22,58 +31,13 @@ scrape_configs:
       - source_labels: [__name__]
         regex: 'node_scrape_collector_duration_seconds'
         action: drop
-    static_configs:
-      - targets: ["ace.freender.internal:9100"]
-        labels:
-          host: ace
-      - targets: ["bray.freender.internal:9100"]
-        labels:
-          host: bray
-      - targets: ["clovis.freender.internal:9100"]
-        labels:
-          host: clovis
-      - targets: ["osiris.freender.internal:9100"]
-        labels:
-          host: osiris
-      - targets: ["tower.freender.internal:9100"]
-        labels:
-          host: tower
-      - targets: ["helm.freender.internal:9100"]
-        labels:
-          host: helm
-      - targets: ["cottonwood.internal:9100"]
-        labels:
-          host: cottonwood
-      - targets: ["cinci.internal:9100"]
-        labels:
-          host: cinci
-      - targets: ["neo.freender.internal:9100"]
-        labels:
-          host: neo
-      - targets: ["riven.freender.internal:9100"]
-        labels:
-          host: riven
-      # LXC guests that carry no other exporter: node_exporter here exists so
-      # NodeDown can answer "is this guest up". xur is the primary PBS, arc is
-      # the PDM host (PDM 1.1.9 has no notification system of its own), and
-      # deepstone is the Time Machine target. All three were entirely
-      # unmonitored until 2026-08-15.
-      - targets: ["xur.freender.internal:9100"]
-        labels:
-          host: xur
-      - targets: ["arc.freender.internal:9100"]
-        labels:
-          host: arc
-      - targets: ["deepstone.freender.internal:9100"]
-        labels:
-          host: deepstone
-      # ghost is a WSL2 userland on a roaming laptop, reachable only over the
-      # WireGuard tunnel. Expect this target to be down whenever the laptop is
-      # away; failed-unit alerting for it is written to fire only when metrics
-      # are present, and it is excluded from metrics-missing alerts.
-      - targets: ["ghost.freender.internal:9100"]
-        labels:
-          host: ghost
+    # Every host metrics-exporters deploys to, in hosts.conf order. Rendered
+    # from hosts.conf so a host that runs node_exporter cannot go unscraped --
+    # xur, arc and deepstone did until 2026-08-15, glint until homelab-ops#379.
+    # ghost (roaming WSL over WireGuard) and glint (GPU VM, onboot off) are
+    # expected down when absent; node-down.yml excludes both from NodeDown and
+    # failed-unit alerting fires only when metrics are present.
+    static_configs:{{ static_configs(targets["pve-node"]) }}
 
   # 10s keeps disk temperatures at full resolution. Must match
   # --smartctl.interval in metrics-exporters' smartctl-exporter-override.conf.tpl.
@@ -85,25 +49,8 @@ scrape_configs:
         target_label: endpoint
       - source_labels: [host]
         target_label: instance
-    static_configs:
-      - targets: ["ace.freender.internal:9633"]
-        labels:
-          host: ace
-      - targets: ["bray.freender.internal:9633"]
-        labels:
-          host: bray
-      - targets: ["clovis.freender.internal:9633"]
-        labels:
-          host: clovis
-      - targets: ["osiris.freender.internal:9633"]
-        labels:
-          host: osiris
-      - targets: ["cottonwood.internal:9633"]
-        labels:
-          host: cottonwood
-      - targets: ["cinci.internal:9633"]
-        labels:
-          host: cinci
+    # Bare-metal metrics-exporters hosts (not lxc_guest).
+    static_configs:{{ static_configs(targets["pve-smartctl"]) }}
 
   - job_name: cadvisor
     scrape_interval: 10s
@@ -180,13 +127,8 @@ scrape_configs:
         target_label: endpoint
       - source_labels: [host]
         target_label: instance
-    static_configs:
-      - targets: ["bray.freender.internal:9162"]
-        labels:
-          host: bray
-      - targets: ["osiris.freender.internal:9162"]
-        labels:
-          host: osiris
+    # metrics-exporters hosts that own a UPS (apcupsd.role master*).
+    static_configs:{{ static_configs(targets["apcupsd"]) }}
 
   - job_name: intel-gpu
     scrape_interval: 10s
@@ -196,16 +138,8 @@ scrape_configs:
         target_label: endpoint
       - source_labels: [host]
         target_label: instance
-    static_configs:
-      - targets: ["ace.freender.internal:9400"]
-        labels:
-          host: ace
-      - targets: ["bray.freender.internal:9400"]
-        labels:
-          host: bray
-      - targets: ["clovis.freender.internal:9400"]
-        labels:
-          host: clovis
+    # metrics-exporters hosts with intel_gpu_exporter configured.
+    static_configs:{{ static_configs(targets["intel-gpu"]) }}
 
   # HAOS VM zion has no node_exporter; Home Assistant's own Prometheus endpoint
   # is the reachability signal for HomeAssistantDown. The token file is
