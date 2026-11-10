@@ -15,6 +15,7 @@ REMOTE_RULES_DIR = "/mnt/cache/appdata/vmalert/rules"
 REMOTE_LOG_RULES_DIR = "/mnt/cache/appdata/vmalert-logs/rules"
 LOG_RULES_SUBDIR = "logs"
 LOG_RULE_FILES = (
+    "arr.yml",
     "kernel.yml",
     "zion.yml",
 )

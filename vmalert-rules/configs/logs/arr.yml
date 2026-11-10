@@ -1,0 +1,17 @@
+groups:
+  - name: logs-arr
+    type: vlogs
+    interval: 5m
+    rules:
+      # Sonarr4K's Plex Media Server connection ran on an expired token from
+      # 2026-09-18 to 2026-11-10: imports landed but Plex never refreshed, and
+      # nothing alerted. These lines are written only when a refresh after an
+      # import fails, so a manual connection Test does not trip the rule.
+      # The 1h window keeps the alert firing between imports.
+      - alert: ArrPlexRefreshFailing
+        expr: '_time:1h container_name:~"^(sonarr|radarr)(4k)?$" ("Failed to Update Plex" OR "Unable to process notification queue for Plex") | stats by (container_name, host) count() as failures'
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.container_name }} cannot refresh Plex ({{ $value }} failures in 1h)"
+          description: "{{ $labels.container_name }} failed to tell Plex to rescan after an import, so new items will not show in Plex. 'PlexAuthenticationException: AuthToken is invalid' in its log means the token expired: Settings -> Connect -> Plex Media Server -> Authenticate with Plex.tv, then Test. Logs: container_name:={{ $labels.container_name }} Plex in VictoriaLogs."

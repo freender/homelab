@@ -460,4 +460,4 @@ def test_orchestrator_sends_both_rule_sets_to_the_installer() -> None:
     edit that never reached the env would fail every deploy rather than
     silently install a subset."""
     assert len(vmalert_rules.RULE_FILES) == 25
-    assert vmalert_rules.LOG_RULE_FILES == ("kernel.yml", "zion.yml")
+    assert vmalert_rules.LOG_RULE_FILES == ("arr.yml", "kernel.yml", "zion.yml")
