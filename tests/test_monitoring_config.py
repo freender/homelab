@@ -648,7 +648,9 @@ def test_the_real_inventory_renders_the_expected_targets() -> None:
         "tower": "vector-tower:9598",
         "helm": "vector-helm:9598",
         "neo": "vector-neo:9598",
-        "arc": f"arc.{lan}:9598",
+        **{h: f"{h}.{lan}:9598" for h in (
+            "ace", "bray", "clovis", "osiris", "arc", "xur", "riven",
+        )},
     }
 
 
