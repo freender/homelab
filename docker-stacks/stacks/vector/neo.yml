@@ -24,6 +24,11 @@ services:
       - /var/log:/var/log:ro
       - /mnt/cache/appdata/vector/vector.yaml:/etc/vector/vector.yaml:ro
       - /mnt/cache/appdata/vector/data:/var/lib/vector
+      # journald source (homelab-ops#375): /var/log/journal comes with /var/log;
+      # the bin dir holds vector-config's journalctl-catchup wrapper.
+      - /run/log/journal:/run/log/journal:ro
+      - /etc/machine-id:/etc/machine-id:ro
+      - /mnt/cache/appdata/vector/bin:/etc/vector/bin:ro
     networks:
       net.internal: {}
       net_overlay: {}

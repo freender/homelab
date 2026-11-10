@@ -20,6 +20,11 @@ Both take:
   beside another shipper without Grafana, `log-spikes` or vmalert (all on tenant
   0) seeing any line twice. The Alloy cutover (homelab-ops#367) removed it from
   every host. To read shadow data, query with `curl -H 'AccountID: 1' …`.
+- `JOURNALD`: the per-host `vector-config.journald` key: `false` (default),
+  `shadow`, or `true`. It adds a `journald` source that ships the host's systemd
+  journal in journal-upload's shape (homelab-ops#374). `shadow` sends only the
+  journal to tenant 1, so it can run beside journal-upload. `validate` refuses
+  `true` while `journal-upload` is still enabled on the host.
 
 ## What it ships
 
@@ -29,6 +34,31 @@ Both take:
 | Traefik access | `job=traefik-access`, `host`, `container_name=traefik` | `traefik-<host>` lines containing `"ClientHost"` |
 | Traefik runtime | `job=traefik-runtime`, `host`, `container_name=traefik` | other `traefik-<host>` lines |
 | `/var/log/*log` | `job=varlogs`, `host` | `file`, `read_from: end` |
+| systemd journal (`journald` hosts) | `_MACHINE_ID`, `_HOSTNAME`, `_SYSTEMD_UNIT` | `journald` via `journalctl-catchup` |
+
+The journal goes to the **Elasticsearch** endpoint instead, because it takes
+`_stream_fields`. Every journal field is kept, `level` comes from `PRIORITY`, the
+`__*` fields are dropped, and `_time` is journald's receive time
+(`__REALTIME_TIMESTAMP`). That is the same shape VictoriaLogs' `/insert/journald`
+produces for journal-upload. On neo, every entry checked was byte-identical
+(homelab-ops#375). The sink uses acknowledgements, so the journald checkpoint
+only advances once a batch is in the disk buffer.
+
+`configs/journalctl-catchup` is installed into `<appdata>/vector/bin/` and set as
+`journalctl_path`. It works around two behaviours of systemd 250–257, where
+`journalctl --follow` implies `--boot` for the boot ID in
+`/proc/sys/kernel/random/boot_id`:
+
+- Docker inside an LXC (neo, tower) sees a different boot ID from the one the
+  LXC's journald stamps, so `--follow` matches nothing. The wrapper pins the boot
+  of the journal's newest entry instead.
+- Resuming from a cursor in a previous boot skips that boot's shutdown tail. The
+  wrapper drains without `--follow` first (homelab-ops#376).
+
+The stack mounts `/run/log/journal`, `/etc/machine-id` and the `bin` directory;
+`/var/log/journal` comes with `/var/log`. `bin` is a directory mount, so Docker
+creates it on first start. Deploy `docker-stacks` before this module; the
+installer refuses to run while `bin` is missing.
 
 Everything goes to VictoriaLogs' **Loki** endpoint on helm. That endpoint parses
 JSON lines into fields, which is where every Traefik access field the dashboard

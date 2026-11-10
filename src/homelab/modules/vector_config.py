@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 from ..build import write_env_file
@@ -17,6 +18,8 @@ CONFIG_NAME = "vector.yaml"
 TESTS_NAME = "vector.test.yaml"
 VECTOR_STACK = "vector"
 GEOIP_STACK = "geoipupdate"
+WRAPPER_NAME = "journalctl-catchup"
+JOURNAL_UPLOAD = "journal-upload"
 
 
 def deploy(
@@ -37,22 +40,35 @@ def deploy(
 
 
 def validate(root: Path) -> None:
-    for template in (f"{CONFIG_NAME}.j2", f"{TESTS_NAME}.j2"):
-        path = root / MODULE_DIR / "templates" / template
+    required = [f"templates/{CONFIG_NAME}.j2", f"templates/{TESTS_NAME}.j2"]
+    required += ["scripts/install.py", f"configs/{WRAPPER_NAME}"]
+    for name in required:
+        path = root / MODULE_DIR / name
         if not path.is_file():
-            raise ValueError(f"missing template: {path}")
-    installer = root / MODULE_DIR / "scripts" / "install.py"
-    if not installer.is_file():
-        raise ValueError(f"missing installer: {installer}")
+            raise ValueError(f"missing module file: {path}")
 
-    # Checked in both directions across the whole inventory: a host running the
-    # vector stack without this feature ships logs from a config in no repo, and
-    # a host with the feature but no stack has no container to validate or reload.
     registry = default_registry(root)
     managed = set(registry.list_hosts(MODULE_DIR))
+    validate_stack_placement(root, managed)
+    uploading = set(registry.list_hosts(JOURNAL_UPLOAD))
+    for host in sorted(managed):
+        shadow_enabled(root, host)
+        # Two shippers on tenant 0 would double every journal line in Grafana,
+        # log-spikes and the kernel rules.
+        if journald_mode(root, host) == "on" and host in uploading:
+            raise ValueError(
+                f"{host}: {MODULE_DIR}.journald: true needs {JOURNAL_UPLOAD} removed first; "
+                "use 'shadow' while both run"
+            )
+
+
+def validate_stack_placement(root: Path, managed: set[str]) -> None:
+    """Checked in both directions across the whole inventory: a host running the
+    vector stack without this feature ships logs from a config in no repo, and a
+    host with the feature but no stack has no container to validate or reload."""
     running = {
         host
-        for host in registry.list_hosts("docker-stacks")
+        for host in default_registry(root).list_hosts("docker-stacks")
         if VECTOR_STACK in declared_stacks(root, host)
     }
     if no_stack := sorted(managed - running):
@@ -63,8 +79,6 @@ def validate(root: Path) -> None:
         raise ValueError(
             f"vector stack runs without {MODULE_DIR} on: {', '.join(unmanaged)}"
         )
-    for host in sorted(managed):
-        shadow_enabled(root, host)
 
 
 def geoip_enabled(root: Path, host: str) -> bool:
@@ -83,28 +97,55 @@ def shadow_enabled(root: Path, host: str) -> bool:
     return value
 
 
+def journald_mode(root: Path, host: str) -> str:
+    """`journald` ships the host's systemd journal: `shadow` to tenant 1 beside
+    journal-upload (homelab-ops#375), `true` to tenant 0 once that is retired."""
+    value = default_registry(root).get(host, f"{MODULE_DIR}.journald", False)
+    modes = {False: "", "shadow": "shadow", True: "on"}
+    if isinstance(value, bool) or value == "shadow":
+        return modes[value]
+    raise ValueError(
+        f"{host}: {MODULE_DIR}.journald must be true, false or 'shadow', got {value!r}"
+    )
+
+
 def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
     build_dir = root / MODULE_DIR / "build" / host
     prepare_build_dir(build_dir)
 
     geoip = geoip_enabled(root, host)
-    context = {"HOST": host, "GEOIP": geoip, "SHADOW": shadow_enabled(root, host)}
+    journald = journald_mode(root, host)
+    context = {
+        "HOST": host,
+        "GEOIP": geoip,
+        "SHADOW": shadow_enabled(root, host),
+        "JOURNALD": journald,
+    }
     for name in (CONFIG_NAME, TESTS_NAME):
         render_template(root / MODULE_DIR / "templates" / f"{name}.j2", build_dir / name, **context)
+    if journald:
+        shutil.copy2(root / MODULE_DIR / "configs" / WRAPPER_NAME, build_dir / WRAPPER_NAME)
 
     appdata = appdata_root_for(root, host)
     remote_config = f"{appdata}/{VECTOR_STACK}/{CONFIG_NAME}"
+    # A directory mount, unlike vector.yaml: Docker creates it empty on first
+    # start, so the stack can be deployed before the wrapper exists.
+    bin_dir = f"{appdata}/{VECTOR_STACK}/bin" if journald else ""
     write_env_file(
         build_dir / "env",
         {
             "VECTOR_CONTAINER": f"vector-{host}",
             "VECTOR_DEST": remote_config,
             "VECTOR_GEOIP_DIR": f"{appdata}/{GEOIP_STACK}" if geoip else "",
+            "VECTOR_BIN_DIR": bin_dir,
         },
     )
 
+    pairs = [(build_dir / CONFIG_NAME, remote_config)]
+    if journald:
+        pairs.append((build_dir / WRAPPER_NAME, f"{bin_dir}/{WRAPPER_NAME}"))
     connection = connection_for_host(root, host)
-    for message in diff_many(connection, [(build_dir / CONFIG_NAME, remote_config)]):
+    for message in diff_many(connection, pairs):
         print_sub(message)
 
     if dry_run:

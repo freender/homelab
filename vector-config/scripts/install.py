@@ -34,6 +34,8 @@ TESTS_NAME = "vector.test.yaml"
 CONTAINER_CONFIG = "/etc/vector/vector.yaml"
 CONTAINER_TESTS = "/etc/vector/vector.test.yaml"
 CONTAINER_GEOIP = "/etc/vector/geoip"
+CONTAINER_BIN = "/etc/vector/bin"
+WRAPPER_NAME = "journalctl-catchup"
 RELOADED = "Vector has reloaded."
 # A config that fails to load, a topology that rolled back, and a reload that
 # killed Vector outright, in Vector 0.61's wording.
@@ -77,7 +79,16 @@ def require_live(dest: str) -> None:
         raise InstallError(f"missing live Vector config: {dest}")
 
 
-def check_config(container: str, image: str, config: Path, tests: Path, geoip_dir: str) -> None:
+def require_bin_dir(bin_dir: str) -> None:
+    """Docker creates the wrapper's directory mount on container start, so a
+    missing one means the stack was never deployed with it."""
+    if not Path(bin_dir).is_dir():
+        raise InstallError(f"missing {bin_dir}: deploy docker-stacks first so vector mounts it")
+
+
+def check_config(
+    container: str, image: str, config: Path, tests: Path, geoip_dir: str, wrapper: Path | None
+) -> None:
     # Named under the running container's prefix, which its docker_logs source
     # excludes, so the check's own output is not shipped as a container's logs.
     args = [
@@ -87,6 +98,8 @@ def check_config(container: str, image: str, config: Path, tests: Path, geoip_di
     ]
     if geoip_dir:
         args += ["-v", f"{geoip_dir}:{CONTAINER_GEOIP}:ro"]
+    if wrapper:
+        args += ["-v", f"{wrapper}:{CONTAINER_BIN}/{WRAPPER_NAME}:ro"]
 
     log.sub("Validating staged Vector config...")
     result = _docker(*args, image, "validate", "--no-environment", CONTAINER_CONFIG)
@@ -133,15 +146,24 @@ def install(ctx: InstallContext) -> None:
     container = ctx.env["VECTOR_CONTAINER"]
     dest = ctx.env["VECTOR_DEST"]
     geoip_dir = ctx.env.get("VECTOR_GEOIP_DIR", "")
+    bin_dir = ctx.env.get("VECTOR_BIN_DIR", "")
 
     src = ctx.build_dir / CONFIG_NAME
     tests = ctx.build_dir / TESTS_NAME
-    for staged in (src, tests):
-        if not staged.is_file():
+    wrapper = ctx.build_dir / WRAPPER_NAME if bin_dir else None
+    for staged in (src, tests, wrapper):
+        if staged and not staged.is_file():
             raise InstallError(f"missing staged file: {staged}")
     require_live(dest)
+    if bin_dir:
+        require_bin_dir(bin_dir)
 
-    check_config(container, container_image(container), src, tests, geoip_dir)
+    check_config(container, container_image(container), src, tests, geoip_dir, wrapper)
+
+    # Before the config, so a reload that adds the journald source finds it. A
+    # changed wrapper is picked up the next time Vector spawns journalctl.
+    if wrapper:
+        files.install_from(ctx, wrapper, f"{bin_dir}/{WRAPPER_NAME}", "0755")
 
     # mode=None: this module owns the file's content, not its permissions.
     if files.install_from(ctx, src, dest, None):

@@ -21,10 +21,15 @@ ROOT = Path(__file__).resolve().parents[1]
 # ---------------------------------------------------------------------------
 
 
-def host_entry(name: str, stacks: list[str], feature: str | None = "") -> str:
-    """`feature` is the vector-config block body; None leaves the feature off."""
+def host_entry(
+    name: str, stacks: list[str], feature: str | None = "", uploads: bool = False
+) -> str:
+    """`feature` is the vector-config block body; None leaves the feature off.
+    `uploads` also enables journal-upload on the host."""
     stack_lines = "".join(f"        - {stack}\n" for stack in stacks)
     block = "" if feature is None else f"    vector-config:\n{feature}"
+    if uploads:
+        block += "    journal-upload:\n"
     return (
         f"{name}:\n"
         "  config:\n"
@@ -44,6 +49,7 @@ def fake_root(tmp_path: Path, *hosts: str) -> Path:
     (tmp_path / "hosts.conf").write_text("".join(hosts), encoding="utf-8")
     module = tmp_path / vector_config.MODULE_DIR
     shutil.copytree(ROOT / vector_config.MODULE_DIR / "templates", module / "templates")
+    shutil.copytree(ROOT / vector_config.MODULE_DIR / "configs", module / "configs")
     (module / "scripts").mkdir(parents=True)
     (module / "scripts" / "install.py").write_text("#!/usr/bin/env python3\n", encoding="utf-8")
     return tmp_path
@@ -62,8 +68,9 @@ def real_repo(tmp_path: Path) -> Path:
     root = tmp_path / "repo"
     (root / vector_config.MODULE_DIR).mkdir(parents=True)
     shutil.copy(ROOT / "hosts.conf", root / "hosts.conf")
-    templates = vector_config.MODULE_DIR + "/templates"
-    shutil.copytree(ROOT / templates, root / templates)
+    for sub in ("templates", "configs"):
+        module = vector_config.MODULE_DIR
+        shutil.copytree(ROOT / module / sub, root / module / sub)
     return root
 
 
@@ -180,6 +187,109 @@ def test_shadow_alone_picks_the_tenant(
         assert sinks[name].get("tenant_id") == ("1" if shadow else None)
 
 
+@pytest.mark.parametrize(
+    ("feature", "mode"),
+    [("", ""), ("      journald: false\n", ""), ("      journald: shadow\n", "shadow"),
+     ("      journald: true\n", "on")],
+)
+def test_journald_mode(tmp_path: Path, feature: str, mode: str) -> None:
+    root = fake_root(tmp_path, host_entry("box", ["vector"], feature))
+
+    assert vector_config.journald_mode(root, "box") == mode
+
+
+@pytest.mark.parametrize("value", ["'true'", "'Shadow'", "1", "[shadow]"])
+def test_validate_refuses_a_bad_journald(tmp_path: Path, value: str) -> None:
+    """`journald: 'true'` must not slip through as a truthy string."""
+    root = fake_root(tmp_path, host_entry("box", ["vector"], f"      journald: {value}\n"))
+
+    message = "box: vector-config.journald must be true, false or 'shadow'"
+    with pytest.raises(ValueError, match=message):
+        vector_config.validate(root)
+
+
+def test_validate_refuses_two_journal_shippers_on_tenant_0(tmp_path: Path) -> None:
+    entry = host_entry("box", ["vector"], "      journald: true\n", uploads=True)
+    root = fake_root(tmp_path, entry)
+
+    message = "box: vector-config.journald: true needs journal-upload removed"
+    with pytest.raises(ValueError, match=message):
+        vector_config.validate(root)
+
+
+@pytest.mark.parametrize(("feature", "uploads"), [("      journald: shadow\n", True),
+                                                  ("      journald: true\n", False)])
+def test_validate_accepts_one_shipper_per_tenant(
+    tmp_path: Path, feature: str, uploads: bool
+) -> None:
+    vector_config.validate(fake_root(tmp_path, host_entry("box", ["vector"], feature, uploads)))
+
+
+def test_journald_off_renders_nothing_of_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = fake_root(tmp_path, host_entry("box", ["vector"]))
+    build = render(tmp_path, monkeypatch, root, "box")
+
+    text = (build / "vector.yaml").read_text(encoding="utf-8")
+    assert "journal" not in text
+    assert "journal" not in (build / "vector.test.yaml").read_text(encoding="utf-8")
+    assert not (build / vector_config.WRAPPER_NAME).exists()
+    assert "VECTOR_BIN_DIR=''\n" in (build / "env").read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    ("feature", "tenant"),
+    [("      journald: shadow\n", "1"), ("      journald: true\n", None),
+     ("      shadow: true\n      journald: true\n", "1")],
+)
+def test_journald_renders_source_shape_and_sink(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, feature: str, tenant: str | None
+) -> None:
+    """The #374 contract: journal-upload's stream fields, a checkpoint that only
+    advances on delivery, a buffer that blocks, no healthcheck to fail at boot,
+    and the catch-up wrapper as journalctl_path."""
+    root = fake_root(tmp_path, host_entry("box", ["vector"], feature))
+    build = render(tmp_path, monkeypatch, root, "box")
+    config = yaml.safe_load((build / "vector.yaml").read_text(encoding="utf-8"))
+
+    source = config["sources"]["journald"]
+    assert source["journalctl_path"] == "/etc/vector/bin/journalctl-catchup"
+    assert source["since_now"] is True
+    assert "current_boot_only" not in source
+    assert config["transforms"]["journald_shape"]["inputs"] == ["journald"]
+    assert '"box"' in config["transforms"]["journald_shape"]["source"]
+    sink = config["sinks"]["vlogs_journald"]
+    assert sink["type"] == "elasticsearch"
+    assert sink["inputs"] == ["journald_shape"]
+    assert sink["query"]["_stream_fields"] == "_MACHINE_ID,_HOSTNAME,_SYSTEMD_UNIT"
+    assert sink["acknowledgements"] == {"enabled": True}
+    assert sink["healthcheck"] == {"enabled": False}
+    assert sink["buffer"]["type"] == "disk"
+    assert sink["buffer"]["when_full"] == "block"
+    assert sink.get("request", {}).get("headers", {}).get("AccountID") == tenant
+
+    wrapper = build / vector_config.WRAPPER_NAME
+    assert wrapper.read_bytes() == (ROOT / "vector-config/configs/journalctl-catchup").read_bytes()
+    assert os.access(wrapper, os.X_OK)
+    env_text = (build / "env").read_text(encoding="utf-8")
+    assert "VECTOR_BIN_DIR=/mnt/cache/appdata/vector/bin\n" in env_text
+    assert "journald_shape" in (build / "vector.test.yaml").read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["templates/vector.yaml.j2", "templates/vector.test.yaml.j2", "scripts/install.py",
+     "configs/journalctl-catchup"],
+)
+def test_validate_requires_every_module_file(tmp_path: Path, name: str) -> None:
+    root = fake_root(tmp_path, host_entry("box", ["vector"]))
+    (root / vector_config.MODULE_DIR / name).unlink()
+
+    with pytest.raises(ValueError, match=f"missing module file: .*{name}"):
+        vector_config.validate(root)
+
+
 def vector_binary() -> str | None:
     found = os.environ.get("VECTOR_BIN") or shutil.which("vector")
     if found:
@@ -271,6 +381,7 @@ def setup(
     staged: str,
     live: str | None,
     geoip_dir: str = "",
+    bin_dir: str = "",
 ):
     installer = load_installer()
     monkeypatch.setattr(installer, "_run", fake)
@@ -279,6 +390,8 @@ def setup(
     build.mkdir(parents=True)
     (build / "vector.yaml").write_text(staged, encoding="utf-8")
     (build / "vector.test.yaml").write_text("tests: []\n", encoding="utf-8")
+    if bin_dir:
+        (build / "journalctl-catchup").write_text("#!/bin/bash\n", encoding="utf-8")
     dest = tmp_path / "live" / "vector.yaml"
     if live is not None:
         dest.parent.mkdir(parents=True)
@@ -291,6 +404,7 @@ def setup(
             "VECTOR_CONTAINER": "vector-box",
             "VECTOR_DEST": str(dest),
             "VECTOR_GEOIP_DIR": geoip_dir,
+            "VECTOR_BIN_DIR": bin_dir,
         },
         deploy_env={},
         file_map={},
@@ -328,6 +442,81 @@ def test_no_geoip_dir_mounts_no_geoip(tmp_path: Path, monkeypatch: pytest.Monkey
     installer.install(ctx)
 
     assert not any("/etc/vector/geoip" in arg for run in fake.runs() for arg in run)
+
+
+def test_no_bin_dir_mounts_and_installs_no_wrapper(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake = FakeDocker()
+    installer, ctx, _dest = setup(tmp_path, monkeypatch, fake, "new\n", "old\n")
+
+    installer.install(ctx)
+
+    assert not any("/etc/vector/bin" in arg for run in fake.runs() for arg in run)
+    assert not any("journalctl-catchup" in key for key in ctx.changes.names())
+
+
+def test_wrapper_is_checked_then_installed_before_the_reload(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    fake = FakeDocker()
+    installer, ctx, dest = setup(
+        tmp_path, monkeypatch, fake, "new\n", "old\n", bin_dir=str(bin_dir)
+    )
+    seen_at_reload: list[bool] = []
+    original = fake.__call__
+
+    def watch(command: list[str], **kwargs) -> subprocess.CompletedProcess:
+        if command[1] == "kill":
+            seen_at_reload.append((bin_dir / "journalctl-catchup").is_file())
+        return original(command, **kwargs)
+
+    monkeypatch.setattr(installer, "_run", watch)
+
+    installer.install(ctx)
+
+    staged = ctx.build_dir / "journalctl-catchup"
+    for run in fake.runs():
+        assert f"{staged}:/etc/vector/bin/journalctl-catchup:ro" in run
+    installed = bin_dir / "journalctl-catchup"
+    assert installed.read_text(encoding="utf-8") == "#!/bin/bash\n"
+    assert installed.stat().st_mode & 0o777 == 0o755
+    assert seen_at_reload == [True]
+    assert dest.read_text(encoding="utf-8") == "new\n"
+
+
+def test_a_missing_bin_dir_is_refused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Docker creates the directory mount; its absence means the stack lacks it."""
+    fake = FakeDocker()
+    missing = tmp_path / "nope"
+    installer, ctx, dest = setup(
+        tmp_path, monkeypatch, fake, "new\n", "old\n", bin_dir=str(missing)
+    )
+
+    with pytest.raises(InstallError, match="deploy docker-stacks first"):
+        installer.install(ctx)
+
+    assert fake.calls == []
+    assert dest.read_text(encoding="utf-8") == "old\n"
+
+
+def test_a_missing_staged_wrapper_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    fake = FakeDocker()
+    installer, ctx, _dest = setup(
+        tmp_path, monkeypatch, fake, "new\n", "old\n", bin_dir=str(bin_dir)
+    )
+    (ctx.build_dir / "journalctl-catchup").unlink()
+
+    with pytest.raises(InstallError, match="missing staged file: .*journalctl-catchup"):
+        installer.install(ctx)
+
+    assert fake.calls == []
 
 
 def test_the_file_is_written_in_place(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

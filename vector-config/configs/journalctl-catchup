@@ -1,0 +1,36 @@
+#!/bin/bash
+# Installed by the vector-config module as the journald source's journalctl_path.
+# Works around two systemd 250-257 behaviours of `journalctl --follow`, which
+# implies --boot for the boot ID in /proc/sys/kernel/random/boot_id:
+#
+# * Docker inside an LXC sees a different boot ID from the one the LXC's journald
+#   stamps, so --follow matches nothing at all (homelab-ops#375). Pin the boot of
+#   the journal's newest entry instead.
+# * Resuming from a cursor in a previous boot skips that boot's shutdown tail
+#   (homelab-ops#376). Drain without --follow (crosses boots), then follow from
+#   the last cursor drained.
+set -euo pipefail
+JCTL=/usr/bin/journalctl
+
+follow=0 after="" rest=()
+for a in "$@"; do
+  case "$a" in
+    --follow) follow=1 ;;
+    --after-cursor=*) after=${a#--after-cursor=} ;;
+    --show-cursor) ;;
+    *) rest+=("$a") ;;
+  esac
+done
+[[ $follow == 1 ]] || exec "$JCTL" "$@"
+
+boot=$("$JCTL" -q -n1 -o json --output-fields=_BOOT_ID | sed -n 's/.*"_BOOT_ID":"\([^"]*\)".*/\1/p')
+pin=()
+[[ -n $boot ]] && pin=(--boot="$boot")
+[[ -n $after ]] || exec "$JCTL" "$@" "${pin[@]}"
+
+last=$(mktemp)
+trap 'rm -f "$last"' ERR
+"$JCTL" "${rest[@]}" --after-cursor="$after" | tee >(tail -n1 >"$last")
+wait
+cur=$(sed -n 's/.*"__CURSOR":"\([^"]*\)".*/\1/p' "$last"); rm -f "$last"
+exec "$JCTL" --follow --show-cursor "${pin[@]}" "${rest[@]}" --after-cursor="${cur:-$after}"
