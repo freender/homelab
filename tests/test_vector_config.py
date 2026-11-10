@@ -279,8 +279,8 @@ def test_journald_renders_source_shape_and_sink(
 
 @pytest.mark.parametrize(
     "name",
-    ["templates/vector.yaml.j2", "templates/vector.test.yaml.j2", "scripts/install.py",
-     "configs/journalctl-catchup"],
+    ["templates/vector.yaml.j2", "templates/vector.test.yaml.j2", "templates/journald.yaml.j2",
+     "scripts/install.py", "configs/journalctl-catchup"],
 )
 def test_validate_requires_every_module_file(tmp_path: Path, name: str) -> None:
     root = fake_root(tmp_path, host_entry("box", ["vector"]))

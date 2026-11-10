@@ -123,7 +123,7 @@ groups:
           severity: warning
         annotations:
           summary: "{{ $labels.instance }} discarded {{ $value }} log events in {{ $labels.component_id }}"
-          description: "Vector on {{ $labels.host }} dropped events it did not mean to drop. They are lost. Check `docker logs vector-{{ $labels.host }}`."
+          description: "Vector on {{ $labels.host }} dropped events it did not mean to drop. They are lost. Check `docker logs vector-{{ $labels.host }}`, or `journalctl -u vector` on a host-native install."
 
       # A delivery outage does not raise component_errors_total: retries that
       # eventually succeed only count here (measured in #365). A VictoriaLogs
@@ -136,7 +136,7 @@ groups:
           severity: warning
         annotations:
           summary: "{{ $labels.instance }} cannot deliver logs to VictoriaLogs ({{ $labels.component_id }})"
-          description: "Vector on {{ $labels.host }} has been retrying pushes to victoria-logs for 15 minutes; logs are queued in its disk buffer. Check victoria-logs on helm and the overlay path from {{ $labels.host }}."
+          description: "Vector on {{ $labels.host }} has been retrying pushes to victoria-logs for 15 minutes; logs are queued in its disk buffer. Check victoria-logs on helm and the path from {{ $labels.host }} (the overlay, or helm:9428 for a host-native install)."
 
       # docker_logs never retries a failed first container listing (upstream
       # #16806), leaving Vector up and scrapeable while it reads nothing. Its
@@ -145,9 +145,9 @@ groups:
       # (neo has logged as few as 2 Docker lines in an hour). Instead: the source
       # creates one received-events series per container on its first line, and
       # they live until Vector restarts, so an up Vector with none for 2h never
-      # started reading.
+      # started reading. Host-native Vector (install="host") has no docker_logs.
       - alert: VectorDockerSourceDead
-        expr: up{job="vector"} == 1 unless on(host) vector_component_received_events_total{job="vector", component_type="docker_logs"}
+        expr: up{job="vector", install!="host"} == 1 unless on(host) vector_component_received_events_total{job="vector", component_type="docker_logs"}
         for: 2h
         labels:
           severity: warning

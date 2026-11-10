@@ -11,6 +11,7 @@
 # JOURNALD SHADOW: the systemd journal goes to tenant AccountID=1 beside
 # journal-upload (homelab-ops#375); Docker and varlogs stay on tenant 0.
 {%- endif %}
+{%- import "journald.yaml.j2" as journald %}
 data_dir: /var/lib/vector
 {%- if GEOIP %}
 
@@ -34,15 +35,7 @@ sources:
     # Without this a new host ships the whole history of /var/log on first start.
     read_from: end
 {%- if JOURNALD %}
-
-  # Checkpoints in data_dir, advanced only on sink acknowledgement. The wrapper
-  # restores the previous boot's tail that systemd 257 skips (homelab-ops#376);
-  # current_boot_only stays at its default because `false` fails on 250-257.
-  journald:
-    type: journald
-    journalctl_path: /etc/vector/bin/journalctl-catchup
-    # First start ships from now on, like journal-upload's cursor seeding.
-    since_now: true
+{{ journald.source("/etc/vector/bin/journalctl-catchup") }}
 {%- endif %}
 
   internal:
@@ -101,28 +94,7 @@ transforms:
         "host": "{{ HOST }}",
       }
 {%- if JOURNALD %}
-
-  # journal-upload's shape (VictoriaLogs' /insert/journald defaults): every journal
-  # field, `level` from PRIORITY, no `__*` fields. Vector renames _HOSTNAME to host.
-  journald_shape:
-    type: remap
-    inputs: [journald]
-    source: |
-      levels = ["emerg", "alert", "critical", "error", "warning", "notice", "info", "debug"]
-      level = "info"
-      if is_string(.PRIORITY) {
-        level = string(get(levels, [parse_int(.PRIORITY) ?? 6]) ?? null) ?? "info"
-      }
-      # journal-upload's _time is journald's receive time; Vector prefers the sender's.
-      received, err = parse_int(.__REALTIME_TIMESTAMP)
-      if err == null {
-        .timestamp = from_unix_timestamp!(received, unit: "microseconds")
-      }
-      hostname = del(.host)
-      del(.source_type)
-      . = filter(.) -> |key, _value| { !starts_with(key, "__") }
-      ._HOSTNAME = if is_string(hostname) { hostname } else { "{{ HOST }}" }
-      .level = level
+{{ journald.transform(HOST) }}
 {%- endif %}
 
 sinks:
@@ -178,33 +150,7 @@ sinks:
       max_size: 268435488
       when_full: block
 {%- if JOURNALD %}
-
-  # The Elasticsearch endpoint, as on zion, because it takes _stream_fields; the
-  # Loki endpoint would make every journal field a label or drop it.
-  vlogs_journald:
-    type: elasticsearch
-    inputs: [journald_shape]
-    endpoints: ["http://victoria-logs:9428/insert/elasticsearch/"]
-    mode: bulk
-    api_version: v8
-    compression: gzip
-    healthcheck:
-      enabled: false
-    query:
-      _msg_field: message
-      _time_field: timestamp
-      _stream_fields: _MACHINE_ID,_HOSTNAME,_SYSTEMD_UNIT
-{%- if JOURNALD == "shadow" or SHADOW %}
-    request:
-      headers:
-        AccountID: "1"
-{%- endif %}
-    acknowledgements:
-      enabled: true
-    buffer:
-      type: disk
-      max_size: 268435488
-      when_full: block
+{{ journald.sink("http://victoria-logs:9428/insert/elasticsearch/", JOURNALD == "shadow" or SHADOW) }}
 {%- endif %}
 
   metrics:

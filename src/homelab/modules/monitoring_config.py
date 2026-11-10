@@ -20,12 +20,14 @@ CONFIG_FILES = ("alertmanager.yml.tpl",)
 SCRAPE_TEMPLATE = "scrape.yml.j2"
 SCRAPE_CONFIG_NAME = "scrape.yml"
 EXPORTER_FEATURE = "metrics-exporters"
+VECTOR_HOST_FEATURE = "vector-host"
 
 # Exporter ports, one per host-derived scrape job.
 NODE_EXPORTER_PORT = 9100
 SMARTCTL_EXPORTER_PORT = 9633
 APCUPSD_EXPORTER_PORT = 9162
 IGPU_EXPORTER_PORT = 9400
+VECTOR_HOST_PORT = 9598
 
 
 @dataclass(frozen=True)
@@ -34,13 +36,20 @@ class ScrapeTarget:
     address: str
 
 
+def scrape_name(registry, host: str) -> str:
+    """`metrics-exporters.scrape_host` overrides `config.hostname` for a host whose
+    SSH address is not the name it should be scraped by (arc's is a bare IP)."""
+    return str(
+        registry.get(host, f"{EXPORTER_FEATURE}.scrape_host", None)
+        or registry.get(host, "config.hostname")
+    )
+
+
 def scrape_targets(root: Path) -> dict[str, list[ScrapeTarget]]:
-    """The host-derived scrape jobs, from the hosts metrics-exporters deploys to.
+    """The host-derived scrape jobs, from the hosts each owning module deploys to.
 
     Which exporters a host runs is decided once, by `exporter_flags`, so the scrape
     config cannot disagree with what metrics-exporters actually installed.
-    `metrics-exporters.scrape_host` overrides `config.hostname` for a host whose
-    SSH address is not the name it should be scraped by (arc's is a bare IP).
     """
     registry = default_registry(root)
     jobs: dict[str, list[ScrapeTarget]] = {
@@ -48,12 +57,10 @@ def scrape_targets(root: Path) -> dict[str, list[ScrapeTarget]]:
         "pve-smartctl": [],
         "apcupsd": [],
         "intel-gpu": [],
+        "vector-host": [],
     }
     for host in registry.list_hosts(EXPORTER_FEATURE):
-        name = str(
-            registry.get(host, f"{EXPORTER_FEATURE}.scrape_host", None)
-            or registry.get(host, "config.hostname")
-        )
+        name = scrape_name(registry, host)
         flags = exporter_flags(root, host)
         jobs["pve-node"].append(ScrapeTarget(host, f"{name}:{NODE_EXPORTER_PORT}"))
         if not flags.lxc_guest:
@@ -62,6 +69,9 @@ def scrape_targets(root: Path) -> dict[str, list[ScrapeTarget]]:
             jobs["apcupsd"].append(ScrapeTarget(host, f"{name}:{APCUPSD_EXPORTER_PORT}"))
         if flags.has_igpu:
             jobs["intel-gpu"].append(ScrapeTarget(host, f"{name}:{IGPU_EXPORTER_PORT}"))
+    for host in registry.list_hosts(VECTOR_HOST_FEATURE):
+        name = scrape_name(registry, host)
+        jobs["vector-host"].append(ScrapeTarget(host, f"{name}:{VECTOR_HOST_PORT}"))
     return jobs
 
 

@@ -1,0 +1,4 @@
+# Rendered by the vector-host module for {{ HOST }}. The installer runs
+# `vector test` with these against the staged config before anything is installed.
+{%- import "journald.yaml.j2" as journald %}
+tests:{{ journald.tests(HOST) }}

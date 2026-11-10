@@ -166,7 +166,12 @@ def purge(ctx: InstallContext, *packages: str) -> list[str]:
     return present
 
 
-def ensure(ctx: InstallContext, *packages: str, target_release: str | None = None) -> None:
+def ensure(
+    ctx: InstallContext,
+    *packages: str,
+    target_release: str | None = None,
+    no_recommends: bool = False,
+) -> None:
     """Install whichever of `packages` dpkg does not already report installed.
 
     `target_release` is apt's `-t`, added with `metrics-exporters`: Debian stable
@@ -174,6 +179,10 @@ def ensure(ctx: InstallContext, *packages: str, target_release: str | None = Non
     `NotAutomatic`, so its dependencies have to be resolved from the same suite. It
     only affects the install; a package already present is left alone, and which
     suite it came from is not checked.
+
+    `no_recommends` arrived with `vector-host`: Vector recommends
+    `datadog-signing-keys`, which would install a second, unmanaged copy of the
+    keyring the module vendors.
     """
     missing = [package for package in packages if not _installed(package)]
     if not missing:
@@ -183,12 +192,13 @@ def ensure(ctx: InstallContext, *packages: str, target_release: str | None = Non
     log.action(f"Installing missing packages: {' '.join(missing)}")
     _apt_update_once()
     target = ["-t", target_release] if target_release else []
+    recommends = ["--no-install-recommends"] if no_recommends else []
 
     # DEBIAN_FRONTEND is set on the child only. Inherited from the parent env
     # rather than replacing it, because dropping PATH here would leave apt-get
     # unable to find the maintainer-script helpers it shells out to.
     result = _run(
-        [*APT_GET, "install", "-y", "-q", *target, *missing],
+        [*APT_GET, "install", "-y", "-q", *recommends, *target, *missing],
         check=False,
         env={**os.environ, "DEBIAN_FRONTEND": "noninteractive"},
     )

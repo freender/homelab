@@ -36,6 +36,7 @@ from .pve_zfs_migration_sync_patch import deploy as deploy_pve_zfs_migration_syn
 from .ssh_config import deploy as deploy_ssh_config
 from .ubuntu_setup import deploy as deploy_ubuntu_setup
 from .vector_config import deploy as deploy_vector_config
+from .vector_host import deploy as deploy_vector_host
 from .vmalert_rules import deploy as deploy_vmalert_rules
 from .wsl_conf import deploy as deploy_wsl_conf
 from .zfs_automation import deploy as deploy_zfs_automation
@@ -177,6 +178,10 @@ MODULES: dict[str, ModuleDefinition] = {
         name="Vector Log Shipping Config",
         deploy=deploy_vector_config,
     ),
+    "vector-host": ModuleDefinition(
+        name="Host-Native Vector Journal Shipping",
+        deploy=deploy_vector_host,
+    ),
     "vmalert-rules": ModuleDefinition(name="vmalert Rules", deploy=deploy_vmalert_rules),
     "wsl-conf": ModuleDefinition(name="WSL Conf", deploy=deploy_wsl_conf),
     "zfs-automation": ModuleDefinition(name="ZFS Automation", deploy=deploy_zfs_automation),
@@ -202,6 +207,7 @@ MODULE_ORDER = [
     "apcupsd",
     "metrics-exporters",
     "journal-upload",
+    "vector-host",
     "monitoring-config",
     "vmalert-rules",
     "pve-zfs-large-block-patch",

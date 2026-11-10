@@ -8,7 +8,8 @@ Repo-managed configuration shared by the VictoriaMetrics monitoring stack:
   `metrics-exporters` deploys to, filtered by the same exporter flags that
   module installs from (`lxc_guest`, `apcupsd.role`, `intel_gpu_exporter`).
   `metrics-exporters.scrape_host` overrides `config.hostname` as the scrape
-  address. Every other job is hand-written in the template.
+  address. The `vector` job adds every `vector-host` host on port 9598, labelled
+  `install: host`. Every other job is hand-written in the template.
 - The secret-free Alertmanager template, deployed only to the host with
   `monitoring-config.alertmanager: true`.
 

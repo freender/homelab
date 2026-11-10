@@ -566,6 +566,18 @@ def test_ensure_with_a_target_release_leaves_an_installed_package_alone(
     assert fake.apt_calls == []
 
 
+def test_ensure_can_skip_recommends(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """vector-host: Vector recommends datadog-signing-keys, a second copy of the
+    keyring the module vendors."""
+    fake = _apt(monkeypatch, FakeApt())
+
+    packages.ensure(_ctx(tmp_path), "vector", no_recommends=True)
+
+    assert fake.apt_calls[-1] == [*APT_GET, "install", "-y", "-q", "--no-install-recommends"] + [
+        "vector"
+    ]
+
+
 # ---------------------------------------------------------------------------
 # systemd.ensure_running — the enable / restart / start ladder
 # ---------------------------------------------------------------------------

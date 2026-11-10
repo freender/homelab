@@ -16,6 +16,8 @@ MODULE_DIR = "vector-config"
 REMOTE_ROOT = "/tmp/homelab-vector-config"
 CONFIG_NAME = "vector.yaml"
 TESTS_NAME = "vector.test.yaml"
+# Macros vector-host renders too, so the journal shape has one owner.
+JOURNALD_PARTIAL = "journald.yaml.j2"
 VECTOR_STACK = "vector"
 GEOIP_STACK = "geoipupdate"
 WRAPPER_NAME = "journalctl-catchup"
@@ -41,6 +43,7 @@ def deploy(
 
 def validate(root: Path) -> None:
     required = [f"templates/{CONFIG_NAME}.j2", f"templates/{TESTS_NAME}.j2"]
+    required += [f"templates/{JOURNALD_PARTIAL}"]
     required += ["scripts/install.py", f"configs/{WRAPPER_NAME}"]
     for name in required:
         path = root / MODULE_DIR / name

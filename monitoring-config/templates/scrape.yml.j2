@@ -290,3 +290,11 @@ scrape_configs:
       - targets: ["vector-neo:9598"]
         labels:
           host: neo
+      # Host-native Vector (vector-host): the journal only, no docker_logs source,
+      # which `install` keeps out of VectorDockerSourceDead.
+{%- for entry in targets["vector-host"] %}
+      - targets: ["{{ entry.address }}"]
+        labels:
+          host: {{ entry.host }}
+          install: host
+{%- endfor %}

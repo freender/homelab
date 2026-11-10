@@ -73,6 +73,7 @@ _VENDOR_DOMAINS = frozenset(
         "plex.tv",
         "telegram.org",
         "ubuntu.com",
+        "vector.dev",
     }
 )
 

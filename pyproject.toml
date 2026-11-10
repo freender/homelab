@@ -165,6 +165,7 @@ also_copy = [
     "ssh-config",
     "ubuntu-setup",
     "vector-config",
+    "vector-host",
     "vmalert-rules",
     "wsl-conf",
     "zfs-automation",

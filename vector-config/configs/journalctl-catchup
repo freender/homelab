@@ -1,5 +1,6 @@
 #!/bin/bash
-# Installed by the vector-config module as the journald source's journalctl_path.
+# Installed by the vector-config and vector-host modules as the journald source's
+# journalctl_path.
 # Works around two systemd 250-257 behaviours of `journalctl --follow`, which
 # implies --boot for the boot ID in /proc/sys/kernel/random/boot_id:
 #

@@ -1,0 +1,18 @@
+# Managed by homelab/vector-host -- do not edit by hand.
+# The packaged unit validates with healthchecks before every start and gives up
+# after 5 starts in 10 s, so VictoriaLogs being down at boot (a helm reboot) would
+# leave it failed for good, as journal-upload was (freender/homelab-ops#373).
+# Retry every 30 s forever and skip the healthchecks; the disk buffer and the
+# journald checkpoint hold the backlog.
+[Unit]
+StartLimitIntervalSec=0
+
+[Service]
+# The module's own file, not the /etc/vector/vector.yaml conffile, so unpinned
+# upgrades never stop at a conffile prompt (homelab-ops#376).
+Environment=VECTOR_CONFIG={{ CONFIG }}
+# A journald-only pipeline needs no more; the default is one worker per CPU.
+Environment=VECTOR_THREADS=2
+ExecStartPre=
+ExecStartPre=/usr/bin/vector validate --skip-healthchecks
+RestartSec=30s

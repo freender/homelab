@@ -8,6 +8,10 @@ rendered per host:
 - `templates/vector.yaml.j2`: the config.
 - `templates/vector.test.yaml.j2`: `vector test` unit tests for its transforms.
 
+Both templates import their journald source, transform, sink and tests from the
+macros in `templates/journald.yaml.j2`. `vector-host` renders the same macros,
+so host-native Vector cannot ship a different journal shape.
+
 Both take:
 
 - `HOST`: the host name. Used for the `host` label, the host's own

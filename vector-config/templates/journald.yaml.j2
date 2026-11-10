@@ -1,0 +1,132 @@
+{#- The systemd journal in journal-upload's shape (homelab-ops#374), shared by
+    vector-config (Docker) and vector-host (host-native) so the two cannot drift.
+    Each macro emits YAML at the indent of one key under sources:, transforms:,
+    sinks: or tests:, preceded by a blank line. Import it with
+    `{% import "journald.yaml.j2" as journald %}`. -#}
+
+{% macro source(journalctl_path) %}
+  # Checkpoints in data_dir, advanced only on sink acknowledgement. The wrapper
+  # restores the previous boot's tail that systemd 257 skips (homelab-ops#376);
+  # current_boot_only stays at its default because `false` fails on 250-257.
+  journald:
+    type: journald
+    journalctl_path: {{ journalctl_path }}
+    # First start ships from now on, like journal-upload's cursor seeding.
+    since_now: true
+{%- endmacro %}
+
+{% macro transform(host) %}
+  # journal-upload's shape (VictoriaLogs' /insert/journald defaults): every journal
+  # field, `level` from PRIORITY, no `__*` fields. Vector renames _HOSTNAME to host.
+  journald_shape:
+    type: remap
+    inputs: [journald]
+    source: |
+      levels = ["emerg", "alert", "critical", "error", "warning", "notice", "info", "debug"]
+      level = "info"
+      if is_string(.PRIORITY) {
+        level = string(get(levels, [parse_int(.PRIORITY) ?? 6]) ?? null) ?? "info"
+      }
+      # journal-upload's _time is journald's receive time; Vector prefers the sender's.
+      received, err = parse_int(.__REALTIME_TIMESTAMP)
+      if err == null {
+        .timestamp = from_unix_timestamp!(received, unit: "microseconds")
+      }
+      hostname = del(.host)
+      del(.source_type)
+      . = filter(.) -> |key, _value| { !starts_with(key, "__") }
+      ._HOSTNAME = if is_string(hostname) { hostname } else { "{{ host }}" }
+      .level = level
+{%- endmacro %}
+
+{% macro sink(endpoint, tenant1) %}
+  # The Elasticsearch endpoint, as on zion, because it takes _stream_fields; the
+  # Loki endpoint would make every journal field a label or drop it.
+  vlogs_journald:
+    type: elasticsearch
+    inputs: [journald_shape]
+    endpoints: ["{{ endpoint }}"]
+    mode: bulk
+    api_version: v8
+    compression: gzip
+    healthcheck:
+      enabled: false
+    query:
+      _msg_field: message
+      _time_field: timestamp
+      _stream_fields: _MACHINE_ID,_HOSTNAME,_SYSTEMD_UNIT
+{%- if tenant1 %}
+    request:
+      headers:
+        AccountID: "1"
+{%- endif %}
+    acknowledgements:
+      enabled: true
+    buffer:
+      type: disk
+      max_size: 268435488
+      when_full: block
+{%- endmacro %}
+
+{% macro tests(host) %}
+  - name: journal entry keeps journal-upload's shape
+    inputs:
+      - insert_at: journald_shape
+        type: log
+        log_fields:
+          message: "zio_wait failed"
+          host: "{{ host }}"
+          source_type: journald
+          PRIORITY: "3"
+          _SYSTEMD_UNIT: zfs-zed.service
+          _MACHINE_ID: cbccc8d8c41143aaa44d455a8117a74b
+          __CURSOR: "s=abc;i=1"
+          __MONOTONIC_TIMESTAMP: "123"
+          __REALTIME_TIMESTAMP: "1794279135133498"
+          _SOURCE_REALTIME_TIMESTAMP: "1794279135133483"
+    outputs:
+      - extract_from: journald_shape
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.timestamp, t'2026-11-10T02:52:15.133498Z')
+              assert_eq!(._SOURCE_REALTIME_TIMESTAMP, "1794279135133483")
+              assert!(!exists(.__REALTIME_TIMESTAMP))
+              assert_eq!(._HOSTNAME, "{{ host }}")
+              assert_eq!(.level, "error")
+              assert_eq!(.message, "zio_wait failed")
+              assert_eq!(._SYSTEMD_UNIT, "zfs-zed.service")
+              assert_eq!(.PRIORITY, "3")
+              assert!(!exists(.host))
+              assert!(!exists(.source_type))
+              assert!(!exists(.__CURSOR))
+              assert!(!exists(.__MONOTONIC_TIMESTAMP))
+
+  - name: journal entry without PRIORITY or hostname
+    inputs:
+      - insert_at: journald_shape
+        type: log
+        log_fields:
+          message: "kernel line"
+    outputs:
+      - extract_from: journald_shape
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.level, "info")
+              assert_eq!(._HOSTNAME, "{{ host }}")
+
+  - name: journal entry with an unknown PRIORITY
+    inputs:
+      - insert_at: journald_shape
+        type: log
+        log_fields:
+          message: "odd"
+          PRIORITY: "x"
+    outputs:
+      - extract_from: journald_shape
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.level, "info")
+{%- endmacro %}

@@ -1,0 +1,25 @@
+# Rendered by the vector-host module for {{ HOST }} -- edit the template in the
+# homelab repo, not this file. Ships the host's systemd journal to VictoriaLogs on
+# helm; the journald pieces are vector-config's, so both ship the same shape.
+{%- if SHADOW %}
+#
+# SHADOW: writes to VictoriaLogs tenant AccountID=1 beside journal-upload
+# (homelab-ops#377), so Grafana, log-spikes and vmalert (tenant 0) never see
+# these lines twice.
+{%- endif %}
+{%- import "journald.yaml.j2" as journald %}
+data_dir: {{ DATA_DIR }}
+
+sources:{{ journald.source(JOURNALCTL_PATH) }}
+
+  internal:
+    type: internal_metrics
+
+transforms:{{ journald.transform(HOST) }}
+
+sinks:{{ journald.sink(ENDPOINT, SHADOW) }}
+
+  metrics:
+    type: prometheus_exporter
+    inputs: [internal]
+    address: 0.0.0.0:{{ METRICS_PORT }}

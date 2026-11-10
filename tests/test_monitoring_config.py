@@ -643,6 +643,24 @@ def test_the_real_inventory_renders_the_expected_targets() -> None:
     }
     assert by_host("apcupsd") == {h: f"{h}.{lan}:9162" for h in ("bray", "osiris")}
     assert by_host("intel-gpu") == {h: f"{h}.{lan}:9400" for h in ("ace", "bray", "clovis")}
+    vector = {labels["host"]: (target, labels) for target, labels in jobs["vector"]}
+    assert {h: t for h, (t, _labels) in vector.items()} == {
+        "tower": "vector-tower:9598",
+        "helm": "vector-helm:9598",
+        "neo": "vector-neo:9598",
+        "arc": f"arc.{lan}:9598",
+    }
+
+
+def test_only_host_native_vector_targets_are_marked_install_host() -> None:
+    """VectorDockerSourceDead skips install="host": those have no docker_logs and
+    would otherwise fire on every one of them."""
+    for target, labels in rendered_targets(REPO_ROOT)["vector"]:
+        expected = {"host"} if target.startswith("vector-") else {"host", "install"}
+        assert set(labels) == expected, target
+        assert labels.get("install", "host") == "host"
+    rules = (REPO_ROOT / "vmalert-rules/configs/monitoring-stack.yml").read_text(encoding="utf-8")
+    assert 'up{job="vector", install!="host"} == 1 unless' in rules
 
 
 def test_every_metrics_exporters_host_has_exactly_one_node_target() -> None:
@@ -691,6 +709,11 @@ def test_scrape_targets_follow_the_exporter_flags(tmp_path: Path) -> None:
             ),
             "gated": inventory_host("gated.lan", **{"metrics-exporters": {"deploy": False}}),
             "bare": inventory_host("bare.lan"),
+            "shipper": inventory_host("10.0.0.7", **{
+                "metrics-exporters": {"lxc_guest": True, "scrape_host": "shipper.lan"},
+                "vector-host": {"shadow": True},
+            }),
+            "plain-shipper": inventory_host("plain.lan", **{"vector-host": None}),
         },
     )
 
@@ -704,10 +727,12 @@ def test_scrape_targets_follow_the_exporter_flags(tmp_path: Path) -> None:
             ("metal", "metal.lan:9100"),
             ("ups-slave", "slave.lan:9100"),
             ("guest", "guest.lan:9100"),
+            ("shipper", "shipper.lan:9100"),
         ],
         "pve-smartctl": [("metal", "metal.lan:9633"), ("ups-slave", "slave.lan:9633")],
         "apcupsd": [("metal", "metal.lan:9162")],
         "intel-gpu": [("metal", "metal.lan:9400")],
+        "vector-host": [("shipper", "shipper.lan:9598"), ("plain-shipper", "plain.lan:9598")],
     }
 
 

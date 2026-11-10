@@ -1,6 +1,7 @@
 # Rendered by the vector-config module for {{ HOST }}. The installer runs
 # `vector test` with these against the staged vector.yaml, in the image the
 # running vector-{{ HOST }} container uses, before anything is installed.
+{%- import "journald.yaml.j2" as journald %}
 tests:
   - name: ordinary container becomes the docker shape
     inputs:
@@ -141,65 +142,5 @@ tests:
               assert_eq!(.message, "dpkg: status installed foo")
               assert!(!exists(.file))
 {%- if JOURNALD %}
-
-  - name: journal entry keeps journal-upload's shape
-    inputs:
-      - insert_at: journald_shape
-        type: log
-        log_fields:
-          message: "zio_wait failed"
-          host: "{{ HOST }}"
-          source_type: journald
-          PRIORITY: "3"
-          _SYSTEMD_UNIT: zfs-zed.service
-          _MACHINE_ID: cbccc8d8c41143aaa44d455a8117a74b
-          __CURSOR: "s=abc;i=1"
-          __MONOTONIC_TIMESTAMP: "123"
-          __REALTIME_TIMESTAMP: "1794279135133498"
-          _SOURCE_REALTIME_TIMESTAMP: "1794279135133483"
-    outputs:
-      - extract_from: journald_shape
-        conditions:
-          - type: vrl
-            source: |
-              assert_eq!(.timestamp, t'2026-11-10T02:52:15.133498Z')
-              assert_eq!(._SOURCE_REALTIME_TIMESTAMP, "1794279135133483")
-              assert!(!exists(.__REALTIME_TIMESTAMP))
-              assert_eq!(._HOSTNAME, "{{ HOST }}")
-              assert_eq!(.level, "error")
-              assert_eq!(.message, "zio_wait failed")
-              assert_eq!(._SYSTEMD_UNIT, "zfs-zed.service")
-              assert_eq!(.PRIORITY, "3")
-              assert!(!exists(.host))
-              assert!(!exists(.source_type))
-              assert!(!exists(.__CURSOR))
-              assert!(!exists(.__MONOTONIC_TIMESTAMP))
-
-  - name: journal entry without PRIORITY or hostname
-    inputs:
-      - insert_at: journald_shape
-        type: log
-        log_fields:
-          message: "kernel line"
-    outputs:
-      - extract_from: journald_shape
-        conditions:
-          - type: vrl
-            source: |
-              assert_eq!(.level, "info")
-              assert_eq!(._HOSTNAME, "{{ HOST }}")
-
-  - name: journal entry with an unknown PRIORITY
-    inputs:
-      - insert_at: journald_shape
-        type: log
-        log_fields:
-          message: "odd"
-          PRIORITY: "x"
-    outputs:
-      - extract_from: journald_shape
-        conditions:
-          - type: vrl
-            source: |
-              assert_eq!(.level, "info")
+{{ journald.tests(HOST) }}
 {%- endif %}
