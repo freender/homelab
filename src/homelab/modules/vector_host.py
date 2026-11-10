@@ -16,7 +16,6 @@ from .vector_config import JOURNALD_PARTIAL, WRAPPER_NAME
 MODULE_DIR = "vector-host"
 REMOTE_ROOT = "/tmp/homelab-vector-host"
 VECTOR_CONFIG_DIR = "vector-config"
-JOURNAL_UPLOAD = "journal-upload"
 VICTORIA_LOGS_STACK = "victoria-logs"
 VICTORIA_LOGS_PORT = 9428
 METRICS_PORT = 9598
@@ -82,24 +81,17 @@ def validate(root: Path, hosts: list[str]) -> None:
 
     registry = default_registry(root)
     docker_vector = set(registry.list_hosts(VECTOR_CONFIG_DIR))
-    uploading = set(registry.list_hosts(JOURNAL_UPLOAD))
     for host in sorted(hosts):
         if host in docker_vector:
             raise ValueError(
                 f"{host}: runs the vector stack; ship its journal with "
                 f"{VECTOR_CONFIG_DIR}.journald instead of {MODULE_DIR}"
             )
-        # Two shippers on tenant 0 would double every journal line in Grafana,
-        # log-spikes and the kernel rules.
-        if not shadow_enabled(root, host) and host in uploading:
-            raise ValueError(
-                f"{host}: {MODULE_DIR} on tenant 0 needs {JOURNAL_UPLOAD} removed first; "
-                f"set {MODULE_DIR}.shadow: true while both run"
-            )
+        shadow_enabled(root, host)
 
 
 def shadow_enabled(root: Path, host: str) -> bool:
-    """`shadow: true` ships to VictoriaLogs tenant 1, beside journal-upload."""
+    """`shadow: true` ships to VictoriaLogs tenant 1, beside another shipper."""
     value = default_registry(root).get(host, f"{MODULE_DIR}.shadow", False)
     if not isinstance(value, bool):
         raise ValueError(f"{host}: {MODULE_DIR}.shadow must be true or false, got {value!r}")
@@ -109,7 +101,7 @@ def shadow_enabled(root: Path, host: str) -> bool:
 def victoria_logs_base(root: Path) -> str:
     """VictoriaLogs' base URL, from where the victoria-logs stack runs.
 
-    Placement rather than a URL of its own, as journal-upload does: a second
+    Placement rather than a URL of its own: a second
     inventory key could only ever agree with docker-stacks or point every host at
     a VictoriaLogs that is not there.
     """

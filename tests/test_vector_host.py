@@ -86,19 +86,18 @@ def test_validate_needs_exactly_one_victoria_logs(tmp_path: Path) -> None:
         validate(root)
 
 
-def test_validate_refuses_two_journal_shippers_on_tenant_0(tmp_path: Path) -> None:
-    root = fake_root(tmp_path, LOGS, host_entry("box", "    vector-host:\n    journal-upload:\n"))
-
-    with pytest.raises(ValueError, match="box: vector-host on tenant 0 needs journal-upload"):
-        validate(root)
-
-
 @pytest.mark.parametrize(
-    "features",
-    ["    vector-host:\n      shadow: true\n    journal-upload:\n", "    vector-host:\n"],
+    "features", ["    vector-host:\n      shadow: true\n", "    vector-host:\n"]
 )
-def test_validate_accepts_one_shipper_per_tenant(tmp_path: Path, features: str) -> None:
+def test_validate_accepts_either_tenant(tmp_path: Path, features: str) -> None:
     validate(fake_root(tmp_path, LOGS, host_entry("box", features)))
+
+
+def test_validate_refuses_a_bad_shadow_value(tmp_path: Path) -> None:
+    root = fake_root(tmp_path, LOGS, host_entry("box", "    vector-host:\n      shadow: maybe\n"))
+
+    with pytest.raises(ValueError, match="box: vector-host.shadow must be true or false"):
+        validate(root)
 
 
 def test_validate_refuses_a_docker_vector_host(tmp_path: Path) -> None:

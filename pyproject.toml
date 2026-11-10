@@ -141,7 +141,6 @@ also_copy = [
     "docker-stacks",
     "guest-baseline",
     "guest-disks",
-    "journal-upload",
     "keepalived",
     "metrics-exporters",
     "monitoring-config",

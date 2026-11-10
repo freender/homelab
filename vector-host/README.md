@@ -29,11 +29,11 @@ both on one host.
   `F14F620E` master key. Each upgrade restarts Vector, which loses nothing.
 - **Config.** The journald source, transform, sink and unit tests come from the
   macros in `vector-config/templates/journald.yaml.j2`. That gives the same shape
-  the Docker hosts and journal-upload ship: stream fields
+  the Docker hosts ship, and that the retired journal-upload shipped: stream fields
   `_MACHINE_ID,_HOSTNAME,_SYSTEMD_UNIT`, `level` from `PRIORITY`, and no `__*`
   fields. The endpoint is the VictoriaLogs Elasticsearch endpoint on the host
   that runs the `victoria-logs` stack. Internal metrics go out on `:9598`.
-  Vector's own `vector.service` lines are shipped too, as journal-upload does.
+  Vector's own `vector.service` lines are shipped too.
 - **Drop-in.** `StartLimitIntervalSec=0`, `RestartSec=30s`, and
   `ExecStartPre=vector validate --skip-healthchecks`, so a helm outage at boot
   cannot leave the unit failed for good (homelab-ops#373).
@@ -41,9 +41,9 @@ both on one host.
   `/etc/vector/vector.yaml` conffile. `VECTOR_THREADS=2` keeps a journald-only
   pipeline from starting one worker per CPU on the PVE nodes.
 
-`vector-host.shadow: true` sends the journal to tenant `AccountID=1`, beside
-journal-upload on tenant 0. `validate` refuses `shadow: false` while
-`journal-upload` is still enabled on the host. To read shadow data, query with
+`vector-host.shadow: true` sends the journal to tenant `AccountID=1`, so it can
+run beside another shipper on tenant 0; no host uses it since the journal-upload
+cutover (homelab-ops#378). To read shadow data, query with
 `curl -H 'AccountID: 1' …`.
 
 ## Installer
@@ -75,4 +75,5 @@ the failed-systemd-unit alert.
 - The first start ships from that moment on (`since_now: true`). After that the
   checkpoint carries it across restarts and reboots, including the previous
   boot's tail, which the wrapper restores (homelab-ops#376).
-- Vector uses about 75–100 MB RSS, compared with about 4 MB for journal-upload.
+- Vector uses about 75–100 MB RSS, compared with about 4 MB for the retired
+  journal-upload.

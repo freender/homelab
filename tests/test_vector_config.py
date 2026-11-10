@@ -21,15 +21,10 @@ ROOT = Path(__file__).resolve().parents[1]
 # ---------------------------------------------------------------------------
 
 
-def host_entry(
-    name: str, stacks: list[str], feature: str | None = "", uploads: bool = False
-) -> str:
-    """`feature` is the vector-config block body; None leaves the feature off.
-    `uploads` also enables journal-upload on the host."""
+def host_entry(name: str, stacks: list[str], feature: str | None = "") -> str:
+    """`feature` is the vector-config block body; None leaves the feature off."""
     stack_lines = "".join(f"        - {stack}\n" for stack in stacks)
     block = "" if feature is None else f"    vector-config:\n{feature}"
-    if uploads:
-        block += "    journal-upload:\n"
     return (
         f"{name}:\n"
         "  config:\n"
@@ -208,21 +203,16 @@ def test_validate_refuses_a_bad_journald(tmp_path: Path, value: str) -> None:
         vector_config.validate(root)
 
 
-def test_validate_refuses_two_journal_shippers_on_tenant_0(tmp_path: Path) -> None:
-    entry = host_entry("box", ["vector"], "      journald: true\n", uploads=True)
-    root = fake_root(tmp_path, entry)
+@pytest.mark.parametrize("feature", ["      journald: shadow\n", "      journald: true\n"])
+def test_validate_accepts_each_journald_mode(tmp_path: Path, feature: str) -> None:
+    vector_config.validate(fake_root(tmp_path, host_entry("box", ["vector"], feature)))
 
-    message = "box: vector-config.journald: true needs journal-upload removed"
-    with pytest.raises(ValueError, match=message):
+
+def test_validate_refuses_a_bad_journald_value(tmp_path: Path) -> None:
+    root = fake_root(tmp_path, host_entry("box", ["vector"], "      journald: yes-please\n"))
+
+    with pytest.raises(ValueError, match="box: vector-config.journald must be"):
         vector_config.validate(root)
-
-
-@pytest.mark.parametrize(("feature", "uploads"), [("      journald: shadow\n", True),
-                                                  ("      journald: true\n", False)])
-def test_validate_accepts_one_shipper_per_tenant(
-    tmp_path: Path, feature: str, uploads: bool
-) -> None:
-    vector_config.validate(fake_root(tmp_path, host_entry("box", ["vector"], feature, uploads)))
 
 
 def test_journald_off_renders_nothing_of_it(

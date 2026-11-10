@@ -26,9 +26,9 @@ Both take:
   every host. To read shadow data, query with `curl -H 'AccountID: 1' …`.
 - `JOURNALD`: the per-host `vector-config.journald` key: `false` (default),
   `shadow`, or `true`. It adds a `journald` source that ships the host's systemd
-  journal in journal-upload's shape (homelab-ops#374). `shadow` sends only the
-  journal to tenant 1, so it can run beside journal-upload. `validate` refuses
-  `true` while `journal-upload` is still enabled on the host.
+  journal in the retired journal-upload's shape (homelab-ops#374). `shadow`
+  sends only the journal to tenant 1, so it can run beside another shipper. Every
+  journald host is on `true` since the cutover (homelab-ops#378).
 
 ## What it ships
 
@@ -44,8 +44,8 @@ The journal goes to the **Elasticsearch** endpoint instead, because it takes
 `_stream_fields`. Every journal field is kept, `level` comes from `PRIORITY`, the
 `__*` fields are dropped, and `_time` is journald's receive time
 (`__REALTIME_TIMESTAMP`). That is the same shape VictoriaLogs' `/insert/journald`
-produces for journal-upload. On neo, every entry checked was byte-identical
-(homelab-ops#375). The sink uses acknowledgements, so the journald checkpoint
+produced for the retired journal-upload. Every entry checked was byte-identical
+on all ten hosts, and the cutover lost and doubled nothing (homelab-ops#375, #378). The sink uses acknowledgements, so the journald checkpoint
 only advances once a batch is in the disk buffer.
 
 `configs/journalctl-catchup` is installed into `<appdata>/vector/bin/` and set as

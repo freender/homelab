@@ -8,8 +8,8 @@
 {%- endif %}
 {%- if JOURNALD == "shadow" %}
 #
-# JOURNALD SHADOW: the systemd journal goes to tenant AccountID=1 beside
-# journal-upload (homelab-ops#375); Docker and varlogs stay on tenant 0.
+# JOURNALD SHADOW: the systemd journal goes to tenant AccountID=1 beside another
+# shipper (homelab-ops#375); Docker and varlogs stay on tenant 0.
 {%- endif %}
 {%- import "journald.yaml.j2" as journald %}
 data_dir: /var/lib/vector

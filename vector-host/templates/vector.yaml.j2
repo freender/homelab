@@ -3,7 +3,7 @@
 # helm; the journald pieces are vector-config's, so both ship the same shape.
 {%- if SHADOW %}
 #
-# SHADOW: writes to VictoriaLogs tenant AccountID=1 beside journal-upload
+# SHADOW: writes to VictoriaLogs tenant AccountID=1 beside another shipper
 # (homelab-ops#377), so Grafana, log-spikes and vmalert (tenant 0) never see
 # these lines twice.
 {%- endif %}

@@ -12,7 +12,6 @@ from .docker import deploy as deploy_docker
 from .docker_stacks import deploy as deploy_docker_stacks
 from .guest_baseline import deploy as deploy_guest_baseline
 from .guest_disks import deploy as deploy_guest_disks
-from .journal_upload import deploy as deploy_journal_upload
 from .keepalived import deploy as deploy_keepalived
 from .metrics_exporters import deploy as deploy_metrics_exporters
 from .monitoring_config import deploy as deploy_monitoring_config
@@ -82,10 +81,6 @@ MODULES: dict[str, ModuleDefinition] = {
     "guest-disks": ModuleDefinition(
         name="Guest Disks",
         deploy=deploy_guest_disks,
-    ),
-    "journal-upload": ModuleDefinition(
-        name="Journal Upload",
-        deploy=deploy_journal_upload,
     ),
     "keepalived": ModuleDefinition(
         name="Keepalived",
@@ -206,7 +201,6 @@ MODULE_ORDER = [
     "pbs-server",
     "apcupsd",
     "metrics-exporters",
-    "journal-upload",
     "vector-host",
     "monitoring-config",
     "vmalert-rules",

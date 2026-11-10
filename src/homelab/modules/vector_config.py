@@ -21,7 +21,6 @@ JOURNALD_PARTIAL = "journald.yaml.j2"
 VECTOR_STACK = "vector"
 GEOIP_STACK = "geoipupdate"
 WRAPPER_NAME = "journalctl-catchup"
-JOURNAL_UPLOAD = "journal-upload"
 
 
 def deploy(
@@ -53,16 +52,9 @@ def validate(root: Path) -> None:
     registry = default_registry(root)
     managed = set(registry.list_hosts(MODULE_DIR))
     validate_stack_placement(root, managed)
-    uploading = set(registry.list_hosts(JOURNAL_UPLOAD))
     for host in sorted(managed):
         shadow_enabled(root, host)
-        # Two shippers on tenant 0 would double every journal line in Grafana,
-        # log-spikes and the kernel rules.
-        if journald_mode(root, host) == "on" and host in uploading:
-            raise ValueError(
-                f"{host}: {MODULE_DIR}.journald: true needs {JOURNAL_UPLOAD} removed first; "
-                "use 'shadow' while both run"
-            )
+        journald_mode(root, host)
 
 
 def validate_stack_placement(root: Path, managed: set[str]) -> None:
@@ -101,8 +93,8 @@ def shadow_enabled(root: Path, host: str) -> bool:
 
 
 def journald_mode(root: Path, host: str) -> str:
-    """`journald` ships the host's systemd journal: `shadow` to tenant 1 beside
-    journal-upload (homelab-ops#375), `true` to tenant 0 once that is retired."""
+    """`journald` ships the host's systemd journal: `true` to tenant 0, `shadow`
+    to tenant 1 so it can run beside another shipper (homelab-ops#375, #378)."""
     value = default_registry(root).get(host, f"{MODULE_DIR}.journald", False)
     modes = {False: "", "shadow": "shadow", True: "on"}
     if isinstance(value, bool) or value == "shadow":
