@@ -1,0 +1,10 @@
+# Managed by homelab/journal-upload -- do not edit by hand.
+# Keep retrying while VictoriaLogs is unreachable (e.g. a helm reboot) instead of
+# burning systemd's default start limit in seconds and staying failed
+# (freender/homelab-ops#373). The uploader resumes from its cursor, so nothing is lost.
+[Unit]
+StartLimitIntervalSec=0
+
+[Service]
+Restart=on-failure
+RestartSec=30s

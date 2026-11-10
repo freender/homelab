@@ -15,6 +15,11 @@ Ships the host's systemd journal to VictoriaLogs with Debian's
   state file only after VictoriaLogs accepts a batch, so a cursor that moves
   past its pre-start value proves the endpoint took data. An active unit alone
   proves nothing: a bad URL fails the upload and the unit keeps restarting.
+
+It also ships a service drop-in that retries every 30 s with no start limit.
+Debian's unit restarts after 100 ms under systemd's default 5-in-10 s limit, so
+a VictoriaLogs outage of more than a few seconds left the unit failed for good
+(freender/homelab-ops#373).
 """
 
 from __future__ import annotations
@@ -31,6 +36,7 @@ from homelab_install.errors import InstallError
 PACKAGE = "systemd-journal-remote"
 UNIT = "systemd-journal-upload.service"
 CONFIG_NAME = "journal-upload.conf"
+OVERRIDE_NAME = "service-override.conf"
 PRIVATE_ROOT = Path("/var/lib/private")
 STATE_FILE = PRIVATE_ROOT / "systemd" / "journal-upload" / "state"
 STATE_HEADER = "# This is private data. Do not parse.\n"
@@ -108,13 +114,20 @@ def confirm_delivery(before: str | None) -> None:
 def install(ctx: InstallContext) -> None:
     log.header("Journal Upload")
 
-    env.require(ctx, "JOURNAL_UPLOAD_DEST")
+    env.require(ctx, "JOURNAL_UPLOAD_DEST", "JOURNAL_UPLOAD_OVERRIDE_DEST")
     src = ctx.build_dir / CONFIG_NAME
-    if not src.is_file():
-        raise InstallError(f"missing staged journal-upload config: {src}")
+    override = ctx.build_dir / OVERRIDE_NAME
+    for staged in (src, override):
+        if not staged.is_file():
+            raise InstallError(f"missing staged journal-upload config: {staged}")
 
     packages.ensure(ctx, PACKAGE)
-    changed = files.install_from(ctx, src, ctx.env["JOURNAL_UPLOAD_DEST"], "0644")
+    config_changed = files.install_from(ctx, src, ctx.env["JOURNAL_UPLOAD_DEST"], "0644")
+    override_changed = files.install_from(
+        ctx, override, ctx.env["JOURNAL_UPLOAD_OVERRIDE_DEST"], "0644"
+    )
+    # ensure_running daemon-reloads before the restart when either changed.
+    changed = config_changed or override_changed
     seeded = seed_cursor()
     starting = changed or seeded or not is_active()
 

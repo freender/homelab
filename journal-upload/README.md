@@ -5,7 +5,8 @@ Ships each host's systemd journal to VictoriaLogs with Debian's
 rsyslog, so the journal is the only place host, kernel, ZFS, PBS and failed
 `homelab-*` unit messages exist; Vector ships container logs only.
 
-The module renders one drop-in, `/etc/systemd/journal-upload.conf.d/homelab.conf`:
+The module renders two drop-ins. The uploader config,
+`/etc/systemd/journal-upload.conf.d/homelab.conf`:
 
 ```ini
 [Upload]
@@ -15,6 +16,14 @@ URL=http://<victoria-logs host>:9428/insert/journald
 The host is not configured separately. It is the single host whose
 `docker-stacks` declares the `victoria-logs` stack, and `validate` fails unless
 exactly one host does. The uploader appends `/upload` itself.
+
+And a service drop-in,
+`/etc/systemd/system/systemd-journal-upload.service.d/homelab.conf`, that sets
+`StartLimitIntervalSec=0` and `RestartSec=30s`. Debian's unit restarts after
+100 ms under systemd's default limit of 5 starts in 10 s, so any VictoriaLogs
+outage longer than a few seconds, such as a helm reboot, left the unit failed
+until someone reset it (homelab-ops#373). With the drop-in it retries every 30 s
+until VictoriaLogs is back, then resumes from its cursor.
 
 ```bash
 ./deploy --dry-run journal-upload all

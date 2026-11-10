@@ -74,7 +74,14 @@ def test_validate_needs_exactly_one_victoria_logs(
         journal_upload.validate(root)
 
 
-@pytest.mark.parametrize("missing", ["templates/journal-upload.conf.j2", "scripts/install.py"])
+@pytest.mark.parametrize(
+    "missing",
+    [
+        "templates/journal-upload.conf.j2",
+        "templates/service-override.conf.j2",
+        "scripts/install.py",
+    ],
+)
 def test_validate_refuses_a_missing_bundle_file(tmp_path: Path, missing: str) -> None:
     root = fake_root(tmp_path, host_entry("logs", ["victoria-logs"]))
     (root / journal_upload.MODULE_DIR / missing).unlink()
@@ -98,8 +105,12 @@ def test_real_host_renders_helm_endpoint(tmp_path: Path, monkeypatch: pytest.Mon
     build = root / journal_upload.MODULE_DIR / "build" / "ace"
     text = (build / "journal-upload.conf").read_text(encoding="utf-8")
     assert "[Upload]\nURL=http://helm.freender.internal:9428/insert/journald\n" in text
+    override = (build / "service-override.conf").read_text(encoding="utf-8")
+    assert "[Unit]\nStartLimitIntervalSec=0\n" in override
+    assert "[Service]\nRestart=on-failure\nRestartSec=30s\n" in override
     env_text = (build / "env").read_text(encoding="utf-8")
     assert f"JOURNAL_UPLOAD_DEST={journal_upload.REMOTE_CONFIG}" in env_text
+    assert f"JOURNAL_UPLOAD_OVERRIDE_DEST={journal_upload.REMOTE_OVERRIDE}" in env_text
 
 
 # ---------------------------------------------------------------------------
@@ -108,6 +119,7 @@ def test_real_host_renders_helm_endpoint(tmp_path: Path, monkeypatch: pytest.Mon
 
 INSTALLER_PATH = ROOT / "journal-upload" / "scripts" / "install.py"
 HEAD = "s=abc;i=10"
+OVERRIDE = "[Unit]\nStartLimitIntervalSec=0\n"
 
 
 def load_installer():
@@ -162,6 +174,7 @@ def setup(
     monkeypatch: pytest.MonkeyPatch,
     staged: str = "URL=new\n",
     live: str | None = None,
+    live_override: str | None = OVERRIDE,
     state: str | None = None,
     active: bool = False,
     enabled: bool = False,
@@ -184,15 +197,20 @@ def setup(
     build = tmp_path / "build" / "box"
     build.mkdir(parents=True)
     (build / "journal-upload.conf").write_text(staged, encoding="utf-8")
+    (build / "service-override.conf").write_text(OVERRIDE, encoding="utf-8")
     dest = tmp_path / "etc" / "homelab.conf"
     if live is not None:
         dest.parent.mkdir(parents=True)
         dest.write_text(live, encoding="utf-8")
+    override_dest = tmp_path / "etc" / "service.d" / "homelab.conf"
+    if live_override is not None:
+        override_dest.parent.mkdir(parents=True)
+        override_dest.write_text(live_override, encoding="utf-8")
     ctx = InstallContext(
         host="box",
         script_dir=tmp_path,
         build_dir=build,
-        env={"JOURNAL_UPLOAD_DEST": str(dest)},
+        env={"JOURNAL_UPLOAD_DEST": str(dest), "JOURNAL_UPLOAD_OVERRIDE_DEST": str(override_dest)},
         deploy_env={},
         file_map={},
         force_update=False,
@@ -263,6 +281,40 @@ def test_changed_url_restarts_and_keeps_the_cursor(
     assert not any(call[0] == "journalctl" for call in fake.calls)
 
 
+@pytest.mark.parametrize("live_override", [None, "[Unit]\n"])
+def test_new_or_changed_override_reloads_and_restarts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, live_override: str | None
+) -> None:
+    """The drop-in alone must reach the running unit: daemon-reload, then restart."""
+    installer, ctx, fake, _dest = setup(
+        tmp_path, monkeypatch, live="URL=new\n", live_override=live_override,
+        state="LAST_CURSOR=s=old\n", active=True, enabled=True,
+    )
+
+    installer.install(ctx)
+
+    override_dest = Path(ctx.env["JOURNAL_UPLOAD_OVERRIDE_DEST"])
+    assert override_dest.read_text(encoding="utf-8") == OVERRIDE
+    verbs = [call[1] for call in fake.calls if call[0] == "systemctl"]
+    assert verbs.index("daemon-reload") < verbs.index("restart")
+    assert not any(call[0] == "journalctl" for call in fake.calls)
+
+
+def test_failed_uploader_with_a_new_override_is_restarted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The #373 state: config converged, unit failed, drop-in not yet installed."""
+    installer, ctx, fake, _dest = setup(
+        tmp_path, monkeypatch, live="URL=new\n", live_override=None,
+        state="LAST_CURSOR=s=old\n", active=False, enabled=True,
+    )
+
+    installer.install(ctx)
+
+    assert fake.ran("daemon-reload") and fake.ran("restart")
+    assert installer.read_cursor() == "s=abc;i=99"
+
+
 def test_lost_state_on_a_running_uploader_restarts_it(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -329,9 +381,12 @@ def test_unreadable_journal_head_is_refused_before_any_start(
     assert not fake.ran("enable")
 
 
-def test_missing_staged_config_is_refused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("name", ["journal-upload.conf", "service-override.conf"])
+def test_missing_staged_config_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name: str
+) -> None:
     installer, ctx, fake, _dest = setup(tmp_path, monkeypatch)
-    (ctx.build_dir / "journal-upload.conf").unlink()
+    (ctx.build_dir / name).unlink()
 
     with pytest.raises(InstallError, match="missing staged journal-upload config"):
         installer.install(ctx)

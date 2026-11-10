@@ -14,8 +14,11 @@ from .docker_stacks import declared_stacks
 MODULE_DIR = "journal-upload"
 REMOTE_ROOT = "/tmp/homelab-journal-upload"
 REMOTE_CONFIG = "/etc/systemd/journal-upload.conf.d/homelab.conf"
+REMOTE_OVERRIDE = "/etc/systemd/system/systemd-journal-upload.service.d/homelab.conf"
 TEMPLATE_NAME = "journal-upload.conf.j2"
 CONFIG_NAME = "journal-upload.conf"
+OVERRIDE_TEMPLATE_NAME = "service-override.conf.j2"
+OVERRIDE_NAME = "service-override.conf"
 VICTORIA_LOGS_STACK = "victoria-logs"
 VICTORIA_LOGS_PORT = 9428
 
@@ -38,9 +41,10 @@ def deploy(
 
 
 def validate(root: Path) -> None:
-    template = root / MODULE_DIR / "templates" / TEMPLATE_NAME
-    if not template.is_file():
-        raise ValueError(f"missing template: {template}")
+    for name in (TEMPLATE_NAME, OVERRIDE_TEMPLATE_NAME):
+        template = root / MODULE_DIR / "templates" / name
+        if not template.is_file():
+            raise ValueError(f"missing template: {template}")
     installer = root / MODULE_DIR / "scripts" / "install.py"
     if not installer.is_file():
         raise ValueError(f"missing installer: {installer}")
@@ -79,10 +83,18 @@ def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
         build_dir / CONFIG_NAME,
         URL=upload_url(root),
     )
-    write_env_file(build_dir / "env", {"JOURNAL_UPLOAD_DEST": REMOTE_CONFIG})
+    render_template(
+        root / MODULE_DIR / "templates" / OVERRIDE_TEMPLATE_NAME,
+        build_dir / OVERRIDE_NAME,
+    )
+    write_env_file(
+        build_dir / "env",
+        {"JOURNAL_UPLOAD_DEST": REMOTE_CONFIG, "JOURNAL_UPLOAD_OVERRIDE_DEST": REMOTE_OVERRIDE},
+    )
 
     connection = connection_for_host(root, host)
-    for message in diff_many(connection, [(build_dir / CONFIG_NAME, REMOTE_CONFIG)]):
+    pairs = [(build_dir / CONFIG_NAME, REMOTE_CONFIG), (build_dir / OVERRIDE_NAME, REMOTE_OVERRIDE)]
+    for message in diff_many(connection, pairs):
         print_sub(message)
 
     if dry_run:
