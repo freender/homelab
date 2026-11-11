@@ -145,6 +145,10 @@ groups:
         labels: {severity: warning, category: docker, site: home, host: helm, name: victoria-logs}
         annotations: {summary: "helm / victoria-logs is missing", description: "Important app container has not been seen by cAdvisor for 5 minutes."}
       - alert: ImportantContainerMissing
+        expr: absent_over_time(container_last_seen{job="cadvisor", host="helm", name="vmalert-logs"}[5m]) and on(host) (avg_over_time(up{job="pve-node"}[10m]) >= 0.95)
+        labels: {severity: warning, category: docker, site: home, host: helm, name: vmalert-logs}
+        annotations: {summary: "helm / vmalert-logs is missing", description: "Important app container has not been seen by cAdvisor for 5 minutes."}
+      - alert: ImportantContainerMissing
         expr: absent_over_time(container_last_seen{job="cadvisor", host="neo", name="vector-neo"}[5m]) and on(host) (avg_over_time(up{job="pve-node"}[10m]) >= 0.95)
         labels: {severity: warning, category: docker, site: home, host: neo, name: vector-neo}
         annotations: {summary: "neo / vector-neo is missing", description: "Important app container has not been seen by cAdvisor for 5 minutes."}
