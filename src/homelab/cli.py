@@ -301,6 +301,79 @@ def guest_create(dry_run: bool, host: str) -> None:
         raise click.ClickException(str(error)) from error
 
 
+@guest.group("throwaway")
+def guest_throwaway() -> None:
+    """Short-lived bare Debian guests that hosts.conf never names (vmids 900-999)."""
+
+
+def _throwaway_errors(action) -> None:
+    from .modules.pve_guest.create import CreateError
+    from .modules.pve_guest.live import NodeUnreachable
+
+    try:
+        action()
+    except (HostLookupError, ValueError, CreateError, NodeUnreachable) as error:
+        raise click.ClickException(str(error)) from error
+
+
+@guest_throwaway.command("create")
+@click.option("--dry-run", is_flag=True, default=False, help="Print the plan; change nothing.")
+@click.option("--node", required=True, help="PVE node to build it on.")
+@click.option("--name", default=None, help="Hostname; default tmp-<vmid>.")
+@click.option("--profile", default=None, help="pve-guest profile; default plain-ct / linux-vm.")
+@click.option("--cores", type=click.IntRange(min=1), default=2, show_default=True)
+@click.option("--memory", type=click.IntRange(min=128), default=2048, show_default=True, help="MiB")
+@click.option("--disk", type=click.IntRange(min=1), default=16, show_default=True, help="GiB")
+@click.option("--vlan", type=click.IntRange(1, 4094), default=40, show_default=True)
+@click.argument("kind", type=click.Choice(["lxc", "vm"]))
+def guest_throwaway_create(
+    dry_run: bool,
+    node: str,
+    name: str | None,
+    profile: str | None,
+    cores: int,
+    memory: int,
+    disk: int,
+    vlan: int,
+    kind: str,
+) -> None:
+    """Build a throwaway LXC or VM: root's infra key, DHCP, tagged `throwaway`."""
+    from .modules.pve_guest.throwaway import Request, create_throwaway
+
+    request = Request(
+        kind="qemu" if kind == "vm" else "lxc",
+        node=node,
+        cores=cores,
+        memory=memory,
+        disk_gib=disk,
+        vlan=vlan,
+        name=name,
+        profile=profile,
+    )
+    _throwaway_errors(lambda: create_throwaway(repo_root(), request, dry_run))
+
+
+@guest_throwaway.command("list")
+def guest_throwaway_list() -> None:
+    """List every guest tagged `throwaway`."""
+    from .modules.pve_guest.throwaway import list_throwaways
+
+    _throwaway_errors(lambda: list_throwaways(repo_root()))
+
+
+@guest_throwaway.command("destroy")
+@click.option("--dry-run", is_flag=True, default=False, help="Print the plan; change nothing.")
+@click.option("--yes", is_flag=True, default=False, help="Skip the confirmation prompt.")
+@click.argument("vmid", type=int)
+def guest_throwaway_destroy(dry_run: bool, yes: bool, vmid: int) -> None:
+    """Stop and destroy a throwaway. Refuses any guest that is not one."""
+    from .modules.pve_guest.throwaway import destroy_throwaway
+
+    if not (dry_run or yes):
+        click.confirm(f"Destroy throwaway guest {vmid} and its disks?", abort=True)
+    _throwaway_errors(lambda: destroy_throwaway(repo_root(), vmid, dry_run))
+
+
 @main.group()
 def roll() -> None:
     """Rolling reboot of the PVE nodes and own-kernel VMs: read-only plan and verify."""

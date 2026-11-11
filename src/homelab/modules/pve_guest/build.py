@@ -23,9 +23,12 @@ import yaml
 from .pveconf import SIZE_UNITS
 from .spec import FEATURE, DiskSpec, GuestSpec, NetSpec
 
-IMAGE_BASE = "https://cloud.debian.org/images/cloud/trixie/latest"
+# Dated release directories, never `latest/`: during Debian's publish window
+# `latest/` can list only some images, and it can move between the checksum read
+# and the download (homelab-ops#384).
+IMAGE_ROOT = "https://cloud.debian.org/images/cloud/trixie"
 IMAGE_NAME = "debian-13-generic-amd64.qcow2"
-SUMS_URL = f"{IMAGE_BASE}/SHA512SUMS"
+RELEASE_RE = re.compile(r'href="(\d{8})-(\d+)/"')
 LOCAL_DIR = "/var/lib/vz"
 TEMPLATE_RE = re.compile(r"^debian-13-standard_(\d+(?:\.\d+)*)-(\d+)_amd64\.tar\.zst$")
 SHA512_RE = re.compile(r"^[0-9a-f]{128}$")
@@ -57,15 +60,31 @@ def scratch_paths(spec: GuestSpec) -> list[str]:
     ]
 
 
-def image_checksum(sums: str) -> str:
-    """The SHA512 for the generic amd64 image, from Debian's SHA512SUMS."""
+def releases(index: str) -> list[str]:
+    """The dated release directories in Debian's trixie index, newest first."""
+    found = {(int(day), int(serial)) for day, serial in RELEASE_RE.findall(index)}
+    return [f"{day}-{serial}" for day, serial in sorted(found, reverse=True)]
+
+
+def sums_url(release: str) -> str:
+    return f"{IMAGE_ROOT}/{release}/SHA512SUMS"
+
+
+def release_image(release: str) -> str:
+    """The generic amd64 image as a dated release directory names it."""
+    return IMAGE_NAME.replace(".qcow2", f"-{release}.qcow2")
+
+
+def image_checksum(sums: str, release: str) -> str:
+    """The SHA512 for the release's generic amd64 image, from its SHA512SUMS."""
+    wanted = release_image(release)
     for line in sums.splitlines():
         digest, _, name = line.strip().partition("  ")
-        if name == IMAGE_NAME:
+        if name == wanted:
             if not SHA512_RE.fullmatch(digest):
-                raise ValueError(f"SHA512SUMS: malformed digest for {IMAGE_NAME}")
+                raise ValueError(f"SHA512SUMS: malformed digest for {wanted}")
             return digest
-    raise ValueError(f"SHA512SUMS lists no {IMAGE_NAME}")
+    raise ValueError(f"SHA512SUMS lists no {wanted}")
 
 
 def newest_template(available: str) -> str:
@@ -249,7 +268,7 @@ def lxc_create(spec: GuestSpec, template_volid: str) -> list[str]:
     return args
 
 
-def download(spec: GuestSpec, digest: str) -> list[str]:
+def download(spec: GuestSpec, release: str, digest: str) -> list[str]:
     return [
         "pvesh",
         "create",
@@ -259,7 +278,7 @@ def download(spec: GuestSpec, digest: str) -> list[str]:
         "--filename",
         image_file(spec.vmid),
         "--url",
-        f"{IMAGE_BASE}/{IMAGE_NAME}",
+        f"{IMAGE_ROOT}/{release}/{release_image(release)}",
         "--checksum",
         digest,
         "--checksum-algorithm",

@@ -12,7 +12,7 @@ from __future__ import annotations
 import re
 
 from ...hosts import HostRegistry
-from .spec import FEATURE, GuestSpec, parse_guest
+from .spec import FEATURE, THROWAWAY_VMIDS, GuestSpec, parse_guest
 
 SUBVOL_RE = re.compile(r"/(?:subvol|vm)-(\d+)-disk-\d+$")
 
@@ -47,6 +47,11 @@ def load_guests(registry: HostRegistry) -> dict[str, GuestSpec]:
         if host in nodes:
             raise ValueError(f"{host}: {FEATURE} is for guests, not PVE nodes")
         spec = parse_guest(host, registry.get(host, FEATURE, None), nodes)
+        if spec.vmid in THROWAWAY_VMIDS:
+            raise ValueError(
+                f"{host}: vmid {spec.vmid} is in the throwaway range "
+                f"{THROWAWAY_VMIDS.start}-{THROWAWAY_VMIDS.stop - 1}"
+            )
         if spec.vmid in owners:
             raise ValueError(f"{host}: vmid {spec.vmid} is already used by {owners[spec.vmid]}")
         owners[spec.vmid] = host

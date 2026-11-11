@@ -198,19 +198,95 @@ def test_cloud_init_documents() -> None:
     }
 
 
-SUMS = f"""\
-{"cd" * 64}  debian-13-genericcloud-amd64.qcow2
-{DIGEST}  debian-13-generic-amd64.qcow2
-{"ef" * 64}  debian-13-generic-arm64.qcow2
+NEWEST, OLDER = "20261111-2659", "20261103-2651"
+
+
+def sums(release: str) -> str:
+    """A dated release's SHA512SUMS: every file is named with the release."""
+    return f"""\
+{"cd" * 64}  debian-13-genericcloud-amd64-{release}.qcow2
+{DIGEST}  debian-13-generic-amd64-{release}.qcow2
+{"ef" * 64}  debian-13-generic-arm64-{release}.qcow2
 """
 
 
+SUMS = sums(NEWEST)
+# The shape of Debian's Apache index: each directory linked twice, plus daily/ and latest/.
+INDEX = """\
+<a href="20261103-2651/"><img src="/icons/dir.gif"></a> <a href="20261103-2651/">20261103-2651/</a>
+<a href="20261111-2659/"><img src="/icons/dir.gif"></a> <a href="20261111-2659/">20261111-2659/</a>
+<a href="daily/">daily/</a> <a href="latest/">latest/</a>
+"""
+INDEX_READ = f"curl -fsSL {build.IMAGE_ROOT}/"
+
+
+def test_releases_are_dated_directories_newest_first() -> None:
+    assert build.releases(INDEX) == ["20261111-2659", "20261103-2651"]
+    # The serial compares as a number, and the date outranks it.
+    index = 'href="20261111-999/" href="20261111-1000/" href="20261010-5000/"'
+    assert build.releases(index) == ["20261111-1000", "20261111-999", "20261010-5000"]
+    assert build.releases('href="latest/" href="daily/"') == []
+
+
+def test_download_pins_the_release_it_checked() -> None:
+    argv = build.download(spec_of(VM_BLOCK), OLDER, DIGEST)
+    url = argv[argv.index("--url") + 1]
+    assert url == f"{build.IMAGE_ROOT}/{OLDER}/debian-13-generic-amd64-{OLDER}.qcow2"
+    assert argv[argv.index("--filename") + 1] == "homelab-900-debian-13-generic-amd64.qcow2"
+    assert argv[argv.index("--checksum") + 1] == DIGEST
+
+
+def image_steps(answers: dict[str, str | Exception]) -> create.Steps:
+    def runner(node: str, command: str) -> str:
+        answer = answers[command]
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+
+    return create.Steps(runner, "clovis", False, FakeClock())
+
+
+def test_resolve_image_takes_the_newest_release_with_the_image() -> None:
+    newest, older = (f"curl -fsSL {build.sums_url(r)}" for r in (NEWEST, OLDER))
+    steps = image_steps({INDEX_READ: INDEX, newest: SUMS, older: "unused"})
+    assert create.resolve_image(steps) == (NEWEST, DIGEST)
+
+
+@pytest.mark.parametrize(
+    "half_published",
+    [
+        SUMS.replace("generic-amd64", "azure-amd64"),  # homelab-ops#384, 2026-11-11
+        live.NodeUnreachable("clovis: `curl` exited 22"),  # no SHA512SUMS yet
+    ],
+)
+def test_resolve_image_falls_back_past_a_half_published_release(
+    half_published: str | Exception, capsys: pytest.CaptureFixture[str]
+) -> None:
+    newest, older = (f"curl -fsSL {build.sums_url(r)}" for r in (NEWEST, OLDER))
+    steps = image_steps({INDEX_READ: INDEX, newest: half_published, older: sums(OLDER)})
+    assert create.resolve_image(steps) == (OLDER, DIGEST)
+    assert f"release {NEWEST} skipped" in capsys.readouterr().out
+
+
+def test_resolve_image_gives_up_after_release_tries() -> None:
+    days = [f"202611{day:02d}-1" for day in range(1, 6)]
+    answers: dict[str, str | Exception] = {INDEX_READ: " ".join(f'href="{day}/"' for day in days)}
+    answers.update({f"curl -fsSL {build.sums_url(day)}": "" for day in days[-3:]})
+    with pytest.raises(create.CreateError, match="newest 3 trixie releases"):
+        create.resolve_image(image_steps(answers))
+    with pytest.raises(create.CreateError, match="lists no dated release"):
+        create.resolve_image(image_steps({INDEX_READ: 'href="latest/"'}))
+
+
 def test_image_checksum_picks_the_exact_file() -> None:
-    assert build.image_checksum(SUMS) == DIGEST
-    with pytest.raises(ValueError, match="lists no debian-13-generic-amd64.qcow2"):
-        build.image_checksum(SUMS.replace("generic-amd64", "generic-amd65"))
+    assert build.image_checksum(SUMS, NEWEST) == DIGEST
+    # latest/'s undated alias is not the release's file.
+    with pytest.raises(ValueError, match=f"lists no debian-13-generic-amd64-{OLDER}.qcow2"):
+        build.image_checksum(f"{DIGEST}  debian-13-generic-amd64.qcow2\n" + SUMS, OLDER)
+    with pytest.raises(ValueError, match="lists no"):
+        build.image_checksum(SUMS.replace("generic-amd64", "generic-amd65"), NEWEST)
     with pytest.raises(ValueError, match="malformed digest"):
-        build.image_checksum(f"{'AB' * 64}  debian-13-generic-amd64.qcow2\n")
+        build.image_checksum(f"{'AB' * 64}  debian-13-generic-amd64-{NEWEST}.qcow2\n", NEWEST)
 
 
 def test_newest_template_compares_versions_as_numbers() -> None:
@@ -340,6 +416,8 @@ class Node:
         if command in reads:
             site = OSIRIS if node == "osiris" else CLUSTER
             return (site / reads[command]).read_text(encoding="utf-8")
+        if command == INDEX_READ:
+            return INDEX
         if command.startswith("curl "):
             return SUMS
         if command.startswith("pveam available"):
@@ -386,9 +464,9 @@ def test_vm_create_runs_in_order_and_cleans_up(tmp_path: Path, no_report: list) 
     clock = FakeClock()
     create.create_guest(write_root(tmp_path, VM_BLOCK), "wftest", False, node, clock)
     steps = [short(cmd) for cmd in node.writes()]
-    assert steps[:4] == ["curl", "pvesh", "echo", "echo"]
-    assert steps[4].startswith("qm create 900 ")
-    assert steps[5:] == [
+    assert steps[:5] == ["curl", "curl", "pvesh", "echo", "echo"]
+    assert steps[5].startswith("qm create 900 ")
+    assert steps[6:] == [
         "qm disk resize 900 scsi0 8G",
         "qm start 900",
         "qm guest exec 900 --timeout 900 -- cloud-init status --wait",
@@ -484,7 +562,8 @@ def test_a_failed_create_is_left_unprotected(tmp_path: Path, no_report: list) ->
 
 def test_dry_run_only_reads(tmp_path: Path, no_report: list) -> None:
     blocks = (VM_BLOCK, CT_BLOCK, {**CT_BLOCK, "protection": True})
-    reads = (["curl"], ["pveam available --section system"], ["pveam available --section system"])
+    pveam = ["pveam available --section system"]
+    reads = (["curl", "curl"], pveam, pveam)
     # default_registry caches per root, so each block needs its own.
     for index, (block, expected) in enumerate(zip(blocks, reads, strict=True)):
         (tmp_path / str(index)).mkdir()

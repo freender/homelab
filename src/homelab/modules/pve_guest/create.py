@@ -34,6 +34,7 @@ AGENT_TIMEOUT = 600
 CLOUD_INIT_TIMEOUT = 900
 SHUTDOWN_TIMEOUT = 180
 POLL_SECONDS = 5
+RELEASE_TRIES = 3
 # `cloud-init status --wait`: 0 done, 2 done with recoverable errors (warnings).
 CLOUD_INIT_OK = (0, 2)
 
@@ -155,11 +156,16 @@ def create_guest(
     if offline_mode():
         raise ValueError("guest create needs the PVE nodes; unset offline validation")
     target = load_target(default_registry(root), host)
-    spec = target.spec
     runner = runner or ssh_runner(root)
-    clock = clock or Clock()
+    if build_target(target, dry_run, runner, clock or Clock()):
+        report(runner, target)
+
+
+def build_target(target: Target, dry_run: bool, runner: Runner, clock: Clock) -> bool:
+    """Check the vmid, then build the guest. True once a live build has finished."""
+    spec = target.spec
     print_action(
-        f"{'Dry run: ' if dry_run else ''}create {spec.kind} {spec.vmid} ({host}) "
+        f"{'Dry run: ' if dry_run else ''}create {spec.kind} {spec.vmid} ({spec.host}) "
         f"on {spec.home_node}"
     )
     check_vmid_free(runner, target)
@@ -169,7 +175,7 @@ def create_guest(
     if dry_run:
         build_guest(steps, target)
         protect(steps, spec)
-        return
+        return False
     try:
         build_guest(steps, target)
         protect(steps, spec)
@@ -181,14 +187,33 @@ def create_guest(
         raise
     finally:
         remove_scratch(runner, spec)
-    report(runner, target)
+    return True
+
+
+def resolve_image(steps: Steps) -> tuple[str, str]:
+    """The newest dated release whose SHA512SUMS lists the image, and its digest.
+
+    A release Debian is still publishing may lack the file or the image; the one
+    before it is tried, up to RELEASE_TRIES releases back."""
+    found = build.releases(steps.read(f"curl -fsSL {build.IMAGE_ROOT}/"))
+    if not found:
+        raise CreateError(f"{build.IMAGE_ROOT}/ lists no dated release")
+    for release in found[:RELEASE_TRIES]:
+        try:
+            sums = steps.read(f"curl -fsSL {build.sums_url(release)}")
+            return release, build.image_checksum(sums, release)
+        except (NodeUnreachable, ValueError) as exc:
+            print_warn(f"release {release} skipped: {exc}")
+    raise CreateError(
+        f"none of the newest {RELEASE_TRIES} trixie releases has a usable {build.IMAGE_NAME}"
+    )
 
 
 def create_vm(steps: Steps, target: Target) -> None:
     spec = target.spec
-    digest = build.image_checksum(steps.read(f"curl -fsSL {build.SUMS_URL}"))
-    print_ok(f"{build.IMAGE_NAME} sha512 {digest[:16]}...")
-    steps.run(f"download {build.IMAGE_NAME}", build.command(build.download(spec, digest)))
+    release, digest = resolve_image(steps)
+    print_ok(f"{build.IMAGE_NAME} {release} sha512 {digest[:16]}...")
+    steps.run(f"download {build.IMAGE_NAME}", build.command(build.download(spec, release, digest)))
     user, network = build.snippet_files(spec.vmid)
     snippets = {
         user: build.user_data(spec, target.root_key, target.fqdn),

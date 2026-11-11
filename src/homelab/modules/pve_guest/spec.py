@@ -20,6 +20,10 @@ KINDS = ("qemu", "lxc")
 DEFAULT_STORAGE = "vm-flash"
 DEFAULT_BRIDGE = "vmbr0"
 DEFAULT_SCHEDULE = "*/15"
+# `./guest throwaway` allocates from here and hosts.conf may not use it, so a
+# throwaway can never share a vmid with a declared guest.
+THROWAWAY_VMIDS = range(900, 1000)
+THROWAWAY_TAG = "throwaway"
 
 
 @dataclass(frozen=True)
