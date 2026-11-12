@@ -108,7 +108,7 @@ def test_every_impact_label_on_a_changed_helm_spec() -> None:
     """Golden drift for one edited spec: each row, and the label it carries."""
     registry = default_registry(ROOT)
     raw = copy.deepcopy(registry.get("helm", "pve-guest"))
-    raw["memory"] = 8192  # needs reboot
+    raw["memory"] = 12288  # needs reboot
     raw["balloon"] = 4096  # applies live
     raw["disks"]["scsi0"]["size"] = "40G"  # grow: applies live
     raw["disks"]["scsi2"]["size"] = "32G"  # shrink: refused
@@ -127,8 +127,8 @@ def test_every_impact_label_on_a_changed_helm_spec() -> None:
     rows = drift.guest_drift(spec, current, view.ha["vm:112"], view.replication[112])
 
     assert [(r.key, r.want, r.have, r.impact) for r in rows] == [
-        ("memory", "8192", "6144", drift.REBOOT),
-        ("balloon", "4096", "6144", drift.LIVE),
+        ("memory", "12288", "8192", drift.REBOOT),
+        ("balloon", "4096", "-", drift.LIVE),
         ("startup", "order=5", "-", drift.LIVE),
         ("scsi0.size", "40G", "32G", drift.LIVE),
         ("scsi2.size", "32G", "64G", "refused (shrink)"),
@@ -342,7 +342,7 @@ def test_report_lists_diffs_and_pending_changes() -> None:
         entry["key"]: entry
         for entry in json.loads((FIXTURES / "cluster" / "pending-112.json").read_text())
     }
-    entries["memory"] = {"key": "memory", "value": "6144", "pending": "8192"}
+    entries["memory"] = {"key": "memory", "value": "8192", "pending": "6144"}
     entries["cores"] = {"key": "cores", "value": 2, "pending": 4}
     entries["scsi2"] = {**entries["scsi2"], "delete": 1}
 
@@ -355,7 +355,7 @@ def test_report_lists_diffs_and_pending_changes() -> None:
     assert report[1] == "  " + drift.format_diff(drift.diff("cores", 4, 2, drift.REBOOT))
     assert report[2:] == [
         "  pending cores: 2 -> 4",
-        "  pending memory: 6144 -> 8192",
+        "  pending memory: 8192 -> 6144",
         "  pending scsi2: "
         f"{entries['scsi2']['value']} -> (delete)",
     ]
