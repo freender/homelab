@@ -5,7 +5,7 @@
  },
  {
   "key": "balloon",
-  "value": 6144
+  "value": 5120
  },
  {
   "key": "bios",
@@ -33,7 +33,7 @@
  },
  {
   "key": "memory",
-  "value": "6144"
+  "value": "5120"
  },
  {
   "key": "name",
