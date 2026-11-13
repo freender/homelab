@@ -280,6 +280,15 @@ route:
       matchers:
         - alertname=~"UpsOnBattery|UpsShutdownImminent"
       continue: false
+    # Kept as a standing, browsable alert (Alertmanager UI, MWBot's alert
+    # list, Grafana) but never posted: a long-unavailable HA entity is a
+    # housekeeping item, not something worth a Telegram message. Silencing it
+    # instead would hide it from the list too, which is the opposite of the
+    # intent.
+    - receiver: quiet
+      matchers:
+        - alertname="HomeAssistantEntitiesUnavailable"
+      continue: false
     - receiver: mwbot
       mute_time_intervals:
         - scheduled-maintenance
@@ -483,6 +492,10 @@ receivers:
     webhook_configs:
       - url: __HEALTHCHECK_URL__
         send_resolved: false
+
+  # No integrations: alerts routed here stay active and visible but notify
+  # nobody.
+  - name: quiet
 
   - name: plex-requests
     telegram_configs:
