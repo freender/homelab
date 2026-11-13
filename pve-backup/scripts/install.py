@@ -557,12 +557,11 @@ def configure_storages(ctx: InstallContext, storages: list[Storage]) -> None:
 
 
 def find_job(jobs: list[dict], job: Job) -> dict | None:
-    """Jobs are identified by storage plus guest selection, as the bash did, so a
-    changed schedule updates the job rather than adding a second one."""
+    """Jobs are identified by storage plus guest selection (a vmid list, or all), so
+    a changed schedule or exclude list updates the job rather than adding a second
+    one. Matching on exclude once duplicated the nightly job (homelab-ops#389)."""
     for current in jobs:
         if current.get("type") != "vzdump" or current.get("storage") != job.storage:
-            continue
-        if str(current.get("exclude", "")) != job.exclude:
             continue
         if job.vmid and str(current.get("vmid", "")) == job.vmid:
             return current

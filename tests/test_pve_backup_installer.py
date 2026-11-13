@@ -541,6 +541,15 @@ def test_a_drifted_schedule_updates_the_same_job(node: Node) -> None:
     assert node.jobs[0]["schedule"] == "*-*-* 23:00:00"
 
 
+def test_a_changed_exclude_list_updates_the_same_job(node: Node) -> None:
+    node.stage(jobs=job_plan(exclude="105,106"))
+
+    node.deploy()
+
+    assert len(node.jobs) == 1
+    assert node.jobs[0]["exclude"] == "105,106"
+
+
 def test_an_emptied_exclude_path_list_is_deleted(node: Node) -> None:
     node.stage(jobs=job_plan(paths=[]))
 
