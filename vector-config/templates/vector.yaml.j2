@@ -62,17 +62,46 @@ transforms:
         job = "traefik-runtime"
         if contains(msg, "\"ClientHost\"") {
           job = "traefik-access"
-{%- if GEOIP %}
           parsed, err = parse_json(msg)
-          if err == null && is_object(parsed) && is_string(parsed.ClientHost) {
-            rec, err = get_enrichment_table_record("asn", {"ip": parsed.ClientHost})
-            if err == null {
-              parsed.geoip_autonomous_system_number = rec.autonomous_system_number
-              parsed.geoip_autonomous_system_organization = rec.autonomous_system_organization
+          if err == null && is_object(parsed) {
+            changed = false
+            # Traefik can drop credential headers but not query-string credentials
+            # (?X-Plex-Token=, ?apikey=, ?token=) or a Home Assistant webhook ID in
+            # the path; mask the values so they never reach VictoriaLogs.
+            if is_string(parsed.RequestPath) {
+              raw_path = string!(parsed.RequestPath)
+              parts = split(raw_path, "?", limit: 2)
+              clean = replace(string!(parts[0]), r'/api/webhook/[^/]+', "/api/webhook/REDACTED")
+              if length(parts) == 2 {
+                params = map_values(split(string!(parts[1]), "&")) -> |p| {
+                  kv = split(p, "=", limit: 2)
+                  if length(kv) == 2 && match(string!(kv[0]), r'(?i)(token|apikey|api_key|authsig|password|secret|^code$)') {
+                    string!(kv[0]) + "=REDACTED"
+                  } else {
+                    p
+                  }
+                }
+                clean = clean + "?" + join(params, "&")
+              }
+              if clean != raw_path {
+                parsed.RequestPath = clean
+                changed = true
+              }
+            }
+{%- if GEOIP %}
+            if is_string(parsed.ClientHost) {
+              rec, err = get_enrichment_table_record("asn", {"ip": parsed.ClientHost})
+              if err == null {
+                parsed.geoip_autonomous_system_number = rec.autonomous_system_number
+                parsed.geoip_autonomous_system_organization = rec.autonomous_system_organization
+                changed = true
+              }
+            }
+{%- endif %}
+            if changed {
               msg = encode_json(parsed)
             }
           }
-{%- endif %}
         }
       }
       . = {
