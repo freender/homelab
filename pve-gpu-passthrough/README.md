@@ -224,6 +224,35 @@ The important startup order is: start `void`, wait for Windows to finish auto-lo
 
 If Proxmox takes 30-60 seconds before the GPU shows output, reboot `clovis` to clear stale VFIO passthrough state. After cleaning the mapping and disabling the emulated tablet, measured startup was about `5s` for `qm start` and about `20s` until the Windows guest agent responded.
 
+### solar PSVR2 SteamVR flow
+
+`solar` (VM `106` on `clovis`) is the Bazzite counterpart to `void`, with the same
+mappings, so only one of `void`, `glint` and `solar` can run (freender/homelab-ops#389).
+The flow is the same except that the PlayStation VR2 app does not run on Linux.
+PSVR2Toolkit + Ignition replace it, so only SteamVR (`250820`) is started:
+- Bazzite auto-logs in to KDE Plasma (Wayland) and Steam starts on login.
+- Turn on PSVR2. Its USB audio card appears behind the passed-through xHCI.
+- `71-psvr2-steamvr.rules` asks the user's systemd manager for `psvr2-steamvr.service`.
+- `psvr2-steamvr` drops repeat triggers while SteamVR runs or for 60s after a
+  launch, then starts SteamVR through Steam.
+
+Linux scripts live in `pve-gpu-passthrough/linux/`. Install inside `solar` as the
+auto-login user:
+```bash
+sudo install -m 0644 71-psvr2-steamvr.rules /etc/udev/rules.d/
+sudo udevadm control --reload
+install -D -m 0755 psvr2-steamvr ~/.local/bin/psvr2-steamvr
+install -D -m 0644 psvr2-steamvr.service ~/.config/systemd/user/psvr2-steamvr.service
+systemctl --user daemon-reload
+```
+
+Manual test and logs:
+```bash
+systemctl --user start psvr2-steamvr.service
+journalctl --user -u psvr2-steamvr.service -b
+udevadm info -a /dev/snd/cardN | grep -E 'idVendor|idProduct|product'
+```
+
 ### No display after reboot
 **Expected behavior** - GPU is bound to vfio-pci and unavailable to host.
 

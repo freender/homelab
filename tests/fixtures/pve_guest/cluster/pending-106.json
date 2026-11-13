@@ -1,0 +1,94 @@
+[
+ {
+  "key": "affinity",
+  "value": "2-7,10-15"
+ },
+ {
+  "key": "agent",
+  "value": "enabled=1"
+ },
+ {
+  "key": "bios",
+  "value": "ovmf"
+ },
+ {
+  "key": "boot",
+  "value": "order=scsi0"
+ },
+ {
+  "key": "cores",
+  "value": 12
+ },
+ {
+  "key": "cpu",
+  "value": "host"
+ },
+ {
+  "key": "efidisk0",
+  "value": "vm-flash:vm-106-disk-0,efitype=4m,pre-enrolled-keys=0,size=1M"
+ },
+ {
+  "key": "hostpci0",
+  "value": "mapping=pci-usb-xhci,rombar=0"
+ },
+ {
+  "key": "hostpci2",
+  "value": "mapping=pci-gpu-nvidia,pcie=1,x-vga=1"
+ },
+ {
+  "key": "machine",
+  "value": "q35"
+ },
+ {
+  "key": "memory",
+  "value": "20480"
+ },
+ {
+  "key": "name",
+  "value": "solar"
+ },
+ {
+  "key": "net0",
+  "value": "virtio=BC:24:11:EC:78:83,bridge=vmbr0,firewall=1,queues=10,tag=10"
+ },
+ {
+  "key": "numa",
+  "value": 1
+ },
+ {
+  "key": "onboot",
+  "value": 0
+ },
+ {
+  "key": "ostype",
+  "value": "l26"
+ },
+ {
+  "key": "scsi0",
+  "value": "vm-flash:vm-106-disk-1,backup=1,discard=on,iothread=1,size=100G,ssd=1"
+ },
+ {
+  "key": "scsi1",
+  "value": "vm-flash:vm-106-disk-2,backup=0,discard=on,iothread=1,size=1T,ssd=1"
+ },
+ {
+  "key": "scsihw",
+  "value": "virtio-scsi-single"
+ },
+ {
+  "key": "sockets",
+  "value": 1
+ },
+ {
+  "key": "tablet",
+  "value": 0
+ },
+ {
+  "key": "vcpus",
+  "value": 12
+ },
+ {
+  "key": "vga",
+  "value": "none"
+ }
+]

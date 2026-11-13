@@ -389,6 +389,9 @@ def test_load_target_needs_a_block_and_an_fqdn(tmp_path: Path) -> None:
     windows = VM_BLOCK | {"profile": "windows-vm"}
     with pytest.raises(ValueError, match="profile windows-vm is not built by guest create"):
         create.load_target(registry(write_root(tmp_path, windows)), "wftest")
+    desktop = VM_BLOCK | {"profile": "linux-desktop-vm"}
+    with pytest.raises(ValueError, match="profile linux-desktop-vm is not built by guest create"):
+        create.load_target(registry(write_root(tmp_path, desktop)), "wftest")
 
 
 def test_sites_put_the_home_node_first_and_ask_each_standalone_node() -> None:

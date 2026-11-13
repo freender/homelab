@@ -34,6 +34,14 @@
   "vmid": 104
  },
  {
+  "id": "qemu/106",
+  "name": "solar",
+  "node": "clovis",
+  "status": "stopped",
+  "type": "qemu",
+  "vmid": 106
+ },
+ {
   "hastate": "started",
   "id": "lxc/108",
   "name": "neo",

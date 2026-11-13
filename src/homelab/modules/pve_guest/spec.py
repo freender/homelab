@@ -76,6 +76,27 @@ PROFILES: dict[str, Profile] = {
         net_model="virtio",
         creatable=False,
     ),
+    # A GPU-passthrough Linux desktop installed from its own ISO (solar: Bazzite),
+    # so it is not a Debian cloud-init build and runs no repo modules.
+    "linux-desktop-vm": Profile(
+        kind="qemu",
+        settings={
+            "machine": "q35",
+            "bios": "ovmf",
+            "cpu": "host",
+            "sockets": "1",
+            "numa": "0",
+            "scsihw": "virtio-scsi-single",
+            "ostype": "l26",
+            "agent": "enabled=1",
+            "tablet": "0",
+            "onboot": "0",
+        },
+        efidisk={"efitype": "4m", "pre-enrolled-keys": "0"},
+        disk_opts={"discard": "on", "iothread": "1", "ssd": "1"},
+        net_model="virtio",
+        creatable=False,
+    ),
     "docker-ct": Profile(
         kind="lxc",
         settings={

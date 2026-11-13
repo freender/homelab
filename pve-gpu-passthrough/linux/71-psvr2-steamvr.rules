@@ -1,0 +1,6 @@
+# solar: start SteamVR when the PS VR2 headset powers on (freender/homelab-ops#389).
+# The Linux side of void's "PS VR2 Audio" Task Scheduler trigger: the headset's
+# USB audio card appears behind the passed-through xHCI, and the logged-in user's
+# systemd manager starts psvr2-steamvr.service. Narrow the match with
+# ATTRS{idProduct} once `udevadm info -a /dev/snd/cardN` shows the headset's PID.
+ACTION=="add", SUBSYSTEM=="sound", KERNEL=="card*", ATTRS{idVendor}=="054c", TAG+="systemd", ENV{SYSTEMD_USER_WANTS}+="psvr2-steamvr.service"
