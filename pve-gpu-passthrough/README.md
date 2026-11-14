@@ -235,6 +235,9 @@ PSVR2Toolkit + Ignition replace it, so only SteamVR (`250820`) is started:
 - `71-psvr2-steamvr.rules` asks the user's systemd manager for `psvr2-steamvr.service`.
 - `psvr2-steamvr` drops repeat triggers while SteamVR runs or for 60s after a
   launch, then starts SteamVR through Steam.
+- `psvr2-audio` then waits for the GPU DisplayPort audio port named `PS VR2`, selects
+  its stereo profile and makes it the default sink. With the headset off, WirePlumber
+  falls back to another output, so this re-runs on every headset power-on.
 
 Linux scripts live in `pve-gpu-passthrough/linux/`. Install inside `solar` as the
 auto-login user:
@@ -242,6 +245,7 @@ auto-login user:
 sudo install -m 0644 71-psvr2-steamvr.rules /etc/udev/rules.d/
 sudo udevadm control --reload
 install -D -m 0755 psvr2-steamvr ~/.local/bin/psvr2-steamvr
+install -D -m 0755 psvr2-audio ~/.local/bin/psvr2-audio
 install -D -m 0644 psvr2-steamvr.service ~/.config/systemd/user/psvr2-steamvr.service
 systemctl --user daemon-reload
 ```

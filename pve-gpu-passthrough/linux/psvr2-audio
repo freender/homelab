@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# Route desktop audio to the PS VR2 when the headset powers on (solar,
+# freender/homelab-ops#389). Run by psvr2-steamvr.service after psvr2-steamvr.
+# The headset's sound arrives over the PC adapter's DisplayPort, so it is a GPU
+# HDMI/DP port whose ELD names it "PS VR2". The port only turns available once
+# the headset is up, and with it off WirePlumber falls back to another output, so
+# wait for the port, then select its stereo profile and make its sink the default.
+set -euo pipefail
+
+MONITOR_NAME="PS VR2"
+TIMEOUT=30
+
+for (( i = 0; i < TIMEOUT; i++ )); do
+    read -r card profile < <(pactl -f json list cards | jq -r --arg name "$MONITOR_NAME" '
+        .[] | .name as $card | .ports | to_entries[]
+        | select(.value.properties["device.product.name"] == $name and .value.availability != "not available")
+        | [$card, (.value.profiles | map(select(startswith("output:hdmi-stereo"))) | first)]
+        | @tsv' | head -n1) || true
+    [[ -n "${profile:-}" ]] && break
+    sleep 1
+done
+
+if [[ -z "${profile:-}" ]]; then
+    echo "no available '$MONITOR_NAME' audio port after ${TIMEOUT}s, leaving audio as is"
+    exit 0
+fi
+
+pactl set-card-profile "$card" "$profile"
+for (( i = 0; i < 10; i++ )); do
+    sink=$(pactl -f json list sinks | jq -r --arg card "$card" --arg profile "${profile#output:}" '
+        .[] | select(.properties["device.name"] == $card and .properties["device.profile.name"] == $profile) | .name' | head -n1)
+    [[ -n "$sink" ]] && break
+    sleep 1
+done
+
+if [[ -z "$sink" ]]; then
+    echo "profile $profile set on $card but no sink appeared"
+    exit 1
+fi
+
+pactl set-default-sink "$sink"
+pactl set-sink-mute "$sink" 0
+echo "audio routed to $sink ($MONITOR_NAME)"

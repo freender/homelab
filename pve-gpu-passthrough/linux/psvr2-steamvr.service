@@ -4,3 +4,4 @@ Description=Start SteamVR when the PS VR2 headset powers on
 [Service]
 Type=oneshot
 ExecStart=%h/.local/bin/psvr2-steamvr
+ExecStart=%h/.local/bin/psvr2-audio
