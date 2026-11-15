@@ -105,7 +105,6 @@ RESOURCES = [
         "type": "lxc",
         "hastate": "started",
     },
-    {"vmid": 102, "name": "void", "node": "clovis", "status": "stopped", "type": "qemu"},
     {
         "vmid": 104,
         "name": "arc",

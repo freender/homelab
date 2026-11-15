@@ -168,68 +168,23 @@ restore `/etc/kernel/cmdline` from its `.bak.` sibling, delete
 
 ## Troubleshooting
 
-### void PSVR2 SteamVR flow
-
-Target flow:
-- Start Windows VM `void` manually from Proxmox.
-- Windows auto-login lands in the desktop session, but SteamVR stays closed.
-- Turn on PSVR2.
-- Windows detects the PSVR2 audio/microphone device through the passed-through USB controller.
-- Task Scheduler triggers on `PS VR2 Audio` becoming active.
-- Task Scheduler launches the PlayStation VR2 app, then SteamVR.
-
-Current Proxmox side for `void` on `clovis`:
-- VMID: `102`
-- Boot disk only: `boot: order=scsi0`
-- Emulated tablet disabled: `tablet: 0`
-- USB/Bluetooth passthrough: `hostpci0: mapping=pci-usb-xhci`
-- GPU passthrough: `hostpci2: mapping=pci-gpu-nvidia,pcie=1,x-vga=1`
-
-Proxmox resource mappings on `clovis`:
-- `pci-usb-xhci`: explicit onboard xHCI controller at `0000:00:14.0`; Bluetooth is exposed to Windows as USB device `VID_8087&PID_0026` through this controller.
-- Avoid recreating broad `pci-usb` with `path=0000:00:14`; it can also match `00:14.3` Wi-Fi.
-
-Windows scripts live in `pve-gpu-passthrough/windows/`:
-- `psvr2-start.bat` starts the PlayStation VR2 app via Steam app id `2580190`, then SteamVR via app id `250820`.
-- `psvr2_startup.xml` is an importable Task Scheduler task that triggers from `Microsoft-Windows-Audio/Operational` event `65` when `DeviceName` is `PS VR2 Audio` and `NewState` is `1`.
-
-Install inside `void` while logged in as the auto-login user:
-```cmd
-mkdir C:\Scripts
-copy psvr2-start.bat C:\Scripts\psvr2-start.bat
-```
-
-Import `psvr2_startup.xml` into Task Scheduler, then check these settings:
-- General: task principal is the interactive users group, equivalent to running only when a user is logged on.
-- General: `Run with highest privileges`.
-- Actions: `C:\Scripts\psvr2-start.bat`.
-
-Manual test inside Windows:
-```cmd
-schtasks /Run /TN "\Event Viewer Tasks\psvr2 startup"
-```
-
-Check recent PSVR2 audio events:
-```powershell
-Get-WinEvent -LogName "Microsoft-Windows-Audio/Operational" -MaxEvents 50 |
-    Where-Object { $_.Id -eq 65 -and $_.Message -match "PS VR2 Audio" } |
-    Select-Object TimeCreated, Id, Message
-```
-
-If the audio log does not show the event, enable and inspect:
-- `Applications and Services Logs > Microsoft > Windows > DriverFrameworks-UserMode > Operational`.
-- `Windows Logs > System`.
-
-The important startup order is: start `void`, wait for Windows to finish auto-login, turn on PSVR2, then let the event task launch the apps. This avoids SteamVR starting before the headset is present.
-
-If Proxmox takes 30-60 seconds before the GPU shows output, reboot `clovis` to clear stale VFIO passthrough state. After cleaning the mapping and disabling the emulated tablet, measured startup was about `5s` for `qm start` and about `20s` until the Windows guest agent responded.
-
 ### solar PSVR2 SteamVR flow
 
-`solar` (VM `106` on `clovis`) is the Bazzite counterpart to `void`, with the same
-mappings, so only one of `void`, `glint` and `solar` can run (freender/homelab-ops#389).
-The flow is the same except that the PlayStation VR2 app does not run on Linux.
-PSVR2Toolkit + Ignition replace it, so only SteamVR (`250820`) is started:
+`solar` (VM `106` on `clovis`) is the VR VM: Bazzite with SteamVR, which replaced the
+Windows VM `void` (retired 2026-11-15). It shares both mappings below with `glint`, so
+only one of the two can run (freender/homelab-ops#389).
+
+Proxmox resource mappings on `clovis`:
+- `pci-gpu-nvidia`: the RTX 3080 Ti, `hostpci2: mapping=pci-gpu-nvidia,pcie=1,x-vga=1`.
+- `pci-usb-xhci`: explicit onboard xHCI controller at `0000:00:14.0`, carrying the headset's
+  USB and the Intel Bluetooth adapter (`8087:0026`), `hostpci0: mapping=pci-usb-xhci,rombar=0`.
+- Avoid recreating broad `pci-usb` with `path=0000:00:14`; it can also match `00:14.3` Wi-Fi.
+
+If Proxmox takes 30-60 seconds before the GPU shows output, reboot `clovis` to clear stale
+VFIO passthrough state.
+
+The PlayStation VR2 app does not run on Linux. PSVR2Toolkit + Ignition replace it, so only
+SteamVR (`250820`) is started:
 - Bazzite auto-logs in to KDE Plasma (Wayland) and Steam starts on login.
 - Turn on PSVR2. Its USB audio card appears behind the passed-through xHCI.
 - `71-psvr2-steamvr.rules` asks the user's systemd manager for `psvr2-steamvr.service`

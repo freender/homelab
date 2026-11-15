@@ -9,14 +9,6 @@
   "vmid": 101
  },
  {
-  "id": "qemu/102",
-  "name": "void",
-  "node": "clovis",
-  "status": "stopped",
-  "type": "qemu",
-  "vmid": 102
- },
- {
   "id": "qemu/103",
   "name": "glint",
   "node": "clovis",

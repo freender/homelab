@@ -88,7 +88,7 @@ def real_specs():
 
 def test_every_declared_guest_is_in_sync_with_the_fixture() -> None:
     specs = real_specs()
-    assert len(specs) == 11, "every guest on the cluster and osiris"
+    assert len(specs) == 10, "every guest on the cluster and osiris"
     runner = FixtureRunner()
     views: dict = {}
     for spec in specs.values():
@@ -96,12 +96,12 @@ def test_every_declared_guest_is_in_sync_with_the_fixture() -> None:
         if key not in views:
             views[key] = live.read_cluster(runner, live.query_nodes(spec, NODES))
         report = live.guest_report(spec, views[key], runner)
-        state = "stopped" if spec.host in {"void", "solar"} else "running"
+        state = "stopped" if spec.host == "solar" else "running"
         assert report == [f"{spec.kind} {spec.vmid} on {spec.home_node}, {state}: in sync"]
 
 
 def test_hand_written_vmids_all_resolve() -> None:
-    assert validate_inventory(default_registry(ROOT)) == (11, 22)
+    assert validate_inventory(default_registry(ROOT)) == (10, 21)
 
 
 def test_every_impact_label_on_a_changed_helm_spec() -> None:
@@ -986,7 +986,7 @@ def test_cli_check_pve_guests(monkeypatch: pytest.MonkeyPatch, capsys) -> None:
     from homelab import cli
 
     cli.check_pve_guests(ROOT)
-    assert "11 pve-guest spec(s) valid; 22 hand-written vmid(s) match" in capsys.readouterr().out
+    assert "10 pve-guest spec(s) valid; 21 hand-written vmid(s) match" in capsys.readouterr().out
 
     def broken(registry):
         raise ValueError("helm: pve-guest.vmid must be a positive integer")

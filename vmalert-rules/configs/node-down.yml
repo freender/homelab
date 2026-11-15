@@ -26,7 +26,7 @@ groups:
       # over WireGuard, so `up == 0` there means "away", not "down". This
       # matches its exclusion from SystemdUnitMetricsMissing in
       # systemd-failed.yml. glint is excluded for the same reason: the GPU VM
-      # has onboot off and yields the RTX card to void for VR sessions, so it
+      # has onboot off and yields the RTX card to solar for VR sessions, so it
       # is off by design much of the time.
       #
       # The host lists in this file do duplicate scrape.yml's pve-node targets,

@@ -168,10 +168,10 @@ reboot that risks the agent.
 - **osiris has no HA at all.** It is standalone, so xur (your primary PBS) and
   deepstone simply go down with it and come back on boot — nothing migrates.
   Confirm no backup or sync is running before you take it.
-- **`void` on clovis is not an HA resource** (`ha-manager status` lists only
-  ct:101, 104, 108 and vm:109, 110, 112). It will not migrate, and it has no
-  `onboot`, so it stays stopped after clovis returns and verify does not
-  expect it back.
+- **`solar` and `glint` on clovis are not HA resources** (`ha-manager status`
+  lists only ct:101, 104, 108 and vm:109, 110, 112). They will not migrate, and
+  have no `onboot`, so they stay stopped after clovis returns and verify does
+  not expect them back.
 
 ## Per-wave procedure
 

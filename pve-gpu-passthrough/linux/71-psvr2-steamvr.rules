@@ -1,6 +1,5 @@
 # solar: run a SteamVR session while the PS VR2 headset is powered on
-# (freender/homelab-ops#389). The Linux side of void's "PS VR2 Audio" Task
-# Scheduler trigger: the headset's USB audio card appears behind the passed-through
+# (freender/homelab-ops#389). The headset's USB audio card appears behind the passed-through
 # xHCI, and the logged-in user's systemd manager starts psvr2-steamvr.service.
 # The /dev/psvr2 alias (dev-psvr2.device) is what that unit binds to, so the card
 # disappearing on headset power-off stops it. Not limited to "add": a change event
