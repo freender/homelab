@@ -20,5 +20,6 @@ services:
       WYO_WHISPER_COMPUTE_TYPE: int8
       # Silence otherwise transcribes as "Thank you.", which the agent answers.
       WYO_WHISPER_VAD_FILTER: "true"
-      # Keep in sync with glint.yml and the zion Whisper app's initial_prompt.
+      # Keep in sync with the zion Whisper app's initial_prompt.
+      # Edit the area list here when an HA area is added or renamed.
       WYO_WHISPER_INITIAL_PROMPT: "Turn on the office lights. Turn off the bedroom lamp. What's the temperature in the living room? Areas: Balcony, Bathroom, Bedroom, Entrance, Guest Bathroom, Living Room, Office, Laundry Room, Closet, Garage."

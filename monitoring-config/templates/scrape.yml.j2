@@ -33,9 +33,9 @@ scrape_configs:
         action: drop
     # Every host metrics-exporters deploys to, in hosts.conf order. Rendered
     # from hosts.conf so a host that runs node_exporter cannot go unscraped --
-    # xur, arc and deepstone did until 2026-08-15, glint until homelab-ops#379.
-    # ghost (roaming WSL over WireGuard) and glint (GPU VM, onboot off) are
-    # expected down when absent; node-down.yml excludes both from NodeDown and
+    # xur, arc and deepstone did until 2026-08-15.
+    # ghost (roaming WSL over WireGuard) is expected down when absent;
+    # node-down.yml excludes it from NodeDown and
     # failed-unit alerting fires only when metrics are present.
     static_configs:{{ static_configs(targets["pve-node"]) }}
 

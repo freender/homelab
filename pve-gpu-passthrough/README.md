@@ -171,8 +171,8 @@ restore `/etc/kernel/cmdline` from its `.bak.` sibling, delete
 ### solar PSVR2 SteamVR flow
 
 `solar` (VM `106` on `clovis`) is the VR VM: Bazzite with SteamVR, which replaced the
-Windows VM `void` (retired 2026-11-15). It shares both mappings below with `glint`, so
-only one of the two can run (freender/homelab-ops#389).
+Windows VM `void` (retired 2026-11-15). It is the only guest using the mappings below
+since the Whisper GPU VM `glint` was retired (freender/homelab-ops#389).
 
 Proxmox resource mappings on `clovis`:
 - `pci-gpu-nvidia`: the RTX 3080 Ti, `hostpci2: mapping=pci-gpu-nvidia,pcie=1,x-vga=1`.

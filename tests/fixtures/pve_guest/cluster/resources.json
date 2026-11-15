@@ -9,14 +9,6 @@
   "vmid": 101
  },
  {
-  "id": "qemu/103",
-  "name": "glint",
-  "node": "clovis",
-  "status": "running",
-  "type": "qemu",
-  "vmid": 103
- },
- {
   "hastate": "started",
   "id": "lxc/104",
   "name": "arc",

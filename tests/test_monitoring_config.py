@@ -621,7 +621,7 @@ def rendered_targets(root: Path) -> dict[str, list[tuple[str, dict]]]:
 
 def test_the_real_inventory_renders_the_expected_targets() -> None:
     """Golden: what today's hosts.conf must render. Equal to the hand-written file
-    this replaced plus glint, which ran node_exporter unscraped until #379."""
+    this replaced."""
     jobs = rendered_targets(REPO_ROOT)
 
     def by_host(job: str) -> dict[str, str]:
@@ -631,7 +631,7 @@ def test_the_real_inventory_renders_the_expected_targets() -> None:
     assert by_host("pve-node") == {
         **{h: f"{h}.{lan}:9100" for h in (
             "ace", "bray", "clovis", "osiris", "arc", "xur", "deepstone", "neo",
-            "tower", "riven", "helm", "glint", "ghost",
+            "tower", "riven", "helm", "ghost",
         )},
         "cottonwood": "cottonwood.internal:9100",
         "cinci": "cinci.internal:9100",
