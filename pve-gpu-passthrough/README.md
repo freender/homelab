@@ -206,18 +206,25 @@ SteamVR (`250820`) is started:
   was used while `clovis` had an 850 W PSU, whose trips on the 3080 Ti's load transients
   hard-reset the node; it was removed when `clovis` moved to a 1000 W PSU.
 
-Linux scripts live in `pve-gpu-passthrough/linux/`. Install inside `solar` as the
-auto-login user:
+Everything solar runs outside the Bazzite image lives in `pve-gpu-passthrough/linux/`:
+
+| Path | What |
+|---|---|
+| `setup.sh` | `base` (hostname, kernel args, `/etc` files, Steam disk, headset session, KDE idle), `vr` (SteamVRLinuxFixes, Ignition, PSVR2Toolkit, play-area tool, `cap_sys_nice`, URL handlers, OpenXR runtime, settings) with pinned, checksummed releases, and a read-only `check` |
+| `etc/` | Files installed under `/etc`: key-only sshd, Plasma auto-login, the upstream xr-hardware udev rule, the headset udev rule |
+| `psvr2-steamvr`, `psvr2-audio`, `psvr2-steamvr.service` | The headset session above |
+| `steamvr-settings.sh` | Applies the settled `steamvr.vrsettings` values with `jq` (SteamVR must be quit) |
+| `bluez-eagain/` | Patched bluetoothd that keeps the Sense controllers connected; see its README |
+| `steamvr-linux-fixes/` | A rolled-back local FIFO patch for SteamVRLinuxFixes, kept for reference |
+
+Run it on solar as the auto-login user from a copy of the directory:
 ```bash
-sudo install -m 0644 71-psvr2-steamvr.rules /etc/udev/rules.d/
-sudo udevadm control --reload
-install -D -m 0755 psvr2-steamvr ~/.local/bin/psvr2-steamvr
-install -D -m 0755 psvr2-audio ~/.local/bin/psvr2-audio
-install -D -m 0644 psvr2-steamvr.service ~/.config/systemd/user/psvr2-steamvr.service
-systemctl --user daemon-reload
-kwriteconfig6 --notify --file powerdevilrc --group AC --group Display --key TurnOffDisplayWhenIdle false
-kwriteconfig6 --notify --file powerdevilrc --group AC --group Display --key DimDisplayWhenIdle false
+rsync -a --delete ~/homelab/pve-gpu-passthrough/linux/ freender@solar:solar-setup/
+ssh freender@solar solar-setup/setup.sh check
 ```
+
+The full rebuild, including VM creation and the steps that need Steam's UI, is the
+Obsidian guide `Solar - Installation`.
 
 Manual test and logs:
 ```bash

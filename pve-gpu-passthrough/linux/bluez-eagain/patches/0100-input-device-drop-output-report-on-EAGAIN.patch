@@ -1,0 +1,39 @@
+diff --git a/profiles/input/device.c b/profiles/input/device.c
+index 5b1be2b16..7d8f9b48c 100644
+--- a/profiles/input/device.c
++++ b/profiles/input/device.c
+@@ -87,6 +87,7 @@ struct input_device {
+ 	bool			virtual_cable_unplug;
+ 	uint8_t			type;
+ 	unsigned int		idle_timer;
++	unsigned int		intr_dropped;
+ };
+ 
+ static int idle_timeout = 0;
+@@ -253,7 +254,25 @@ static bool hidp_send_message(struct input_device *idev, GIOChannel *chan,
+ 
+ 	len = writev(fd, iov, 2);
+ 	if (len < 0) {
+-		error("BT socket write error: %s (%d)", strerror(errno), errno);
++		int err = errno;
++
++		/*
++		 * Only output reports are sent on the interrupt channel. They
++		 * carry device state (rumble, LEDs, triggers) and a later report
++		 * supersedes a dropped one, so treat a full socket as transient
++		 * backpressure instead of destroying the UHID device.
++		 */
++		if ((err == EAGAIN || err == EWOULDBLOCK) &&
++						chan == idev->intr_io) {
++			idev->intr_dropped++;
++			if (idev->intr_dropped == 1 ||
++					!(idev->intr_dropped % 1000))
++				warn("BT interrupt socket busy: dropped %u "
++					"output report(s)", idev->intr_dropped);
++			return true;
++		}
++
++		error("BT socket write error: %s (%d)", strerror(err), err);
+ 		return false;
+ 	}
+ 
