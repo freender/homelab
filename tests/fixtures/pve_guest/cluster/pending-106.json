@@ -57,7 +57,7 @@
  },
  {
   "key": "onboot",
-  "value": 0
+  "value": 1
  },
  {
   "key": "ostype",
