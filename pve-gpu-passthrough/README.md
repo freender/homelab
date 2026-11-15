@@ -290,7 +290,7 @@ reboot
 
 **Device IDs:**
 - ace: Intel UHD 630 [8086:3e92]
-- clovis: NVIDIA RTX 3080 [10de:2208], Audio [10de:1aef]
+- clovis: NVIDIA RTX 3080 Ti [10de:2208], Audio [10de:1aef]
 
 **Get device IDs:**
 ```bash
