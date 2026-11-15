@@ -59,6 +59,7 @@ _VENDOR_DOMAINS = frozenset(
         "example.com",
         "example.net",
         "example.org",
+        "freedesktop.org",
         "github.com",
         "githubusercontent.com",
         "grafana.com",

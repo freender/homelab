@@ -245,6 +245,7 @@ auto-login user:
 sudo install -m 0644 71-psvr2-steamvr.rules /etc/udev/rules.d/
 sudo udevadm control --reload
 install -D -m 0755 psvr2-steamvr ~/.local/bin/psvr2-steamvr
+install -D -m 0755 psvr2-runtime ~/.local/bin/psvr2-runtime
 install -D -m 0755 psvr2-audio ~/.local/bin/psvr2-audio
 install -D -m 0644 psvr2-steamvr.service ~/.config/systemd/user/psvr2-steamvr.service
 systemctl --user daemon-reload
@@ -256,6 +257,32 @@ systemctl --user start psvr2-steamvr.service
 journalctl --user -u psvr2-steamvr.service -b
 udevadm info -a /dev/snd/cardN | grep -E 'idVendor|idProduct|product'
 ```
+
+#### solar Monado runtime (A/B against SteamVR)
+
+`psvr2-runtime monado` makes headset power-on start Envision's `psvr2-toolkit-monado`
+profile (`envision -p psvr2-toolkit-monado -S`) instead of SteamVR; `psvr2-runtime steamvr`
+switches back. Both use the same PSVR2Toolkit + Ignition driver: Monado's `steamvr_lh`
+loads it with `LH_LOAD_PSVR2=1`, and xrizer stands in for OpenVR, so SteamVR's
+compositor, vrserver and dashboard are not involved. There is no in-headset launcher:
+start games from desktop Steam once the headset shows black.
+
+Build inside a `fedora:45` distrobox, run on the host (`linux/monado/`):
+```bash
+distrobox create -Y -n vr-build -i registry.fedoraproject.org/fedora:45 \
+  --additional-packages "git cmake ninja-build gcc-c++ rust cargo clang-devel dnf-plugins-core"
+distrobox enter vr-build -- sudo dnf -y builddep monado
+ROOT=~/.local/share/envision/psvr2-toolkit-monado
+git clone --branch psvr2-linux-steam-lh https://gitlab.freedesktop.org/Supremium/monado "$ROOT/xrservice"
+git clone https://github.com/Supreeeme/xrizer "$ROOT/xrizer"
+distrobox enter vr-build -- ./build.sh
+sudo setcap CAP_SYS_NICE=eip ~/.local/share/envision/prefixes/psvr2-toolkit-monado/bin/monado-service
+```
+Then merge `envision-profile.json` (with `@HOME@` replaced) into
+`~/.config/envision/envision.json` `user_profiles`, and set
+`PRESSURE_VESSEL_IMPORT_OPENXR_1_RUNTIMES=1` in `~/.config/environment.d/` so Proton
+games follow Envision's active OpenXR runtime. Envision is the AppImage in
+`~/Applications`, linked as `~/.local/bin/envision`. Rebuilding drops the `setcap`.
 
 ### No display after reboot
 **Expected behavior** - GPU is bound to vfio-pci and unavailable to host.

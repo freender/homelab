@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# Show or select the runtime psvr2-steamvr starts on headset power-on (solar,
+# freender/homelab-ops#389): steamvr (default) or monado (Envision profile
+# psvr2-toolkit-monado). Takes effect at the next headset power-on.
+set -euo pipefail
+
+file="${XDG_CONFIG_HOME:-$HOME/.config}/psvr2/runtime"
+case "${1:-}" in
+    "")
+        cat "$file" 2>/dev/null || echo steamvr
+        ;;
+    steamvr | monado)
+        mkdir -p "$(dirname "$file")"
+        echo "$1" >"$file"
+        echo "headset power-on now starts: $1"
+        ;;
+    *)
+        echo "usage: psvr2-runtime [steamvr|monado]" >&2
+        exit 2
+        ;;
+esac
