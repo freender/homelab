@@ -238,6 +238,9 @@ PSVR2Toolkit + Ignition replace it, so only SteamVR (`250820`) is started:
 - `psvr2-audio` then waits for the GPU DisplayPort audio port named `PS VR2`, selects
   its stereo profile and makes it the default sink. With the headset off, WirePlumber
   falls back to another output, so this re-runs on every headset power-on.
+- `nvidia-power-limit.service` caps the GPU at 280 W on boot (default 350 W). Uncapped,
+  the 3080 Ti's load transients on a game launch tripped `clovis`'s 850 W PSU and
+  hard-reset the node.
 
 Linux scripts live in `pve-gpu-passthrough/linux/`. Install inside `solar` as the
 auto-login user:
@@ -248,6 +251,9 @@ install -D -m 0755 psvr2-steamvr ~/.local/bin/psvr2-steamvr
 install -D -m 0755 psvr2-audio ~/.local/bin/psvr2-audio
 install -D -m 0644 psvr2-steamvr.service ~/.config/systemd/user/psvr2-steamvr.service
 systemctl --user daemon-reload
+sudo install -m 0644 nvidia-power-limit.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now nvidia-power-limit.service
 ```
 
 Manual test and logs:

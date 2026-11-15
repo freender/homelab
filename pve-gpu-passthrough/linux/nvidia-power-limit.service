@@ -1,0 +1,16 @@
+# solar: cap the RTX 3080 Ti so its load transients stop tripping clovis's 850 W PSU
+# (hard reset on Half-Life: Alyx launch, freender/homelab-ops#389). The driver forgets
+# the limit on every boot, so this re-applies it. Default is 350 W, max 380 W.
+[Unit]
+Description=Cap NVIDIA GPU power limit
+After=systemd-modules-load.service
+
+[Service]
+Type=oneshot
+Environment=POWER_LIMIT_W=280
+ExecStart=/usr/bin/nvidia-smi -pm 1
+ExecStart=/usr/bin/nvidia-smi -pl ${POWER_LIMIT_W}
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
