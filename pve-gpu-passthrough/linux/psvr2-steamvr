@@ -1,33 +1,140 @@
 #!/usr/bin/env bash
-# Start SteamVR when the PS VR2 headset powers on (solar, freender/homelab-ops#389).
-# Run by psvr2-steamvr.service, which 71-psvr2-steamvr.rules starts. The headset
-# re-enumerates while it powers up, so repeat triggers are dropped while SteamVR
-# runs or within COOLDOWN seconds of the last launch.
+# Start SteamVR when the PS VR2 headset powers on, quit it when the headset powers
+# off (solar, freender/homelab-ops#389). psvr2-steamvr.service runs `start` when
+# 71-psvr2-steamvr.rules pulls it in, and `stop` when the headset's device unit
+# goes away. `quit` quits SteamVR without the headset check, for testing.
 set -euo pipefail
 
 STEAMVR_APPID=250820
 COOLDOWN=60
 SETTLE=3
+# A headset power-cycle re-enumerates USB within a few seconds; only quit once
+# the headset has stayed gone this long.
+GRACE=10
+QUIT_TIMEOUT=30
+STEAM_EXIT_TIMEOUT=30
+# Steam starts its webhelper within seconds of the client. A webhelper this much
+# younger than its client was respawned after a crash, and a respawned webhelper
+# never shows the launch prompt, so the SteamVR launch hangs on it.
+WEBHELPER_RESPAWN_AGE=60
 
 state="${XDG_RUNTIME_DIR:-/tmp}/psvr2-steamvr"
-exec 9>"$state.lock"
-flock -n 9 || exit 0
 
-if pgrep -u "$UID" -x vrserver >/dev/null || pgrep -u "$UID" -x vrcompositor >/dev/null; then
-    echo "SteamVR already running"
-    exit 0
-fi
+steamvr_running() {
+    pgrep -u "$UID" -x vrserver >/dev/null || pgrep -u "$UID" -x vrcompositor >/dev/null \
+        || pgrep -u "$UID" -x vrmonitor >/dev/null
+}
 
-now=$(date +%s)
-last=$(cat "$state.last" 2>/dev/null || echo 0)
-if (( now - last < COOLDOWN )); then
-    echo "SteamVR launched $(( now - last ))s ago, skipping"
-    exit 0
-fi
-echo "$now" >"$state.last"
+headset_present() {
+    local dev
+    for dev in /sys/bus/usb/devices/*; do
+        [[ "$(cat "$dev/idVendor" 2>/dev/null)" == 054c && "$(cat "$dev/idProduct" 2>/dev/null)" == 0cde ]] && return 0
+    done
+    return 1
+}
 
-sleep "$SETTLE"
-echo "starting SteamVR"
-# Its own transient unit: if Steam was not already running, this `steam` becomes
-# the Steam client, which must outlive this oneshot's cgroup.
-systemd-run --user --collect --no-block --quiet steam "steam://rungameid/$STEAMVR_APPID"
+# Prints "<client pid> <client age> <webhelper age>" for the running Steam client.
+steam_ages() {
+    local ppid helper_age client_age
+    read -r ppid helper_age < <(ps -u "$UID" -o ppid=,etimes=,args= \
+        | awk '$3 ~ /(^|\/)steamwebhelper$/ && !/--type=/ { print $1, $2 }' | sort -k2 -n -r | head -n1) || return 1
+    client_age=$(ps -o etimes= -p "$ppid") || return 1
+    echo "$ppid ${client_age// /} $helper_age"
+}
+
+restart_steam_if_webhelper_respawned() {
+    local client client_age helper_age i
+    read -r client client_age helper_age < <(steam_ages) || return 0
+    (( client_age - helper_age > WEBHELPER_RESPAWN_AGE )) || return 0
+    echo "steamwebhelper is ${helper_age}s old but Steam ${client_age}s: respawned, restarting Steam"
+    timeout 10 steam -shutdown >/dev/null 2>&1 || true
+    for (( i = 0; i < STEAM_EXIT_TIMEOUT; i++ )); do
+        kill -0 "$client" 2>/dev/null || return 0
+        sleep 1
+    done
+    # A client blocked on the hidden launch prompt ignores -shutdown too.
+    echo "Steam ignored -shutdown for ${STEAM_EXIT_TIMEOUT}s, terminating it"
+    kill -TERM "$client" 2>/dev/null || true
+    for (( i = 0; i < 15; i++ )); do
+        kill -0 "$client" 2>/dev/null || break
+        sleep 1
+    done
+    pkill -u "$UID" -KILL -x steamwebhelper || true
+    pkill -u "$UID" -KILL -x steam || true
+    sleep 2
+}
+
+start() {
+    exec 9>"$state.lock"
+    flock -n 9 || exit 0
+
+    if steamvr_running; then
+        echo "SteamVR already running"
+        exit 0
+    fi
+
+    now=$(date +%s)
+    last=$(cat "$state.last" 2>/dev/null || echo 0)
+    if (( now - last < COOLDOWN )); then
+        echo "SteamVR launched $(( now - last ))s ago, skipping"
+        exit 0
+    fi
+    echo "$now" >"$state.last"
+
+    # With every desktop output DPMS-off, Steam creates its windows hidden and
+    # waits forever on the hidden login window or launch prompt.
+    kscreen-doctor --dpms on >/dev/null 2>&1 || echo "could not wake the desktop screen"
+    restart_steam_if_webhelper_respawned
+    sleep "$SETTLE"
+    echo "starting SteamVR"
+    # Its own transient unit: if Steam was not already running, this `steam` becomes
+    # the Steam client, which must outlive this oneshot's cgroup. bazzite-steam
+    # adds Bazzite's NVIDIA and Wayland (extest) setup that plain `steam` skips.
+    launcher=steam
+    command -v bazzite-steam >/dev/null && launcher=bazzite-steam
+    systemd-run --user --collect --no-block --quiet "$launcher" "steam://rungameid/$STEAMVR_APPID"
+}
+
+quit() {
+    local i
+    if ! steamvr_running; then
+        echo "SteamVR not running"
+        exit 0
+    fi
+    echo "quitting SteamVR"
+    # Same request SteamVR's own Quit makes; vrmonitor.sh sets up the SteamVR env.
+    if pgrep -u "$UID" -x vrmonitor >/dev/null; then
+        timeout 10 "$HOME/.local/share/Steam/steamapps/common/SteamVR/bin/vrmonitor.sh" vrmonitor://quit \
+            >/dev/null 2>&1 || true
+    fi
+    for (( i = 0; i < QUIT_TIMEOUT; i++ )); do
+        steamvr_running || { echo "SteamVR quit"; exit 0; }
+        sleep 1
+    done
+    echo "SteamVR still running after ${QUIT_TIMEOUT}s, sending SIGTERM"
+    local proc
+    for proc in vrmonitor vrdashboard vrwebhelper vrcompositor vrserver; do
+        pkill -u "$UID" -TERM -x "$proc" || true
+    done
+}
+
+stop() {
+    sleep "$GRACE"
+    if headset_present; then
+        # vrwebhelper draws the SteamVR dashboard and overlay and is not respawned
+        # after a crash; quitting lets the start queued by the re-plug relaunch it.
+        if pgrep -u "$UID" -x vrwebhelper >/dev/null; then
+            echo "headset back within ${GRACE}s, leaving SteamVR running"
+            exit 0
+        fi
+        echo "headset back within ${GRACE}s but the SteamVR overlay has crashed, restarting SteamVR"
+    fi
+    quit
+}
+
+case "${1:-start}" in
+    start) start ;;
+    stop) stop ;;
+    quit) quit ;;
+    *) echo "usage: $0 [start|stop|quit]" >&2; exit 2 ;;
+esac

@@ -232,9 +232,18 @@ The flow is the same except that the PlayStation VR2 app does not run on Linux.
 PSVR2Toolkit + Ignition replace it, so only SteamVR (`250820`) is started:
 - Bazzite auto-logs in to KDE Plasma (Wayland) and Steam starts on login.
 - Turn on PSVR2. Its USB audio card appears behind the passed-through xHCI.
-- `71-psvr2-steamvr.rules` asks the user's systemd manager for `psvr2-steamvr.service`.
-- `psvr2-steamvr` drops repeat triggers while SteamVR runs or for 60s after a
-  launch, then starts SteamVR through Steam.
+- `71-psvr2-steamvr.rules` asks the user's systemd manager for `psvr2-steamvr.service`
+  and aliases the headset's sound card as `dev-psvr2.device`. The service binds to that
+  device and stays active while the headset is on.
+- `psvr2-steamvr start` drops repeat triggers while SteamVR runs or for 60s after a
+  launch, wakes the desktop screen, restarts Steam if its webhelper was respawned after
+  a crash, then starts SteamVR through Steam. Either a sleeping screen or a respawned
+  webhelper leaves Steam's login window or launch prompt hidden, and the launch hangs.
+- `psvr2-steamvr stop` runs when the headset powers off and the device goes away. It
+  waits 10s, since a headset power-cycle re-enumerates USB within a few seconds, then
+  quits SteamVR (SIGTERM after 30s). `psvr2-steamvr quit` does the same without the wait.
+  If the headset is back but `vrwebhelper` (the SteamVR dashboard/overlay, never
+  respawned after a crash) is gone, it quits anyway and the re-plug relaunches SteamVR.
 - `psvr2-audio` then waits for the GPU DisplayPort audio port named `PS VR2`, selects
   its stereo profile and makes it the default sink. With the headset off, WirePlumber
   falls back to another output, so this re-runs on every headset power-on.
@@ -254,6 +263,8 @@ systemctl --user daemon-reload
 sudo install -m 0644 nvidia-power-limit.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now nvidia-power-limit.service
+kwriteconfig6 --notify --file powerdevilrc --group AC --group Display --key TurnOffDisplayWhenIdle false
+kwriteconfig6 --notify --file powerdevilrc --group AC --group Display --key DimDisplayWhenIdle false
 ```
 
 Manual test and logs:

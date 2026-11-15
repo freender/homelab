@@ -1,7 +1,15 @@
 [Unit]
-Description=Start SteamVR when the PS VR2 headset powers on
+Description=SteamVR session while the PS VR2 headset is powered on
+# 71-psvr2-steamvr.rules aliases the headset's sound card as /dev/psvr2; the
+# headset powering off removes it, which stops this unit and quits SteamVR.
+BindsTo=dev-psvr2.device
+After=dev-psvr2.device
 
 [Service]
 Type=oneshot
-ExecStart=%h/.local/bin/psvr2-steamvr
+RemainAfterExit=yes
+ExecStart=%h/.local/bin/psvr2-steamvr start
 ExecStart=%h/.local/bin/psvr2-audio
+ExecStop=%h/.local/bin/psvr2-steamvr stop
+TimeoutStartSec=3min
+TimeoutStopSec=2min
