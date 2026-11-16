@@ -86,10 +86,33 @@ pull_stack_with_retry() {
     done
 }
 
+# A hand- or agent-edited compose file that no longer parses must fail loudly
+# and by name, before anything is pulled or recreated. Skipping the stack leaves
+# its running containers untouched, the other stacks still start, and the run
+# exits non-zero so the update unit goes red instead of the breakage surfacing
+# only at the next recreate.
+validate_stack() {
+    local stack_dir="$1"
+    local stack_name="$2"
+    local output
+    local code
+
+    output="$(run_compose "$stack_dir" config --quiet 2>&1)"
+    code=$?
+    [[ $code -eq 0 ]] && return 0
+
+    echo "!! invalid compose file in $stack_dir (docker compose config exit $code); skipping stack"
+    [[ -n "$output" ]] && sed 's/^/   /' <<< "$output"
+    failed_stacks+=("$stack_name")
+    return 1
+}
+
 start_stack() {
     local stack_dir="$1"
     local stack_name="$2"
     local code
+
+    validate_stack "$stack_dir" "$stack_name" || return 1
 
     if [[ "$PULL_IMAGES" == "true" ]]; then
         pull_stack_with_retry "$stack_dir"

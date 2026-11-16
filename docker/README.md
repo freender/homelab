@@ -87,6 +87,7 @@ cd /mnt/cache/appdata && ./rm.sh
 ### start.sh
 Orchestrates Docker Compose stacks with custom startup order:
 - Starts priority stacks first (Traefik)
+- Validates each compose file with `docker compose config --quiet`; an invalid stack is skipped (running containers left as-is), the error is printed, and the run exits non-zero
 - Pulls latest images
 - Starts all remaining stacks
 - Cleans up unused Docker images after safe update runs

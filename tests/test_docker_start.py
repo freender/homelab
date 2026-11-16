@@ -44,6 +44,10 @@ def prepare_start_root(tmp_path: Path) -> tuple[Path, Path]:
         "set -u\n"
         "printf '%s\\n' \"$*\" >> \"${DOCKER_LOG:?}\"\n"
         "if [[ \"$1\" == \"compose\" && \"${2:-}\" == \"config\" ]]; then\n"
+        "    if [[ \" ${DOCKER_INVALID_STACKS:-} \" == *\" ${PWD##*/} \"* ]]; then\n"
+        "        echo \"yaml: line 3: mapping values are not allowed in this context\" >&2\n"
+        "        exit 15\n"
+        "    fi\n"
         "    if [[ -f config.json ]]; then cat config.json; else echo '{\"name\": \"x\"}'; fi\n"
         "    exit 0\n"
         "fi\n"
@@ -81,6 +85,7 @@ def run_start(
     ps_output: str = "",
     fail_pull: bool = False,
     missing_networks: tuple[str, ...] = (),
+    invalid_stacks: tuple[str, ...] = (),
     stacks: dict[str, dict[str, object]] | None = None,
 ) -> tuple[subprocess.CompletedProcess[str], list[str]]:
     appdata, fake_bin = prepare_start_root(tmp_path)
@@ -102,6 +107,7 @@ def run_start(
         "DOCKER_PS_OUTPUT": ps_output,
         "DOCKER_FAIL_PULL": "true" if fail_pull else "false",
         "DOCKER_MISSING_NETWORKS": " ".join(missing_networks),
+        "DOCKER_INVALID_STACKS": " ".join(invalid_stacks),
         "PATH": f"{fake_bin}:{os.environ['PATH']}",
         "XDG_RUNTIME_DIR": str(tmp_path / "runtime"),
         # start.sh defaults to PULL_RETRY_DELAY=15, so the failing-pull case slept
@@ -160,6 +166,36 @@ def test_start_skips_prune_when_stack_fails(tmp_path: Path) -> None:
     assert result.returncode == 1
     assert "image prune -af" not in commands
     assert ">>> Skipping Docker image prune because one or more stacks failed" in result.stdout
+
+
+def test_start_validates_compose_file_before_pull(tmp_path: Path) -> None:
+    result, commands = run_start(tmp_path)
+
+    assert result.returncode == 0
+    assert commands.index("compose config --quiet") < commands.index("compose pull")
+
+
+def test_start_skips_invalid_stack_and_fails_run(tmp_path: Path) -> None:
+    result, commands = run_start(
+        tmp_path, stacks={"broken": {}}, invalid_stacks=("broken",)
+    )
+
+    assert result.returncode == 1
+    # Only the valid stack is pulled and brought up.
+    assert commands.count("compose pull") == 1
+    assert commands.count("compose up -d") == 1
+    assert "!! invalid compose file in" in result.stdout
+    assert "broken (docker compose config exit 15); skipping stack" in result.stdout
+    assert "   yaml: line 3: mapping values are not allowed in this context" in result.stdout
+    assert "   - broken" in result.stdout
+    assert "image prune -af" not in commands
+
+
+def test_start_validates_even_without_pull(tmp_path: Path) -> None:
+    result, commands = run_start(tmp_path, ["--no-pull"], invalid_stacks=("example",))
+
+    assert result.returncode == 1
+    assert "compose up -d" not in commands
 
 
 def network_creates(commands: list[str]) -> list[str]:
