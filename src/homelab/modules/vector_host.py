@@ -129,11 +129,13 @@ def config_sources(root: Path) -> list[Path]:
     ]
 
 
-def render_config(root: Path, host: str, out_dir: Path, shadow: bool) -> None:
+def render_config(
+    root: Path, host: str, out_dir: Path, shadow: bool, steam_logs: tuple[str, ...] = ()
+) -> None:
     """`vector.yaml`, `vector.test.yaml` and the journalctl wrapper into `out_dir`.
 
     vr-guest renders solar's Vector from this too (homelab-ops#402), so a host-native
-    Vector has one config whichever module installs it.
+    Vector has one config whichever module installs it; `steam_logs` is its addition.
     """
     base = victoria_logs_base(root)
     templates = root / MODULE_DIR / "templates"
@@ -145,6 +147,7 @@ def render_config(root: Path, host: str, out_dir: Path, shadow: bool) -> None:
         "JOURNALCTL_PATH": WRAPPER_PATH,
         "ENDPOINT": f"{base}/insert/elasticsearch/",
         "METRICS_PORT": METRICS_PORT,
+        "STEAM_LOGS": steam_logs,
     }
     out_dir.mkdir(parents=True, exist_ok=True)
     for name in (CONFIG_NAME, TESTS_NAME):

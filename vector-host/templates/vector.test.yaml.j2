@@ -2,3 +2,41 @@
 # `vector test` with these against the staged config before anything is installed.
 {%- import "journald.yaml.j2" as journald %}
 tests:{{ journald.tests(HOST) }}
+{%- if STEAM_LOGS %}
+
+  - name: SteamVR line gets its file's stream and its level
+    inputs:
+      - insert_at: steam_shape
+        type: log
+        log_fields:
+          message: "Mon Nov 16 2026 13:40:18.927508 [Error] - Failed Watchdog timeout"
+          file: "/var/home/u/.local/share/Steam/logs/vrserver.txt"
+          host: "{{ HOST }}"
+          source_type: file
+    outputs:
+      - extract_from: steam_shape
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.steam_log, "vrserver")
+              assert_eq!(.level, "error")
+              assert_eq!(._HOSTNAME, "{{ HOST }}")
+              assert!(!exists(.file))
+              assert!(!exists(.host))
+              assert!(!exists(.source_type))
+
+  - name: Steam client line without a level tag is info
+    inputs:
+      - insert_at: steam_shape
+        type: log
+        log_fields:
+          message: "[2026-11-16 13:27:20] [Logged On, 4, 7] [U:1:5] processing complete"
+          file: "/var/home/u/.local/share/Steam/logs/connection_log.txt"
+    outputs:
+      - extract_from: steam_shape
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.steam_log, "connection_log")
+              assert_eq!(.level, "info")
+{%- endif %}

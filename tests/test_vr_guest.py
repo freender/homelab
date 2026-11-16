@@ -232,15 +232,34 @@ def test_vector_config_is_vector_hosts_render_at_tenant_0(tmp_path: Path) -> Non
     root = fake_root(tmp_path)
     build_dir, _ = vr_guest.render_build(root, "solar")
     reference = tmp_path / "reference"
-    vector_host.render_config(root, "solar", reference, shadow=False)
+    vector_host.render_config(root, "solar", reference, shadow=False,
+                              steam_logs=vr_guest.steam_log_paths("/var/home/freender"))
 
     for name in ("vector.yaml", "vector.test.yaml", "journalctl-catchup"):
         assert (build_dir / "vector" / name).read_bytes() == (reference / name).read_bytes()
     config = yaml.safe_load((build_dir / "vector/vector.yaml").read_text(encoding="utf-8"))
-    sink = config["sinks"]["vlogs_journald"]
-    assert sink["endpoints"] == ["http://logs.internal:9428/insert/elasticsearch/"]
-    assert "request" not in sink
+    for sink in (config["sinks"]["vlogs_journald"], config["sinks"]["vlogs_steam"]):
+        assert sink["endpoints"] == ["http://logs.internal:9428/insert/elasticsearch/"]
+        assert "request" not in sink
     assert config["sources"]["journald"]["journalctl_path"] == "/usr/local/bin/journalctl-catchup"
+
+
+def test_vector_ships_the_steam_logs_the_skill_debugs_from(tmp_path: Path) -> None:
+    build_dir, _ = vr_guest.render_build(fake_root(tmp_path), "solar")
+    config = yaml.safe_load((build_dir / "vector/vector.yaml").read_text(encoding="utf-8"))
+
+    source = config["sources"]["steam_logs"]
+    logs = "/var/home/freender/.local/share/Steam/logs"
+    assert source["include"] == [f"{logs}/{name}" for name in (
+        "vrserver.txt", "vrcompositor.txt", "vrcompositor-linux.txt",
+        "console_log.txt", "connection_log.txt", "webhelper.txt", "webhelper_vr.txt")]
+    assert source["read_from"] == "end"
+    assert source["fingerprint"] == {"strategy": "device_and_inode"}
+    sink = config["sinks"]["vlogs_steam"]
+    assert sink["inputs"] == ["steam_shape"]
+    assert sink["query"]["_stream_fields"] == "_HOSTNAME,steam_log"
+    assert sink["acknowledgements"] == {"enabled": True}
+    assert sink["buffer"]["type"] == "disk"
 
 
 def test_validate_needs_victoria_logs(tmp_path: Path) -> None:
@@ -270,7 +289,9 @@ def test_the_unit_runs_vector_without_a_user_of_its_own() -> None:
     for line in ("DynamicUser=yes", "SupplementaryGroups=systemd-journal", "StateDirectory=vector",
                  "Environment=VECTOR_CONFIG=/etc/vector/homelab.yaml", "StartLimitIntervalSec=0",
                  "RestartSec=30s", "ExecStart=/usr/local/bin/vector",
-                 "ExecStartPre=/usr/local/bin/vector validate --skip-healthchecks"):
+                 "ExecStartPre=/usr/local/bin/vector validate --skip-healthchecks",
+                 "AmbientCapabilities=CAP_DAC_READ_SEARCH",
+                 "CapabilityBoundingSet=CAP_DAC_READ_SEARCH"):
         assert line in lines
     assert lines.index("StartLimitIntervalSec=0") < lines.index("[Service]")
 

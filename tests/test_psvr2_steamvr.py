@@ -81,6 +81,16 @@ class Solar:
         path = self.fake / "headset"
         path.touch() if present else path.unlink(missing_ok=True)
 
+    def connection_log(self, *lines: str) -> None:
+        path = Path(self.env["HOME"]) / ".local/share/Steam/logs/connection_log.txt"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("".join(f"{line}\n" for line in lines), encoding="utf-8")
+
+    def steam_client(self) -> None:
+        """A running Steam whose webhelper started with it, so it was never respawned."""
+        (self.fake / "ps_helper").write_text("999999 3990 /x/steamwebhelper\n", encoding="utf-8")
+        (self.fake / "ps_client").write_text("4000\n", encoding="utf-8")
+
     def run(self, *args: str) -> subprocess.CompletedProcess[str]:
         return subprocess.run([str(SCRIPT), *args], env=self.env, capture_output=True,
                               text=True, check=False, timeout=30)
@@ -254,6 +264,55 @@ def test_stop_does_not_restart_steam_after_a_failed_quit(solar: Solar) -> None:
 
     assert result.returncode == 1
     assert "steam -shutdown" not in solar.log
+
+
+LOGGED_ON = ("[2026-11-16 13:27:20] [Logged On, 4, 7] [U:1:51555675] "
+             "RecvMsgClientLogOnResponse() : processing complete")
+LOGGED_OFF = "[2026-11-14 09:17:35] [Logged Off, 0, 0] [U:1:0] CCMInterface::SetSteamID( [U:1:0] )"
+SIGNED_OUT = "[2026-11-15 15:07:53] [Logged Off, 0, 0] [U:1:51555675] Log session ended"
+
+
+def test_start_restarts_a_steam_that_is_not_logged_in(solar: Solar) -> None:
+    solar.procs()
+    solar.steam_client()
+    restarted = "[2026-11-16 18:00:00] Client version: 1794536281"
+    solar.connection_log(LOGGED_ON, "", restarted, LOGGED_OFF)
+
+    result = solar.run("start")
+
+    assert result.returncode == 0
+    assert "Steam is not logged in, restarting it" in result.stdout
+    assert solar.log.index("steam -shutdown") < next(
+        i for i, line in enumerate(solar.log) if "steam://rungameid/250820" in line)
+
+
+@pytest.mark.parametrize("last", [LOGGED_ON, SIGNED_OUT], ids=["logged-on", "known-account"])
+def test_start_leaves_a_steam_with_an_account_alone(solar: Solar, last: str) -> None:
+    solar.procs()
+    solar.steam_client()
+    solar.connection_log(LOGGED_OFF, last)
+
+    result = solar.run("start")
+
+    assert result.returncode == 0
+    assert "not logged in" not in result.stdout
+    assert "steam -shutdown" not in solar.log
+    assert any("steam://rungameid/250820" in line for line in solar.log)
+
+
+@pytest.mark.parametrize("client", [False, True], ids=["no-steam", "no-log"])
+def test_start_without_a_logged_off_steam_just_launches(solar: Solar, client: bool) -> None:
+    solar.procs()
+    if client:
+        solar.steam_client()
+    else:
+        solar.connection_log(LOGGED_OFF)
+
+    result = solar.run("start")
+
+    assert result.returncode == 0
+    assert "steam -shutdown" not in solar.log
+    assert any("steam://rungameid/250820" in line for line in solar.log)
 
 
 def test_start_after_a_quit_is_not_held_by_the_cooldown(solar: Solar) -> None:

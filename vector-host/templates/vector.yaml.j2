@@ -7,17 +7,80 @@
 # (homelab-ops#377), so Grafana, log-spikes and vmalert (tenant 0) never see
 # these lines twice.
 {%- endif %}
+{%- if STEAM_LOGS %}
+#
+# Also ships Steam's and SteamVR's own logs, which never reach the journal
+# (vr-guest), as their own streams: {_HOSTNAME="{{ HOST }}", steam_log=<file name>}.
+{%- endif %}
 {%- import "journald.yaml.j2" as journald %}
 data_dir: {{ DATA_DIR }}
 
 sources:{{ journald.source(JOURNALCTL_PATH) }}
+{%- if STEAM_LOGS %}
+
+  # A file present at the first start ships from its end. One created later ships
+  # whole: Steam renames the old one to *.previous.txt, out of this list, and starts
+  # anew. Inode, not checksum: several open with the same blank lines.
+  steam_logs:
+    type: file
+    include:
+{%- for path in STEAM_LOGS %}
+      - "{{ path }}"
+{%- endfor %}
+    read_from: end
+    fingerprint:
+      strategy: device_and_inode
+{%- endif %}
 
   internal:
     type: internal_metrics
 
 transforms:{{ journald.transform(HOST) }}
+{%- if STEAM_LOGS %}
+
+  # `level` from SteamVR's [Info]/[Warning]/[Error] tag; Steam's own logs carry
+  # none and stay info. The timestamp is when Vector read the line.
+  steam_shape:
+    type: remap
+    inputs: [steam_logs]
+    source: |
+      file = string(del(.file)) ?? ""
+      .steam_log = replace(file, r'^.*/|\.txt$', "")
+      tag = parse_regex(string(.message) ?? "", r'\[(?P<level>Info|Warning|Error)\]') ?? {}
+      .level = downcase(string(tag.level) ?? "info")
+      del(.host)
+      del(.source_type)
+      ._HOSTNAME = "{{ HOST }}"
+{%- endif %}
 
 sinks:{{ journald.sink(ENDPOINT, SHADOW) }}
+{%- if STEAM_LOGS %}
+
+  vlogs_steam:
+    type: elasticsearch
+    inputs: [steam_shape]
+    endpoints: ["{{ ENDPOINT }}"]
+    mode: bulk
+    api_version: v8
+    compression: gzip
+    healthcheck:
+      enabled: false
+    query:
+      _msg_field: message
+      _time_field: timestamp
+      _stream_fields: _HOSTNAME,steam_log
+{%- if SHADOW %}
+    request:
+      headers:
+        AccountID: "1"
+{%- endif %}
+    acknowledgements:
+      enabled: true
+    buffer:
+      type: disk
+      max_size: 268435488
+      when_full: block
+{%- endif %}
 
   metrics:
     type: prometheus_exporter

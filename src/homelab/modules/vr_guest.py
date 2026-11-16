@@ -60,6 +60,13 @@ VECTOR_FILES = (
     (vector_host.CONFIG_NAME, vector_host.CONFIG_PATH, "644", vector_host.CONFIG_PATH),
     (vector_host.WRAPPER_NAME, vector_host.WRAPPER_PATH, "755", "vector_wrapper"),
 )
+# Steam's and SteamVR's logs Vector ships beside the journal, under the desktop home:
+# the ones the vr skill debugs from. The unit's CAP_DAC_READ_SEARCH reads them.
+STEAM_LOG_DIR = ".local/share/Steam/logs"
+STEAM_LOGS = (
+    "vrserver.txt", "vrcompositor.txt", "vrcompositor-linux.txt",
+    "console_log.txt", "connection_log.txt", "webhelper.txt", "webhelper_vr.txt",
+)
 
 # The vr stage's pinned BnuuySolutions releases: env prefix -> (repo, tag, zip asset,
 # its sha256). Verified against the files solar ran on 2026-11-15.
@@ -222,6 +229,10 @@ def bluez_inputs(root: Path) -> str:
     return digest.hexdigest()
 
 
+def steam_log_paths(home: str) -> tuple[str, ...]:
+    return tuple(f"{home}/{STEAM_LOG_DIR}/{name}" for name in STEAM_LOGS)
+
+
 def sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
@@ -285,7 +296,8 @@ def render_build(root: Path, host: str) -> tuple[Path, tuple[FileSpec, ...]]:
         shutil.copyfile(source, build_dir / name)
 
     vector_dir = build_dir / VECTOR_DIR
-    vector_host.render_config(root, host, vector_dir, shadow=False)
+    vector_host.render_config(root, host, vector_dir, shadow=False,
+                              steam_logs=steam_log_paths(home))
     manifest = check_manifest(root, host, home, vector_dir)
     (build_dir / MANIFEST_NAME).write_text(
         json.dumps(manifest, indent=2) + "\n", encoding="utf-8"

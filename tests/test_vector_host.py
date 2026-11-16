@@ -131,6 +131,8 @@ def test_render_ships_the_journal_to_the_shadow_tenant_only_when_asked(
 
     assert config["data_dir"] == "/var/lib/vector"
     assert set(config["sources"]) == {"journald", "internal"}
+    assert set(config["sinks"]) == {"vlogs_journald", "metrics"}
+    assert set(config["transforms"]) == {"journald_shape"}
     assert config["sources"]["journald"]["journalctl_path"] == "/usr/local/bin/journalctl-catchup"
     sink = config["sinks"]["vlogs_journald"]
     assert sink["endpoints"] == ["http://logs.internal:9428/insert/elasticsearch/"]

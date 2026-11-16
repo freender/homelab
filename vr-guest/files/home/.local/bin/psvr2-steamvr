@@ -4,6 +4,9 @@
 # 71-psvr2-steamvr.rules pulls it in, and `stop` when the headset's device unit
 # goes away. `quit` quits SteamVR without the headset check, for testing.
 #
+# Before launching SteamVR it restarts a Steam whose webhelper was respawned or
+# that is not logged in: either leaves the launch waiting on a prompt nobody sees.
+#
 # Quitting asks vrmonitor first, then SIGTERM, then SIGKILL, and fails if SteamVR
 # survives all three. After a headset-off quit it restarts Steam if the quit
 # crashed its webhelper. During system shutdown it quits at once, with no grace.
@@ -25,6 +28,7 @@ STEAM_EXIT_TIMEOUT=30
 WEBHELPER_RESPAWN_AGE=60
 # Quitting SteamVR aborts steamwebhelper about 2s later (ValveSoftware/SteamVR-for-Linux#964).
 WEBHELPER_CRASH_WAIT=5
+CONNECTION_LOG="$HOME/.local/share/Steam/logs/connection_log.txt"
 # The headset's sound card, the same device the service is bound to.
 HEADSET_UNIT=dev-psvr2.device
 STEAMVR_PROCS=(vrmonitor vrdashboard vrwebhelper vrcompositor vrserver)
@@ -85,6 +89,17 @@ webhelper_respawned() {
     echo "steamwebhelper is ${helper_age}s old but Steam ${client_age}s: respawned, restarting Steam"
 }
 
+# Sets steam_client when the running Steam is not logged in. A Steam started with
+# no usable screen sits at a login window it never shows, and its connection log
+# ends on a Logged Off state with no account ([U:1:0]); a restart logs it in.
+steam_logged_off() {
+    local last
+    read -r steam_client _ _ < <(steam_ages) || return 1
+    last=$(grep -E '^\[[^]]+\] \[[^]]+\] \[U:' "$CONNECTION_LOG" 2>/dev/null | tail -n1) || return 1
+    [[ "$last" == *"] [Logged Off, "*"] [U:1:0] "* ]] || return 1
+    echo "Steam is not logged in, restarting it"
+}
+
 shutdown_steam() {
     local i
     timeout 10 steam -shutdown >/dev/null 2>&1 9>&- || true
@@ -137,7 +152,7 @@ start() {
     echo "$now" >"$state.last"
 
     wake_screen
-    if webhelper_respawned; then
+    if webhelper_respawned || steam_logged_off; then
         shutdown_steam
     fi
     sleep "$SETTLE"

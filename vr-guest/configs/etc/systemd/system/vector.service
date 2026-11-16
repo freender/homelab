@@ -1,5 +1,5 @@
 [Unit]
-Description=Vector: ships the journal to VictoriaLogs on helm (vr-guest, homelab-ops#402)
+Description=Vector: ships the journal and Steam's logs to VictoriaLogs on helm (vr-guest, homelab-ops#402)
 Documentation=https://vector.dev
 After=network-online.target
 Wants=network-online.target
@@ -13,9 +13,14 @@ StartLimitIntervalSec=0
 # needs. /var/lib/vector is the config's data_dir.
 DynamicUser=yes
 SupplementaryGroups=systemd-journal
+# Steam's logs sit under the desktop user's 0700 home. Read-only bypass, so no
+# ACLs to keep alive as Steam renames and recreates them; DynamicUser already
+# makes the home read-only to this unit.
+AmbientCapabilities=CAP_DAC_READ_SEARCH
+CapabilityBoundingSet=CAP_DAC_READ_SEARCH
 StateDirectory=vector
 Environment=VECTOR_CONFIG=/etc/vector/homelab.yaml
-# A journald-only pipeline needs no more; the default is one worker per CPU.
+# A journal and a few log files need no more; the default is one worker per CPU.
 Environment=VECTOR_THREADS=2
 ExecStartPre=/usr/local/bin/vector validate --skip-healthchecks
 ExecStart=/usr/local/bin/vector
