@@ -5,7 +5,7 @@
  },
  {
   "key": "agent",
-  "value": "enabled=1"
+  "value": "enabled=1,freeze-fs-on-backup=0"
  },
  {
   "key": "bios",
