@@ -175,9 +175,12 @@ route:
     #
     # group_by: [alertname] collapses every host that needs a reboot into one
     # weekly message instead of one per host, same as the Proxmox digest.
+    #
+    # SolarUpdatePending rides along: a staged Bazzite image waiting for a VM
+    # power-cycle is the same kind of deliberately standing condition.
     - receiver: mwbot
       matchers:
-        - alertname="RebootRequired"
+        - alertname=~"RebootRequired|SolarUpdatePending"
       group_by:
         - alertname
       repeat_interval: 24h
@@ -321,9 +324,9 @@ route:
 # an outage, and this rule cleans up everything slower than they are.
 inhibit_rules:
   - source_matchers:
-      - alertname=~"NodeDown|NodeDownOffsite"
+      - alertname=~"NodeDown|NodeDownOffsite|NodeDownSolar"
     target_matchers:
-      - alertname!~"NodeDown|NodeDownOffsite"
+      - alertname!~"NodeDown|NodeDownOffsite|NodeDownSolar"
       - alertname!="Watchdog"
     equal:
       - host
@@ -350,6 +353,14 @@ inhibit_rules:
     target_matchers:
       - alertname=~"NodeDown|NodeDownOffsite"
       - host=~"xur|deepstone"
+
+  # Same reasoning for solar on clovis: its GPU and USB passthrough pin it to
+  # clovis, so it is not HA-managed and goes down with the node every time.
+  - source_matchers:
+      - alertname="NodeDown"
+      - host="clovis"
+    target_matchers:
+      - alertname="NodeDownSolar"
 
 # These windows mute the expected churn from the repo's own scheduled jobs in
 # hosts.conf, so they are load-bearing despite predating the retirement of

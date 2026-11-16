@@ -5,6 +5,7 @@
 #   rsync -a ~/homelab/pve-gpu-passthrough/linux/ freender@solar:solar-setup/
 #   ssh freender@solar solar-setup/setup.sh base     # before Steam; reboot after
 #   ssh freender@solar solar-setup/setup.sh vr       # after Steam, SteamVR and PS VR2 App
+#   ssh freender@solar solar-setup/setup.sh metrics  # node_exporter + solar-metrics (base runs it too)
 #   ssh freender@solar solar-setup/setup.sh check    # read-only verification
 #
 # Every step is idempotent. The patched BlueZ is a separate step: bluez-eagain/README.md.
@@ -27,10 +28,17 @@ UNITYSETUP_URL=https://github.com/BnuuySolutions/PSVR2Toolkit.UnitySetup/release
 UNITYSETUP_SHA=5e223773e6615f71b9496393ae9e1d74df43cab2a30e67e1a1b389e4cc8ad7da
 SVLF_URL=https://github.com/BnuuySolutions/SteamVRLinuxFixes/releases/download/v0.2.1/VK_LAYER_BNUUY_steamvr_linux_fixes.zip
 SVLF_SHA=af649a5aa45b732aa29989c401d23d9088f013c105c1d94893d77192addb6d05
+NODE_EXPORTER_VERSION=1.12.1
+NODE_EXPORTER_URL=https://github.com/prometheus/node_exporter/releases/download/v$NODE_EXPORTER_VERSION/node_exporter-$NODE_EXPORTER_VERSION.linux-amd64.tar.gz
+NODE_EXPORTER_SHA=b51d8a76aa2a9156a55d501aca6276fae09e262259a5e4e831d2c2222f084e63
+TEXTFILE_DIR=/var/lib/node_exporter/textfile
+BLUEZ_MARKER=/usr/local/libexec/bluetooth/bluetoothd.built-for
+METRICS_UNITS=(node_exporter.service solar-metrics.service solar-metrics.timer)
 
 say() { printf '\n== %s\n' "$*"; }
-ok() { printf '  ok    %s\n' "$*"; }
-bad() { printf '  FAIL  %s\n' "$*"; FAILED=1; }
+# check output is parsed by solar-metrics: the id is one token, the reason follows ": ".
+ok() { printf '  ok    %s\n' "$1"; }
+bad() { printf '  FAIL  %s: %s\n' "$1" "$2"; FAILED=1; }
 
 install_etc() { # <repo path under etc/> <mode>
   local src="$HERE/etc/$1" dst="/etc/$1"
@@ -94,6 +102,33 @@ base() {
   kwriteconfig6 --notify --file powerdevilrc --group AC --group Display --key TurnOffDisplayWhenIdle false
   kwriteconfig6 --notify --file kscreenlockerrc --group Daemon --key Autolock false
   kwriteconfig6 --notify --file kscreenlockerrc --group Daemon --key LockOnResume false
+
+  metrics
+}
+
+# node_exporter on :9100 (FedoraWorkstation zone already allows 1025-65535/tcp) plus
+# the solar-metrics timer. Alert rules: vmalert-rules/configs/solar.yml.
+metrics() {
+  say "metrics: node_exporter $NODE_EXPORTER_VERSION + solar-metrics timer"
+  if [ "$(/usr/local/bin/node_exporter --version 2>/dev/null | awk 'NR==1 {print $3}')" != "$NODE_EXPORTER_VERSION" ]; then
+    local z
+    z=$(fetch "$NODE_EXPORTER_URL" "$NODE_EXPORTER_SHA")
+    tar -xzf "$z" -C "$DL" --strip-components=1 "node_exporter-$NODE_EXPORTER_VERSION.linux-amd64/node_exporter"
+    sudo install -m 0755 "$DL/node_exporter" /usr/local/bin/node_exporter
+    sudo restorecon /usr/local/bin/node_exporter
+    echo "  installed /usr/local/bin/node_exporter"
+  fi
+  if ! cmp -s "$HERE/solar-metrics" /usr/local/libexec/solar-metrics; then
+    sudo install -D -m 0755 "$HERE/solar-metrics" /usr/local/libexec/solar-metrics
+    sudo restorecon /usr/local/libexec/solar-metrics
+    echo "  installed /usr/local/libexec/solar-metrics"
+  fi
+  sudo install -d -m 0755 -o "$USER" -g "$USER" "$TEXTFILE_DIR"
+  for u in "${METRICS_UNITS[@]}"; do install_etc "systemd/system/$u" 0644; done
+  sudo systemctl daemon-reload
+  sudo systemctl enable --now node_exporter.service solar-metrics.timer
+  sudo systemctl try-restart node_exporter.service
+  sudo systemctl start solar-metrics.service
 }
 
 vr() {
@@ -158,45 +193,58 @@ check() {
   FAILED=0
   local cmdline
   cmdline=$(cat /proc/cmdline)
-  [ "$(hostnamectl --static)" = solar ] && ok hostname || bad "hostname is '$(hostnamectl --static)'"
+  [ "$(hostnamectl --static)" = solar ] && ok hostname || bad hostname "is '$(hostnamectl --static)'"
   for k in "${KARGS[@]}"; do
-    [[ " $cmdline " == *" $k "* ]] && ok "karg $k" || bad "karg $k not booted"
+    [[ " $cmdline " == *" $k "* ]] && ok "karg:$k" || bad "karg:$k" "not booted"
   done
   [ "$(cat /sys/module/nvidia_modeset/parameters/conceal_vrr_caps 2>/dev/null)" = Y ] \
-    && ok "conceal_vrr_caps=Y" || bad "conceal_vrr_caps not Y"
+    && ok conceal_vrr_caps || bad conceal_vrr_caps "not Y"
   for f in ssh/sshd_config.d/10-key-only.conf plasmalogin.conf.d/autologin.conf \
-    udev/rules.d/70-xrhardware.rules udev/rules.d/71-psvr2-steamvr.rules; do
-    sudo cmp -s "$HERE/etc/$f" "/etc/$f" && ok "/etc/$f" || bad "/etc/$f differs from repo"
+    udev/rules.d/70-xrhardware.rules udev/rules.d/71-psvr2-steamvr.rules \
+    "${METRICS_UNITS[@]/#/systemd/system/}"; do
+    sudo cmp -s "$HERE/etc/$f" "/etc/$f" && ok "/etc/$f" || bad "/etc/$f" "differs from repo"
   done
   for f in .local/bin/psvr2-steamvr:psvr2-steamvr .local/bin/psvr2-audio:psvr2-audio \
     .config/systemd/user/psvr2-steamvr.service:psvr2-steamvr.service; do
-    cmp -s "$HERE/${f#*:}" "$HOME/${f%%:*}" && ok "\$HOME/${f%%:*}" || bad "\$HOME/${f%%:*} differs from repo"
+    cmp -s "$HERE/${f#*:}" "$HOME/${f%%:*}" && ok "home/${f%%:*}" || bad "home/${f%%:*}" "differs from repo"
   done
-  mountpoint -q /var/mnt/steam && ok "/var/mnt/steam mounted" || bad "/var/mnt/steam not mounted"
-  systemctl is-active -q sshd && ok sshd || bad "sshd not active"
-  [ -f "$HOME/.local/lib/libsteamvr_linux_fixes.so" ] && ok "SteamVRLinuxFixes layer" || bad "SteamVRLinuxFixes layer missing"
+  mountpoint -q /var/mnt/steam && ok steam_library || bad steam_library "/var/mnt/steam not mounted"
+  systemctl is-active -q sshd && ok sshd || bad sshd "not active"
+  [ -f "$HOME/.local/lib/libsteamvr_linux_fixes.so" ] && ok steamvr_linux_fixes || bad steamvr_linux_fixes "layer missing"
   [ "$(readlink -f "$PLUGIN/bin/linux64/driver_playstation_vr2.so")" = "$HOME/ignition/libdriver_ignition.so" ] \
-    && ok "Ignition shim" || bad "Ignition shim missing"
+    && ok ignition_shim || bad ignition_shim "driver_playstation_vr2.so is not the Ignition shim"
   cmp -s "$PLUGIN/bin/win64/driver_playstation_vr2.dll" <(unzip -p "$DL/PSVR2TK-win64-Ignition.zip" driver_playstation_vr2.dll 2>/dev/null) \
-    && ok "PSVR2Toolkit dll" || bad "driver_playstation_vr2.dll is not the pinned PSVR2Toolkit (Steam restored Sony's?)"
+    && ok psvr2toolkit_dll || bad psvr2toolkit_dll "driver_playstation_vr2.dll is not the pinned PSVR2Toolkit (Steam restored Sony's?)"
   grep -q "PlayStation VR2 App/SteamVR_Plug-In" "$HOME/.config/openvr/openvrpaths.vrpath" 2>/dev/null \
-    && ok "driver registered in openvrpaths" || bad "PS VR2 driver not in openvrpaths external_drivers"
+    && ok openvr_driver || bad openvr_driver "PS VR2 driver not in openvrpaths external_drivers"
   sudo getcap "$STEAMVR/bin/linux64/vrcompositor-launcher" | grep -q cap_sys_nice \
-    && ok "vrcompositor-launcher cap_sys_nice" || bad "vrcompositor-launcher lost cap_sys_nice"
+    && ok compositor_cap_sys_nice || bad compositor_cap_sys_nice "vrcompositor-launcher lost cap_sys_nice"
   [ "$(xdg-mime query default x-scheme-handler/vrmonitor 2>/dev/null)" = valve-vrmonitor.desktop ] \
-    && ok "vrmonitor:// handler" || bad "no vrmonitor:// handler"
+    && ok vrmonitor_handler || bad vrmonitor_handler "no vrmonitor:// handler"
   [ "$(readlink "$HOME/.config/openxr/1/active_runtime.json")" = "$STEAMVR/steamxr_linux64.json" ] \
-    && ok "OpenXR runtime SteamVR" || bad "OpenXR runtime not SteamVR"
+    && ok openxr_runtime || bad openxr_runtime "not SteamVR"
   jq -e '.steamvr | .enableLinuxVulkanAsync and .useFacetRenderer and (.showMirrorView == false)' \
-    "$HOME/.steam/steam/config/steamvr.vrsettings" >/dev/null && ok "steamvr.vrsettings" || bad "steamvr.vrsettings values"
+    "$HOME/.steam/steam/config/steamvr.vrsettings" >/dev/null && ok steamvr_settings || bad steamvr_settings "values differ"
   systemctl show -p ExecStart bluetooth | grep -q /usr/local/libexec/bluetooth/bluetoothd \
-    && ok "patched bluetoothd" || bad "stock bluetoothd (bluez-eagain not installed)"
+    && ok patched_bluetoothd || bad patched_bluetoothd "stock bluetoothd (bluez-eagain not installed)"
+  # A Bazzite update that ships a new terra-bluez leaves the old patched build running.
+  local bluez built
+  bluez=$(rpm -q terra-bluez 2>/dev/null) || bluez="terra-bluez not installed"
+  built=$(cat "$BLUEZ_MARKER" 2>/dev/null) || built="unknown (no $BLUEZ_MARKER)"
+  [ "$bluez" = "$built" ] && ok bluez_build_matches \
+    || bad bluez_build_matches "image has $bluez, patched bluetoothd built for $built: rebuild (bluez-eagain/README.md)"
+  [ "$(/usr/local/bin/node_exporter --version 2>/dev/null | awk 'NR==1 {print $3}')" = "$NODE_EXPORTER_VERSION" ] \
+    && ok node_exporter_version || bad node_exporter_version "not $NODE_EXPORTER_VERSION"
+  cmp -s "$HERE/solar-metrics" /usr/local/libexec/solar-metrics \
+    && ok solar_metrics_script || bad solar_metrics_script "/usr/local/libexec/solar-metrics differs from repo"
+  systemctl is-enabled -q solar-metrics.timer && ok solar_metrics_timer || bad solar_metrics_timer "not enabled"
   return "$FAILED"
 }
 
 case "${1:-}" in
   base) base ;;
   vr) vr ;;
+  metrics) metrics ;;
   check) check ;;
-  *) echo "usage: $0 base|vr|check" >&2; exit 2 ;;
+  *) echo "usage: $0 base|vr|metrics|check" >&2; exit 2 ;;
 esac

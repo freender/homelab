@@ -1,0 +1,83 @@
+groups:
+  - name: solar
+    interval: 1m
+    rules:
+      # solar (Bazzite VR VM) publishes these through node_exporter's textfile
+      # collector: solar-metrics.timer runs pve-gpu-passthrough/linux/solar-metrics
+      # every 15 minutes, which runs `setup.sh check` and reads rpm-ostree and the
+      # uupd journal. Nothing here is apt: Bazzite's uupd.timer stages a new image
+      # daily by itself and never reboots, and solar is always on.
+
+      # One series per setup.sh check id (karg:..., /etc/..., psvr2toolkit_dll,
+      # compositor_cap_sys_nice, bluez_build_matches, ...). 30m absorbs a
+      # `setup.sh vr` run or a SteamVR update mid-flight; anything that stays
+      # failed past that needs a hand on solar. bluez_build_matches is the one
+      # that fires after a Bazzite update: the patched bluetoothd was built for
+      # the previous terra-bluez.
+      - alert: SolarPatchCheckFailed
+        expr: homelab_solar_check{host="solar"} == 0
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "solar: setup.sh check {{ $labels.check }} failed"
+          description: "The solar guest-side check `{{ $labels.check }}` has failed for 30 minutes. Run `~/solar-setup/setup.sh check` on solar for the reason. Common causes: a SteamVR update dropped cap_sys_nice (setcap, see the vr skill), a PS VR2 App update restored Sony's dll (re-run `setup.sh vr` with SteamVR quit), or a Bazzite update shipped a new terra-bluez (`bluez_build_matches`: rebuild per pve-gpu-passthrough/linux/bluez-eagain/README.md, or roll back). /etc or script drift: rsync the repo copy to ~/solar-setup and re-run the owning stage."
+
+      # A staged (or finalized, not yet booted) Bazzite image only applies on a
+      # full power-off/on of VM 106. uupd replaces the staged image daily without
+      # changing this series' labels, so `for:` keeps counting from the first
+      # staged image until solar actually boots into one. Routed to the Saturday
+      # digest with RebootRequired.
+      - alert: SolarUpdatePending
+        expr: homelab_ostree_update_pending{host="solar"} == 1
+        for: 7d
+        labels:
+          severity: warning
+        annotations:
+          summary: "solar: a Bazzite update has waited a week for a power-cycle"
+          description: "solar has had a newer Bazzite deployment staged for 7 days (homelab_ostree_pending_info shows its version). Check whether it changes terra-bluez first: `rpm-ostree db diff | grep -i bluez` on solar; if so, the patched bluetoothd needs a rebuild after the boot. Apply with a full power-cycle when nobody is in the headset: `ssh clovis qm shutdown 106 && ssh clovis qm start 106`."
+
+      # Updates are not landing at all: no pending image, and the booted one is
+      # three weeks old. Bazzite stable publishes far more often than that, so
+      # this means uupd's system module is skipping or failing quietly.
+      - alert: SolarImageStale
+        expr: |
+          (time() - homelab_ostree_booted_timestamp_seconds{host="solar"}) > 21 * 86400
+          and on(host) homelab_ostree_update_pending{host="solar"} == 0
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "solar: booted Bazzite image is over 3 weeks old and nothing is staged"
+          description: "solar's booted image was built more than 21 days ago and uupd has staged nothing newer. Check `journalctl -u uupd.service -b` and `rpm-ostree status` on solar, then `sudo uupd` by hand."
+
+      # uupd.timer runs daily. A failed run that exhausts its restarts also
+      # leaves uupd.service failed, which SystemdUnitFailed reports; this
+      # catches the run that never happens or never completes.
+      - alert: SolarUpdatesFailing
+        expr: (time() - homelab_uupd_last_success_timestamp_seconds{host="solar"}) > 3 * 86400
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "solar: no successful Bazzite update run in 3 days"
+          description: "uupd has not logged 'Updates Completed Successfully' on solar for 3 days (0 means none in the 30-day journal window). Check `systemctl list-timers uupd.timer` and `journalctl -u uupd.service --since=-3d` on solar."
+
+      # The check run itself, gated on the host being up so a powered-off solar
+      # reports NodeDownSolar only. Covers solar-metrics not running, setup.sh
+      # missing from ~/solar-setup, and a run that produced no results.
+      - alert: SolarMetricsMissing
+        expr: |
+          (
+            absent_over_time(homelab_solar_check_run_success{host="solar"}[1h])
+            or homelab_solar_check_run_success{host="solar"} == 0
+            or time() - node_textfile_mtime_seconds{host="solar",file=~".*/solar\\.prom"} > 3600
+          )
+          and on(host) (min_over_time(up{job="pve-node", host="solar"}[30m]) == 1)
+        for: 15m
+        labels:
+          severity: warning
+          host: solar
+        annotations:
+          summary: "solar: patch and update metrics are missing or stale"
+          description: "solar.prom has not been refreshed for an hour, or the last `setup.sh check` run reported nothing, so SolarPatchCheckFailed and the update rules are blind. Check `systemctl status solar-metrics.timer solar-metrics.service` and `journalctl -u solar-metrics.service` on solar, and that ~/solar-setup/setup.sh exists."

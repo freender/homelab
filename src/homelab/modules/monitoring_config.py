@@ -10,7 +10,7 @@ from ..module_support import connection_for_host, normalize_bool, run_module_dep
 from ..output import print_sub
 from ..ssh import build_files, diff_many
 from ..templates import render_template_text
-from .metrics_exporters import exporter_flags
+from .metrics_exporters import exporter_flags, is_external
 
 MODULE_DIR = "monitoring-config"
 REMOTE_ROOT = "/tmp/homelab-monitoring-config"
@@ -61,8 +61,11 @@ def scrape_targets(root: Path) -> dict[str, list[ScrapeTarget]]:
     }
     for host in registry.list_hosts(EXPORTER_FEATURE):
         name = scrape_name(registry, host)
-        flags = exporter_flags(root, host)
         jobs["pve-node"].append(ScrapeTarget(host, f"{name}:{NODE_EXPORTER_PORT}"))
+        # An external host runs node_exporter only, whatever its other flags say.
+        if is_external(registry, host):
+            continue
+        flags = exporter_flags(root, host)
         if not flags.lxc_guest:
             jobs["pve-smartctl"].append(ScrapeTarget(host, f"{name}:{SMARTCTL_EXPORTER_PORT}"))
         if flags.has_apcupsd:

@@ -1,0 +1,109 @@
+#!/usr/bin/python3
+"""Textfile metrics for solar: setup.sh check results and Bazzite update state.
+
+Run by solar-metrics.timer as the desktop user (setup.sh check expects its $HOME
+and passwordless sudo). node_exporter's textfile collector publishes the result;
+the rules are vmalert-rules/configs/solar.yml.
+"""
+import json
+import os
+import re
+import subprocess
+import tempfile
+from pathlib import Path
+
+TEXTFILE = Path("/var/lib/node_exporter/textfile/solar.prom")
+SETUP = Path.home() / "solar-setup" / "setup.sh"
+CHECK_LINE = re.compile(r"^\s+(ok|FAIL)\s+(\S+?)(?::\s.*)?$")
+UUPD_DONE = "Updates Completed Successfully"
+
+
+def escape(value: str) -> str:
+    return value.replace("\\", "\\\\").replace('"', '\\"').replace("\n", " ")
+
+
+def run(*cmd: str) -> subprocess.CompletedProcess:
+    return subprocess.run(cmd, capture_output=True, text=True, timeout=300, check=False)
+
+
+def check_metrics() -> list[str]:
+    lines = [
+        "# HELP homelab_solar_check 1 when a setup.sh check item passes, 0 when it fails.",
+        "# TYPE homelab_solar_check gauge",
+    ]
+    results = []
+    if SETUP.is_file():
+        proc = run("bash", str(SETUP), "check")
+        results = [m.groups() for m in map(CHECK_LINE.match, proc.stdout.splitlines()) if m]
+        ran = proc.returncode in (0, 1) and bool(results)
+    else:
+        ran = False
+    for status, check in results:
+        lines.append(f'homelab_solar_check{{check="{escape(check)}"}} {int(status == "ok")}')
+    lines += [
+        "# HELP homelab_solar_check_run_success 1 when setup.sh check ran and reported results.",
+        "# TYPE homelab_solar_check_run_success gauge",
+        f"homelab_solar_check_run_success {int(ran)}",
+    ]
+    return lines
+
+
+def ostree_metrics() -> list[str]:
+    proc = run("rpm-ostree", "status", "--json")
+    if proc.returncode != 0:
+        return []
+    deployments = json.loads(proc.stdout).get("deployments") or []
+    booted = next((d for d in deployments if d.get("booted")), None)
+    if booted is None:
+        return []
+    # A staged or finalized-but-unbooted deployment sorts ahead of the booted one.
+    pending = deployments[0] if not deployments[0].get("booted") else None
+    image = booted.get("container-image-reference", "")
+    lines = [
+        "# HELP homelab_ostree_booted_info The booted rpm-ostree deployment.",
+        "# TYPE homelab_ostree_booted_info gauge",
+        f'homelab_ostree_booted_info{{version="{escape(booted.get("version", ""))}",'
+        f'image="{escape(image)}"}} 1',
+        "# HELP homelab_ostree_booted_timestamp_seconds Build time of the booted image.",
+        "# TYPE homelab_ostree_booted_timestamp_seconds gauge",
+        f"homelab_ostree_booted_timestamp_seconds {int(booted.get('timestamp', 0))}",
+        "# HELP homelab_ostree_update_pending 1 when a newer deployment waits for a reboot.",
+        "# TYPE homelab_ostree_update_pending gauge",
+        f"homelab_ostree_update_pending {int(pending is not None)}",
+    ]
+    if pending is not None:
+        lines += [
+            "# HELP homelab_ostree_pending_info The deployment the next boot will use.",
+            "# TYPE homelab_ostree_pending_info gauge",
+            f'homelab_ostree_pending_info{{version="{escape(pending.get("version", ""))}"}} 1',
+        ]
+    return lines
+
+
+def uupd_metrics() -> list[str]:
+    # The journal, not the unit's ExecMainExitTimestamp: that resets on every boot.
+    proc = run(
+        "journalctl", "-q", "-u", "uupd.service", "--since=-30d",
+        "-o", "short-unix", f"--grep={UUPD_DONE}",
+    )
+    stamps = [line.split(None, 1)[0] for line in proc.stdout.splitlines() if UUPD_DONE in line]
+    last = int(float(stamps[-1])) if stamps else 0
+    return [
+        "# HELP homelab_uupd_last_success_timestamp_seconds Last uupd run that completed "
+        "successfully (0: none in 30 days).",
+        "# TYPE homelab_uupd_last_success_timestamp_seconds gauge",
+        f"homelab_uupd_last_success_timestamp_seconds {last}",
+    ]
+
+
+def main() -> None:
+    body = "\n".join(check_metrics() + ostree_metrics() + uupd_metrics()) + "\n"
+    fd, tmp = tempfile.mkstemp(dir=TEXTFILE.parent, prefix=".solar.prom.")
+    with os.fdopen(fd, "w") as handle:
+        handle.write(body)
+    os.chmod(tmp, 0o644)
+    os.replace(tmp, TEXTFILE)
+
+
+if __name__ == "__main__":
+    main()

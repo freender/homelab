@@ -631,7 +631,7 @@ def test_the_real_inventory_renders_the_expected_targets() -> None:
     assert by_host("pve-node") == {
         **{h: f"{h}.{lan}:9100" for h in (
             "ace", "bray", "clovis", "osiris", "arc", "xur", "deepstone", "neo",
-            "tower", "riven", "helm", "ghost",
+            "tower", "riven", "helm", "ghost", "solar",
         )},
         "cottonwood": "cottonwood.internal:9100",
         "cinci": "cinci.internal:9100",
@@ -716,6 +716,11 @@ def test_scrape_targets_follow_the_exporter_flags(tmp_path: Path) -> None:
                 "vector-host": {"shadow": True},
             }),
             "plain-shipper": inventory_host("plain.lan", **{"vector-host": None}),
+            # Not an LXC guest and flagged for a GPU exporter, yet only node is scraped.
+            "outside": inventory_host(
+                "outside.lan",
+                **{"metrics-exporters": {"external": True, "intel_gpu_exporter": {"x": 1}}},
+            ),
         },
     )
 
@@ -730,12 +735,43 @@ def test_scrape_targets_follow_the_exporter_flags(tmp_path: Path) -> None:
             ("ups-slave", "slave.lan:9100"),
             ("guest", "guest.lan:9100"),
             ("shipper", "shipper.lan:9100"),
+            ("outside", "outside.lan:9100"),
         ],
         "pve-smartctl": [("metal", "metal.lan:9633"), ("ups-slave", "slave.lan:9633")],
         "apcupsd": [("metal", "metal.lan:9162")],
         "intel-gpu": [("metal", "metal.lan:9400")],
         "vector-host": [("shipper", "shipper.lan:9598"), ("plain-shipper", "plain.lan:9598")],
     }
+
+
+def test_metrics_exporters_never_touches_an_external_host(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """solar installs node_exporter itself; metrics-exporters only lists it for the
+    scrape, so a live deploy must not build, connect or stage anything there."""
+    from homelab.modules import metrics_exporters
+
+    outside = inventory_host("outside.lan", **{"metrics-exporters": {"external": True}})
+    write_inventory(tmp_path, {"outside": outside})
+
+    def refuse(*_args, **_kwargs):
+        raise AssertionError("an external host must not be deployed to")
+
+    monkeypatch.setattr(metrics_exporters, "prepare_build_dir", refuse)
+    monkeypatch.setattr(metrics_exporters, "HostConnection", refuse)
+    monkeypatch.setattr(metrics_exporters, "stage_and_run_remote_installer", refuse)
+
+    metrics_exporters.deploy_host(tmp_path, "outside", dry_run=False, force=False)
+
+
+def test_external_must_be_a_boolean(tmp_path: Path) -> None:
+    from homelab.modules import metrics_exporters
+
+    write_inventory(
+        tmp_path, {"odd": inventory_host("odd.lan", **{"metrics-exporters": {"external": "maybe"}})}
+    )
+    with pytest.raises(ValueError, match="metrics-exporters.external"):
+        metrics_exporters.is_external(default_registry(tmp_path), "odd")
 
 
 def test_deploy_host_renders_the_scrape_config_into_the_build_dir(

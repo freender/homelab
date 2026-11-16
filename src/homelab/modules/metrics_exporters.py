@@ -475,6 +475,20 @@ def is_lxc_guest(root: Path, host: str) -> bool:
     )
 
 
+def is_external(registry: HostRegistry, host: str) -> bool:
+    """Whether node_exporter on this host is installed outside this module.
+
+    solar (Bazzite, rpm-ostree, no apt) installs its own node_exporter from
+    pve-gpu-passthrough/linux/setup.sh. The flag keeps it in metrics-exporters so
+    monitoring-config scrapes it, while this module never deploys there.
+    """
+    return normalize_bool(
+        registry.get(host, "metrics-exporters.external", None),
+        False,
+        f"metrics-exporters.external must be true or false for {host}",
+    )
+
+
 def has_own_kernel(root: Path, host: str) -> bool:
     """Whether a reduced-profile guest boots its own apt-managed kernel (a VM).
 
@@ -891,6 +905,9 @@ def render_if_any(values: list, template: Path, destination: Path, key: str) -> 
 
 def deploy_host(root: Path, host: str, dry_run: bool, force: bool) -> None:
     registry = default_registry(root)
+    if is_external(registry, host):
+        print_sub(f"{host}: node_exporter is installed outside this module (external); skipping")
+        return
     common_dir = root / "metrics-exporters" / "configs" / "common"
     build_dir = root / "metrics-exporters" / "build" / host
     prepare_build_dir(build_dir)

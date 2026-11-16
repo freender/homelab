@@ -40,6 +40,7 @@ RULE_FILES = (
     "reboot.yml",
     "sas-links.yml",
     "smart-disks.yml",
+    "solar.yml",
     "systemd-failed.yml",
     "temperatures.yml",
     "ups.yml",

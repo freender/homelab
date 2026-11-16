@@ -1,0 +1,23 @@
+[Unit]
+Description=Prometheus node_exporter (scraped by vmagent on helm and neo)
+Documentation=https://github.com/prometheus/node_exporter
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+DynamicUser=yes
+# solar-metrics writes solar.prom here; the scrape drops every systemd unit
+# state but failed (monitoring-config scrape.yml.j2). `$$` is a literal `$`
+# to systemd. / is the read-only composefs overlay, excluded with the other
+# ostree bind mounts so only /var (btrfs) and /var/mnt/steam report.
+ExecStart=/usr/local/bin/node_exporter \
+  --web.listen-address=:9100 \
+  --collector.systemd \
+  --collector.textfile.directory=/var/lib/node_exporter/textfile \
+  --collector.filesystem.mount-points-exclude=^/($$|dev|proc|run|sys|sysroot|usr|etc|boot|var/lib/containers/storage/.+)($$|/) \
+  --collector.netdev.device-include=^ens[0-9]+$$
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

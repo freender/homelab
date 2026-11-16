@@ -63,3 +63,16 @@ groups:
         annotations:
           summary: "Offsite host {{ $labels.host }} is unreachable"
           description: "vmagent has been unable to scrape node_exporter on {{ $labels.host }} ({{ $labels.endpoint }}) for an hour. Longer window than the on-prem rule to tolerate offsite link flaps. Could be the WireGuard tunnel, the site's internet, or the host itself; see the offsite-connectivity notes before assuming the host is dead."
+
+      # solar, the Bazzite VR VM on clovis: always on (onboot 1), but a game
+      # VM, so the same 10m window at warning rather than critical. Its
+      # node_exporter is installed by pve-gpu-passthrough/linux/setup.sh, not
+      # by metrics-exporters.
+      - alert: NodeDownSolar
+        expr: up{job="pve-node", host="solar"} == 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "solar (VR VM) is down"
+          description: "vmagent has been unable to scrape node_exporter on solar ({{ $labels.endpoint }}) for 10 minutes. Check `ssh clovis qm status 106` first; if the VM runs, check `systemctl status node_exporter` on solar. Never stop or restart solar unasked: someone may be in the headset."
