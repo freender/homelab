@@ -4,7 +4,8 @@
 Runs as the desktop user: solar-metrics.timer every 15 minutes, and the vr-guest
 installer as its verify step. What to expect comes from check.json, which the
 module renders at deploy time (hashes of every file it installs, the kargs, the
-pinned node_exporter and Vector versions and PSVR2Toolkit dll, the SteamVR settings).
+pinned node_exporter and Vector versions and PSVR2Toolkit dll, the bluetoothd build
+inputs, the SteamVR settings).
 
 Output is one line per item, `  ok    <id>` or `  FAIL  <id>: <reason>`; the ids are
 the `check` label of homelab_solar_check, so renaming one breaks its history and
@@ -27,6 +28,7 @@ PROC_CMDLINE = Path("/proc/cmdline")
 STEAM_MOUNT = "/var/mnt/steam"
 PATCHED_BLUETOOTHD = "/usr/local/libexec/bluetooth/bluetoothd"
 BLUEZ_MARKER = Path(f"{PATCHED_BLUETOOTHD}.built-for")
+BLUEZ_STAMP = Path(f"{PATCHED_BLUETOOTHD}.inputs")
 STEAM = ".local/share/Steam/steamapps/common"
 PLUGIN = f"{STEAM}/PlayStation VR2 App/SteamVR_Plug-In"
 STEAMVR = f"{STEAM}/SteamVR"
@@ -126,10 +128,10 @@ def check_vr(report: Report, manifest: dict) -> None:
                 "values differ")
 
 
-def check_bluez(report: Report) -> None:
+def check_bluez(report: Report, manifest: dict) -> None:
     exec_start = output("systemctl", "show", "-p", "ExecStart", "bluetooth")
     report.item("patched_bluetoothd", PATCHED_BLUETOOTHD in exec_start,
-                "stock bluetoothd (bluez-eagain not installed)")
+                "stock bluetoothd (vr-guest bluez stage not applied)")
     # A Bazzite update that ships a new terra-bluez leaves the old patched build running.
     bluez = output("rpm", "-q", "terra-bluez")
     if not bluez.startswith("terra-bluez-"):
@@ -137,7 +139,9 @@ def check_bluez(report: Report) -> None:
     built = read(BLUEZ_MARKER) or f"unknown (no {BLUEZ_MARKER})"
     report.item("bluez_build_matches", bluez == built,
                 f"image has {bluez}, patched bluetoothd built for {built}: "
-                "rebuild (vr-guest/bluez-eagain/README.md)")
+                "update bluez-eagain and deploy (vr-guest/bluez-eagain/README.md)")
+    report.item("bluez_build_inputs", read(BLUEZ_STAMP) == manifest["bluez_inputs"],
+                "patched bluetoothd not built from the repo's patch set: deploy vr-guest")
 
 
 def check_metrics(report: Report, manifest: dict) -> None:
@@ -167,7 +171,7 @@ def main(manifest_path: Path = MANIFEST) -> int:
     report = Report()
     check_system(report, manifest)
     check_vr(report, manifest)
-    check_bluez(report)
+    check_bluez(report, manifest)
     check_metrics(report, manifest)
     check_vector(report, manifest)
     return int(report.failed)

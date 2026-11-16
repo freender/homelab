@@ -213,8 +213,8 @@ above (`psvr2-steamvr`, `psvr2-audio`, `psvr2-steamvr.service`), KDE idle settin
 node_exporter and the `solar-metrics` timer, the SteamVR side (SteamVRLinuxFixes,
 Ignition, PSVR2Toolkit, the play-area tool, `cap_sys_nice`, URL handlers, OpenXR runtime,
 `steamvr.vrsettings` values), plus the read-only check `/usr/local/libexec/solar-check`.
-The patched bluetoothd that keeps the Sense controllers connected is
-`vr-guest/bluez-eagain/` (manual; see its README).
+The module's `bluez` stage also builds and installs the patched bluetoothd that keeps the
+Sense controllers connected (`vr-guest/bluez-eagain/`; see its README).
 
 ```bash
 ./deploy --dry-run vr-guest solar

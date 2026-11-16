@@ -1,5 +1,5 @@
 #!/bin/bash
-# Runs inside fedora:45. Builds bluetoothd as terra-bluez-5.87+1.git8750129efca8-2 does, plus patches 0100 (EAGAIN drop) and 0101 (Supremium sniff mode, RealSupremium/bluez fadd645).
+# Runs inside BLUEZ_IMAGE (vr_guest.py), started by vr-guest's bluez stage. Builds bluetoothd as terra-bluez-5.87+1.git8750129efca8-2 does, plus patches 0100 (EAGAIN drop) and 0101 (Supremium sniff mode, RealSupremium/bluez fadd645).
 set -euo pipefail
 dnf -y -q install dbus-devel glib2-devel libell-devel libical-devel make readline-devel json-c-devel \
   systemd-devel systemd cups-devel libtool automake autoconf python3-docutils python3-pygments \

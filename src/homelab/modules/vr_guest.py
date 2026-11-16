@@ -3,7 +3,7 @@
 Replaces the retired `pve-gpu-passthrough/linux/setup.sh`: the `base` and `metrics`
 stages (homelab-ops#400; design in #399) and the `vr` stage (#401). The `vector`
 stage ships the journal to VictoriaLogs (#403, design in #402) from vector-host's
-config render.
+config render. The `bluez` stage builds and installs the patched bluetoothd (#405).
 
 Every destination, mode, pinned release and expected value is decided here and passed
 down: the file map and env for the installer, and `check.json` for `solar-check`, the
@@ -84,6 +84,16 @@ VR_RELEASES = {
 # driver_playstation_vr2.dll inside the PSVR2TK zip; bump it together with that release.
 PSVR2TK_DLL_SHA = "b456e89433ad8dbe02719e215409912bb26fb9bf062d8528bb29174ea3d24583"
 
+# The patched bluetoothd (bluez-eagain/README.md) is built on solar from these inputs.
+# BLUEZ_TERRA is the exact `rpm -q terra-bluez` the patch set and build.sh's source
+# commit reproduce; the stage refuses any other. Bump all three together.
+BLUEZ_SOURCE = "bluez-eagain"
+BLUEZ_TERRA = "terra-bluez-5.87+1.git8750129efca8-2.fc45.x86_64"
+BLUEZ_IMAGE = "registry.fedoraproject.org/fedora:45"
+BLUEZ_DIR = "bluez"
+BLUEZ_DROPIN = "50-eagain-patch.conf"
+BLUEZ_DROPIN_PATH = f"/etc/systemd/system/bluetooth.service.d/{BLUEZ_DROPIN}"
+
 # Merged into steamvr.vrsettings' "steamvr" section with SteamVR quit (it rewrites the
 # file on exit). 90 Hz at 118% manual supersampling is the settled Alyx tuning.
 STEAMVR_SETTINGS = {
@@ -147,6 +157,8 @@ def validate(root: Path, hosts: list[str]) -> None:
     for path in required:
         if not path.is_file():
             raise ValueError(f"missing module file: {path}")
+    if not bluez_patches(root):
+        raise ValueError(f"no patches in {root / MODULE_DIR / BLUEZ_SOURCE / 'patches'}")
     vector_host.victoria_logs_base(root)
     for host in hosts:
         host_type(root, host)
@@ -182,7 +194,32 @@ def module_sources(root: Path) -> list[tuple[Path, str]]:
     sources += [
         (module / "files" / "libexec" / name, f"libexec/{name}") for name, _ in LIBEXEC_FILES
     ]
+    sources += [
+        (module / BLUEZ_SOURCE / name, f"{BLUEZ_DIR}/{name}")
+        for name in ("build.sh", BLUEZ_DROPIN)
+    ]
+    sources += [
+        (patch, f"{BLUEZ_DIR}/patches/{patch.name}") for patch in bluez_patches(root)
+    ]
     return sources
+
+
+def bluez_patches(root: Path) -> list[Path]:
+    return sorted((root / MODULE_DIR / BLUEZ_SOURCE / "patches").glob("*.patch"))
+
+
+def bluez_inputs(root: Path) -> str:
+    """Fingerprint of everything the bluetoothd build depends on.
+
+    Recorded next to the installed binary; a Podman build is not byte-reproducible,
+    so this, not the binary's hash, is what says the build is current.
+    """
+    source = root / MODULE_DIR / BLUEZ_SOURCE
+    digest = hashlib.sha256(f"{BLUEZ_TERRA}\n{BLUEZ_IMAGE}\n".encode())
+    for path in (source / "build.sh", *bluez_patches(root)):
+        digest.update(f"{path.name}\n".encode())
+        digest.update(path.read_bytes())
+    return digest.hexdigest()
 
 
 def sha256(path: Path) -> str:
@@ -194,6 +231,7 @@ def file_specs(home: str) -> tuple[FileSpec, ...]:
     specs += [FileSpec(f"home/{path}", f"{home}/{path}", mode) for path, mode in HOME_FILES]
     specs += [FileSpec(f"libexec/{name}", f"{LIBEXEC}/{name}", "755") for name, _ in LIBEXEC_FILES]
     specs += [FileSpec(f"{VECTOR_DIR}/{name}", dest, mode) for name, dest, mode, _ in VECTOR_FILES]
+    specs.append(FileSpec(f"{BLUEZ_DIR}/{BLUEZ_DROPIN}", BLUEZ_DROPIN_PATH, "644"))
     specs.append(FileSpec(MANIFEST_NAME, MANIFEST_PATH, "644"))
     return tuple(specs)
 
@@ -220,6 +258,8 @@ def check_manifest(root: Path, host: str, home: str, vector_dir: Path) -> dict[s
         {"id": check_id, "path": dest, "sha256": sha256(vector_dir / name)}
         for name, dest, _, check_id in VECTOR_FILES
     ]
+    files.append({"id": "bluez_dropin", "path": BLUEZ_DROPIN_PATH,
+                  "sha256": sha256(module / BLUEZ_SOURCE / BLUEZ_DROPIN)})
     return {
         "hostname": host,
         "home": home,
@@ -227,6 +267,7 @@ def check_manifest(root: Path, host: str, home: str, vector_dir: Path) -> dict[s
         "node_exporter_version": NODE_EXPORTER_VERSION,
         "vector_version": VECTOR_VERSION,
         "psvr2toolkit_dll_sha256": PSVR2TK_DLL_SHA,
+        "bluez_inputs": bluez_inputs(root),
         "steamvr_settings": STEAMVR_SETTINGS,
         "files": files,
     }
@@ -273,6 +314,9 @@ def render_build(root: Path, host: str) -> tuple[Path, tuple[FileSpec, ...]]:
             "VECTOR_SHA": VECTOR_SHA,
             "VECTOR_QUERY_URL": f"{vector_host.victoria_logs_base(root)}/select/logsql/query",
             "VECTOR_TENANT": "0",
+            "BLUEZ_TERRA": BLUEZ_TERRA,
+            "BLUEZ_IMAGE": BLUEZ_IMAGE,
+            "BLUEZ_INPUTS": bluez_inputs(root),
             **releases,
         },
     )

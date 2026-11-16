@@ -1,10 +1,10 @@
 # bluez-eagain: patched bluetoothd for the PS VR2 Sense controllers
 
 solar's stock BlueZ (Bazzite ships terra-bluez 5.87) drops both Sense controllers about
-30 s after SteamVR starts: an output report write returns `EAGAIN`, and bluetoothd
-destroys the UHID device instead of retrying (bluez/bluez#2431, stale-closed and unfixed).
-This directory rebuilds terra's exact bluetoothd with two extra patches and runs it from
-`/usr/local` through a systemd drop-in. The image's `/usr/libexec/bluetooth/bluetoothd`
+30 s after SteamVR starts. An output report write returns `EAGAIN`, and bluetoothd
+destroys the UHID device instead of retrying (bluez/bluez#2431, closed as stale and never
+fixed). This directory rebuilds terra's exact bluetoothd with two extra patches and runs
+it from `/usr/local` through a systemd drop-in. The image's `/usr/libexec/bluetooth/bluetoothd`
 is never touched, so an `rpm-ostree` update cannot half-replace it.
 
 | Patch | Source | What |
@@ -13,20 +13,53 @@ is never touched, so an `rpm-ostree` update cannot half-replace it.
 | `0100-input-device-drop-output-report-on-EAGAIN` | local (homelab-ops#389) | Drop interrupt-channel output reports on `EAGAIN` for any device; logs `BT interrupt socket busy: dropped N output report(s)` |
 | `0101-input-Do-not-force-active-mode-by-default` | RealSupremium/bluez `fadd645` | Sniff-mode patch PSVR2Toolkit exp-3 needs for its 133 Hz controller poll. Turn it off without a rebuild: `DisableForceActive=false` under `[General]` in `/etc/bluetooth/input.conf` |
 
-## Build and install (on solar)
+## Build and install: the `vr-guest` bluez stage
 
-```bash
-./build-in-podman.sh      # writes ./bluetoothd and build/configure/make logs
-sudo ./install.sh         # /usr/local/libexec/bluetooth/bluetoothd + bluetooth.service.d/50-eagain-patch.conf
-sudo ./rollback.sh        # back to the image's stock bluetoothd
-```
+`./deploy vr-guest solar` handles both (homelab-ops#405).
+
+**Build.**
+- The stage fingerprints `build.sh`, `patches/`, `BLUEZ_TERRA` and `BLUEZ_IMAGE` (both in
+  `src/homelab/modules/vr_guest.py`).
+- It rebuilds only when that fingerprint differs from the one recorded in
+  `/usr/local/libexec/bluetooth/bluetoothd.inputs`.
+- The build runs `build.sh` in a throwaway root Podman container from `BLUEZ_IMAGE` and
+  takes minutes.
+- The work dir and the build/configure/make logs stay in `/var/cache/vr-guest/bluez-eagain/`.
+
+**Install.**
+- It installs the binary with the `bluetooth_exec_t` SELinux context.
+- It writes `bluetoothd.built-for` (the `rpm -q terra-bluez` it was built for) and the
+  inputs stamp.
+- It installs the drop-in `50-eagain-patch.conf` into `/etc/systemd/system/bluetooth.service.d/`.
+- It restarts `bluetooth`, but only when something changed.
+
+**Guards.**
+- **SteamVR running:** the stage does nothing while SteamVR runs. The build is minutes of
+  CPU, and the restart drops the controllers. A build finished just as SteamVR started is
+  kept and installed by the next deploy.
+- **BlueZ version mismatch:** the stage refuses to build when the booted image's
+  terra-bluez is not `BLUEZ_TERRA`. A patch set written for another version is never
+  built.
+
+`solar-check` covers it with `patched_bluetoothd`, `bluez_build_matches`,
+`bluez_build_inputs` and `bluez_dropin`. When the stage ran, the deploy fails on any of
+them.
 
 ## After a Bazzite BlueZ update
 
-The drop-in keeps running the old patched binary. `install.sh` records the terra-bluez it
-was installed against in `bluetoothd.built-for`; `solar-check` fails
-`bluez_build_matches` once the image's terra-bluez differs, which alerts as
-`SolarPatchCheckFailed`. Either roll back, or rebuild against
-the new source: take the new terra-bluez spec, replace patches `0001`–`0099` with its
-patch set, point the `curl` line in `build.sh` at its git commit, and check that
-`0100` and `0101` still apply (`patch -F3` fails loudly when they don't).
+`SolarUpdateStaged` lists a bluez change the day the image is staged. After the
+power-cycle, the drop-in keeps running the old patched binary. `bluez_build_matches` then
+fails, which alerts as `SolarPatchCheckFailed`, and the deploy refuses until the inputs
+match. Either roll back, or move the inputs to the new source:
+
+1. Take the new terra-bluez spec and replace patches `0001`–`0099` with its patch set.
+2. Point the `curl` line in `build.sh` at its git commit.
+3. Set `BLUEZ_TERRA` to the new `rpm -q terra-bluez`.
+4. Run `./deploy vr-guest solar` with SteamVR quit. If `0100` or `0101` no longer apply,
+   the build fails loudly (`patch -F3`), and its logs are in the work dir.
+
+## Rollback
+
+`sudo ./rollback.sh` on solar returns `bluetooth.service` to the image's stock bluetoothd.
+It is an emergency switch, not a setting: the next `./deploy vr-guest solar` installs the
+patch again.

@@ -2,7 +2,7 @@
 """Remote installer for vr-guest (freender/homelab-ops#400, #401; design in #399).
 
 The `base`, `metrics` and `vr` stages of the retired `setup.sh`, plus `vector`
-(#403), run as root. Steps
+(#403) and `bluez` (#405), run as root. Steps
 that need the desktop user's session (`systemctl --user`, `kwriteconfig6 --notify`)
 go through `runuser` with that session's bus; with nobody logged in they are skipped
 with a warning rather than failing the deploy.
@@ -16,6 +16,12 @@ The `vector` stage installs the pinned release tarball, not an rpm (#402), and
 checks the staged config and delivery the way vector-host does
 (`homelab_install.vector`).
 
+The `bluez` stage (#405) builds the patched bluetoothd in a throwaway Podman
+container when its inputs changed, and swaps it in through a systemd drop-in. It
+refuses an image whose terra-bluez the patch set was not written for, and like
+`vr` it does nothing while SteamVR runs: the build is minutes of CPU and the
+bluetooth restart drops the Sense controllers.
+
 Ends by running `solar-check` as the desktop user, the same check `solar-metrics`
 publishes every 15 minutes. A failure this module owns fails the deploy; a
 not-yet-booted karg, and the vr items when the vr stage was skipped, only warn.
@@ -27,6 +33,7 @@ import hashlib
 import json
 import os
 import pwd
+import shutil
 import subprocess
 import tarfile
 import urllib.request
@@ -71,8 +78,8 @@ KDE_SETTINGS = (
 )
 
 # Check ids a base/metrics run converges; a FAIL on one of these after the run is
-# this module's failure. The vr stage adds VR_CHECKS when it ran; booted kargs and
-# the patched BlueZ (manual) only ever warn.
+# this module's failure. The vr and bluez stages add VR_CHECKS and BLUEZ_CHECKS when
+# they ran; booted kargs only ever warn.
 OWNED_CHECKS = frozenset({
     "hostname", "steam_library", "sshd",
     "node_exporter_version", "solar_metrics_script", "solar_metrics_timer",
@@ -83,6 +90,14 @@ VR_CHECKS = frozenset({
     "steamvr_linux_fixes", "ignition_shim", "psvr2toolkit_dll", "openvr_driver",
     "compositor_cap_sys_nice", "vrmonitor_handler", "openxr_runtime", "steamvr_settings",
 })
+BLUEZ_CHECKS = frozenset({
+    "patched_bluetoothd", "bluez_build_matches", "bluez_build_inputs", "bluez_dropin",
+})
+BLUETOOTHD = Path("/usr/local/libexec/bluetooth/bluetoothd")
+BLUEZ_MARKER = Path(f"{BLUETOOTHD}.built-for")
+BLUEZ_STAMP = Path(f"{BLUETOOTHD}.inputs")
+BLUEZ_WORK = CACHE_DIR / "bluez-eagain"
+BLUEZ_DROPIN = "bluez/50-eagain-patch.conf"
 
 STEAM_APPS = ".local/share/Steam/steamapps/common"
 STEAMVR = f"{STEAM_APPS}/SteamVR"
@@ -618,6 +633,108 @@ def vr(ctx: InstallContext, user: Desktop) -> frozenset[str]:
     return frozenset(converged)
 
 
+# --- bluez -------------------------------------------------------------------------
+
+
+def read_line(path: Path) -> str:
+    return path.read_text(encoding="utf-8").strip() if path.is_file() else ""
+
+
+def image_bluez() -> str:
+    result = _run(["rpm", "-q", "terra-bluez"], check=False, capture_output=True, text=True)
+    return result.stdout.strip() if result.returncode == 0 else ""
+
+
+def bluetoothd_current(inputs: str, terra: str) -> bool:
+    return (BLUETOOTHD.is_file() and read_line(BLUEZ_STAMP) == inputs
+            and read_line(BLUEZ_MARKER) == terra)
+
+
+def dropin_current(ctx: InstallContext) -> bool:
+    dest = Path(ctx.file_map[BLUEZ_DROPIN][0])
+    return dest.is_file() and files.same_content(ctx.build_dir / BLUEZ_DROPIN, dest)
+
+
+def build_bluetoothd(ctx: InstallContext, inputs: str, image: str) -> Path:
+    """Build in a throwaway container, or reuse a build of the same inputs.
+
+    The work dir persists, so a build that SteamVR kept from being installed, and
+    the configure/make logs of a failed one, are still there on the next deploy.
+    """
+    built, stamp = BLUEZ_WORK / "bluetoothd", BLUEZ_WORK / "inputs"
+    if built.is_file() and read_line(stamp) == inputs:
+        log.sub("patched bluetoothd already built from these inputs")
+        return built
+    shutil.rmtree(BLUEZ_WORK, ignore_errors=True)
+    BLUEZ_WORK.mkdir(parents=True)
+    shutil.copyfile(ctx.build_dir / "bluez" / "build.sh", BLUEZ_WORK / "build.sh")
+    shutil.copytree(ctx.build_dir / "bluez" / "patches", BLUEZ_WORK / "patches")
+    log.sub(f"building bluetoothd in {image}; this takes minutes")
+    result = _run(
+        ["podman", "run", "--rm", "-v", f"{BLUEZ_WORK}:/build:Z",
+         "-v", f"{BLUEZ_WORK}/patches:/patches:ro,Z", image, "bash", "/build/build.sh"],
+        check=False, capture_output=True, text=True,
+    )
+    if result.returncode != 0 or not built.is_file():
+        tail = "\n".join(f"{result.stdout}{result.stderr}".strip().splitlines()[-20:])
+        raise InstallError(f"bluetoothd build failed (logs in {BLUEZ_WORK}):\n{tail}")
+    stamp.write_text(f"{inputs}\n", encoding="utf-8")
+    log.ok("patched bluetoothd built")
+    return built
+
+
+def install_bluetoothd(built: Path, inputs: str, terra: str) -> None:
+    """The image's /usr/libexec/bluetooth/bluetoothd is never touched."""
+    BLUETOOTHD.parent.mkdir(parents=True, exist_ok=True)
+    staged = BLUETOOTHD.with_name(f".{BLUETOOTHD.name}.vr-guest")
+    shutil.copyfile(built, staged)
+    os.chmod(staged, 0o755)
+    os.replace(staged, BLUETOOTHD)
+    if not succeeds("semanage", "fcontext", "-a", "-t", "bluetooth_exec_t", str(BLUETOOTHD)):
+        _run(["semanage", "fcontext", "-m", "-t", "bluetooth_exec_t", str(BLUETOOTHD)],
+             check=True)
+    # /usr/local is a symlink into /var on Fedora Atomic.
+    bazzite_relabel(os.path.realpath(BLUETOOTHD))
+    BLUEZ_MARKER.write_text(f"{terra}\n", encoding="utf-8")
+    BLUEZ_STAMP.write_text(f"{inputs}\n", encoding="utf-8")
+    log.ok(f"patched bluetoothd installed for {terra}")
+
+
+def bluez(ctx: InstallContext) -> frozenset[str]:
+    """The check ids the bluez stage converged; empty when it was skipped."""
+    log.action("Patched BlueZ (bluez-eagain)")
+    env.require(ctx, "BLUEZ_TERRA", "BLUEZ_IMAGE", "BLUEZ_INPUTS")
+    terra, inputs = env.text(ctx, "BLUEZ_TERRA", ""), env.text(ctx, "BLUEZ_INPUTS", "")
+    found = image_bluez()
+    if found != terra:
+        raise InstallError(
+            f"the image has {found or 'no terra-bluez'}, bluez-eagain is written for {terra}: "
+            "update its patch set, build.sh's source commit and BLUEZ_TERRA "
+            "(vr-guest/bluez-eagain/README.md)"
+        )
+    binary_ok, dropin_ok = bluetoothd_current(inputs, terra), dropin_current(ctx)
+    if binary_ok and dropin_ok:
+        log.sub("patched bluetoothd current")
+        return BLUEZ_CHECKS
+    if steamvr_running():
+        log.warn("SteamVR is running (someone may be in the headset): bluez stage skipped; "
+                 "deploy again after `psvr2-steamvr quit`")
+        return frozenset()
+    built = None if binary_ok else build_bluetoothd(ctx, inputs, env.text(ctx, "BLUEZ_IMAGE", ""))
+    if steamvr_running():
+        log.warn("SteamVR started during the build: the new bluetoothd waits in "
+                 f"{BLUEZ_WORK} for the next deploy")
+        return frozenset()
+    if built is not None:
+        install_bluetoothd(built, inputs, terra)
+    files.install(ctx, BLUEZ_DROPIN)
+    systemd.daemon_reload(ctx)
+    _run(["systemctl", "restart", "bluetooth.service"], check=True)
+    systemd.require_active(ctx, "bluetooth.service")
+    log.ok("bluetooth restarted on the patched bluetoothd")
+    return BLUEZ_CHECKS
+
+
 # --- verify ------------------------------------------------------------------------
 
 
@@ -662,7 +779,8 @@ def install(ctx: InstallContext) -> None:
     base(ctx, user, env.text(ctx, "DESKTOP_HOME", ""))
     metrics(ctx, user)
     install_vector(ctx)
-    verify(ctx, user, vr(ctx, Desktop.lookup(user)))
+    converged = vr(ctx, Desktop.lookup(user))
+    verify(ctx, user, converged | bluez(ctx))
 
 
 if __name__ == "__main__":

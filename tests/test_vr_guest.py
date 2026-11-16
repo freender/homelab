@@ -52,13 +52,14 @@ MANIFEST_IDS = [
     "solar_metrics_script",
     "/etc/vector/homelab.yaml",
     "vector_wrapper",
+    "bluez_dropin",
 ]
 CHECK_IDS = [
     "hostname", "karg:nvidia-modeset.conceal_vrr_caps=1", "karg:bluetooth.disable_ertm=1",
     "conceal_vrr_caps", *MANIFEST_IDS, "steam_library", "sshd", "steamvr_linux_fixes",
     "ignition_shim", "psvr2toolkit_dll", "openvr_driver", "compositor_cap_sys_nice",
     "vrmonitor_handler", "openxr_runtime", "steamvr_settings", "patched_bluetoothd",
-    "bluez_build_matches", "node_exporter_version", "solar_metrics_timer",
+    "bluez_build_matches", "bluez_build_inputs", "node_exporter_version", "solar_metrics_timer",
     "vector_version", "vector_active",
 ]
 
@@ -155,6 +156,11 @@ def test_render_build_maps_every_file_to_its_destination(tmp_path: Path) -> None
     assert destinations["vector/journalctl-catchup"] == (
         "/usr/local/bin/journalctl-catchup", "755")
     assert (build_dir / "vector/vector.test.yaml").is_file()
+    assert destinations["bluez/50-eagain-patch.conf"] == (
+        "/etc/systemd/system/bluetooth.service.d/50-eagain-patch.conf", "644")
+    assert (build_dir / "bluez/build.sh").is_file()
+    assert sorted(p.name for p in (build_dir / "bluez/patches").iterdir()) == [
+        p.name for p in vr_guest.bluez_patches(ROOT)]
     for spec in specs:
         assert (build_dir / spec.build_name).is_file()
 
@@ -180,6 +186,9 @@ def test_render_build_env(tmp_path: Path) -> None:
         "VECTOR_SHA": vr_guest.VECTOR_SHA,
         "VECTOR_QUERY_URL": "http://logs.internal:9428/select/logsql/query",
         "VECTOR_TENANT": "0",
+        "BLUEZ_TERRA": "terra-bluez-5.87+1.git8750129efca8-2.fc45.x86_64",
+        "BLUEZ_IMAGE": "registry.fedoraproject.org/fedora:45",
+        "BLUEZ_INPUTS": vr_guest.bluez_inputs(ROOT),
         "SVLF_URL": "https://github.com/BnuuySolutions/SteamVRLinuxFixes/releases/download/"
                     "v0.2.1/VK_LAYER_BNUUY_steamvr_linux_fixes.zip",
         "SVLF_SHA": vr_guest.VR_RELEASES["SVLF"][3],
@@ -210,6 +219,7 @@ def test_check_manifest_ids_and_hashes(tmp_path: Path) -> None:
     assert manifest["kargs"] == list(vr_guest.KARGS)
     assert manifest["vector_version"] == vr_guest.VECTOR_VERSION
     assert manifest["psvr2toolkit_dll_sha256"] == vr_guest.PSVR2TK_DLL_SHA
+    assert manifest["bluez_inputs"] == vr_guest.bluez_inputs(root)
     assert manifest["steamvr_settings"] == {
         "enableLinuxVulkanAsync": True, "useFacetRenderer": True, "showMirrorView": False,
         "supersampleManualOverride": True, "supersampleScale": 1.18,
@@ -975,6 +985,210 @@ def test_vr_check_ids_are_solar_check_ids(installer) -> None:
     assert installer.VR_CHECKS <= set(CHECK_IDS)
 
 
+# --- bluez stage ---------------------------------------------------------------------
+
+TERRA = "terra-bluez-5.87+1.git8750129efca8-2.fc45.x86_64"
+BLUEZ_ENV = {"BLUEZ_TERRA": TERRA, "BLUEZ_IMAGE": "fedora:45", "BLUEZ_INPUTS": "inputs-1"}
+
+
+class BluezHost(Commands):
+    """rpm, a podman build that writes ./bluetoothd, and records every other call."""
+
+    def __init__(self, work: Path, terra: str = TERRA, build_ok: bool = True):
+        super().__init__({("rpm", "-q", "terra-bluez"): (0, f"{terra}\n")})
+        self.work, self.build_ok = work, build_ok
+
+    def __call__(self, cmd, check=False, **kwargs):
+        argv = list(cmd)
+        if argv[:2] == ["podman", "run"]:
+            self.seen.append(argv)
+            if self.build_ok:
+                (self.work / "bluetoothd").write_bytes(b"patched")
+            return subprocess.CompletedProcess(argv, 0 if self.build_ok else 2,
+                                               stdout="apply 0100\n", stderr="make: error\n")
+        return super().__call__(cmd, check=check, **kwargs)
+
+
+@pytest.fixture
+def bluez_host(installer, tmp_path, monkeypatch):
+    live = tmp_path / "live"
+    monkeypatch.setattr(installer, "BLUETOOTHD", live / "bluetoothd")
+    monkeypatch.setattr(installer, "BLUEZ_MARKER", live / "bluetoothd.built-for")
+    monkeypatch.setattr(installer, "BLUEZ_STAMP", live / "bluetoothd.inputs")
+    monkeypatch.setattr(installer, "BLUEZ_WORK", tmp_path / "cache" / "bluez-eagain")
+    monkeypatch.setattr(installer, "steamvr_running", lambda: False)
+    commands = BluezHost(installer.BLUEZ_WORK)
+    for module in (installer, systemd):
+        monkeypatch.setattr(module, "_run", commands)
+    build = tmp_path / "build"
+    (build / "bluez" / "patches").mkdir(parents=True)
+    (build / "bluez" / "build.sh").write_text("build\n")
+    (build / "bluez" / "patches" / "0100.patch").write_text("patch\n")
+    (build / installer.BLUEZ_DROPIN).write_text("[Service]\n")
+    dropin = tmp_path / "etc" / "50-eagain-patch.conf"
+    ctx = InstallContext(host="solar", script_dir=tmp_path, build_dir=build, env=BLUEZ_ENV,
+                         deploy_env={}, file_map={installer.BLUEZ_DROPIN: (str(dropin), "644")},
+                         force_update=False)
+    return ctx, commands
+
+
+def converge_bluez(installer, ctx, inputs: str = "inputs-1") -> None:
+    installer.BLUETOOTHD.parent.mkdir(parents=True, exist_ok=True)
+    installer.BLUETOOTHD.write_bytes(b"patched")
+    installer.BLUEZ_MARKER.write_text(f"{TERRA}\n")
+    installer.BLUEZ_STAMP.write_text(f"{inputs}\n")
+    dropin = Path(ctx.file_map[installer.BLUEZ_DROPIN][0])
+    dropin.parent.mkdir(parents=True, exist_ok=True)
+    dropin.write_text("[Service]\n")
+
+
+def test_bluez_fresh_host_builds_installs_and_restarts(installer, bluez_host) -> None:
+    ctx, commands = bluez_host
+
+    assert installer.bluez(ctx) == installer.BLUEZ_CHECKS
+
+    work = installer.BLUEZ_WORK
+    podman = next(argv for argv in commands.seen if argv[:2] == ["podman", "run"])
+    assert podman[-3:] == ["fedora:45", "bash", "/build/build.sh"]
+    assert f"{work}:/build:Z" in podman and f"{work}/patches:/patches:ro,Z" in podman
+    assert (work / "patches" / "0100.patch").is_file()
+    assert (work / "inputs").read_text() == "inputs-1\n"
+    assert installer.BLUETOOTHD.read_bytes() == b"patched"
+    assert installer.BLUETOOTHD.stat().st_mode & 0o777 == 0o755
+    assert installer.BLUEZ_MARKER.read_text() == f"{TERRA}\n"
+    assert installer.BLUEZ_STAMP.read_text() == "inputs-1\n"
+    assert Path(ctx.file_map[installer.BLUEZ_DROPIN][0]).read_text() == "[Service]\n"
+    restart = first(commands, "systemctl", "restart", "bluetooth.service")
+    assert first(commands, "semanage", "fcontext", "-a") < restart
+    assert first(commands, "restorecon") < restart
+    assert first(commands, "systemctl", "daemon-reload") < restart
+
+
+def test_bluez_converged_host_is_left_alone(installer, bluez_host) -> None:
+    ctx, commands = bluez_host
+    converge_bluez(installer, ctx)
+
+    assert installer.bluez(ctx) == installer.BLUEZ_CHECKS
+
+    assert [argv[0] for argv in commands.seen] == ["rpm"]
+
+
+def test_bluez_dropin_drift_restarts_without_a_build(installer, bluez_host) -> None:
+    ctx, commands = bluez_host
+    converge_bluez(installer, ctx)
+    Path(ctx.file_map[installer.BLUEZ_DROPIN][0]).write_text("edited\n")
+
+    assert installer.bluez(ctx) == installer.BLUEZ_CHECKS
+
+    assert not any(argv[:1] in (["podman"], ["semanage"]) for argv in commands.seen)
+    assert ["systemctl", "restart", "bluetooth.service"] in commands.seen
+
+
+def test_bluez_reuses_a_cached_build_of_the_same_inputs(installer, bluez_host) -> None:
+    ctx, commands = bluez_host
+    converge_bluez(installer, ctx, inputs="inputs-0")
+    installer.BLUEZ_WORK.mkdir(parents=True)
+    (installer.BLUEZ_WORK / "bluetoothd").write_bytes(b"cached")
+    (installer.BLUEZ_WORK / "inputs").write_text("inputs-1\n")
+
+    installer.bluez(ctx)
+
+    assert not any(argv[:1] == ["podman"] for argv in commands.seen)
+    assert installer.BLUETOOTHD.read_bytes() == b"cached"
+    assert installer.BLUEZ_STAMP.read_text() == "inputs-1\n"
+
+
+def test_bluez_refuses_another_terra_bluez(installer, bluez_host, monkeypatch) -> None:
+    ctx, _ = bluez_host
+    commands = BluezHost(installer.BLUEZ_WORK, terra="terra-bluez-5.88-1.fc45.x86_64")
+    monkeypatch.setattr(installer, "_run", commands)
+
+    with pytest.raises(InstallError, match="has terra-bluez-5.88-1.fc45.x86_64, bluez-eagain "
+                                           "is written for terra-bluez-5.87"):
+        installer.bluez(ctx)
+    assert [argv[0] for argv in commands.seen] == ["rpm"]
+    assert not installer.BLUETOOTHD.exists()
+
+
+def test_bluez_refuses_an_image_without_terra_bluez(installer, bluez_host, monkeypatch) -> None:
+    ctx, _ = bluez_host
+    monkeypatch.setattr(installer, "_run", Commands(
+        {("rpm",): (1, "package terra-bluez is not installed\n")}))
+
+    with pytest.raises(InstallError, match="the image has no terra-bluez"):
+        installer.bluez(ctx)
+
+
+@pytest.mark.parametrize("when", ["before", "during"])
+def test_bluez_never_restarts_under_steamvr(installer, bluez_host, monkeypatch, capsys,
+                                            when: str) -> None:
+    ctx, commands = bluez_host
+    answers = iter([when == "before", True])
+    monkeypatch.setattr(installer, "steamvr_running", lambda: next(answers))
+
+    assert installer.bluez(ctx) == frozenset()
+
+    built = any(argv[:1] == ["podman"] for argv in commands.seen)
+    assert built is (when == "during")
+    assert not installer.BLUETOOTHD.exists()
+    assert not any(argv[:2] == ["systemctl", "restart"] for argv in commands.seen)
+    assert "SteamVR" in capsys.readouterr().out
+
+
+def test_bluez_failed_build_installs_nothing(installer, bluez_host, monkeypatch) -> None:
+    ctx, _ = bluez_host
+    commands = BluezHost(installer.BLUEZ_WORK, build_ok=False)
+    for module in (installer, systemd):
+        monkeypatch.setattr(module, "_run", commands)
+
+    with pytest.raises(InstallError, match=r"bluetoothd build failed \(logs in .*\):\n"
+                                           r"apply 0100\nmake: error"):
+        installer.bluez(ctx)
+    assert not installer.BLUETOOTHD.exists()
+    assert not (installer.BLUEZ_WORK / "inputs").exists()
+
+
+def test_bluez_semanage_modifies_an_existing_rule(installer, bluez_host, monkeypatch) -> None:
+    ctx, commands = bluez_host
+    commands.outputs[("semanage", "fcontext", "-a")] = (1, "")
+
+    installer.bluez(ctx)
+
+    assert ["semanage", "fcontext", "-m", "-t", "bluetooth_exec_t",
+            str(installer.BLUETOOTHD)] in commands.seen
+
+
+def test_bluez_check_ids_are_solar_check_ids(installer) -> None:
+    assert installer.BLUEZ_CHECKS <= set(CHECK_IDS)
+
+
+def test_bluez_terra_pin_matches_build_sh() -> None:
+    commit = vr_guest.BLUEZ_TERRA.split(".git", 1)[1].split("-", 1)[0]
+    build_sh = (ROOT / "vr-guest" / "bluez-eagain" / "build.sh").read_text(encoding="utf-8")
+    assert f"bluez/archive/{commit}.tar.gz" in build_sh
+
+
+def test_bluez_inputs_follow_every_build_input(tmp_path: Path) -> None:
+    root = fake_root(tmp_path)
+    before = vr_guest.bluez_inputs(root)
+    patch = vr_guest.bluez_patches(root)[-1]
+    patch.write_text(patch.read_text() + "\n")
+    after_patch = vr_guest.bluez_inputs(root)
+    build_sh = root / "vr-guest" / "bluez-eagain" / "build.sh"
+    build_sh.write_text(build_sh.read_text() + "\n")
+
+    assert len({before, after_patch, vr_guest.bluez_inputs(root)}) == 3
+
+
+def test_validate_needs_bluez_patches(tmp_path: Path) -> None:
+    root = fake_root(tmp_path)
+    for patch in vr_guest.bluez_patches(root):
+        patch.unlink()
+
+    with pytest.raises(ValueError, match="no patches in"):
+        vr_guest.validate(root, ["solar"])
+
+
 # ---------------------------------------------------------------------------
 # solar-check
 # ---------------------------------------------------------------------------
@@ -1117,11 +1331,24 @@ def test_bluez_build_matches(check, tmp_path, monkeypatch, capsys, rpm, marker, 
     monkeypatch.setattr(check, "output", lambda *cmd: rpm if cmd[0] == "rpm" else "")
     report = check.Report()
 
-    check.check_bluez(report)
+    check.check_bluez(report, {"bluez_inputs": "x"})
 
     line = capsys.readouterr().out.splitlines()[1]
     status = "ok  " if passes else "FAIL"
     assert line.startswith(f"  {status}  bluez_build_matches")
+
+
+@pytest.mark.parametrize(("stamp", "passes"), [("abc", True), ("old", False), (None, False)])
+def test_bluez_build_inputs(check, tmp_path, monkeypatch, capsys, stamp, passes) -> None:
+    check.BLUEZ_STAMP = tmp_path / "inputs"
+    if stamp:
+        check.BLUEZ_STAMP.write_text(stamp + "\n")
+    monkeypatch.setattr(check, "output", lambda *cmd: "")
+
+    check.check_bluez(check.Report(), {"bluez_inputs": "abc"})
+
+    line = capsys.readouterr().out.splitlines()[2]
+    assert line.startswith(f"  {'ok  ' if passes else 'FAIL'}  bluez_build_inputs")
 
 
 def test_check_unreadable_manifest(check, tmp_path) -> None:
