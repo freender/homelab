@@ -21,8 +21,17 @@
   "affinity": "positive",
   "nodes": "ace:3,clovis:2",
   "order": 3,
-  "resources": "ct:101,vm:109",
+  "resources": "ct:101",
   "rule": "ha-rule-0caad0a3-f056",
+  "strict": 1,
+  "type": "node-affinity"
+ },
+ {
+  "affinity": "positive",
+  "nodes": "ace:3,bray:2",
+  "order": 4,
+  "resources": "vm:109",
+  "rule": "ha-rule-zion",
   "strict": 1,
   "type": "node-affinity"
  }
