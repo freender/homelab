@@ -10,8 +10,14 @@ set -euo pipefail
 MONITOR_NAME="PS VR2"
 TIMEOUT=30
 
+# pactl's JSON encoder logs "Invalid non-ASCII character" to stderr for every
+# non-ASCII property byte, about 80 journal lines per headset-on.
+pactl_json() {
+    pactl -f json "$@" 2>/dev/null
+}
+
 for (( i = 0; i < TIMEOUT; i++ )); do
-    read -r card profile < <(pactl -f json list cards | jq -r --arg name "$MONITOR_NAME" '
+    read -r card profile < <(pactl_json list cards | jq -r --arg name "$MONITOR_NAME" '
         .[] | .name as $card | .ports | to_entries[]
         | select(.value.properties["device.product.name"] == $name and .value.availability != "not available")
         | [$card, (.value.profiles | map(select(startswith("output:hdmi-stereo"))) | first)]
@@ -27,7 +33,7 @@ fi
 
 pactl set-card-profile "$card" "$profile"
 for (( i = 0; i < 10; i++ )); do
-    sink=$(pactl -f json list sinks | jq -r --arg card "$card" --arg profile "${profile#output:}" '
+    sink=$(pactl_json list sinks | jq -r --arg card "$card" --arg profile "${profile#output:}" '
         .[] | select(.properties["device.name"] == $card and .properties["device.profile.name"] == $profile) | .name' | head -n1)
     [[ -n "$sink" ]] && break
     sleep 1

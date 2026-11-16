@@ -3,6 +3,10 @@
 # off (solar, freender/homelab-ops#389). psvr2-steamvr.service runs `start` when
 # 71-psvr2-steamvr.rules pulls it in, and `stop` when the headset's device unit
 # goes away. `quit` quits SteamVR without the headset check, for testing.
+#
+# Quitting asks vrmonitor first, then SIGTERM, then SIGKILL, and fails if SteamVR
+# survives all three. After a headset-off quit it restarts Steam if the quit
+# crashed its webhelper. During system shutdown it quits at once, with no grace.
 set -euo pipefail
 
 STEAMVR_APPID=250820
@@ -12,11 +16,18 @@ SETTLE=3
 # the headset has stayed gone this long.
 GRACE=10
 QUIT_TIMEOUT=30
+TERM_TIMEOUT=10
+KILL_TIMEOUT=5
 STEAM_EXIT_TIMEOUT=30
 # Steam starts its webhelper within seconds of the client. A webhelper this much
 # younger than its client was respawned after a crash, and a respawned webhelper
 # never shows the launch prompt, so the SteamVR launch hangs on it.
 WEBHELPER_RESPAWN_AGE=60
+# Quitting SteamVR aborts steamwebhelper about 2s later (ValveSoftware/SteamVR-for-Linux#964).
+WEBHELPER_CRASH_WAIT=5
+# The headset's sound card, the same device the service is bound to.
+HEADSET_UNIT=dev-psvr2.device
+STEAMVR_PROCS=(vrmonitor vrdashboard vrwebhelper vrcompositor vrserver)
 
 state="${XDG_RUNTIME_DIR:-/tmp}/psvr2-steamvr"
 
@@ -26,11 +37,35 @@ steamvr_running() {
 }
 
 headset_present() {
-    local dev
-    for dev in /sys/bus/usb/devices/*; do
-        [[ "$(cat "$dev/idVendor" 2>/dev/null)" == 054c && "$(cat "$dev/idProduct" 2>/dev/null)" == 0cde ]] && return 0
-    done
-    return 1
+    systemctl --user is-active --quiet "$HEADSET_UNIT"
+}
+
+shutting_down() {
+    [[ "$(systemctl is-system-running 2>/dev/null || true)" == stopping ]]
+}
+
+# Takes the lock for the rest of the run; children that may outlive it close fd 9.
+lock() {
+    exec 9>"$state.lock"
+    flock "$@" 9
+}
+
+launcher() {
+    # bazzite-steam adds Bazzite's NVIDIA and Wayland (extest) setup that plain
+    # `steam` skips.
+    if command -v bazzite-steam >/dev/null; then echo bazzite-steam; else echo steam; fi
+}
+
+# With every desktop output DPMS-off, Steam creates its windows hidden and
+# waits forever on the hidden login window or launch prompt.
+wake_screen() {
+    kscreen-doctor --dpms on >/dev/null 2>&1 || echo "could not wake the desktop screen"
+}
+
+# Its own transient unit: a `steam` that becomes the Steam client must outlive
+# this oneshot's cgroup.
+launch_steam() {
+    systemd-run --user --collect --no-block --quiet "$(launcher)" "$@" 9>&-
 }
 
 # Prints "<client pid> <client age> <webhelper age>" for the running Steam client.
@@ -42,21 +77,26 @@ steam_ages() {
     echo "$ppid ${client_age// /} $helper_age"
 }
 
-restart_steam_if_webhelper_respawned() {
-    local client client_age helper_age i
-    read -r client client_age helper_age < <(steam_ages) || return 0
-    (( client_age - helper_age > WEBHELPER_RESPAWN_AGE )) || return 0
+# Sets steam_client to the Steam client's pid when its webhelper was respawned.
+webhelper_respawned() {
+    local client_age helper_age
+    read -r steam_client client_age helper_age < <(steam_ages) || return 1
+    (( client_age - helper_age > WEBHELPER_RESPAWN_AGE )) || return 1
     echo "steamwebhelper is ${helper_age}s old but Steam ${client_age}s: respawned, restarting Steam"
-    timeout 10 steam -shutdown >/dev/null 2>&1 || true
+}
+
+shutdown_steam() {
+    local i
+    timeout 10 steam -shutdown >/dev/null 2>&1 9>&- || true
     for (( i = 0; i < STEAM_EXIT_TIMEOUT; i++ )); do
-        kill -0 "$client" 2>/dev/null || return 0
+        kill -0 "$steam_client" 2>/dev/null || return 0
         sleep 1
     done
     # A client blocked on the hidden launch prompt ignores -shutdown too.
     echo "Steam ignored -shutdown for ${STEAM_EXIT_TIMEOUT}s, terminating it"
-    kill -TERM "$client" 2>/dev/null || true
+    kill -TERM "$steam_client" 2>/dev/null || true
     for (( i = 0; i < 15; i++ )); do
-        kill -0 "$client" 2>/dev/null || break
+        kill -0 "$steam_client" 2>/dev/null || break
         sleep 1
     done
     pkill -u "$UID" -KILL -x steamwebhelper || true
@@ -64,9 +104,24 @@ restart_steam_if_webhelper_respawned() {
     sleep 2
 }
 
+wait_steamvr_exit() {
+    local i
+    for (( i = 0; i < $1; i++ )); do
+        steamvr_running || return 0
+        sleep 1
+    done
+    ! steamvr_running
+}
+
+signal_steamvr() {
+    local proc
+    for proc in "${STEAMVR_PROCS[@]}"; do
+        pkill -u "$UID" "-$1" -x "$proc" || true
+    done
+}
+
 start() {
-    exec 9>"$state.lock"
-    flock -n 9 || exit 0
+    lock -n || exit 0
 
     if steamvr_running; then
         echo "SteamVR already running"
@@ -81,60 +136,97 @@ start() {
     fi
     echo "$now" >"$state.last"
 
-    # With every desktop output DPMS-off, Steam creates its windows hidden and
-    # waits forever on the hidden login window or launch prompt.
-    kscreen-doctor --dpms on >/dev/null 2>&1 || echo "could not wake the desktop screen"
-    restart_steam_if_webhelper_respawned
+    wake_screen
+    if webhelper_respawned; then
+        shutdown_steam
+    fi
     sleep "$SETTLE"
     echo "starting SteamVR"
-    # Its own transient unit: if Steam was not already running, this `steam` becomes
-    # the Steam client, which must outlive this oneshot's cgroup. bazzite-steam
-    # adds Bazzite's NVIDIA and Wayland (extest) setup that plain `steam` skips.
-    launcher=steam
-    command -v bazzite-steam >/dev/null && launcher=bazzite-steam
-    systemd-run --user --collect --no-block --quiet "$launcher" "steam://rungameid/$STEAMVR_APPID"
+    launch_steam "steam://rungameid/$STEAMVR_APPID"
 }
 
+# Returns non-zero only if SteamVR survives SIGKILL.
 quit() {
-    local i
     if ! steamvr_running; then
         echo "SteamVR not running"
-        exit 0
+        return 0
     fi
     echo "quitting SteamVR"
-    # Same request SteamVR's own Quit makes; vrmonitor.sh sets up the SteamVR env.
+    # A deliberate quit: the next headset-on must not be held off by the cooldown.
+    rm -f "$state.last"
     if pgrep -u "$UID" -x vrmonitor >/dev/null; then
+        # Same request SteamVR's own Quit makes; vrmonitor.sh sets up the SteamVR env.
         timeout 10 "$HOME/.local/share/Steam/steamapps/common/SteamVR/bin/vrmonitor.sh" vrmonitor://quit \
-            >/dev/null 2>&1 || true
+            >/dev/null 2>&1 9>&- || true
+        if wait_steamvr_exit "$QUIT_TIMEOUT"; then
+            echo "SteamVR quit"
+            return 0
+        fi
+        echo "SteamVR still running after ${QUIT_TIMEOUT}s, sending SIGTERM"
+    else
+        echo "vrmonitor not running, so nothing to ask to quit; sending SIGTERM"
     fi
-    for (( i = 0; i < QUIT_TIMEOUT; i++ )); do
-        steamvr_running || { echo "SteamVR quit"; exit 0; }
-        sleep 1
-    done
-    echo "SteamVR still running after ${QUIT_TIMEOUT}s, sending SIGTERM"
-    local proc
-    for proc in vrmonitor vrdashboard vrwebhelper vrcompositor vrserver; do
-        pkill -u "$UID" -TERM -x "$proc" || true
-    done
+    signal_steamvr TERM
+    if wait_steamvr_exit "$TERM_TIMEOUT"; then
+        echo "SteamVR exited on SIGTERM"
+        return 0
+    fi
+    echo "SteamVR still running ${TERM_TIMEOUT}s after SIGTERM, sending SIGKILL"
+    signal_steamvr KILL
+    if wait_steamvr_exit "$KILL_TIMEOUT"; then
+        echo "SteamVR killed"
+        return 0
+    fi
+    echo "SteamVR still running after SIGKILL: $(pgrep -u "$UID" -l -x "$(IFS='|'; echo "${STEAMVR_PROCS[*]}")" | tr '\n' ' ')" >&2
+    return 1
+}
+
+# A respawned webhelper leaves the Steam library missing from the next session's
+# dashboard; restart Steam now rather than at the next headset-on.
+restart_crashed_steam() {
+    sleep "$WEBHELPER_CRASH_WAIT"
+    headset_present && return 0
+    if webhelper_respawned; then
+        shutdown_steam
+        wake_screen
+        launch_steam
+    fi
 }
 
 stop() {
+    lock -w 60
+    if shutting_down; then
+        echo "system shutting down, quitting SteamVR without the ${GRACE}s grace"
+        quit
+        return
+    fi
     sleep "$GRACE"
     if headset_present; then
+        if ! steamvr_running; then
+            echo "headset back within ${GRACE}s and SteamVR not running, leaving it to start"
+            return 0
+        fi
         # vrwebhelper draws the SteamVR dashboard and overlay and is not respawned
         # after a crash; quitting lets the start queued by the re-plug relaunch it.
         if pgrep -u "$UID" -x vrwebhelper >/dev/null; then
             echo "headset back within ${GRACE}s, leaving SteamVR running"
-            exit 0
+            return 0
         fi
         echo "headset back within ${GRACE}s but the SteamVR overlay has crashed, restarting SteamVR"
+        quit
+        return
+    fi
+    if ! steamvr_running; then
+        echo "SteamVR not running"
+        return 0
     fi
     quit
+    restart_crashed_steam
 }
 
 case "${1:-start}" in
     start) start ;;
     stop) stop ;;
-    quit) quit ;;
+    quit) lock -w 180; quit ;;
     *) echo "usage: $0 [start|stop|quit]" >&2; exit 2 ;;
 esac

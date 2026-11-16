@@ -12,4 +12,5 @@ ExecStart=%h/.local/bin/psvr2-steamvr start
 ExecStart=%h/.local/bin/psvr2-audio
 ExecStop=%h/.local/bin/psvr2-steamvr stop
 TimeoutStartSec=3min
-TimeoutStopSec=2min
+# Grace, quit with SIGTERM/SIGKILL fallbacks, then a Steam restart: ~2 min worst case.
+TimeoutStopSec=4min

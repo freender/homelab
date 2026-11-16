@@ -892,8 +892,28 @@ def validate() -> None:
 _SHELL_LINT_SKIP = {".bin", ".git", ".venv", "build", "mutants"}
 
 
+_SHELLS = {"sh", "bash"}
+
+
+def is_shell_script(path: Path) -> bool:
+    """A `*.sh` file, or an extensionless one with a sh/bash shebang.
+
+    Extensionless only: a `.tpl` with a shebang is a Jinja template, not shell.
+    """
+    if path.suffix == ".sh":
+        return path.is_file()
+    if path.suffix or not path.is_file():
+        return False
+    with path.open("rb") as handle:
+        first = handle.readline(256).decode("utf-8", "replace")
+    words = first[2:].split() if first.startswith("#!") else []
+    if words and Path(words[0]).name == "env":
+        words = words[1:]
+    return bool(words) and Path(words[0]).name in _SHELLS
+
+
 def shell_lint_targets(root: Path) -> list[str]:
-    """The `*.sh` files this repo publishes -- the same list the leak check reads.
+    """The shell scripts this repo publishes -- the same list the leak check reads.
 
     Walking the tree instead picks up `.venv/`, the `mutants/` copy of every
     payload, and gitignored build output: slower, and failures in files nobody
@@ -901,12 +921,13 @@ def shell_lint_targets(root: Path) -> list[str]:
     """
     tracked = tracked_files(root)
     if tracked:
-        candidates = [path for path in tracked if path.suffix == ".sh" and path.is_file()]
+        candidates = [path for path in tracked if is_shell_script(path)]
     else:
         candidates = [
             path
-            for path in root.rglob("*.sh")
+            for path in root.rglob("*")
             if not _SHELL_LINT_SKIP.intersection(path.relative_to(root).parts)
+            and is_shell_script(path)
         ]
     return sorted(str(path) for path in candidates)
 
