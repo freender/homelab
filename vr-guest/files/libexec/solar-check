@@ -171,6 +171,8 @@ def check_metrics(report: Report, manifest: dict) -> None:
     report.item("node_exporter_version", version == wanted, f"not {wanted}")
     report.item("solar_metrics_timer",
                 succeeds("systemctl", "is-enabled", "-q", "solar-metrics.timer"), "not enabled")
+    report.item("solar_gpu_metrics_active",
+                succeeds("systemctl", "is-active", "-q", "solar-gpu-metrics"), "not active")
 
 
 def check_vector(report: Report, manifest: dict) -> None:

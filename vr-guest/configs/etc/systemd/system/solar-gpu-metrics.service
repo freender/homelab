@@ -1,0 +1,12 @@
+[Unit]
+Description=solar textfile metrics: NVIDIA GPU (nvidia-smi, 1 s samples) and VR session state
+
+[Service]
+User=freender
+ExecStart=/usr/local/libexec/solar-gpu-metrics
+Restart=always
+RestartSec=10
+Nice=10
+
+[Install]
+WantedBy=multi-user.target

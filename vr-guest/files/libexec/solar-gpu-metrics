@@ -1,0 +1,242 @@
+#!/usr/bin/python3
+"""NVIDIA GPU and VR-session textfile metrics for solar.
+
+Run by solar-gpu-metrics.service as the desktop user (vr-guest). One long-lived
+`nvidia-smi --query-gpu ... -lms 1000` streams a CSV sample a second; a reader
+thread keeps the newest one, and every PUBLISH_SECONDS the main loop writes
+solar-gpu.prom for node_exporter's textfile collector (scraped every 10 s).
+Sampling once per write instead would re-initialise NVML each time and miss the
+power peaks between writes; nvidia_gpu_power_draw_max_watts keeps the highest
+1 s sample of the last POWER_WINDOW_SECONDS so a 10 s scrape still sees them.
+
+Without a fresh sample (driver gone, GPU fallen off the bus) only
+nvidia_gpu_up 0 and the session gauges are written, so panels gap instead of
+repeating stale values. The session gauges say whether SteamVR runs and the
+headset is on, to read the GPU series against.
+"""
+from __future__ import annotations
+
+import os
+import subprocess
+import tempfile
+import threading
+import time
+from collections import deque
+from pathlib import Path
+
+TEXTFILE = Path("/var/lib/node_exporter/textfile/solar-gpu.prom")
+NVIDIA_SMI = "/usr/bin/nvidia-smi"
+SAMPLE_MS = 1000
+PUBLISH_SECONDS = 5
+STALE_SECONDS = 5
+POWER_WINDOW_SECONDS = 15
+RESTART_DELAY_SECONDS = 5
+USB_DEVICES = Path("/sys/bus/usb/devices")
+HEADSET_USB = ("054c", "0cde")
+PROCESSES = ("vrserver", "vrcompositor")
+
+# (nvidia-smi field, metric, scale, help). Strings first: they become nvidia_gpu_info.
+INFO_FIELDS = ("index", "name", "driver_version", "vbios_version")
+GAUGES = (
+    ("utilization.gpu", "utilization_percent", 1, "GPU core busy, percent."),
+    ("utilization.memory", "memory_controller_utilization_percent", 1,
+     "Memory controller busy, percent."),
+    ("utilization.encoder", "encoder_utilization_percent", 1, "NVENC busy, percent."),
+    ("utilization.decoder", "decoder_utilization_percent", 1, "NVDEC busy, percent."),
+    ("memory.used", "memory_used_bytes", 1048576, "VRAM in use."),
+    ("memory.total", "memory_total_bytes", 1048576, "VRAM size."),
+    ("temperature.gpu", "temperature_celsius", 1, "GPU core temperature."),
+    ("fan.speed", "fan_speed_percent", 1, "Fan duty, percent of max."),
+    ("power.draw.instant", "power_draw_watts", 1, "Board power, instantaneous sample."),
+    ("enforced.power.limit", "power_limit_watts", 1, "Power limit in force."),
+    ("clocks.gr", "graphics_clock_hertz", 1_000_000, "Graphics clock."),
+    ("clocks.mem", "memory_clock_hertz", 1_000_000, "Memory clock."),
+    ("pcie.link.gen.current", "pcie_link_gen", 1,
+     "PCIe generation in use (drops at idle by design)."),
+    ("pcie.link.gen.max", "pcie_link_gen_max", 1, "Highest PCIe generation the link allows."),
+    ("pcie.link.width.current", "pcie_link_width", 1, "PCIe lanes in use."),
+    ("pcie.link.width.max", "pcie_link_width_max", 1, "Most PCIe lanes the link allows."),
+)
+PSTATE_FIELD = "pstate"
+REASONS_FIELD = "clocks_event_reasons.active"
+QUERY = (*INFO_FIELDS, *(field for field, *_ in GAUGES), PSTATE_FIELD, REASONS_FIELD)
+# nvmlClocksEventReasons bits.
+CLOCK_REASONS = (
+    (0x1, "gpu_idle"),
+    (0x2, "applications_clocks"),
+    (0x4, "sw_power_cap"),
+    (0x8, "hw_slowdown"),
+    (0x10, "sync_boost"),
+    (0x20, "sw_thermal_slowdown"),
+    (0x40, "hw_thermal_slowdown"),
+    (0x80, "hw_power_brake_slowdown"),
+    (0x100, "display_clock_setting"),
+)
+
+
+def escape(value: str) -> str:
+    return value.replace("\\", "\\\\").replace('"', '\\"').replace("\n", " ")
+
+
+def number(raw: str) -> float | None:
+    try:
+        return float(raw)
+    except ValueError:
+        return None
+
+
+def parse_sample(line: str) -> dict[str, str] | None:
+    """One `--format=csv,noheader,nounits` line, or None when it is not a full sample."""
+    values = [value.strip() for value in line.split(",")]
+    if len(values) != len(QUERY):
+        return None
+    return dict(zip(QUERY, values, strict=True))
+
+
+def fmt(value: float) -> str:
+    """Whole numbers without a fraction; never `:g`, which rounds VRAM bytes to 6 digits."""
+    return str(int(value)) if float(value).is_integer() else repr(float(value))
+
+
+def gauge(name: str, help_text: str, samples: list[tuple[str, float]]) -> list[str]:
+    lines = [f"# HELP {name} {help_text}", f"# TYPE {name} gauge"]
+    return lines + [f"{name}{labels} {fmt(value)}" for labels, value in samples]
+
+
+def gpu_metrics(sample: dict[str, str], power_max: float | None) -> list[str]:
+    gpu = f'{{gpu="{escape(sample["index"])}"}}'
+    lines = gauge("nvidia_gpu_info", "The GPU and its driver.", [(
+        f'{{gpu="{escape(sample["index"])}",name="{escape(sample["name"])}",'
+        f'driver="{escape(sample["driver_version"])}",vbios="{escape(sample["vbios_version"])}"}}',
+        1,
+    )])
+    for field, metric, scale, help_text in GAUGES:
+        value = number(sample[field])
+        if value is not None:
+            lines += gauge(f"nvidia_gpu_{metric}", help_text, [(gpu, value * scale)])
+    if power_max is not None:
+        lines += gauge("nvidia_gpu_power_draw_max_watts",
+                       f"Highest 1 s power sample of the last {POWER_WINDOW_SECONDS} s.",
+                       [(gpu, power_max)])
+    pstate = sample[PSTATE_FIELD].removeprefix("P")
+    if pstate.isdigit():
+        lines += gauge("nvidia_gpu_pstate", "Performance state (0 fastest, 8 idle).",
+                       [(gpu, int(pstate))])
+    lines += clock_reason_metrics(sample["index"], sample[REASONS_FIELD])
+    return lines
+
+
+def clock_reason_metrics(index: str, raw: str) -> list[str]:
+    try:
+        mask = int(raw, 16)
+    except ValueError:
+        return []
+    return gauge(
+        "nvidia_gpu_clock_event_reason",
+        "1 while this reason holds the clocks down (nvmlClocksEventReasons).",
+        [(f'{{gpu="{escape(index)}",reason="{reason}"}}', int(bool(mask & bit)))
+         for bit, reason in CLOCK_REASONS],
+    )
+
+
+def running(proc: Path = Path("/proc")) -> set[str]:
+    """Which of PROCESSES run now, by /proc/<pid>/comm (no pgrep per write)."""
+    found = set()
+    for comm in proc.glob("[0-9]*/comm"):
+        try:
+            name = comm.read_text(encoding="utf-8").strip()
+        except OSError:
+            continue
+        if name in PROCESSES:
+            found.add(name)
+    return found
+
+
+def headset_connected(devices: Path = USB_DEVICES) -> bool:
+    for vendor in devices.glob("*/idVendor"):
+        try:
+            ids = (vendor.read_text().strip(), (vendor.parent / "idProduct").read_text().strip())
+        except OSError:
+            continue
+        if ids == HEADSET_USB:
+            return True
+    return False
+
+
+def session_metrics(processes: set[str], headset: bool) -> list[str]:
+    lines = gauge("homelab_solar_process_running", "1 while this SteamVR process runs.",
+                  [(f'{{process="{name}"}}', int(name in processes)) for name in PROCESSES])
+    return lines + gauge("homelab_solar_headset_connected",
+                         "1 while the PS VR2 headset is on (USB 054c:0cde present).",
+                         [("", int(headset))])
+
+
+class Sampler:
+    """The newest nvidia-smi sample and a window of power readings."""
+
+    def __init__(self) -> None:
+        self.lock = threading.Lock()
+        self.sample: dict[str, str] | None = None
+        self.at = 0.0
+        self.power: deque[tuple[float, float]] = deque()
+
+    def add(self, sample: dict[str, str], now: float) -> None:
+        with self.lock:
+            self.sample, self.at = sample, now
+            power = number(sample["power.draw.instant"])
+            if power is not None:
+                self.power.append((now, power))
+            while self.power and self.power[0][0] < now - POWER_WINDOW_SECONDS:
+                self.power.popleft()
+
+    def current(self, now: float) -> tuple[dict[str, str] | None, float | None]:
+        with self.lock:
+            if self.sample is None or now - self.at > STALE_SECONDS:
+                return None, None
+            peak = max((value for _, value in self.power), default=None)
+            return self.sample, peak
+
+
+def read_stream(sampler: Sampler) -> None:
+    """Supervise nvidia-smi: a transient failure restarts it, never the service."""
+    command = [NVIDIA_SMI, f"--query-gpu={','.join(QUERY)}",
+               "--format=csv,noheader,nounits", f"-lms={SAMPLE_MS}"]
+    while True:
+        with subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                              text=True) as child:
+            for line in child.stdout or ():
+                sample = parse_sample(line)
+                if sample is not None:
+                    sampler.add(sample, time.monotonic())
+        time.sleep(RESTART_DELAY_SECONDS)
+
+
+def render(sample: dict[str, str] | None, power_max: float | None,
+           processes: set[str], headset: bool) -> str:
+    lines = gauge("nvidia_gpu_up",
+                  f"1 when nvidia-smi gave a sample in the last {STALE_SECONDS} s.",
+                  [("", int(sample is not None))])
+    if sample is not None:
+        lines += gpu_metrics(sample, power_max)
+    return "\n".join(lines + session_metrics(processes, headset)) + "\n"
+
+
+def publish(body: str, target: Path = TEXTFILE) -> None:
+    fd, tmp = tempfile.mkstemp(dir=target.parent, prefix=f".{target.name}.")
+    with os.fdopen(fd, "w") as handle:
+        handle.write(body)
+    os.chmod(tmp, 0o644)
+    os.replace(tmp, target)
+
+
+def main() -> None:
+    sampler = Sampler()
+    threading.Thread(target=read_stream, args=(sampler,), daemon=True).start()
+    while True:
+        time.sleep(PUBLISH_SECONDS)
+        sample, power_max = sampler.current(time.monotonic())
+        publish(render(sample, power_max, running(), headset_connected()))
+
+
+if __name__ == "__main__":
+    main()

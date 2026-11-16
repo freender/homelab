@@ -45,11 +45,13 @@ MANIFEST_IDS = [
     "/etc/systemd/system/node_exporter.service",
     "/etc/systemd/system/solar-metrics.service",
     "/etc/systemd/system/solar-metrics.timer",
+    "/etc/systemd/system/solar-gpu-metrics.service",
     "/etc/systemd/system/vector.service",
     "home/.local/bin/psvr2-steamvr",
     "home/.local/bin/psvr2-audio",
     "home/.config/systemd/user/psvr2-steamvr.service",
     "solar_metrics_script",
+    "solar_gpu_metrics_script",
     "/etc/vector/homelab.yaml",
     "vector_wrapper",
     "bluez_dropin",
@@ -60,7 +62,7 @@ CHECK_IDS = [
     "ignition_shim", "psvr2toolkit_dll", "openvr_driver", "compositor_cap_sys_nice",
     "vrmonitor_handler", "openxr_runtime", "steamvr_settings", "kde_ddc_ci", "patched_bluetoothd",
     "bluez_build_matches", "bluez_build_inputs", "node_exporter_version", "solar_metrics_timer",
-    "vector_version", "vector_active",
+    "solar_gpu_metrics_active", "vector_version", "vector_active",
 ]
 
 

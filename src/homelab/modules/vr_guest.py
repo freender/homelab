@@ -125,6 +125,7 @@ ETC_FILES = (
     ("systemd/system/node_exporter.service", "644"),
     ("systemd/system/solar-metrics.service", "644"),
     ("systemd/system/solar-metrics.timer", "644"),
+    ("systemd/system/solar-gpu-metrics.service", "644"),
     ("systemd/system/vector.service", "644"),
 )
 # (repo path under files/home/, mode). Destination and check id are relative to $HOME.
@@ -136,6 +137,7 @@ HOME_FILES = (
 # (repo name under files/libexec/, check id or None when the check does not compare it).
 LIBEXEC_FILES = (
     ("solar-metrics", "solar_metrics_script"),
+    ("solar-gpu-metrics", "solar_gpu_metrics_script"),
     ("solar-check", None),
 )
 

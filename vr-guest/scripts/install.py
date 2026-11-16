@@ -54,7 +54,10 @@ SYSTEM_UNITS = (
     "etc/systemd/system/node_exporter.service",
     "etc/systemd/system/solar-metrics.service",
     "etc/systemd/system/solar-metrics.timer",
+    "etc/systemd/system/solar-gpu-metrics.service",
 )
+GPU_METRICS_UNIT = "solar-gpu-metrics.service"
+GPU_METRICS_SCRIPT = "libexec/solar-gpu-metrics"
 ETC_OTHER = ("etc/plasmalogin.conf.d/autologin.conf",)
 NODE_EXPORTER = "/usr/local/bin/node_exporter"
 VECTOR = "/usr/local/bin/vector"
@@ -83,6 +86,7 @@ KDE_SETTINGS = (
 OWNED_CHECKS = frozenset({
     "hostname", "steam_library", "sshd",
     "node_exporter_version", "solar_metrics_script", "solar_metrics_timer",
+    "solar_gpu_metrics_script", "solar_gpu_metrics_active",
     "vector_version", "vector_wrapper", "vector_active",
 })
 OWNED_PREFIXES = ("/etc/", "home/")
@@ -345,12 +349,14 @@ def ensure_node_exporter(ctx: InstallContext) -> bool:
 
 
 def metrics(ctx: InstallContext, user: str) -> None:
-    log.action("node_exporter and solar-metrics")
+    log.action("node_exporter, solar-metrics and solar-gpu-metrics")
     binary_changed = ensure_node_exporter(ctx)
+    scripts_changed = set()
     for name, (dest, _mode) in ctx.file_map.items():
         if name.startswith("libexec/") or name == "check.json":
             if files.install(ctx, name):
                 bazzite_relabel(dest)
+                scripts_changed.add(name)
     account = pwd.getpwnam(user)
     textfile = Path(TEXTFILE_DIR)
     textfile.mkdir(parents=True, exist_ok=True)
@@ -361,6 +367,8 @@ def metrics(ctx: InstallContext, user: str) -> None:
     systemd.ensure_running(ctx, "node_exporter.service",
                            binary_changed or "node_exporter.service" in changed)
     systemd.ensure_running(ctx, "solar-metrics.timer", "solar-metrics.timer" in changed)
+    systemd.ensure_running(ctx, GPU_METRICS_UNIT,
+                           GPU_METRICS_UNIT in changed or GPU_METRICS_SCRIPT in scripts_changed)
     systemd.run_once(ctx, "solar-metrics.service")
 
 
