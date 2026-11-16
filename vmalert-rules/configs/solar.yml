@@ -30,10 +30,14 @@ groups:
       # The expr is the bare pending flag, not pending_info: uupd re-stages a
       # newer image every few days, and a version label would re-notify on each.
       # Version and package changes are read at render time instead.
-      # SolarUpdatePending below stays as the 7-day backstop.
+      # No `for:`: rpm-ostree only reports a deployment once uupd has finished
+      # staging it, and the flag holds through a re-stage until the next boot,
+      # so there is no flap to debounce -- the 15m solar-metrics refresh is
+      # already the only delay. SolarUpdatePending below stays as the 7-day
+      # backstop.
       - alert: SolarUpdateStaged
         expr: homelab_ostree_update_pending{host="solar"} == 1
-        for: 1h
+        for: 0m
         labels:
           severity: info
         annotations:
