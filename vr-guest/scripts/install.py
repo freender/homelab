@@ -3,9 +3,9 @@
 
 The `base`, `metrics` and `vr` stages of the retired `setup.sh`, plus `vector`
 (#403) and `bluez` (#405), run as root. Steps
-that need the desktop user's session (`systemctl --user`, `kwriteconfig6 --notify`)
-go through `runuser` with that session's bus; with nobody logged in they are skipped
-with a warning rather than failing the deploy.
+that need the desktop user's session (`systemctl --user`, `kwriteconfig6 --notify`,
+`kscreen-doctor`) go through `runuser` with that session's bus; with nobody logged in
+they are skipped with a warning rather than failing the deploy.
 
 Kernel-argument changes only take effect after a reboot, which this never does:
 it reports "reboot required" and leaves the power-cycle to a human, because
@@ -93,6 +93,7 @@ VR_CHECKS = frozenset({
 BLUEZ_CHECKS = frozenset({
     "patched_bluetoothd", "bluez_build_matches", "bluez_build_inputs", "bluez_dropin",
 })
+DDC_CHECK = "kde_ddc_ci"
 BLUETOOTHD = Path("/usr/local/libexec/bluetooth/bluetoothd")
 BLUEZ_MARKER = Path(f"{BLUETOOTHD}.built-for")
 BLUEZ_STAMP = Path(f"{BLUETOOTHD}.inputs")
@@ -232,11 +233,54 @@ def install_home(ctx: InstallContext, user: str, home: str) -> bool:
     return changed
 
 
-def configure_session(user: str, units_changed: bool) -> None:
+def wayland_display(runtime: str) -> str | None:
+    sockets = sorted(path.name for path in Path(runtime).glob("wayland-*")
+                     if not path.name.endswith(".lock"))
+    return sockets[0] if sockets else None
+
+
+def kscreen(user: str, session: dict[str, str], *args: str) -> str:
+    exports = [f"{key}={value}" for key, value in session.items()]
+    return _run(["runuser", "-u", user, "--", "env", *exports, "kscreen-doctor", *args],
+                check=True, capture_output=True, text=True).stdout
+
+
+def ddc_ci_changes(outputs: list[dict]) -> list[str]:
+    """kscreen-doctor arguments that leave KDE no hold on a monitor's own brightness.
+
+    The monitor is shared (its other input is the MacBook) and KWin re-applies its
+    stored brightness over DDC/CI on every DRM hotplug, which the headset's DP-2
+    coming and going is: it rewrote the monitor's backlight for both inputs. All
+    disallows come first, so the brightness reset never reaches the monitor.
+    """
+    connected = [output for output in outputs if output.get("connected")]
+    changes = [f"output.{o['name']}.ddcCi.disallow" for o in connected if o.get("ddcCiAllowed")]
+    changes += [f"output.{o['name']}.brightness.100" for o in connected
+                if o.get("brightness", 1) < 1]
+    return changes
+
+
+def ensure_no_ddc_ci(user: str, session: dict[str, str]) -> bool:
+    wayland = wayland_display(session["XDG_RUNTIME_DIR"])
+    if wayland is None:
+        log.warn(f"{user} has no Wayland session: skipped KDE DDC/CI")
+        return False
+    session = {**session, "WAYLAND_DISPLAY": wayland}
+    changes = ddc_ci_changes(json.loads(kscreen(user, session, "-j")).get("outputs", []))
+    if changes:
+        kscreen(user, session, *changes)
+        log.ok("KDE DDC/CI disallowed, KDE brightness 100%")
+    else:
+        log.sub("KDE DDC/CI already disallowed")
+    return True
+
+
+def configure_session(user: str, units_changed: bool) -> frozenset[str]:
+    """The check ids it converged; empty without a session."""
     session = session_env(pwd.getpwnam(user).pw_uid)
     if session is None:
-        log.warn(f"{user} has no session bus (not logged in): skipped user units and KDE idle")
-        return
+        log.warn(f"{user} has no session bus (not logged in): skipped user units and KDE")
+        return frozenset()
     if units_changed:
         as_user(user, session, "systemctl", "--user", "daemon-reload")
     for file, groups, key, value in KDE_SETTINGS:
@@ -244,9 +288,10 @@ def configure_session(user: str, units_changed: bool) -> None:
         as_user(user, session, "kwriteconfig6", "--notify", "--file", file,
                 *group_args, "--key", key, value)
     log.sub("KDE idle dim, screen-off and lock disabled")
+    return frozenset({DDC_CHECK}) if ensure_no_ddc_ci(user, session) else frozenset()
 
 
-def base(ctx: InstallContext, user: str, home: str) -> None:
+def base(ctx: InstallContext, user: str, home: str) -> frozenset[str]:
     log.action("Hostname")
     ensure_hostname(env.text(ctx, "HOSTNAME", ctx.host))
     log.action("Kernel arguments")
@@ -256,7 +301,7 @@ def base(ctx: InstallContext, user: str, home: str) -> None:
     log.action("Steam library disk")
     ensure_steam_library(user)
     log.action("Headset-on SteamVR session and KDE")
-    configure_session(user, install_home(ctx, user, home))
+    return configure_session(user, install_home(ctx, user, home))
 
 
 # --- metrics -----------------------------------------------------------------------
@@ -776,10 +821,10 @@ def install(ctx: InstallContext) -> None:
         raise InstallError(f"unsupported OS_TYPE {env.text(ctx, 'OS_TYPE', '')!r}")
     env.require(ctx, "DESKTOP_USER", "DESKTOP_HOME", "NODE_EXPORTER_VERSION", "CHECK_PATH")
     user = env.text(ctx, "DESKTOP_USER", "")
-    base(ctx, user, env.text(ctx, "DESKTOP_HOME", ""))
+    converged = base(ctx, user, env.text(ctx, "DESKTOP_HOME", ""))
     metrics(ctx, user)
     install_vector(ctx)
-    converged = vr(ctx, Desktop.lookup(user))
+    converged |= vr(ctx, Desktop.lookup(user))
     verify(ctx, user, converged | bluez(ctx))
 
 

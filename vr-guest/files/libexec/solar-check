@@ -128,6 +128,26 @@ def check_vr(report: Report, manifest: dict) -> None:
                 "values differ")
 
 
+def ddc_ci_off(runtime: Path) -> tuple[bool, str]:
+    """No connected output lets KWin drive the shared monitor's backlight over DDC/CI."""
+    sockets = sorted(p.name for p in runtime.glob("wayland-*") if not p.name.endswith(".lock"))
+    if not sockets:
+        return False, "no Wayland session"
+    raw = output("env", f"XDG_RUNTIME_DIR={runtime}", f"WAYLAND_DISPLAY={sockets[0]}",
+                 "kscreen-doctor", "-j")
+    try:
+        outputs = json.loads(raw)["outputs"]
+    except (ValueError, KeyError, TypeError):
+        return False, "kscreen-doctor -j unreadable"
+    allowed = [o.get("name") for o in outputs if o.get("connected") and o.get("ddcCiAllowed")]
+    return not allowed, f"DDC/CI allowed on {', '.join(map(str, allowed))}"
+
+
+def check_desktop(report: Report) -> None:
+    passed, reason = ddc_ci_off(Path(f"/run/user/{os.getuid()}"))
+    report.item("kde_ddc_ci", passed, reason)
+
+
 def check_bluez(report: Report, manifest: dict) -> None:
     exec_start = output("systemctl", "show", "-p", "ExecStart", "bluetooth")
     report.item("patched_bluetoothd", PATCHED_BLUETOOTHD in exec_start,
@@ -171,6 +191,7 @@ def main(manifest_path: Path = MANIFEST) -> int:
     report = Report()
     check_system(report, manifest)
     check_vr(report, manifest)
+    check_desktop(report)
     check_bluez(report, manifest)
     check_metrics(report, manifest)
     check_vector(report, manifest)

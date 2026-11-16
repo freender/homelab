@@ -58,7 +58,7 @@ CHECK_IDS = [
     "hostname", "karg:nvidia-modeset.conceal_vrr_caps=1", "karg:bluetooth.disable_ertm=1",
     "conceal_vrr_caps", *MANIFEST_IDS, "steam_library", "sshd", "steamvr_linux_fixes",
     "ignition_shim", "psvr2toolkit_dll", "openvr_driver", "compositor_cap_sys_nice",
-    "vrmonitor_handler", "openxr_runtime", "steamvr_settings", "patched_bluetoothd",
+    "vrmonitor_handler", "openxr_runtime", "steamvr_settings", "kde_ddc_ci", "patched_bluetoothd",
     "bluez_build_matches", "bluez_build_inputs", "node_exporter_version", "solar_metrics_timer",
     "vector_version", "vector_active",
 ]
@@ -409,6 +409,53 @@ def test_make_user_dirs_creates_only_what_is_missing(installer, tmp_path, monkey
 
 def test_session_env_needs_a_bus(installer, tmp_path) -> None:
     assert installer.session_env(999999) is None
+
+
+def test_wayland_display_skips_lock_files(installer, tmp_path) -> None:
+    assert installer.wayland_display(str(tmp_path)) is None
+    (tmp_path / "wayland-0.lock").touch()
+    (tmp_path / "wayland-1").touch()
+    assert installer.wayland_display(str(tmp_path)) == "wayland-1"
+
+
+def test_ddc_ci_changes_disallow_before_brightness(installer) -> None:
+    outputs = [
+        {"name": "HDMI-A-1", "connected": True, "ddcCiAllowed": True, "brightness": 0.1111},
+        {"name": "DP-1", "connected": False, "ddcCiAllowed": True, "brightness": 0.5},
+        {"name": "DP-3", "connected": True, "ddcCiAllowed": False, "brightness": 1},
+    ]
+    assert installer.ddc_ci_changes(outputs) == [
+        "output.HDMI-A-1.ddcCi.disallow", "output.HDMI-A-1.brightness.100"]
+    assert installer.ddc_ci_changes(outputs[2:]) == []
+
+
+@pytest.mark.parametrize(
+    ("doctor", "applied"),
+    [('{"outputs": [{"name": "HDMI-A-1", "connected": true, "ddcCiAllowed": true,'
+      ' "brightness": 1}]}', True),
+     ('{"outputs": [{"name": "HDMI-A-1", "connected": true, "ddcCiAllowed": false,'
+      ' "brightness": 1}]}', False)],
+)
+def test_ensure_no_ddc_ci(installer, tmp_path, doctor: str, applied: bool) -> None:
+    (tmp_path / "wayland-1").touch()
+    session = {"XDG_RUNTIME_DIR": str(tmp_path)}
+    commands = Commands({("runuser",): (0, doctor)})
+    installer._run = commands
+
+    assert installer.ensure_no_ddc_ci("freender", session)
+
+    prefix = ["runuser", "-u", "freender", "--", "env", f"XDG_RUNTIME_DIR={tmp_path}",
+              "WAYLAND_DISPLAY=wayland-1", "kscreen-doctor"]
+    expected = [[*prefix, "-j"]]
+    if applied:
+        expected.append([*prefix, "output.HDMI-A-1.ddcCi.disallow"])
+    assert commands.seen == expected
+
+
+def test_ensure_no_ddc_ci_without_wayland_is_not_owned(installer, tmp_path) -> None:
+    installer._run = Commands()
+    assert not installer.ensure_no_ddc_ci("freender", {"XDG_RUNTIME_DIR": str(tmp_path)})
+    assert installer._run.seen == []
 
 
 @pytest.mark.parametrize(
@@ -1349,6 +1396,32 @@ def test_bluez_build_inputs(check, tmp_path, monkeypatch, capsys, stamp, passes)
 
     line = capsys.readouterr().out.splitlines()[2]
     assert line.startswith(f"  {'ok  ' if passes else 'FAIL'}  bluez_build_inputs")
+
+
+@pytest.mark.parametrize(
+    ("doctor", "passed", "reason"),
+    [('{"outputs": [{"name": "HDMI-A-1", "connected": true, "ddcCiAllowed": false},'
+      ' {"name": "DP-1", "connected": false, "ddcCiAllowed": true}]}', True, ""),
+     ('{"outputs": [{"name": "HDMI-A-1", "connected": true, "ddcCiAllowed": true}]}', False,
+      "DDC/CI allowed on HDMI-A-1"),
+     ("", False, "kscreen-doctor -j unreadable")],
+)
+def test_ddc_ci_off(check, tmp_path, monkeypatch, doctor, passed, reason) -> None:
+    seen: list[tuple[str, ...]] = []
+    monkeypatch.setattr(check, "output", lambda *cmd: seen.append(cmd) or doctor)
+    (tmp_path / "wayland-0.lock").touch()
+    (tmp_path / "wayland-0").touch()
+
+    ok, why = check.ddc_ci_off(tmp_path)
+
+    assert ok is passed
+    assert passed or why == reason
+    assert seen == [("env", f"XDG_RUNTIME_DIR={tmp_path}", "WAYLAND_DISPLAY=wayland-0",
+                     "kscreen-doctor", "-j")]
+
+
+def test_ddc_ci_off_needs_a_wayland_session(check, tmp_path) -> None:
+    assert check.ddc_ci_off(tmp_path) == (False, "no Wayland session")
 
 
 def test_check_unreadable_manifest(check, tmp_path) -> None:
