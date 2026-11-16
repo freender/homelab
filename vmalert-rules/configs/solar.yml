@@ -41,8 +41,10 @@ groups:
         labels:
           severity: info
         annotations:
-          summary: "solar: Bazzite {{ with query \"homelab_ostree_pending_info{host='solar'}\" }}{{ . | first | label \"version\" }}{{ end }} is staged; power-cycle before the next VR session"
-          description: "Changes: {{ range $i, $c := query \"homelab_ostree_pending_package_changed{host='solar'} == 1\" }}{{ if $i }}, {{ end }}{{ $c.Labels.package }}{{ else }}no bluez, kernel or kmod-nvidia change{{ end }}. A bluez change means moving the bluez-eagain inputs to the new terra-bluez before `./deploy vr-guest solar` will pass again (vr-guest/bluez-eagain/README.md). Apply when nobody is in the headset: `ssh clovis qm shutdown 106 && ssh clovis qm start 106`, then `/usr/local/libexec/solar-check` on solar."
+          summary: "solar: Bazzite {{ with query \"homelab_ostree_pending_info{host='solar'}\" }}{{ . | first | label \"version\" }}{{ end }} staged — power-cycle before the next VR session"
+          # The bluez line only renders when bluez actually changed;
+          # SolarPatchCheckFailed covers anything the reboot breaks.
+          description: "Updates: {{ range $i, $c := query \"homelab_ostree_pending_package_changed{host='solar'} == 1\" }}{{ if $i }}, {{ end }}{{ $c.Labels.package }}{{ else }}no kernel, NVIDIA or bluez change{{ end }}\nApply: ssh clovis qm shutdown 106 && ssh clovis qm start 106{{ with query \"homelab_ostree_pending_package_changed{host='solar',package='bluez'} == 1\" }}\n⚠️ bluez changed: move the bluez-eagain inputs to the new terra-bluez, then ./deploy vr-guest solar (vr-guest/bluez-eagain/README.md){{ end }}"
 
       # A staged (or finalized, not yet booted) Bazzite image only applies on a
       # full power-off/on of VM 106. uupd replaces the staged image daily without
