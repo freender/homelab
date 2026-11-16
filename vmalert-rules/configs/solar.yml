@@ -23,6 +23,23 @@ groups:
           summary: "solar: solar-check {{ $labels.check }} failed"
           description: "The solar guest-side check `{{ $labels.check }}` has failed for 30 minutes. Run `/usr/local/libexec/solar-check` on solar for the reason. Common causes: a SteamVR update dropped cap_sys_nice, or a PS VR2 App update restored Sony's dll (both: `psvr2-steamvr quit` on solar, then `./deploy vr-guest solar` from the repo), or a Bazzite update shipped a new terra-bluez (`bluez_build_matches`: rebuild per vr-guest/bluez-eagain/README.md, or roll back). /etc, home or script drift: `./deploy vr-guest solar`."
 
+      # The heads-up, not the nag: solar is a one-minute power-cycle, best taken
+      # just before a VR session, so a staged image is worth knowing about the
+      # day it lands rather than on the next Saturday. severity info routes it to
+      # mwbot-quiet (silent Telegram, no resolved, one send per staged cycle).
+      # The expr is the bare pending flag, not pending_info: uupd re-stages a
+      # newer image every few days, and a version label would re-notify on each.
+      # Version and package changes are read at render time instead.
+      # SolarUpdatePending below stays as the 7-day backstop.
+      - alert: SolarUpdateStaged
+        expr: homelab_ostree_update_pending{host="solar"} == 1
+        for: 1h
+        labels:
+          severity: info
+        annotations:
+          summary: "solar: Bazzite {{ with query \"homelab_ostree_pending_info{host='solar'}\" }}{{ . | first | label \"version\" }}{{ end }} is staged; power-cycle before the next VR session"
+          description: "Changes: {{ range $i, $c := query \"homelab_ostree_pending_package_changed{host='solar'} == 1\" }}{{ if $i }}, {{ end }}{{ $c.Labels.package }}{{ else }}no bluez, kernel or kmod-nvidia change{{ end }}. A bluez change means rebuilding the patched bluetoothd after the boot (vr-guest/bluez-eagain/README.md). Apply when nobody is in the headset: `ssh clovis qm shutdown 106 && ssh clovis qm start 106`, then `/usr/local/libexec/solar-check` on solar."
+
       # A staged (or finalized, not yet booted) Bazzite image only applies on a
       # full power-off/on of VM 106. uupd replaces the staged image daily without
       # changing this series' labels, so `for:` keeps counting from the first

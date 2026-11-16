@@ -16,6 +16,17 @@ TEXTFILE = Path("/var/lib/node_exporter/textfile/solar.prom")
 CHECK = Path("/usr/local/libexec/solar-check")
 CHECK_LINE = re.compile(r"^\s+(ok|FAIL)\s+(\S+?)(?::\s.*)?$")
 UUPD_DONE = "Updates Completed Successfully"
+# Packages whose change in a staged image decides how much a reboot costs: a new
+# terra-bluez means rebuilding the patched bluetoothd, kernel and kmod-nvidia are
+# what break passthrough or the headset if anything does.
+# Exact names, not prefixes: kernel-headers or kernel-srpm-macros bump without the
+# booted kernel changing. Bazzite ships terra-bluez; plain bluez is kept in case
+# it switches back.
+WATCHED_PACKAGES = {
+    "bluez": {"terra-bluez", "bluez"},
+    "kernel": {"kernel", "kernel-core"},
+    "kmod-nvidia": {"kmod-nvidia"},
+}
 
 
 def escape(value: str) -> str:
@@ -77,6 +88,39 @@ def ostree_metrics() -> list[str]:
             "# TYPE homelab_ostree_pending_info gauge",
             f'homelab_ostree_pending_info{{version="{escape(pending.get("version", ""))}"}} 1',
         ]
+        lines += pending_change_metrics()
+    return lines
+
+
+def changed_packages(diff: str) -> set[str]:
+    """Names in `rpm-ostree db diff` block output (its --format=json prints block too).
+
+    Upgraded/Downgraded entries read `  name old -> new`; Added/Removed entries are a
+    bare `  name-version-release.arch`.
+    """
+    names = set()
+    for line in diff.splitlines():
+        if not line.startswith("  ") or not line.strip():
+            continue
+        entry = line.split()[0]
+        names.add(entry if " " in line.strip() else entry.rsplit("-", 2)[0])
+    return names
+
+
+def pending_change_metrics() -> list[str]:
+    proc = run("rpm-ostree", "db", "diff")
+    if proc.returncode != 0:
+        return []
+    names = changed_packages(proc.stdout)
+    lines = [
+        "# HELP homelab_ostree_pending_package_changed 1 when the staged image changes "
+        "this package family.",
+        "# TYPE homelab_ostree_pending_package_changed gauge",
+    ]
+    for family, packages in WATCHED_PACKAGES.items():
+        lines.append(
+            f'homelab_ostree_pending_package_changed{{package="{family}"}} {int(bool(names & packages))}'
+        )
     return lines
 
 

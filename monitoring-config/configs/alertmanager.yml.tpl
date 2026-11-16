@@ -128,11 +128,11 @@ route:
         - run
       repeat_interval: 24h
       continue: false
-    # The Proxmox update digest, not an alert. Proxmox packages are upgraded by
-    # hand during the monthly window, so ProxmoxUpdatesAvailable is true nearly
-    # all the time by design -- at the parent's 4h repeat that would page six
-    # times a day for a condition that is *supposed* to stand between windows,
-    # which is exactly the noise that gets a receiver muted.
+    # The Proxmox update digest. apt-upgrade dist-upgrades the PVE nodes every
+    # Saturday 05:00-05:15, so ProxmoxUpdatesAvailable (8d `for:`) only fires
+    # when a weekly run achieved nothing -- a backstop, not a reminder, and
+    # nothing about it is urgent enough to beat the parent's 4h repeat into a
+    # six-times-a-day page.
     #
     # active_time_intervals is what makes this weekly: saturday-digest is
     # active for all of Saturday and nothing else, so the notification is held
@@ -186,6 +186,25 @@ route:
       repeat_interval: 24h
       active_time_intervals:
         - saturday-digest
+      mute_time_intervals:
+        - scheduled-maintenance
+      continue: false
+    # Same-day heads-up for things worth knowing but not worth a sound:
+    # severity=info, delivered silently by mwbot-quiet. First member is
+    # SolarUpdateStaged (a Bazzite image staged on solar, which is a one-minute
+    # power-cycle best taken before a VR session).
+    #
+    # One send per firing cycle: send_resolved is off, and the 120h repeat
+    # matches Alertmanager's default notification-log retention -- the log entry
+    # is garbage-collected then anyway, so a longer repeat would be fiction. A
+    # condition still standing after that gets one more quiet message; the
+    # loud backstops (SolarUpdatePending) live on their own routes.
+    - receiver: mwbot-quiet
+      matchers:
+        - severity="info"
+      group_by:
+        - alertname
+      repeat_interval: 120h
       mute_time_intervals:
         - scheduled-maintenance
       continue: false
@@ -503,6 +522,20 @@ receivers:
     webhook_configs:
       - url: __HEALTHCHECK_URL__
         send_resolved: false
+
+  # Silent Telegram delivery (no sound or vibration) for severity=info
+  # heads-ups. Firing only: a heads-up clearing is not news.
+  - name: mwbot-quiet
+    telegram_configs:
+      - bot_token_file: /tmp/telegram_token
+        chat_id: __TELEGRAM_CHATID__
+        send_resolved: false
+        disable_notifications: true
+        message: |-
+          {{ range .Alerts.Firing }}&#128309; {{ .Labels.alertname }}
+          {{ .Annotations.summary }}
+          {{ if .Annotations.description }}{{ .Annotations.description }}{{ end }}
+          {{ end }}
 
   # No integrations: alerts routed here stay active and visible but notify
   # nobody.

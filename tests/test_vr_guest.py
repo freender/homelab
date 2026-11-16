@@ -997,6 +997,39 @@ def test_check_output_matches_what_solar_metrics_parses(check, tmp_path, capsys)
     assert report.failed
 
 
+DB_DIFF = """\
+ostree diff commit from: booted deployment (8b7f)
+ostree diff commit to:   pending deployment (9070)
+Upgraded:
+  kernel-headers 7.3.3-300.fc45 -> 7.3.4-300.fc45
+  kmod-nvidia 3:620.70.06-1.fc45 -> 3:620.70.06-2.fc45
+Removed:
+  terra-bluez-5.87+1.git8750129efca8-2.fc45.x86_64
+  kernel-srpm-macros-1.0-30.fc45.noarch
+"""
+
+
+def test_pending_changes_match_exact_package_names(monkeypatch) -> None:
+    metrics = load_script("solar_metrics", METRICS_PATH)
+    monkeypatch.setattr(metrics, "run", lambda *cmd: subprocess.CompletedProcess(cmd, 0, DB_DIFF))
+
+    lines = metrics.pending_change_metrics()
+
+    # kernel-headers is not the booted kernel; a removed terra-bluez is a bluez change.
+    assert [line for line in lines if not line.startswith("#")] == [
+        'homelab_ostree_pending_package_changed{package="bluez"} 1',
+        'homelab_ostree_pending_package_changed{package="kernel"} 0',
+        'homelab_ostree_pending_package_changed{package="kmod-nvidia"} 1',
+    ]
+
+
+def test_a_failed_db_diff_publishes_no_change_series(monkeypatch) -> None:
+    metrics = load_script("solar_metrics", METRICS_PATH)
+    monkeypatch.setattr(metrics, "run", lambda *cmd: subprocess.CompletedProcess(cmd, 1, ""))
+
+    assert metrics.pending_change_metrics() == []
+
+
 def test_check_reports_every_id(check, tmp_path, monkeypatch, capsys) -> None:
     root = fake_root(tmp_path)
     build_dir, _ = vr_guest.render_build(root, "solar")
