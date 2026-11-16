@@ -4,6 +4,7 @@ Replaces the retired `pve-gpu-passthrough/linux/setup.sh`: the `base` and `metri
 stages (homelab-ops#400; design in #399) and the `vr` stage (#401). The `vector`
 stage ships the journal to VictoriaLogs (#403, design in #402) from vector-host's
 config render. The `bluez` stage builds and installs the patched bluetoothd (#405).
+The `goxlr` stage installs goxlr-utility for the GoXLR mixer moved over from exo.
 
 Every destination, mode, pinned release and expected value is decided here and passed
 down: the file map and env for the installer, and `check.json` for `solar-check`, the
@@ -68,6 +69,16 @@ STEAM_LOGS = (
     "console_log.txt", "connection_log.txt", "webhelper.txt", "webhelper_vr.txt",
 )
 
+# goxlr-utility's RPM, unpacked rather than layered: its four binaries go to
+# /usr/local/bin and its udev rule ships in ETC_FILES. Its user data (profiles,
+# mic profiles, samples) is the user's, not the repo's: copied by hand.
+GOXLR_VERSION = "1.2.4"
+GOXLR_URL = (
+    "https://github.com/GoXLR-on-Linux/goxlr-utility/releases/download/"
+    f"v{GOXLR_VERSION}/goxlr-utility-{GOXLR_VERSION}-1.x86_64.rpm"
+)
+GOXLR_SHA = "a3006b5536f98d162904c41a407c66810df2509ef47bb6457cbc8f2a05c297ea"
+
 # The vr stage's pinned BnuuySolutions releases: env prefix -> (repo, tag, zip asset,
 # its sha256). Verified against the files solar ran on 2026-11-15.
 VR_RELEASES = {
@@ -122,6 +133,7 @@ ETC_FILES = (
     ("plasmalogin.conf.d/autologin.conf", "644"),
     ("udev/rules.d/70-xrhardware.rules", "644"),
     ("udev/rules.d/71-psvr2-steamvr.rules", "644"),
+    ("udev/rules.d/50-goxlr.rules", "644"),
     ("systemd/system/node_exporter.service", "644"),
     ("systemd/system/solar-metrics.service", "644"),
     ("systemd/system/solar-metrics.timer", "644"),
@@ -133,6 +145,9 @@ HOME_FILES = (
     (".local/bin/psvr2-steamvr", "755"),
     (".local/bin/psvr2-audio", "755"),
     (".config/systemd/user/psvr2-steamvr.service", "644"),
+    # What goxlr-utility's own "autostart" toggle writes, so the UI shows it on.
+    (".config/autostart/goxlr-daemon.desktop", "644"),
+    (".local/share/applications/goxlr-utility.desktop", "644"),
 )
 # (repo name under files/libexec/, check id or None when the check does not compare it).
 LIBEXEC_FILES = (
@@ -279,6 +294,7 @@ def check_manifest(root: Path, host: str, home: str, vector_dir: Path) -> dict[s
         "kargs": list(KARGS),
         "node_exporter_version": NODE_EXPORTER_VERSION,
         "vector_version": VECTOR_VERSION,
+        "goxlr_version": GOXLR_VERSION,
         "psvr2toolkit_dll_sha256": PSVR2TK_DLL_SHA,
         "bluez_inputs": bluez_inputs(root),
         "steamvr_settings": STEAMVR_SETTINGS,
@@ -328,6 +344,9 @@ def render_build(root: Path, host: str) -> tuple[Path, tuple[FileSpec, ...]]:
             "VECTOR_SHA": VECTOR_SHA,
             "VECTOR_QUERY_URL": f"{vector_host.victoria_logs_base(root)}/select/logsql/query",
             "VECTOR_TENANT": "0",
+            "GOXLR_VERSION": GOXLR_VERSION,
+            "GOXLR_URL": GOXLR_URL,
+            "GOXLR_SHA": GOXLR_SHA,
             "BLUEZ_TERRA": BLUEZ_TERRA,
             "BLUEZ_IMAGE": BLUEZ_IMAGE,
             "BLUEZ_INPUTS": bluez_inputs(root),

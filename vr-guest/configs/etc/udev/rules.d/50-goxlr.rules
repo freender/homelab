@@ -1,0 +1,4 @@
+# solar: let the desktop user's goxlr-daemon open the GoXLR (8fe0) and GoXLR Mini
+# (8fe4). Upstream goxlr-utility's 50-goxlr.rules, which its RPM would install.
+SUBSYSTEM=="usb", ATTR{idVendor}=="1220", ATTR{idProduct}=="8fe4", TAG+="uaccess"
+SUBSYSTEM=="usb", ATTR{idVendor}=="1220", ATTR{idProduct}=="8fe0", TAG+="uaccess"

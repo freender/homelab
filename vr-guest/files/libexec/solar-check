@@ -4,7 +4,7 @@
 Runs as the desktop user: solar-metrics.timer every 15 minutes, and the vr-guest
 installer as its verify step. What to expect comes from check.json, which the
 module renders at deploy time (hashes of every file it installs, the kargs, the
-pinned node_exporter and Vector versions and PSVR2Toolkit dll, the bluetoothd build
+pinned node_exporter, Vector and goxlr-utility versions and PSVR2Toolkit dll, the bluetoothd build
 inputs, the SteamVR settings).
 
 Output is one line per item, `  ok    <id>` or `  FAIL  <id>: <reason>`; the ids are
@@ -23,6 +23,7 @@ from pathlib import Path
 MANIFEST = Path("/usr/local/share/vr-guest/check.json")
 NODE_EXPORTER = "/usr/local/bin/node_exporter"
 VECTOR = "/usr/local/bin/vector"
+GOXLR_DAEMON = "/usr/local/bin/goxlr-daemon"
 CONCEAL_VRR = Path("/sys/module/nvidia_modeset/parameters/conceal_vrr_caps")
 PROC_CMDLINE = Path("/proc/cmdline")
 STEAM_MOUNT = "/var/mnt/steam"
@@ -184,6 +185,13 @@ def check_vector(report: Report, manifest: dict) -> None:
                 "not active")
 
 
+def check_goxlr(report: Report, manifest: dict) -> None:
+    words = output(GOXLR_DAEMON, "--version").split()
+    version = words[1] if len(words) > 1 else ""
+    wanted = manifest["goxlr_version"]
+    report.item("goxlr_version", version == wanted, f"not {wanted}")
+
+
 def main(manifest_path: Path = MANIFEST) -> int:
     try:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -197,6 +205,7 @@ def main(manifest_path: Path = MANIFEST) -> int:
     check_bluez(report, manifest)
     check_metrics(report, manifest)
     check_vector(report, manifest)
+    check_goxlr(report, manifest)
     return int(report.failed)
 
 

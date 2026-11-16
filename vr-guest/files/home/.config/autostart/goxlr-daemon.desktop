@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=GoXLR Utility
+Comment=A Tool for Configuring a GoXLR
+Path=/usr/local/bin
+Exec=/usr/local/bin/goxlr-daemon
+Terminal=false

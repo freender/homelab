@@ -22,6 +22,10 @@ refuses an image whose terra-bluez the patch set was not written for, and like
 `vr` it does nothing while SteamVR runs: the build is minutes of CPU and the
 bluetooth restart drops the Sense controllers.
 
+The `goxlr` stage unpacks goxlr-utility's pinned RPM into /usr/local/bin (nothing
+is layered) and starts the daemon in the desktop session when it is not running.
+A running daemon is never restarted: an upgrade applies at the next login.
+
 Ends by running `solar-check` as the desktop user, the same check `solar-metrics`
 publishes every 15 minutes. A failure this module owns fails the deploy; a
 not-yet-booted karg, and the vr items when the vr stage was skipped, only warn.
@@ -36,6 +40,7 @@ import pwd
 import shutil
 import subprocess
 import tarfile
+import tempfile
 import urllib.request
 import zipfile
 import zlib
@@ -49,7 +54,13 @@ from homelab_install.errors import InstallError
 _run = subprocess.run
 
 SSHD_DROPIN = "etc/ssh/sshd_config.d/10-key-only.conf"
-UDEV_RULES = ("etc/udev/rules.d/70-xrhardware.rules", "etc/udev/rules.d/71-psvr2-steamvr.rules")
+GOXLR_UDEV = "etc/udev/rules.d/50-goxlr.rules"
+UDEV_RULES = (
+    "etc/udev/rules.d/70-xrhardware.rules", "etc/udev/rules.d/71-psvr2-steamvr.rules", GOXLR_UDEV,
+)
+GOXLR_VENDOR = "1220"
+LOCAL_BIN = "/usr/local/bin"
+GOXLR_BINARIES = ("goxlr-daemon", "goxlr-client", "goxlr-launcher", "goxlr-defaults")
 SYSTEM_UNITS = (
     "etc/systemd/system/node_exporter.service",
     "etc/systemd/system/solar-metrics.service",
@@ -87,7 +98,7 @@ OWNED_CHECKS = frozenset({
     "hostname", "steam_library", "sshd",
     "node_exporter_version", "solar_metrics_script", "solar_metrics_timer",
     "solar_gpu_metrics_script", "solar_gpu_metrics_active",
-    "vector_version", "vector_wrapper", "vector_active",
+    "vector_version", "vector_wrapper", "vector_active", "goxlr_version",
 })
 OWNED_PREFIXES = ("/etc/", "home/")
 VR_CHECKS = frozenset({
@@ -189,8 +200,13 @@ def install_etc(ctx: InstallContext) -> None:
     systemd.ensure_running(ctx, "sshd.service", False)
     for name in ETC_OTHER:
         files.install(ctx, name)
-    if any([files.install(ctx, name) for name in UDEV_RULES]):
+    changed = [name for name in UDEV_RULES if files.install(ctx, name)]
+    if changed:
         _run(["udevadm", "control", "--reload"], check=True)
+    # uaccess only reaches an already-plugged GoXLR on its next event.
+    if GOXLR_UDEV in changed:
+        _run(["udevadm", "trigger", "--subsystem-match=usb",
+              f"--attr-match=idVendor={GOXLR_VENDOR}"], check=True)
 
 
 def ensure_steam_library(user: str) -> None:
@@ -425,6 +441,64 @@ def install_vector(ctx: InstallContext) -> None:
     if starting:
         vector.confirm_delivery(env.text(ctx, "VECTOR_QUERY_URL", ""),
                                 env.text(ctx, "VECTOR_TENANT", ""), VECTOR_MARKER_TAG, VECTOR_UNIT)
+
+
+# --- goxlr -------------------------------------------------------------------------
+
+
+def goxlr_version() -> str:
+    """`goxlr-daemon 1.2.4` -> `1.2.4`."""
+    try:
+        result = _run([f"{LOCAL_BIN}/goxlr-daemon", "--version"],
+                      check=False, capture_output=True, text=True)
+    except OSError:
+        return ""
+    words = (result.stdout or "").split()
+    return words[1] if len(words) > 1 and words[0] == "goxlr-daemon" else ""
+
+
+def ensure_goxlr_binaries(ctx: InstallContext) -> None:
+    version = env.text(ctx, "GOXLR_VERSION", "")
+    if goxlr_version() == version and not ctx.force_update:
+        log.sub(f"goxlr-utility {version} already installed")
+        return
+    package = fetch(env.text(ctx, "GOXLR_URL", ""), env.text(ctx, "GOXLR_SHA", ""))
+    payload = _run(["rpm2cpio", str(package)], check=True, capture_output=True).stdout
+    with tempfile.TemporaryDirectory() as unpacked:
+        _run(["cpio", "-idm", "--quiet", *(f"./usr/bin/{name}" for name in GOXLR_BINARIES)],
+             input=payload, cwd=unpacked, check=True)
+        for name in GOXLR_BINARIES:
+            built = Path(unpacked, "usr/bin", name)
+            if not built.is_file():
+                raise InstallError(f"{package.name} has no /usr/bin/{name}")
+            dest = Path(LOCAL_BIN, name)
+            staged = dest.with_name(f".{name}.vr-guest")
+            shutil.copyfile(built, staged)
+            os.chmod(staged, 0o755)
+            os.replace(staged, dest)
+            bazzite_relabel(str(dest))
+    log.ok(f"goxlr-utility {version} installed")
+
+
+def ensure_goxlr_daemon(user: str) -> None:
+    """Start it in the session now; the autostart entry covers every later login."""
+    if succeeds("pgrep", "-u", user, "-x", "goxlr-daemon"):
+        log.sub("goxlr-daemon running (an upgrade applies at the next login)")
+        return
+    session = session_env(pwd.getpwnam(user).pw_uid)
+    if session is None:
+        log.warn(f"{user} has no session bus (not logged in): goxlr-daemon starts at login")
+        return
+    as_user(user, session, "systemd-run", "--user", "--collect", "--unit=goxlr-daemon",
+            f"{LOCAL_BIN}/goxlr-daemon")
+    log.ok("goxlr-daemon started")
+
+
+def goxlr(ctx: InstallContext, user: str) -> None:
+    log.action("goxlr-utility")
+    env.require(ctx, "GOXLR_VERSION", "GOXLR_URL", "GOXLR_SHA")
+    ensure_goxlr_binaries(ctx)
+    ensure_goxlr_daemon(user)
 
 
 # --- vr ----------------------------------------------------------------------------
@@ -832,6 +906,7 @@ def install(ctx: InstallContext) -> None:
     converged = base(ctx, user, env.text(ctx, "DESKTOP_HOME", ""))
     metrics(ctx, user)
     install_vector(ctx)
+    goxlr(ctx, user)
     converged |= vr(ctx, Desktop.lookup(user))
     verify(ctx, user, converged | bluez(ctx))
 

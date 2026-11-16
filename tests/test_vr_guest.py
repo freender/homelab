@@ -42,6 +42,7 @@ MANIFEST_IDS = [
     "/etc/plasmalogin.conf.d/autologin.conf",
     "/etc/udev/rules.d/70-xrhardware.rules",
     "/etc/udev/rules.d/71-psvr2-steamvr.rules",
+    "/etc/udev/rules.d/50-goxlr.rules",
     "/etc/systemd/system/node_exporter.service",
     "/etc/systemd/system/solar-metrics.service",
     "/etc/systemd/system/solar-metrics.timer",
@@ -50,6 +51,8 @@ MANIFEST_IDS = [
     "home/.local/bin/psvr2-steamvr",
     "home/.local/bin/psvr2-audio",
     "home/.config/systemd/user/psvr2-steamvr.service",
+    "home/.config/autostart/goxlr-daemon.desktop",
+    "home/.local/share/applications/goxlr-utility.desktop",
     "solar_metrics_script",
     "solar_gpu_metrics_script",
     "/etc/vector/homelab.yaml",
@@ -62,7 +65,7 @@ CHECK_IDS = [
     "ignition_shim", "psvr2toolkit_dll", "openvr_driver", "compositor_cap_sys_nice",
     "vrmonitor_handler", "openxr_runtime", "steamvr_settings", "kde_ddc_ci", "patched_bluetoothd",
     "bluez_build_matches", "bluez_build_inputs", "node_exporter_version", "solar_metrics_timer",
-    "solar_gpu_metrics_active", "vector_version", "vector_active",
+    "solar_gpu_metrics_active", "vector_version", "vector_active", "goxlr_version",
 ]
 
 
@@ -188,6 +191,10 @@ def test_render_build_env(tmp_path: Path) -> None:
         "VECTOR_SHA": vr_guest.VECTOR_SHA,
         "VECTOR_QUERY_URL": "http://logs.internal:9428/select/logsql/query",
         "VECTOR_TENANT": "0",
+        "GOXLR_VERSION": "1.2.4",
+        "GOXLR_URL": "https://github.com/GoXLR-on-Linux/goxlr-utility/releases/download/"
+                     "v1.2.4/goxlr-utility-1.2.4-1.x86_64.rpm",
+        "GOXLR_SHA": vr_guest.GOXLR_SHA,
         "BLUEZ_TERRA": "terra-bluez-5.87+1.git8750129efca8-2.fc45.x86_64",
         "BLUEZ_IMAGE": "registry.fedoraproject.org/fedora:45",
         "BLUEZ_INPUTS": vr_guest.bluez_inputs(ROOT),
@@ -220,6 +227,7 @@ def test_check_manifest_ids_and_hashes(tmp_path: Path) -> None:
     assert manifest["home"] == "/var/home/freender"
     assert manifest["kargs"] == list(vr_guest.KARGS)
     assert manifest["vector_version"] == vr_guest.VECTOR_VERSION
+    assert manifest["goxlr_version"] == vr_guest.GOXLR_VERSION
     assert manifest["psvr2toolkit_dll_sha256"] == vr_guest.PSVR2TK_DLL_SHA
     assert manifest["bluez_inputs"] == vr_guest.bluez_inputs(root)
     assert manifest["steamvr_settings"] == {
@@ -1259,6 +1267,151 @@ def test_validate_needs_bluez_patches(tmp_path: Path) -> None:
         vr_guest.validate(root, ["solar"])
 
 
+# --- goxlr stage -------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("stdout", "version"),
+    [("goxlr-daemon 1.2.4\n", "1.2.4"), ("", ""), ("bash: goxlr-daemon: not found\n", "")],
+)
+def test_goxlr_version(installer, stdout: str, version: str) -> None:
+    installer._run = Commands({(f"{installer.LOCAL_BIN}/goxlr-daemon",): (0, stdout)})
+    assert installer.goxlr_version() == version
+
+
+def test_goxlr_version_without_the_binary(installer, monkeypatch) -> None:
+    def missing(*_a, **_k):
+        raise FileNotFoundError
+
+    installer._run = missing
+    assert installer.goxlr_version() == ""
+
+
+class RpmHost(Commands):
+    """`cpio` unpacks the named members into its cwd, as the real one would."""
+
+    def __init__(self, members: tuple[str, ...], version: str = ""):
+        super().__init__({("rpm2cpio",): (0, b"payload")})
+        self.members, self.version = members, version
+        self.payload = None
+
+    def __call__(self, cmd, check=False, **kwargs):
+        argv = list(cmd)
+        if argv[0].endswith("/goxlr-daemon"):
+            self.seen.append(argv)
+            return subprocess.CompletedProcess(argv, 0, stdout=self.version, stderr="")
+        if argv[0] == "cpio":
+            self.payload = kwargs["input"]
+            for name in self.members:
+                path = Path(kwargs["cwd"], "usr/bin", name)
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(f"{name} new")
+        return super().__call__(cmd, check, **kwargs)
+
+
+def goxlr_ctx(tmp_path: Path) -> InstallContext:
+    return make_ctx(tmp_path, {"GOXLR_VERSION": "1.2.4", "GOXLR_URL": "https://h/g.rpm",
+                               "GOXLR_SHA": "x"})
+
+
+def test_goxlr_installs_every_binary_from_the_pinned_rpm(installer, tmp_path,
+                                                         monkeypatch) -> None:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "goxlr-daemon").write_text("old")
+    installer.LOCAL_BIN = str(bin_dir)
+    host = RpmHost(installer.GOXLR_BINARIES, version="goxlr-daemon 1.2.3\n")
+    installer._run = host
+    fetched = []
+    monkeypatch.setattr(installer, "fetch",
+                        lambda url, digest: fetched.append((url, digest)) or tmp_path / "g.rpm")
+
+    installer.ensure_goxlr_binaries(goxlr_ctx(tmp_path))
+
+    assert fetched == [("https://h/g.rpm", "x")]
+    assert host.payload == b"payload"
+    for name in ("goxlr-daemon", "goxlr-client", "goxlr-launcher", "goxlr-defaults"):
+        assert (bin_dir / name).read_text() == f"{name} new"
+        assert (bin_dir / name).stat().st_mode & 0o777 == 0o755
+        assert ["restorecon", str(bin_dir / name)] in host.seen
+    assert not list(bin_dir.glob(".*"))
+
+
+def test_goxlr_rpm_without_a_binary_is_refused(installer, tmp_path, monkeypatch) -> None:
+    installer.LOCAL_BIN = str(tmp_path)
+    installer._run = RpmHost(("goxlr-daemon", "goxlr-client"))
+    monkeypatch.setattr(installer, "fetch", lambda url, digest: tmp_path / "g.rpm")
+
+    with pytest.raises(InstallError, match="g.rpm has no /usr/bin/goxlr-launcher"):
+        installer.ensure_goxlr_binaries(goxlr_ctx(tmp_path))
+
+
+def test_the_pinned_goxlr_is_left_alone(installer, tmp_path, monkeypatch) -> None:
+    installer.LOCAL_BIN = str(tmp_path)
+    host = RpmHost(installer.GOXLR_BINARIES, version="goxlr-daemon 1.2.4\n")
+    installer._run = host
+    monkeypatch.setattr(installer, "fetch", lambda *_a: pytest.fail("fetched"))
+
+    installer.ensure_goxlr_binaries(goxlr_ctx(tmp_path))
+
+    assert host.seen == [[f"{tmp_path}/goxlr-daemon", "--version"]]
+
+
+def test_goxlr_daemon_already_running_is_never_restarted(installer) -> None:
+    commands = Commands({("pgrep",): (0, "")})
+    installer._run = commands
+
+    installer.ensure_goxlr_daemon("freender")
+
+    assert commands.seen == [["pgrep", "-u", "freender", "-x", "goxlr-daemon"]]
+
+
+def test_goxlr_daemon_waits_for_a_login(installer, monkeypatch, capsys) -> None:
+    installer._run = Commands({("pgrep",): (1, "")})
+    monkeypatch.setattr(installer, "session_env", lambda uid: None)
+
+    installer.ensure_goxlr_daemon(os.environ.get("USER") or "root")
+
+    assert "goxlr-daemon starts at login" in capsys.readouterr().out
+
+
+def test_goxlr_daemon_starts_in_the_session(installer, monkeypatch) -> None:
+    commands = Commands({("pgrep",): (1, "")})
+    installer._run = commands
+    session = {"XDG_RUNTIME_DIR": "/run/user/1000",
+               "DBUS_SESSION_BUS_ADDRESS": "unix:path=/run/user/1000/bus"}
+    monkeypatch.setattr(installer, "session_env", lambda uid: session)
+    monkeypatch.setattr(installer.pwd, "getpwnam", lambda user: type("A", (), {"pw_uid": 1000}))
+
+    installer.ensure_goxlr_daemon("freender")
+
+    assert commands.seen[1] == [
+        "runuser", "-u", "freender", "--", "env", "XDG_RUNTIME_DIR=/run/user/1000",
+        "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus",
+        "systemd-run", "--user", "--collect", "--unit=goxlr-daemon", "/usr/local/bin/goxlr-daemon",
+    ]
+
+
+@pytest.mark.parametrize(("changed", "triggered"), [
+    ({"etc/udev/rules.d/50-goxlr.rules"}, True),
+    ({"etc/udev/rules.d/71-psvr2-steamvr.rules"}, False),
+    (set(), False),
+])
+def test_udev_triggers_the_goxlr_only_when_its_rule_changed(installer, tmp_path, monkeypatch,
+                                                            changed, triggered) -> None:
+    commands = Commands()
+    installer._run = commands
+    monkeypatch.setattr(installer.files, "install_validated", lambda *_a: False)
+    monkeypatch.setattr(installer.files, "install", lambda ctx, name: name in changed)
+    monkeypatch.setattr(installer.systemd, "ensure_running", lambda *_a: None)
+
+    installer.install_etc(make_ctx(tmp_path))
+
+    assert (["udevadm", "control", "--reload"] in commands.seen) is bool(changed)
+    assert (["udevadm", "trigger", "--subsystem-match=usb", "--attr-match=idVendor=1220"]
+            in commands.seen) is triggered
+
+
 # ---------------------------------------------------------------------------
 # solar-check
 # ---------------------------------------------------------------------------
@@ -1464,6 +1617,23 @@ def test_check_vector(check, monkeypatch, capsys, stdout: str, active: bool,
 
     check.check_vector(check.Report(), {"vector_version": "0.61.0"})
 
+    out = capsys.readouterr().out
+    assert [line.split()[1].rstrip(":") for line in out.splitlines()
+            if line.startswith("  FAIL")] == failed
+
+
+@pytest.mark.parametrize(
+    ("stdout", "failed"),
+    [("goxlr-daemon 1.2.4", []), ("goxlr-daemon 1.2.3", ["goxlr_version"]),
+     ("", ["goxlr_version"])],
+)
+def test_check_goxlr(check, monkeypatch, capsys, stdout: str, failed: list[str]) -> None:
+    seen: list[tuple[str, ...]] = []
+    monkeypatch.setattr(check, "output", lambda *cmd: seen.append(cmd) or stdout)
+
+    check.check_goxlr(check.Report(), {"goxlr_version": "1.2.4"})
+
+    assert seen == [("/usr/local/bin/goxlr-daemon", "--version")]
     out = capsys.readouterr().out
     assert [line.split()[1].rstrip(":") for line in out.splitlines()
             if line.startswith("  FAIL")] == failed
