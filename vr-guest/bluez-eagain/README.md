@@ -24,7 +24,7 @@ sudo ./rollback.sh        # back to the image's stock bluetoothd
 ## After a Bazzite BlueZ update
 
 The drop-in keeps running the old patched binary. `install.sh` records the terra-bluez it
-was installed against in `bluetoothd.built-for`; `setup.sh check` fails
+was installed against in `bluetoothd.built-for`; `solar-check` fails
 `bluez_build_matches` once the image's terra-bluez differs, which alerts as
 `SolarPatchCheckFailed`. Either roll back, or rebuild against
 the new source: take the new terra-bluez spec, replace patches `0001`–`0099` with its

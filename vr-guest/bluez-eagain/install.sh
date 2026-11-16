@@ -8,7 +8,7 @@ install -D -m0755 bluetoothd "$BIN"
 semanage fcontext -a -t bluetooth_exec_t "$BIN" 2>/dev/null \
   || semanage fcontext -m -t bluetooth_exec_t "$BIN"
 restorecon -v "$(realpath "$BIN")"
-# setup.sh check (bluez_build_matches) compares this with the image's terra-bluez.
+# solar-check (bluez_build_matches) compares this with the image's terra-bluez.
 # Build against the installed terra-bluez first: that is what makes this record true.
 rpm -q terra-bluez > "$BIN.built-for"
 mkdir -p /etc/systemd/system/bluetooth.service.d

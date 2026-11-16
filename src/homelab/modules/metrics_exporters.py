@@ -478,8 +478,8 @@ def is_lxc_guest(root: Path, host: str) -> bool:
 def is_external(registry: HostRegistry, host: str) -> bool:
     """Whether node_exporter on this host is installed outside this module.
 
-    solar (Bazzite, rpm-ostree, no apt) installs its own node_exporter from
-    pve-gpu-passthrough/linux/setup.sh. The flag keeps it in metrics-exporters so
+    solar (Bazzite, rpm-ostree, no apt) gets its node_exporter from the vr-guest
+    module. The flag keeps it in metrics-exporters so
     monitoring-config scrapes it, while this module never deploys there.
     """
     return normalize_bool(

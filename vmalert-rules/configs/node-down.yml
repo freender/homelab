@@ -66,8 +66,8 @@ groups:
 
       # solar, the Bazzite VR VM on clovis: always on (onboot 1), but a game
       # VM, so the same 10m window at warning rather than critical. Its
-      # node_exporter is installed by pve-gpu-passthrough/linux/setup.sh, not
-      # by metrics-exporters.
+      # node_exporter is installed by the vr-guest module, not by
+      # metrics-exporters.
       - alert: NodeDownSolar
         expr: up{job="pve-node", host="solar"} == 0
         for: 10m

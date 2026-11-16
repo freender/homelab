@@ -206,22 +206,28 @@ SteamVR (`250820`) is started:
   was used while `clovis` had an 850 W PSU, whose trips on the 3080 Ti's load transients
   hard-reset the node; it was removed when `clovis` moved to a 1000 W PSU.
 
-Everything solar runs outside the Bazzite image lives in `pve-gpu-passthrough/linux/`:
+Everything solar runs outside the Bazzite image is the `vr-guest` module
+(freender/homelab-ops#398): hostname, kernel args, `/etc` files (key-only sshd, Plasma
+auto-login, the xr-hardware and headset udev rules), the Steam disk, the headset session
+above (`psvr2-steamvr`, `psvr2-audio`, `psvr2-steamvr.service`), KDE idle settings,
+node_exporter and the `solar-metrics` timer, plus the read-only check
+`/usr/local/libexec/solar-check`. The patched bluetoothd that keeps the Sense controllers
+connected is `vr-guest/bluez-eagain/` (manual; see its README).
 
-| Path | What |
-|---|---|
-| `setup.sh` | `base` (hostname, kernel args, `/etc` files, Steam disk, headset session, KDE idle), `vr` (SteamVRLinuxFixes, Ignition, PSVR2Toolkit, play-area tool, `cap_sys_nice`, URL handlers, OpenXR runtime, settings) with pinned, checksummed releases, and a read-only `check` |
-| `etc/` | Files installed under `/etc`: key-only sshd, Plasma auto-login, the upstream xr-hardware udev rule, the headset udev rule |
-| `psvr2-steamvr`, `psvr2-audio`, `psvr2-steamvr.service` | The headset session above |
-| `steamvr-settings.sh` | Applies the settled `steamvr.vrsettings` values with `jq` (SteamVR must be quit) |
-| `bluez-eagain/` | Patched bluetoothd that keeps the Sense controllers connected; see its README |
-| `steamvr-linux-fixes/` | A rolled-back local FIFO patch for SteamVRLinuxFixes, kept for reference |
+```bash
+./deploy --dry-run vr-guest solar
+ssh solar /usr/local/libexec/solar-check
+```
 
-Run it on solar as the auto-login user from a copy of the directory:
+Until freender/homelab-ops#401 ports it, the `vr` stage (SteamVRLinuxFixes, Ignition,
+PSVR2Toolkit, play-area tool, `cap_sys_nice`, URL handlers, OpenXR runtime,
+`steamvr-settings.sh`) stays in `pve-gpu-passthrough/linux/setup.sh`, run on solar as the
+auto-login user with SteamVR quit:
 ```bash
 rsync -a --delete ~/homelab/pve-gpu-passthrough/linux/ freender@solar:solar-setup/
-ssh freender@solar solar-setup/setup.sh check
+ssh freender@solar solar-setup/setup.sh vr
 ```
+`steamvr-linux-fixes/` there is a rolled-back local FIFO patch, kept for reference.
 
 The full rebuild, including VM creation and the steps that need Steam's UI, is the
 Obsidian guide `Solar - Installation`.

@@ -1,0 +1,180 @@
+#!/usr/bin/python3
+"""Read-only check of solar's guest-side setup (vr-guest, freender/homelab-ops#400).
+
+Runs as the desktop user: solar-metrics.timer every 15 minutes, and the vr-guest
+installer as its verify step. What to expect comes from check.json, which the
+module renders at deploy time (hashes of every file it installs, the kargs, the
+pinned node_exporter version).
+
+Output is one line per item, `  ok    <id>` or `  FAIL  <id>: <reason>`; the ids are
+the `check` label of homelab_solar_check, so renaming one breaks its history and
+vmalert-rules/configs/solar.yml. Exit 0 when everything passes, 1 otherwise.
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import subprocess
+import sys
+import zipfile
+from pathlib import Path
+
+MANIFEST = Path("/usr/local/share/vr-guest/check.json")
+NODE_EXPORTER = "/usr/local/bin/node_exporter"
+CONCEAL_VRR = Path("/sys/module/nvidia_modeset/parameters/conceal_vrr_caps")
+PROC_CMDLINE = Path("/proc/cmdline")
+STEAM_MOUNT = "/var/mnt/steam"
+PATCHED_BLUETOOTHD = "/usr/local/libexec/bluetooth/bluetoothd"
+BLUEZ_MARKER = Path(f"{PATCHED_BLUETOOTHD}.built-for")
+STEAM = ".local/share/Steam/steamapps/common"
+PLUGIN = f"{STEAM}/PlayStation VR2 App/SteamVR_Plug-In"
+STEAMVR = f"{STEAM}/SteamVR"
+
+
+def output(*cmd: str) -> str:
+    try:
+        return subprocess.run(
+            cmd, capture_output=True, text=True, timeout=60, check=False
+        ).stdout.strip()
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+
+
+def succeeds(*cmd: str) -> bool:
+    try:
+        return subprocess.run(cmd, capture_output=True, timeout=60, check=False).returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+def read(path: Path) -> str | None:
+    try:
+        return path.read_text(encoding="utf-8", errors="replace").strip()
+    except OSError:
+        return None
+
+
+def digest(path: Path) -> str | None:
+    try:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError:
+        return None
+
+
+class Report:
+    def __init__(self) -> None:
+        self.failed = False
+
+    def item(self, check_id: str, passed: bool, reason: str) -> None:
+        if passed:
+            print(f"  ok    {check_id}")
+        else:
+            print(f"  FAIL  {check_id}: {reason}")
+            self.failed = True
+
+
+def check_system(report: Report, manifest: dict) -> None:
+    hostname = output("hostnamectl", "--static")
+    report.item("hostname", hostname == manifest["hostname"], f"is '{hostname}'")
+    cmdline = (read(PROC_CMDLINE) or "").split()
+    for karg in manifest["kargs"]:
+        report.item(f"karg:{karg}", karg in cmdline, "not booted")
+    report.item("conceal_vrr_caps", read(CONCEAL_VRR) == "Y", "not Y")
+    for entry in manifest["files"]:
+        report.item(entry["id"], digest(Path(entry["path"])) == entry["sha256"],
+                    "differs from repo")
+    report.item("steam_library", os.path.ismount(STEAM_MOUNT), f"{STEAM_MOUNT} not mounted")
+    report.item("sshd", succeeds("systemctl", "is-active", "-q", "sshd"), "not active")
+
+
+def zip_member(archive: Path, name: str) -> bytes | None:
+    try:
+        with zipfile.ZipFile(archive) as handle:
+            return handle.read(name)
+    except (OSError, KeyError, zipfile.BadZipFile):
+        return None
+
+
+def steamvr_settings_ok(path: Path) -> bool:
+    try:
+        settings = json.loads(path.read_text(encoding="utf-8")).get("steamvr") or {}
+    except (OSError, ValueError, AttributeError):
+        return False
+    return bool(
+        settings.get("enableLinuxVulkanAsync")
+        and settings.get("useFacetRenderer")
+        and settings.get("showMirrorView") is False
+    )
+
+
+def check_vr(report: Report, manifest: dict) -> None:
+    home = Path(manifest["home"])
+    plugin, steamvr = home / PLUGIN, home / STEAMVR
+    report.item("steamvr_linux_fixes", (home / ".local/lib/libsteamvr_linux_fixes.so").is_file(),
+                "layer missing")
+    shim = os.path.realpath(plugin / "bin/linux64/driver_playstation_vr2.so")
+    report.item("ignition_shim", shim == str(home / "ignition/libdriver_ignition.so"),
+                "driver_playstation_vr2.so is not the Ignition shim")
+    dll = plugin / "bin/win64/driver_playstation_vr2.dll"
+    pinned = zip_member(Path(manifest["psvr2tk_zip"]), "driver_playstation_vr2.dll")
+    current = dll.read_bytes() if dll.is_file() else None
+    report.item("psvr2toolkit_dll", pinned is not None and current == pinned,
+                "driver_playstation_vr2.dll is not the pinned PSVR2Toolkit "
+                "(Steam restored Sony's?)")
+    vrpaths = read(home / ".config/openvr/openvrpaths.vrpath") or ""
+    report.item("openvr_driver", "PlayStation VR2 App/SteamVR_Plug-In" in vrpaths,
+                "PS VR2 driver not in openvrpaths external_drivers")
+    caps = output("getcap", str(steamvr / "bin/linux64/vrcompositor-launcher"))
+    report.item("compositor_cap_sys_nice", "cap_sys_nice" in caps,
+                "vrcompositor-launcher lost cap_sys_nice")
+    handler = output("xdg-mime", "query", "default", "x-scheme-handler/vrmonitor")
+    report.item("vrmonitor_handler", handler == "valve-vrmonitor.desktop",
+                "no vrmonitor:// handler")
+    runtime = home / ".config/openxr/1/active_runtime.json"
+    target = os.readlink(runtime) if runtime.is_symlink() else ""
+    report.item("openxr_runtime", target == str(steamvr / "steamxr_linux64.json"), "not SteamVR")
+    report.item("steamvr_settings",
+                steamvr_settings_ok(home / ".steam/steam/config/steamvr.vrsettings"),
+                "values differ")
+
+
+def check_bluez(report: Report) -> None:
+    exec_start = output("systemctl", "show", "-p", "ExecStart", "bluetooth")
+    report.item("patched_bluetoothd", PATCHED_BLUETOOTHD in exec_start,
+                "stock bluetoothd (bluez-eagain not installed)")
+    # A Bazzite update that ships a new terra-bluez leaves the old patched build running.
+    bluez = output("rpm", "-q", "terra-bluez")
+    if not bluez.startswith("terra-bluez-"):
+        bluez = "terra-bluez not installed"
+    built = read(BLUEZ_MARKER) or f"unknown (no {BLUEZ_MARKER})"
+    report.item("bluez_build_matches", bluez == built,
+                f"image has {bluez}, patched bluetoothd built for {built}: "
+                "rebuild (vr-guest/bluez-eagain/README.md)")
+
+
+def check_metrics(report: Report, manifest: dict) -> None:
+    words = output(NODE_EXPORTER, "--version").split("\n", 1)[0].split()
+    version = words[2] if len(words) > 2 else ""
+    wanted = manifest["node_exporter_version"]
+    report.item("node_exporter_version", version == wanted, f"not {wanted}")
+    report.item("solar_metrics_timer",
+                succeeds("systemctl", "is-enabled", "-q", "solar-metrics.timer"), "not enabled")
+
+
+def main(manifest_path: Path = MANIFEST) -> int:
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        print(f"cannot read {manifest_path}: {exc}", file=sys.stderr)
+        return 2
+    report = Report()
+    check_system(report, manifest)
+    check_vr(report, manifest)
+    check_bluez(report)
+    check_metrics(report, manifest)
+    return int(report.failed)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -36,6 +36,7 @@ from .ubuntu_setup import deploy as deploy_ubuntu_setup
 from .vector_config import deploy as deploy_vector_config
 from .vector_host import deploy as deploy_vector_host
 from .vmalert_rules import deploy as deploy_vmalert_rules
+from .vr_guest import deploy as deploy_vr_guest
 from .wsl_conf import deploy as deploy_wsl_conf
 from .zfs_automation import deploy as deploy_zfs_automation
 
@@ -173,6 +174,7 @@ MODULES: dict[str, ModuleDefinition] = {
         deploy=deploy_vector_host,
     ),
     "vmalert-rules": ModuleDefinition(name="vmalert Rules", deploy=deploy_vmalert_rules),
+    "vr-guest": ModuleDefinition(name="VR Guest Setup", deploy=deploy_vr_guest),
     "wsl-conf": ModuleDefinition(name="WSL Conf", deploy=deploy_wsl_conf),
     "zfs-automation": ModuleDefinition(name="ZFS Automation", deploy=deploy_zfs_automation),
 }
@@ -208,6 +210,9 @@ MODULE_ORDER = [
     "ssh-config",
     "wsl-conf",
     "ubuntu-setup",
+    # solar's guest-side setup, including its own node_exporter (metrics-exporters
+    # only marks it `external`).
+    "vr-guest",
     "guest-baseline",
     # Role disks mounted before anything (stacks, backups) writes under their paths.
     "guest-disks",

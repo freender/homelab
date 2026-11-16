@@ -1,5 +1,5 @@
 [Unit]
-Description=solar textfile metrics: setup.sh check and Bazzite update state
+Description=solar textfile metrics: solar-check and Bazzite update state
 After=network-online.target
 
 [Service]
