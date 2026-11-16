@@ -64,7 +64,8 @@ cutover (homelab-ops#378). To read shadow data, query with
 
 ## Alerts
 
-The `vector` scrape job picks up every `vector-host` host (monitoring-config).
+The `vector` scrape job picks up every `vector-host` host, and solar, whose
+Vector `vr-guest` installs from the same config render (monitoring-config).
 `VectorLogsDiscarded` and `VectorDeliveryFailing` cover these hosts as they cover
 the Docker hosts. `VectorDockerSourceDead` skips `install="host"` targets, since
 those hosts have no `docker_logs` source. A unit that stays failed shows up in

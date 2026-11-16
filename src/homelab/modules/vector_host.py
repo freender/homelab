@@ -16,6 +16,7 @@ from .vector_config import JOURNALD_PARTIAL, WRAPPER_NAME
 MODULE_DIR = "vector-host"
 REMOTE_ROOT = "/tmp/homelab-vector-host"
 VECTOR_CONFIG_DIR = "vector-config"
+VR_GUEST_DIR = "vr-guest"
 VICTORIA_LOGS_STACK = "victoria-logs"
 VICTORIA_LOGS_PORT = 9428
 METRICS_PORT = 9598
@@ -64,15 +65,10 @@ def deploy(
 
 
 def validate(root: Path, hosts: list[str]) -> None:
-    required = [
-        root / MODULE_DIR / "templates" / f"{name}.j2"
-        for name in (CONFIG_NAME, TESTS_NAME, OVERRIDE_NAME)
-    ]
-    required += [
+    required = config_sources(root) + [
+        root / MODULE_DIR / "templates" / f"{OVERRIDE_NAME}.j2",
         root / MODULE_DIR / "configs" / KEYRING_NAME,
         root / MODULE_DIR / "scripts" / "install.py",
-        root / VECTOR_CONFIG_DIR / "templates" / JOURNALD_PARTIAL,
-        root / VECTOR_CONFIG_DIR / "configs" / WRAPPER_NAME,
     ]
     for path in required:
         if not path.is_file():
@@ -81,12 +77,15 @@ def validate(root: Path, hosts: list[str]) -> None:
 
     registry = default_registry(root)
     docker_vector = set(registry.list_hosts(VECTOR_CONFIG_DIR))
+    vr_guests = set(registry.list_hosts(VR_GUEST_DIR))
     for host in sorted(hosts):
         if host in docker_vector:
             raise ValueError(
                 f"{host}: runs the vector stack; ship its journal with "
                 f"{VECTOR_CONFIG_DIR}.journald instead of {MODULE_DIR}"
             )
+        if host in vr_guests:
+            raise ValueError(f"{host}: {VR_GUEST_DIR} installs its Vector, not {MODULE_DIR}")
         shadow_enabled(root, host)
 
 
@@ -120,11 +119,22 @@ def victoria_logs_base(root: Path) -> str:
     return f"http://{registry.get(hosts[0], 'config.hostname')}:{VICTORIA_LOGS_PORT}"
 
 
-def render_build(root: Path, host: str) -> Path:
-    build_dir = root / MODULE_DIR / "build" / host
-    prepare_build_dir(build_dir)
+def config_sources(root: Path) -> list[Path]:
+    """Every repo file `render_config` reads."""
+    return [
+        root / MODULE_DIR / "templates" / f"{CONFIG_NAME}.j2",
+        root / MODULE_DIR / "templates" / f"{TESTS_NAME}.j2",
+        root / VECTOR_CONFIG_DIR / "templates" / JOURNALD_PARTIAL,
+        root / VECTOR_CONFIG_DIR / "configs" / WRAPPER_NAME,
+    ]
 
-    shadow = shadow_enabled(root, host)
+
+def render_config(root: Path, host: str, out_dir: Path, shadow: bool) -> None:
+    """`vector.yaml`, `vector.test.yaml` and the journalctl wrapper into `out_dir`.
+
+    vr-guest renders solar's Vector from this too (homelab-ops#402), so a host-native
+    Vector has one config whichever module installs it.
+    """
     base = victoria_logs_base(root)
     templates = root / MODULE_DIR / "templates"
     partials = [root / VECTOR_CONFIG_DIR / "templates"]
@@ -136,14 +146,25 @@ def render_build(root: Path, host: str) -> Path:
         "ENDPOINT": f"{base}/insert/elasticsearch/",
         "METRICS_PORT": METRICS_PORT,
     }
+    out_dir.mkdir(parents=True, exist_ok=True)
     for name in (CONFIG_NAME, TESTS_NAME):
-        render_template(templates / f"{name}.j2", build_dir / name, partials, **context)
+        render_template(templates / f"{name}.j2", out_dir / name, partials, **context)
+    shutil.copy2(root / VECTOR_CONFIG_DIR / "configs" / WRAPPER_NAME, out_dir / WRAPPER_NAME)
+
+
+def render_build(root: Path, host: str) -> Path:
+    build_dir = root / MODULE_DIR / "build" / host
+    prepare_build_dir(build_dir)
+
+    shadow = shadow_enabled(root, host)
+    base = victoria_logs_base(root)
+    render_config(root, host, build_dir, shadow)
+    templates = root / MODULE_DIR / "templates"
     render_template(
         templates / f"{OVERRIDE_NAME}.j2", build_dir / OVERRIDE_NAME, CONFIG=CONFIG_PATH
     )
     (build_dir / SOURCE_NAME).write_text(APT_SOURCE, encoding="utf-8")
     shutil.copyfile(root / MODULE_DIR / "configs" / KEYRING_NAME, build_dir / KEYRING_NAME)
-    shutil.copy2(root / VECTOR_CONFIG_DIR / "configs" / WRAPPER_NAME, build_dir / WRAPPER_NAME)
 
     write_env_file(
         build_dir / "env",

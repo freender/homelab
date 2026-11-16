@@ -21,6 +21,7 @@ SCRAPE_TEMPLATE = "scrape.yml.j2"
 SCRAPE_CONFIG_NAME = "scrape.yml"
 EXPORTER_FEATURE = "metrics-exporters"
 VECTOR_HOST_FEATURE = "vector-host"
+VR_GUEST_FEATURE = "vr-guest"
 
 # Exporter ports, one per host-derived scrape job.
 NODE_EXPORTER_PORT = 9100
@@ -72,7 +73,9 @@ def scrape_targets(root: Path) -> dict[str, list[ScrapeTarget]]:
             jobs["apcupsd"].append(ScrapeTarget(host, f"{name}:{APCUPSD_EXPORTER_PORT}"))
         if flags.has_igpu:
             jobs["intel-gpu"].append(ScrapeTarget(host, f"{name}:{IGPU_EXPORTER_PORT}"))
-    for host in registry.list_hosts(VECTOR_HOST_FEATURE):
+    # vr-guest installs the same host-native Vector on solar (homelab-ops#403).
+    vector_hosts = registry.list_hosts(VECTOR_HOST_FEATURE) + registry.list_hosts(VR_GUEST_FEATURE)
+    for host in vector_hosts:
         name = scrape_name(registry, host)
         jobs["vector-host"].append(ScrapeTarget(host, f"{name}:{VECTOR_HOST_PORT}"))
     return jobs

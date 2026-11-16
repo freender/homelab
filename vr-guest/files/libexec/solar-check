@@ -4,7 +4,7 @@
 Runs as the desktop user: solar-metrics.timer every 15 minutes, and the vr-guest
 installer as its verify step. What to expect comes from check.json, which the
 module renders at deploy time (hashes of every file it installs, the kargs, the
-pinned node_exporter version and PSVR2Toolkit dll, the SteamVR settings).
+pinned node_exporter and Vector versions and PSVR2Toolkit dll, the SteamVR settings).
 
 Output is one line per item, `  ok    <id>` or `  FAIL  <id>: <reason>`; the ids are
 the `check` label of homelab_solar_check, so renaming one breaks its history and
@@ -21,6 +21,7 @@ from pathlib import Path
 
 MANIFEST = Path("/usr/local/share/vr-guest/check.json")
 NODE_EXPORTER = "/usr/local/bin/node_exporter"
+VECTOR = "/usr/local/bin/vector"
 CONCEAL_VRR = Path("/sys/module/nvidia_modeset/parameters/conceal_vrr_caps")
 PROC_CMDLINE = Path("/proc/cmdline")
 STEAM_MOUNT = "/var/mnt/steam"
@@ -148,6 +149,15 @@ def check_metrics(report: Report, manifest: dict) -> None:
                 succeeds("systemctl", "is-enabled", "-q", "solar-metrics.timer"), "not enabled")
 
 
+def check_vector(report: Report, manifest: dict) -> None:
+    words = output(VECTOR, "--version").split()
+    version = words[1] if len(words) > 1 else ""
+    wanted = manifest["vector_version"]
+    report.item("vector_version", version == wanted, f"not {wanted}")
+    report.item("vector_active", succeeds("systemctl", "is-active", "-q", "vector"),
+                "not active")
+
+
 def main(manifest_path: Path = MANIFEST) -> int:
     try:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -159,6 +169,7 @@ def main(manifest_path: Path = MANIFEST) -> int:
     check_vr(report, manifest)
     check_bluez(report)
     check_metrics(report, manifest)
+    check_vector(report, manifest)
     return int(report.failed)
 
 

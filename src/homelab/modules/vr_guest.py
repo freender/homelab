@@ -1,7 +1,9 @@
 """vr-guest: the guest-side setup of the VR VM (solar, Bazzite), freender/homelab-ops#398.
 
 Replaces the retired `pve-gpu-passthrough/linux/setup.sh`: the `base` and `metrics`
-stages (homelab-ops#400; design in #399) and the `vr` stage (#401).
+stages (homelab-ops#400; design in #399) and the `vr` stage (#401). The `vector`
+stage ships the journal to VictoriaLogs (#403, design in #402) from vector-host's
+config render.
 
 Every destination, mode, pinned release and expected value is decided here and passed
 down: the file map and env for the installer, and `check.json` for `solar-check`, the
@@ -22,6 +24,7 @@ from ..hosts import default_registry
 from ..module_support import FileSpec, connection_for_host, run_module_deploy, write_file_map
 from ..output import print_sub
 from ..ssh import build_files, diff_many
+from . import vector_host
 
 MODULE_DIR = "vr-guest"
 REMOTE_ROOT = "/tmp/homelab-vr-guest"
@@ -42,6 +45,21 @@ NODE_EXPORTER_URL = (
     f"v{NODE_EXPORTER_VERSION}/node_exporter-{NODE_EXPORTER_VERSION}.linux-amd64.tar.gz"
 )
 NODE_EXPORTER_SHA = "b51d8a76aa2a9156a55d501aca6276fae09e262259a5e4e831d2c2222f084e63"
+
+# The release the apt hosts run (vector-host); bumped by hand, nothing watches it.
+VECTOR_VERSION = "0.61.0"
+VECTOR_URL = (
+    "https://github.com/vectordotdev/vector/releases/download/"
+    f"v{VECTOR_VERSION}/vector-{VECTOR_VERSION}-x86_64-unknown-linux-gnu.tar.gz"
+)
+VECTOR_SHA = "84a27c3ad6b772fdb05bb76ea01a31498bfc8f5e71f32cc78a0d96841f1aa827"
+# Rendered by vector-host into build/<host>/vector/; tenant 0, never shadow.
+VECTOR_DIR = "vector"
+VECTOR_FILES = (
+    # (build name, destination, mode, check id)
+    (vector_host.CONFIG_NAME, vector_host.CONFIG_PATH, "644", vector_host.CONFIG_PATH),
+    (vector_host.WRAPPER_NAME, vector_host.WRAPPER_PATH, "755", "vector_wrapper"),
+)
 
 # The vr stage's pinned BnuuySolutions releases: env prefix -> (repo, tag, zip asset,
 # its sha256). Verified against the files solar ran on 2026-11-15.
@@ -90,6 +108,7 @@ ETC_FILES = (
     ("systemd/system/node_exporter.service", "644"),
     ("systemd/system/solar-metrics.service", "644"),
     ("systemd/system/solar-metrics.timer", "644"),
+    ("systemd/system/vector.service", "644"),
 )
 # (repo path under files/home/, mode). Destination and check id are relative to $HOME.
 HOME_FILES = (
@@ -124,9 +143,11 @@ def deploy(
 def validate(root: Path, hosts: list[str]) -> None:
     required = [root / MODULE_DIR / INSTALLER]
     required += [source for source, _ in module_sources(root)]
+    required += vector_host.config_sources(root)
     for path in required:
         if not path.is_file():
             raise ValueError(f"missing module file: {path}")
+    vector_host.victoria_logs_base(root)
     for host in hosts:
         host_type(root, host)
         desktop_user(root, host)
@@ -172,11 +193,12 @@ def file_specs(home: str) -> tuple[FileSpec, ...]:
     specs = [FileSpec(f"etc/{path}", f"/etc/{path}", mode) for path, mode in ETC_FILES]
     specs += [FileSpec(f"home/{path}", f"{home}/{path}", mode) for path, mode in HOME_FILES]
     specs += [FileSpec(f"libexec/{name}", f"{LIBEXEC}/{name}", "755") for name, _ in LIBEXEC_FILES]
+    specs += [FileSpec(f"{VECTOR_DIR}/{name}", dest, mode) for name, dest, mode, _ in VECTOR_FILES]
     specs.append(FileSpec(MANIFEST_NAME, MANIFEST_PATH, "644"))
     return tuple(specs)
 
 
-def check_manifest(root: Path, host: str, home: str) -> dict[str, object]:
+def check_manifest(root: Path, host: str, home: str, vector_dir: Path) -> dict[str, object]:
     module = root / MODULE_DIR
     files = [
         {"id": f"/etc/{path}", "path": f"/etc/{path}",
@@ -194,11 +216,16 @@ def check_manifest(root: Path, host: str, home: str) -> dict[str, object]:
         for name, check_id in LIBEXEC_FILES
         if check_id
     ]
+    files += [
+        {"id": check_id, "path": dest, "sha256": sha256(vector_dir / name)}
+        for name, dest, _, check_id in VECTOR_FILES
+    ]
     return {
         "hostname": host,
         "home": home,
         "kargs": list(KARGS),
         "node_exporter_version": NODE_EXPORTER_VERSION,
+        "vector_version": VECTOR_VERSION,
         "psvr2toolkit_dll_sha256": PSVR2TK_DLL_SHA,
         "steamvr_settings": STEAMVR_SETTINGS,
         "files": files,
@@ -216,7 +243,9 @@ def render_build(root: Path, host: str) -> tuple[Path, tuple[FileSpec, ...]]:
         (build_dir / name).parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(source, build_dir / name)
 
-    manifest = check_manifest(root, host, home)
+    vector_dir = build_dir / VECTOR_DIR
+    vector_host.render_config(root, host, vector_dir, shadow=False)
+    manifest = check_manifest(root, host, home, vector_dir)
     (build_dir / MANIFEST_NAME).write_text(
         json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
     )
@@ -239,6 +268,11 @@ def render_build(root: Path, host: str) -> tuple[Path, tuple[FileSpec, ...]]:
             "NODE_EXPORTER_URL": NODE_EXPORTER_URL,
             "NODE_EXPORTER_SHA": NODE_EXPORTER_SHA,
             "CHECK_PATH": CHECK_PATH,
+            "VECTOR_VERSION": VECTOR_VERSION,
+            "VECTOR_URL": VECTOR_URL,
+            "VECTOR_SHA": VECTOR_SHA,
+            "VECTOR_QUERY_URL": f"{vector_host.victoria_logs_base(root)}/select/logsql/query",
+            "VECTOR_TENANT": "0",
             **releases,
         },
     )

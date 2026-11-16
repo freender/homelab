@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Remote installer for vr-guest (freender/homelab-ops#400, #401; design in #399).
 
-The `base`, `metrics` and `vr` stages of the retired `setup.sh`, run as root. Steps
+The `base`, `metrics` and `vr` stages of the retired `setup.sh`, plus `vector`
+(#403), run as root. Steps
 that need the desktop user's session (`systemctl --user`, `kwriteconfig6 --notify`)
 go through `runuser` with that session's bus; with nobody logged in they are skipped
 with a warning rather than failing the deploy.
@@ -10,6 +11,10 @@ Kernel-argument changes only take effect after a reboot, which this never does:
 it reports "reboot required" and leaves the power-cycle to a human, because
 someone may be in the headset. For the same reason the `vr` stage is skipped, with
 a warning, while SteamVR runs; it never stops SteamVR.
+
+The `vector` stage installs the pinned release tarball, not an rpm (#402), and
+checks the staged config and delivery the way vector-host does
+(`homelab_install.vector`).
 
 Ends by running `solar-check` as the desktop user, the same check `solar-metrics`
 publishes every 15 minutes. A failure this module owns fails the deploy; a
@@ -30,7 +35,7 @@ import zlib
 from pathlib import Path
 from typing import NamedTuple
 
-from homelab_install import env, files, log, run, systemd
+from homelab_install import env, files, log, run, systemd, vector
 from homelab_install.context import InstallContext
 from homelab_install.errors import InstallError
 
@@ -45,6 +50,14 @@ SYSTEM_UNITS = (
 )
 ETC_OTHER = ("etc/plasmalogin.conf.d/autologin.conf",)
 NODE_EXPORTER = "/usr/local/bin/node_exporter"
+VECTOR = "/usr/local/bin/vector"
+VECTOR_MEMBER = "vector-x86_64-unknown-linux-gnu/bin/vector"
+VECTOR_UNIT = "vector.service"
+VECTOR_UNIT_FILE = "etc/systemd/system/vector.service"
+VECTOR_CONFIG = "vector/vector.yaml"
+VECTOR_TESTS = "vector/vector.test.yaml"
+VECTOR_WRAPPER = "vector/journalctl-catchup"
+VECTOR_MARKER_TAG = "vr-guest"
 TEXTFILE_DIR = "/var/lib/node_exporter/textfile"
 CACHE_DIR = Path("/var/cache/vr-guest")
 STEAM_MOUNT = "/var/mnt/steam"
@@ -63,6 +76,7 @@ KDE_SETTINGS = (
 OWNED_CHECKS = frozenset({
     "hostname", "steam_library", "sshd",
     "node_exporter_version", "solar_metrics_script", "solar_metrics_timer",
+    "vector_version", "vector_wrapper", "vector_active",
 })
 OWNED_PREFIXES = ("/etc/", "home/")
 VR_CHECKS = frozenset({
@@ -288,6 +302,61 @@ def metrics(ctx: InstallContext, user: str) -> None:
                            binary_changed or "node_exporter.service" in changed)
     systemd.ensure_running(ctx, "solar-metrics.timer", "solar-metrics.timer" in changed)
     systemd.run_once(ctx, "solar-metrics.service")
+
+
+# --- vector ------------------------------------------------------------------------
+
+
+def vector_version() -> str:
+    """`vector 0.61.0 (x86_64-unknown-linux-gnu ...)` -> `0.61.0`."""
+    try:
+        result = _run([VECTOR, "--version"], check=False, capture_output=True, text=True)
+    except OSError:
+        return ""
+    words = (result.stdout or "").split()
+    return words[1] if len(words) > 1 and words[0] == "vector" else ""
+
+
+def ensure_vector_binary(ctx: InstallContext) -> bool:
+    version = env.text(ctx, "VECTOR_VERSION", "")
+    if vector_version() == version and not ctx.force_update:
+        log.sub(f"vector {version} already installed")
+        return False
+    archive = fetch(env.text(ctx, "VECTOR_URL", ""), env.text(ctx, "VECTOR_SHA", ""))
+    with tarfile.open(archive) as tar:
+        names = {name.removeprefix("./"): name for name in tar.getnames()}
+        binary = tar.extractfile(names[VECTOR_MEMBER]) if VECTOR_MEMBER in names else None
+        if binary is None:
+            raise InstallError(f"{archive.name} has no {VECTOR_MEMBER}")
+        staged = Path(f"{VECTOR}.vr-guest")
+        staged.write_bytes(binary.read())
+    os.chmod(staged, 0o755)
+    os.replace(staged, VECTOR)
+    bazzite_relabel(VECTOR)
+    log.ok(f"vector {version} installed")
+    return True
+
+
+def install_vector(ctx: InstallContext) -> None:
+    log.action("Vector: the journal to VictoriaLogs")
+    env.require(ctx, "VECTOR_VERSION", "VECTOR_URL", "VECTOR_SHA",
+                "VECTOR_QUERY_URL", "VECTOR_TENANT")
+    changed = ensure_vector_binary(ctx)
+    # Before the check: the config names it as journalctl_path.
+    if files.install(ctx, VECTOR_WRAPPER):
+        bazzite_relabel(ctx.file_map[VECTOR_WRAPPER][0])
+        changed = True
+    vector.check_config(VECTOR, ctx.build_dir / VECTOR_CONFIG, ctx.build_dir / VECTOR_TESTS)
+    # Each its own call, never short-circuited.
+    changed = files.install(ctx, VECTOR_CONFIG) or changed
+    changed = files.install(ctx, VECTOR_UNIT_FILE) or changed
+    starting = changed or not succeeds("systemctl", "is-active", "--quiet", VECTOR_UNIT)
+    # ensure_running daemon-reloads before the restart when anything changed.
+    systemd.ensure_running(ctx, VECTOR_UNIT, changed)
+    systemd.require_active(ctx, VECTOR_UNIT)
+    if starting:
+        vector.confirm_delivery(env.text(ctx, "VECTOR_QUERY_URL", ""),
+                                env.text(ctx, "VECTOR_TENANT", ""), VECTOR_MARKER_TAG, VECTOR_UNIT)
 
 
 # --- vr ----------------------------------------------------------------------------
@@ -592,6 +661,7 @@ def install(ctx: InstallContext) -> None:
     user = env.text(ctx, "DESKTOP_USER", "")
     base(ctx, user, env.text(ctx, "DESKTOP_HOME", ""))
     metrics(ctx, user)
+    install_vector(ctx)
     verify(ctx, user, vr(ctx, Desktop.lookup(user)))
 
 

@@ -8,6 +8,7 @@ silently splits its history and the SolarPatchCheckFailed series in solar.yml.
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import importlib.machinery
 import importlib.util
@@ -22,8 +23,10 @@ import zipfile
 from pathlib import Path
 
 import pytest
+import yaml
 
-from homelab.modules import vr_guest
+from homelab.modules import vector_host, vr_guest
+from homelab_install import systemd, vector
 from homelab_install.context import InstallContext
 from homelab_install.errors import InstallError
 
@@ -42,10 +45,13 @@ MANIFEST_IDS = [
     "/etc/systemd/system/node_exporter.service",
     "/etc/systemd/system/solar-metrics.service",
     "/etc/systemd/system/solar-metrics.timer",
+    "/etc/systemd/system/vector.service",
     "home/.local/bin/psvr2-steamvr",
     "home/.local/bin/psvr2-audio",
     "home/.config/systemd/user/psvr2-steamvr.service",
     "solar_metrics_script",
+    "/etc/vector/homelab.yaml",
+    "vector_wrapper",
 ]
 CHECK_IDS = [
     "hostname", "karg:nvidia-modeset.conceal_vrr_caps=1", "karg:bluetooth.disable_ertm=1",
@@ -53,6 +59,7 @@ CHECK_IDS = [
     "ignition_shim", "psvr2toolkit_dll", "openvr_driver", "compositor_cap_sys_nice",
     "vrmonitor_handler", "openxr_runtime", "steamvr_settings", "patched_bluetoothd",
     "bluez_build_matches", "node_exporter_version", "solar_metrics_timer",
+    "vector_version", "vector_active",
 ]
 
 
@@ -79,14 +86,28 @@ SOLAR = """solar:
     vr-guest:
 """
 DESKTOP = "    ssh_config:\n      user: freender\n"
+LOGS = """logs:
+  config:
+    type: lxc
+    hostname: logs.internal
+    user: root
+    sshkey: infra
+  features:
+    docker-stacks:
+      stacks:
+        - victoria-logs
+"""
 
 
 def fake_root(tmp_path: Path, os_type: str = "bazzite", ssh_config: str = DESKTOP) -> Path:
     (tmp_path / "hosts.conf").write_text(
-        SOLAR.format(type=os_type, ssh_config=ssh_config), encoding="utf-8"
+        SOLAR.format(type=os_type, ssh_config=ssh_config) + LOGS, encoding="utf-8"
     )
     shutil.copytree(ROOT / "vr-guest", tmp_path / "vr-guest",
                     ignore=shutil.ignore_patterns("build", "__pycache__"))
+    for module in ("vector-host", "vector-config"):
+        for sub in ("templates", "configs"):
+            shutil.copytree(ROOT / module / sub, tmp_path / module / sub)
     return tmp_path
 
 
@@ -130,6 +151,10 @@ def test_render_build_maps_every_file_to_its_destination(tmp_path: Path) -> None
         "/var/home/freender/.local/bin/psvr2-steamvr", "755")
     assert destinations["libexec/solar-check"] == ("/usr/local/libexec/solar-check", "755")
     assert destinations["check.json"] == ("/usr/local/share/vr-guest/check.json", "644")
+    assert destinations["vector/vector.yaml"] == ("/etc/vector/homelab.yaml", "644")
+    assert destinations["vector/journalctl-catchup"] == (
+        "/usr/local/bin/journalctl-catchup", "755")
+    assert (build_dir / "vector/vector.test.yaml").is_file()
     for spec in specs:
         assert (build_dir / spec.build_name).is_file()
 
@@ -149,6 +174,12 @@ def test_render_build_env(tmp_path: Path) -> None:
         "NODE_EXPORTER_URL": vr_guest.NODE_EXPORTER_URL,
         "NODE_EXPORTER_SHA": vr_guest.NODE_EXPORTER_SHA,
         "CHECK_PATH": "/usr/local/libexec/solar-check",
+        "VECTOR_VERSION": "0.61.0",
+        "VECTOR_URL": "https://github.com/vectordotdev/vector/releases/download/v0.61.0/"
+                      "vector-0.61.0-x86_64-unknown-linux-gnu.tar.gz",
+        "VECTOR_SHA": vr_guest.VECTOR_SHA,
+        "VECTOR_QUERY_URL": "http://logs.internal:9428/select/logsql/query",
+        "VECTOR_TENANT": "0",
         "SVLF_URL": "https://github.com/BnuuySolutions/SteamVRLinuxFixes/releases/download/"
                     "v0.2.1/VK_LAYER_BNUUY_steamvr_linux_fixes.zip",
         "SVLF_SHA": vr_guest.VR_RELEASES["SVLF"][3],
@@ -177,11 +208,77 @@ def test_check_manifest_ids_and_hashes(tmp_path: Path) -> None:
     assert manifest["hostname"] == "solar"
     assert manifest["home"] == "/var/home/freender"
     assert manifest["kargs"] == list(vr_guest.KARGS)
+    assert manifest["vector_version"] == vr_guest.VECTOR_VERSION
     assert manifest["psvr2toolkit_dll_sha256"] == vr_guest.PSVR2TK_DLL_SHA
     assert manifest["steamvr_settings"] == {
         "enableLinuxVulkanAsync": True, "useFacetRenderer": True, "showMirrorView": False,
         "supersampleManualOverride": True, "supersampleScale": 1.18,
     }
+
+
+def test_vector_config_is_vector_hosts_render_at_tenant_0(tmp_path: Path) -> None:
+    """One config for every host-native Vector (#402): vector-host renders it, solar
+    always writes to tenant 0 with the journal wrapper vector-config ships."""
+    root = fake_root(tmp_path)
+    build_dir, _ = vr_guest.render_build(root, "solar")
+    reference = tmp_path / "reference"
+    vector_host.render_config(root, "solar", reference, shadow=False)
+
+    for name in ("vector.yaml", "vector.test.yaml", "journalctl-catchup"):
+        assert (build_dir / "vector" / name).read_bytes() == (reference / name).read_bytes()
+    config = yaml.safe_load((build_dir / "vector/vector.yaml").read_text(encoding="utf-8"))
+    sink = config["sinks"]["vlogs_journald"]
+    assert sink["endpoints"] == ["http://logs.internal:9428/insert/elasticsearch/"]
+    assert "request" not in sink
+    assert config["sources"]["journald"]["journalctl_path"] == "/usr/local/bin/journalctl-catchup"
+
+
+def test_validate_needs_victoria_logs(tmp_path: Path) -> None:
+    root = fake_root(tmp_path)
+    (root / "hosts.conf").write_text(SOLAR.format(type="bazzite", ssh_config=DESKTOP))
+
+    with pytest.raises(ValueError, match="exactly one host running the victoria-logs stack"):
+        vr_guest.validate(root, ["solar"])
+
+
+def test_vector_host_refuses_a_vr_guest(tmp_path: Path) -> None:
+    root = fake_root(tmp_path)
+    hosts = (root / "hosts.conf").read_text()
+    (root / "hosts.conf").write_text(
+        hosts.replace("    vr-guest:\n", "    vr-guest:\n    vector-host:\n"))
+    (root / "vector-host" / "scripts").mkdir()
+    (root / "vector-host" / "scripts" / "install.py").write_text("")
+
+    with pytest.raises(ValueError, match="solar: vr-guest installs its Vector, not vector-host"):
+        vector_host.validate(root, ["solar"])
+
+
+def test_the_unit_runs_vector_without_a_user_of_its_own() -> None:
+    unit = (ROOT / "vr-guest/configs/etc/systemd/system/vector.service").read_text()
+    lines = unit.splitlines()
+
+    for line in ("DynamicUser=yes", "SupplementaryGroups=systemd-journal", "StateDirectory=vector",
+                 "Environment=VECTOR_CONFIG=/etc/vector/homelab.yaml", "StartLimitIntervalSec=0",
+                 "RestartSec=30s", "ExecStart=/usr/local/bin/vector",
+                 "ExecStartPre=/usr/local/bin/vector validate --skip-healthchecks"):
+        assert line in lines
+    assert lines.index("StartLimitIntervalSec=0") < lines.index("[Service]")
+
+
+def test_real_solar_render_passes_vector(tmp_path: Path) -> None:
+    binary = os.environ.get("VECTOR_BIN") or shutil.which("vector")
+    cached = Path.home() / f".cache/vector-sync/{vr_guest.VECTOR_VERSION}/vector"
+    binary = binary or (str(cached) if cached.is_file() else None)
+    if not binary:
+        pytest.skip("no vector binary (VECTOR_BIN or PATH)")
+    (tmp_path / "repo").mkdir()
+    root = fake_root(tmp_path / "repo")
+    shutil.copy(ROOT / "hosts.conf", root / "hosts.conf")
+    out = vr_guest.render_build(root, "solar")[0] / "vector"
+    for args in (["validate", "--no-environment", str(out / "vector.yaml")],
+                 ["test", str(out / "vector.yaml"), str(out / "vector.test.yaml")]):
+        result = subprocess.run([binary, *args], capture_output=True, text=True, check=False)
+        assert result.returncode == 0, result.stdout + result.stderr
 
 
 # ---------------------------------------------------------------------------
@@ -360,6 +457,197 @@ def test_verify_owns_the_vr_ids_the_vr_stage_converged(installer, tmp_path) -> N
 
     with pytest.raises(InstallError, match="failed after deploy: psvr2toolkit_dll$"):
         installer.verify(ctx, "freender", frozenset({"psvr2toolkit_dll"}))
+
+
+# --- vector stage ------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("stdout", "version"),
+    [("vector 0.61.0 (x86_64-unknown-linux-gnu 17e017e 2026-10-29)\n", "0.61.0"),
+     ("", ""), ("bash: vector: not found\n", "")],
+)
+def test_vector_version(installer, stdout: str, version: str) -> None:
+    installer._run = Commands({(installer.VECTOR,): (0, stdout)})
+    assert installer.vector_version() == version
+
+
+def vector_tarball(tmp_path: Path, member: str) -> Path:
+    payload = io.BytesIO()
+    with tarfile.open(fileobj=payload, mode="w:gz") as tar:
+        info = tarfile.TarInfo(member)
+        info.size = 3
+        tar.addfile(info, io.BytesIO(b"bin"))
+    archive = tmp_path / "vector.tar.gz"
+    archive.write_bytes(payload.getvalue())
+    return archive
+
+
+def test_vector_installs_from_the_pinned_tarball(installer, tmp_path, monkeypatch) -> None:
+    """Upstream's tarball names members with a leading `./`."""
+    archive = vector_tarball(tmp_path, "./vector-x86_64-unknown-linux-gnu/bin/vector")
+    installer.VECTOR = str(tmp_path / "vector")
+    commands = Commands()
+    installer._run = commands
+    monkeypatch.setattr(installer, "fetch", lambda url, digest: archive)
+
+    assert installer.ensure_vector_binary(make_ctx(tmp_path, {"VECTOR_VERSION": "0.61.0"}))
+    assert (tmp_path / "vector").read_bytes() == b"bin"
+    assert os.access(tmp_path / "vector", os.X_OK)
+    assert ["restorecon", str(tmp_path / "vector")] in commands.seen
+
+
+def test_vector_tarball_without_the_binary_is_refused(installer, tmp_path, monkeypatch) -> None:
+    archive = vector_tarball(tmp_path, "./vector-x86_64-unknown-linux-gnu/README.md")
+    installer.VECTOR = str(tmp_path / "vector")
+    installer._run = Commands()
+    monkeypatch.setattr(installer, "fetch", lambda url, digest: archive)
+
+    with pytest.raises(InstallError, match="has no vector-x86_64-unknown-linux-gnu/bin/vector"):
+        installer.ensure_vector_binary(make_ctx(tmp_path, {"VECTOR_VERSION": "0.61.0"}))
+    assert not (tmp_path / "vector").exists()
+
+
+def test_the_pinned_vector_is_left_alone(installer, tmp_path, monkeypatch) -> None:
+    installer._run = Commands({(installer.VECTOR,): (0, "vector 0.61.0 (x86_64)\n")})
+    monkeypatch.setattr(installer, "fetch", lambda *_: pytest.fail("downloaded"))
+
+    assert not installer.ensure_vector_binary(make_ctx(tmp_path, {"VECTOR_VERSION": "0.61.0"}))
+
+
+VECTOR_ENV = {
+    "VECTOR_VERSION": "0.61.0", "VECTOR_URL": "https://h/v.tar.gz", "VECTOR_SHA": "x",
+    "VECTOR_QUERY_URL": "http://logs:9428/select/logsql/query", "VECTOR_TENANT": "0",
+}
+VECTOR_STAGED = ("vector/journalctl-catchup", "vector/vector.yaml",
+                 "etc/systemd/system/vector.service")
+
+
+def vector_stage(installer, tmp_path: Path, monkeypatch, commands: Commands,
+                 live: dict[str, str] | None = None, delivered: bool = True):
+    for module in (installer, systemd, vector):
+        monkeypatch.setattr(module, "_run", commands)
+    monkeypatch.setattr(installer, "ensure_vector_binary", lambda ctx: False)
+    monkeypatch.setattr(vector, "_sleep", lambda _s: None)
+    monkeypatch.setattr(vector, "_nonce", lambda: "nonce")
+    answer = b'{"_msg":"delivery check nonce"}\n' if delivered else b""
+    monkeypatch.setattr(vector, "_urlopen", lambda *_a, **_k: io.BytesIO(answer))
+    clock = iter(range(0, 1000, 10))
+    monkeypatch.setattr(vector, "_now", lambda: float(next(clock)))
+    build = tmp_path / "build"
+    file_map = {}
+    for name in (*VECTOR_STAGED, "vector/vector.test.yaml"):
+        (build / name).parent.mkdir(parents=True, exist_ok=True)
+        (build / name).write_text(f"{name} new\n")
+    for name in VECTOR_STAGED:
+        dest = tmp_path / "live" / Path(name).name
+        file_map[name] = (str(dest), "644")
+        if live and name in live:
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_text(live[name])
+    return InstallContext(host="solar", script_dir=tmp_path, build_dir=build, env=VECTOR_ENV,
+                          deploy_env={}, file_map=file_map, force_update=False)
+
+
+VECTOR_CONVERGED = {name: f"{name} new\n" for name in VECTOR_STAGED}
+
+
+class StoppedVector(Commands):
+    """A disabled, stopped vector.service that `enable --now` or `start` brings up."""
+
+    def __init__(self, outputs=None, enabled: bool = False):
+        super().__init__(outputs)
+        self.enabled, self.active = enabled, False
+
+    def __call__(self, cmd, check=False, **kwargs):
+        argv = list(cmd)
+        if argv[:1] == ["systemctl"] and argv[1] in ("is-active", "is-enabled"):
+            self.seen.append(argv)
+            up = self.active if argv[1] == "is-active" else self.enabled
+            return subprocess.CompletedProcess(argv, 0 if up else 3, stdout="", stderr="")
+        if argv[:1] == ["systemctl"] and argv[1] in ("enable", "start", "restart"):
+            self.enabled = self.active = True
+        return super().__call__(cmd, check=check, **kwargs)
+
+
+def first(commands: Commands, *prefix: str) -> int:
+    return next(i for i, argv in enumerate(commands.seen) if argv[:len(prefix)] == list(prefix))
+
+
+def test_vector_stage_on_a_fresh_host(installer, tmp_path, monkeypatch) -> None:
+    commands = StoppedVector()
+    ctx = vector_stage(installer, tmp_path, monkeypatch, commands)
+
+    installer.install_vector(ctx)
+
+    for name in VECTOR_STAGED:
+        assert Path(ctx.file_map[name][0]).read_text() == f"{name} new\n"
+    wrapper = ctx.file_map["vector/journalctl-catchup"][0]
+    assert first(commands, "restorecon", wrapper) < first(commands, installer.VECTOR, "validate")
+    assert first(commands, installer.VECTOR, "test") < first(commands, "systemctl", "daemon-reload")
+    assert ["systemctl", "enable", "--now", "vector.service"] in commands.seen
+    assert ["logger", "-t", "vr-guest", "delivery check nonce"] in commands.seen
+
+
+def test_vector_stage_leaves_a_converged_running_host_alone(installer, tmp_path,
+                                                            monkeypatch) -> None:
+    commands = Commands()
+    ctx = vector_stage(installer, tmp_path, monkeypatch, commands, live=VECTOR_CONVERGED)
+
+    installer.install_vector(ctx)
+
+    assert [installer.VECTOR, "validate", "--no-environment",
+            str(ctx.build_dir / "vector/vector.yaml")] in commands.seen
+    assert not any(argv[:2] == ["systemctl", "restart"] for argv in commands.seen)
+    assert not any(argv[0] in ("logger", "restorecon") for argv in commands.seen)
+
+
+@pytest.mark.parametrize("changed", VECTOR_STAGED)
+def test_vector_stage_restarts_on_any_changed_file(installer, tmp_path, monkeypatch,
+                                                    changed: str) -> None:
+    commands = Commands()
+    live = dict(VECTOR_CONVERGED, **{changed: "old\n"})
+    ctx = vector_stage(installer, tmp_path, monkeypatch, commands, live=live)
+
+    installer.install_vector(ctx)
+
+    assert first(commands, "systemctl", "daemon-reload") < first(commands, "systemctl", "restart")
+    assert any(argv[0] == "logger" for argv in commands.seen)
+
+
+def test_vector_stage_a_failed_check_installs_no_config(installer, tmp_path, monkeypatch) -> None:
+    commands = Commands({(installer.VECTOR, "test"): (1, "")})
+    live = dict(VECTOR_CONVERGED, **{"vector/vector.yaml": "old\n"})
+    ctx = vector_stage(installer, tmp_path, monkeypatch, commands, live=live)
+
+    with pytest.raises(InstallError, match="vector unit tests failed"):
+        installer.install_vector(ctx)
+
+    assert Path(ctx.file_map["vector/vector.yaml"][0]).read_text() == "old\n"
+    assert not any(argv[:2] == ["systemctl", "restart"] for argv in commands.seen)
+
+
+def test_vector_stage_fails_when_nothing_arrives(installer, tmp_path, monkeypatch) -> None:
+    commands = StoppedVector(enabled=True)
+    ctx = vector_stage(installer, tmp_path, monkeypatch, commands, live=VECTOR_CONVERGED,
+                       delivered=False)
+
+    with pytest.raises(InstallError, match="vector.service delivered nothing within 30s"):
+        installer.install_vector(ctx)
+
+
+@pytest.mark.parametrize("missing", list(VECTOR_ENV))
+def test_vector_stage_refuses_an_incomplete_env(installer, tmp_path, monkeypatch,
+                                                missing: str) -> None:
+    commands = Commands()
+    ctx = dataclasses.replace(
+        vector_stage(installer, tmp_path, monkeypatch, commands),
+        env={key: value for key, value in VECTOR_ENV.items() if key != missing},
+    )
+
+    with pytest.raises(InstallError, match=missing):
+        installer.install_vector(ctx)
+    assert commands.seen == []
 
 
 # --- vr stage ----------------------------------------------------------------------
@@ -805,3 +1093,21 @@ def test_bluez_build_matches(check, tmp_path, monkeypatch, capsys, rpm, marker, 
 
 def test_check_unreadable_manifest(check, tmp_path) -> None:
     assert check.main(tmp_path / "missing.json") == 2
+
+
+@pytest.mark.parametrize(
+    ("stdout", "active", "failed"),
+    [("vector 0.61.0 (x86_64-unknown-linux-gnu)", True, []),
+     ("vector 0.60.1 (x86_64-unknown-linux-gnu)", True, ["vector_version"]),
+     ("", False, ["vector_version", "vector_active"])],
+)
+def test_check_vector(check, monkeypatch, capsys, stdout: str, active: bool,
+                      failed: list[str]) -> None:
+    monkeypatch.setattr(check, "output", lambda *cmd: stdout)
+    monkeypatch.setattr(check, "succeeds", lambda *cmd: active)
+
+    check.check_vector(check.Report(), {"vector_version": "0.61.0"})
+
+    out = capsys.readouterr().out
+    assert [line.split()[1].rstrip(":") for line in out.splitlines()
+            if line.startswith("  FAIL")] == failed

@@ -14,7 +14,7 @@ import yaml
 
 from homelab.modules import vector_host
 from homelab.templates import render_template_text
-from homelab_install import packages, systemd
+from homelab_install import packages, systemd, vector
 from homelab_install.context import InstallContext
 from homelab_install.errors import InstallError
 
@@ -314,12 +314,12 @@ def setup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, host: FakeHost,
           logs: FakeVictoriaLogs | None = None, live: dict[str, str] | None = None,
           journal_members: list[str] | None = None):
     installer = load_installer()
-    for module in (installer, packages, systemd):
+    for module in (installer, packages, systemd, vector):
         monkeypatch.setattr(module, "_run", host)
     monkeypatch.setattr(packages, "_apt_updated", False)
-    monkeypatch.setattr(installer, "_sleep", lambda _seconds: None)
-    monkeypatch.setattr(installer, "_nonce", lambda: "nonce")
-    monkeypatch.setattr(installer, "_urlopen", logs or FakeVictoriaLogs([FOUND]))
+    monkeypatch.setattr(vector, "_sleep", lambda _seconds: None)
+    monkeypatch.setattr(vector, "_nonce", lambda: "nonce")
+    monkeypatch.setattr(vector, "_urlopen", logs or FakeVictoriaLogs([FOUND]))
     members = ["vector"] if journal_members is None else journal_members
     monkeypatch.setattr(
         installer.grp, "getgrnam", lambda name: grp.struct_group((name, "x", 999, members))
@@ -386,7 +386,7 @@ def test_the_wrapper_is_in_place_before_the_config_is_checked(
             seen.append(wrapper.is_file())
         return original(command, **kwargs)
 
-    monkeypatch.setattr(installer, "_run", watch)
+    monkeypatch.setattr(vector, "_run", watch)
 
     installer.install(ctx)
 
@@ -556,7 +556,7 @@ def test_no_delivery_fails_the_deploy(tmp_path: Path, monkeypatch: pytest.Monkey
     host = FakeHost(active=False)
     installer, ctx = setup(tmp_path, monkeypatch, host, FakeVictoriaLogs([b""]), live=CONVERGED)
     clock = iter([0.0, 10.0, 20.0, 31.0])
-    monkeypatch.setattr(installer, "_now", lambda: next(clock))
+    monkeypatch.setattr(vector, "_now", lambda: next(clock))
 
     with pytest.raises(InstallError, match="delivered nothing within 30s"):
         installer.install(ctx)

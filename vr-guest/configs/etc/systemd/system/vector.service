@@ -1,0 +1,28 @@
+[Unit]
+Description=Vector: ships the journal to VictoriaLogs on helm (vr-guest, homelab-ops#402)
+Documentation=https://vector.dev
+After=network-online.target
+Wants=network-online.target
+# Retry every 30 s forever: VictoriaLogs being down at boot (a helm reboot) must
+# not leave it failed for good (homelab-ops#373). The disk buffer and the
+# journald checkpoint hold the backlog.
+StartLimitIntervalSec=0
+
+[Service]
+# No vector user: the pinned tarball ships none, and systemd-journal is all it
+# needs. /var/lib/vector is the config's data_dir.
+DynamicUser=yes
+SupplementaryGroups=systemd-journal
+StateDirectory=vector
+Environment=VECTOR_CONFIG=/etc/vector/homelab.yaml
+# A journald-only pipeline needs no more; the default is one worker per CPU.
+Environment=VECTOR_THREADS=2
+ExecStartPre=/usr/local/bin/vector validate --skip-healthchecks
+ExecStart=/usr/local/bin/vector
+ExecReload=/usr/local/bin/vector validate --skip-healthchecks
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=always
+RestartSec=30s
+
+[Install]
+WantedBy=multi-user.target
