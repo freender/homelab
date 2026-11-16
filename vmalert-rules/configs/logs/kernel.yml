@@ -25,3 +25,14 @@ groups:
         annotations:
           summary: "{{ $value }} kernel I/O errors on {{ $labels.host }}"
           description: "Kernel block-layer/ATA errors on {{ $labels.host }} in the last 5m. Check the journal, then `smartctl` / `zpool status` on that host."
+
+      # NVIDIA driver Xid events: GPU faults (fell off the bus, page faults,
+      # hangs) the driver logs as `NVRM: Xid (PCI:...): <code>, ...`. Only solar
+      # runs the NVIDIA driver today; any host that does is covered.
+      - alert: KernelNvidiaXid
+        expr: '{_HOSTNAME=~".+"} _TRANSPORT:=kernel "NVRM: Xid" | stats by (_HOSTNAME) count() as errors | rename _HOSTNAME as host'
+        labels:
+          severity: warning
+        annotations:
+          summary: "NVIDIA Xid error {{ $value }}x on {{ $labels.host }}"
+          description: "The NVIDIA driver on {{ $labels.host }} logged {{ $value }} Xid event(s) in the last 5m. Find them with `{_HOSTNAME=\"{{ $labels.host }}\"} \"NVRM: Xid\"` in VictoriaLogs; the number after the PCI address is the Xid code (79: fell off the bus; 13, 31, 43: usually an application fault). A GPU that is gone needs the VM power-cycled; see Obsidian `PVE - NVIDIA GPU Stuck Reset`."

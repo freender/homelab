@@ -104,3 +104,60 @@ groups:
         annotations:
           summary: "solar: patch and update metrics are missing or stale"
           description: "solar.prom has not been refreshed for an hour, or the last solar-check run reported nothing, so SolarPatchCheckFailed and the update rules are blind. Check `systemctl status solar-metrics.timer solar-metrics.service` and `journalctl -u solar-metrics.service` on solar, and run `/usr/local/libexec/solar-check` by hand; `./deploy vr-guest solar` reinstalls it."
+
+      # The rules below read solar-gpu-metrics.service, which streams nvidia-smi
+      # at 1 s into solar-gpu.prom (homelab-ops#410).
+      #
+      # nvidia_gpu_up 0 means nvidia-smi gave no sample for 5 s: the GPU fell
+      # off the bus or the driver is gone. A stale file means the service itself
+      # stopped publishing, and node_exporter would keep serving the last
+      # nvidia_gpu_up 1, so it counts too. Gated on solar being up so a VM
+      # reboot reports NodeDownSolar only.
+      - alert: SolarGpuUnresponsive
+        expr: |
+          (
+            nvidia_gpu_up{host="solar"} == 0
+            or absent_over_time(nvidia_gpu_up{host="solar"}[10m])
+            or time() - node_textfile_mtime_seconds{host="solar",file=~".*/solar-gpu\\.prom"} > 120
+          )
+          and on(host) (min_over_time(up{job="pve-node", host="solar"}[30m]) == 1)
+        for: 5m
+        labels:
+          severity: warning
+          host: solar
+        annotations:
+          summary: "solar: the RTX 3080 Ti is not answering nvidia-smi"
+          description: "solar-gpu-metrics has had no nvidia-smi sample for 5 minutes, or has stopped writing solar-gpu.prom. Run `nvidia-smi` and `systemctl status solar-gpu-metrics` on solar, and look for NVRM/Xid lines in `journalctl -k -b`. A GPU that will not come back needs the VM power-cycled (ask first, someone may be in the headset); if it then fails to start, see Obsidian `PVE - NVIDIA GPU Stuck Reset`."
+
+      # Thermal or hardware slowdown while SteamVR runs: dropped frames in the
+      # headset. sw_power_cap is left out, it is the normal ceiling at full
+      # load. avg over 5m tolerates a reason that flickers between samples;
+      # with for: 5m it means throttled most of the last ~10 minutes.
+      - alert: SolarGpuThrottling
+        expr: |
+          avg_over_time(nvidia_gpu_clock_event_reason{host="solar", reason=~"sw_thermal_slowdown|hw_thermal_slowdown|hw_slowdown|hw_power_brake_slowdown"}[5m]) > 0.5
+          and on(host) homelab_solar_process_running{host="solar", process="vrserver"} == 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "solar: GPU clocks held down by {{ $labels.reason }} during a VR session"
+          description: "The 3080 Ti has reported `{{ $labels.reason }}` most of the last 10 minutes with SteamVR running. Thermal reasons: check `nvidia_gpu_temperature_celsius` and the fan on the VR - solar row, and clovis' case airflow. hw_slowdown or hw_power_brake_slowdown: the board asserted its slowdown line, usually a power transient or an external power brake (see the vr skill's clovis PSU notes)."
+
+      # clovis' Z490 splits the CPU's 16 lanes x8/x8 with the SAS2308 HBA, so
+      # x8 Gen3 is the ceiling: nvidia-smi's width max of 16 is the card's, not
+      # the slot's, and comparing against it would fire forever. The generation
+      # drops at idle by design, so both are only judged under sustained load.
+      - alert: SolarGpuPcieDegraded
+        expr: |
+          (
+            label_set(max_over_time(nvidia_gpu_pcie_link_width{host="solar"}[5m]) < 8, "link", "width")
+            or label_set(max_over_time(nvidia_gpu_pcie_link_gen{host="solar"}[5m]) < 3, "link", "gen")
+          )
+          and on(host, gpu) min_over_time(nvidia_gpu_utilization_percent{host="solar"}[5m]) > 50
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "solar: GPU PCIe link {{ $labels.link }} below x8 Gen3 under load"
+          description: "With the GPU over 50% busy, its PCIe link has run at {{ $labels.link }} {{ $value }} for 10 minutes (expected x8 Gen3, the slot's maximum). Compare `lspci -vv -s 01:00.0 | grep LnkSta` on clovis; a narrowed or downtrained link usually means the card is not seated, a riser fault, or AER errors in clovis' kernel log."
