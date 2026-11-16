@@ -10,7 +10,7 @@ groups:
 
       # One series per solar-check id (karg:..., /etc/..., psvr2toolkit_dll,
       # compositor_cap_sys_nice, bluez_build_matches, ...). 30m absorbs a
-      # `setup.sh vr` run or a SteamVR update mid-flight; anything that stays
+      # vr-guest deploy or a SteamVR update mid-flight; anything that stays
       # failed past that needs a hand on solar. bluez_build_matches is the one
       # that fires after a Bazzite update: the patched bluetoothd was built for
       # the previous terra-bluez.
@@ -21,7 +21,7 @@ groups:
           severity: warning
         annotations:
           summary: "solar: solar-check {{ $labels.check }} failed"
-          description: "The solar guest-side check `{{ $labels.check }}` has failed for 30 minutes. Run `/usr/local/libexec/solar-check` on solar for the reason. Common causes: a SteamVR update dropped cap_sys_nice (setcap, see the vr skill), a PS VR2 App update restored Sony's dll (re-run `setup.sh vr` with SteamVR quit), or a Bazzite update shipped a new terra-bluez (`bluez_build_matches`: rebuild per vr-guest/bluez-eagain/README.md, or roll back). /etc, home or script drift: `./deploy vr-guest solar` from the repo."
+          description: "The solar guest-side check `{{ $labels.check }}` has failed for 30 minutes. Run `/usr/local/libexec/solar-check` on solar for the reason. Common causes: a SteamVR update dropped cap_sys_nice, or a PS VR2 App update restored Sony's dll (both: `psvr2-steamvr quit` on solar, then `./deploy vr-guest solar` from the repo), or a Bazzite update shipped a new terra-bluez (`bluez_build_matches`: rebuild per vr-guest/bluez-eagain/README.md, or roll back). /etc, home or script drift: `./deploy vr-guest solar`."
 
       # A staged (or finalized, not yet booted) Bazzite image only applies on a
       # full power-off/on of VM 106. uupd replaces the staged image daily without

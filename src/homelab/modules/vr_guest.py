@@ -1,11 +1,12 @@
 """vr-guest: the guest-side setup of the VR VM (solar, Bazzite), freender/homelab-ops#398.
 
-Replaces `pve-gpu-passthrough/linux/setup.sh`'s `base` and `metrics` stages
-(homelab-ops#400; design in #399). The `vr` stage follows in #401.
+Replaces the retired `pve-gpu-passthrough/linux/setup.sh`: the `base` and `metrics`
+stages (homelab-ops#400; design in #399) and the `vr` stage (#401).
 
-Every destination, mode and expected hash is decided here and passed down: the file
-map for the installer, and `check.json` for `solar-check`, the permanent read-only
-check that `solar-metrics` publishes and the installer runs as its verify step.
+Every destination, mode, pinned release and expected value is decided here and passed
+down: the file map and env for the installer, and `check.json` for `solar-check`, the
+permanent read-only check that `solar-metrics` publishes and the installer runs as its
+verify step. The installer reads `check.json` too, for the SteamVR settings it applies.
 """
 
 from __future__ import annotations
@@ -42,12 +43,43 @@ NODE_EXPORTER_URL = (
 )
 NODE_EXPORTER_SHA = "b51d8a76aa2a9156a55d501aca6276fae09e262259a5e4e831d2c2222f084e63"
 
+# The vr stage's pinned BnuuySolutions releases: env prefix -> (repo, tag, zip asset,
+# its sha256). Verified against the files solar ran on 2026-11-15.
+VR_RELEASES = {
+    "SVLF": (
+        "SteamVRLinuxFixes", "v0.2.1", "VK_LAYER_BNUUY_steamvr_linux_fixes.zip",
+        "af649a5aa45b732aa29989c401d23d9088f013c105c1d94893d77192addb6d05",
+    ),
+    "IGNITION": (
+        "Ignition", "v1.1.0", "Ignition-Linux-Windows.zip",
+        "2637bb32c3e9d4ce2f8d8af4f1eaa7f2affe4c4f544868988ba4fd7da9e0f7ec",
+    ),
+    "PSVR2TK": (
+        "PSVR2Toolkit", "v1.0.0-experimental-3", "PSVR2TK-win64-Ignition.zip",
+        "306e6bf9465b9266233db69e0c2175056b8cbed5dba0024e78dd056dbb0c6f67",
+    ),
+    "UNITYSETUP": (
+        "PSVR2Toolkit.UnitySetup", "v1.1.0", "PSVR2Toolkit.UnitySetup-Linux.zip",
+        "5e223773e6615f71b9496393ae9e1d74df43cab2a30e67e1a1b389e4cc8ad7da",
+    ),
+}
+# driver_playstation_vr2.dll inside the PSVR2TK zip; bump it together with that release.
+PSVR2TK_DLL_SHA = "b456e89433ad8dbe02719e215409912bb26fb9bf062d8528bb29174ea3d24583"
+
+# Merged into steamvr.vrsettings' "steamvr" section with SteamVR quit (it rewrites the
+# file on exit). 90 Hz at 118% manual supersampling is the settled Alyx tuning.
+STEAMVR_SETTINGS = {
+    "enableLinuxVulkanAsync": True,
+    "useFacetRenderer": True,
+    "showMirrorView": False,
+    "supersampleManualOverride": True,
+    "supersampleScale": 1.18,
+}
+
 LIBEXEC = "/usr/local/libexec"
 CHECK_PATH = f"{LIBEXEC}/solar-check"
 MANIFEST_NAME = "check.json"
 MANIFEST_PATH = "/usr/local/share/vr-guest/check.json"
-# Downloaded by setup.sh `vr` (until #401 ports it); psvr2toolkit_dll compares against it.
-PSVR2TK_ZIP = "vr-downloads/PSVR2TK-win64-Ignition.zip"
 
 # (repo path under configs/etc/, mode). The check id of each is "/etc/<path>".
 ETC_FILES = (
@@ -167,7 +199,8 @@ def check_manifest(root: Path, host: str, home: str) -> dict[str, object]:
         "home": home,
         "kargs": list(KARGS),
         "node_exporter_version": NODE_EXPORTER_VERSION,
-        "psvr2tk_zip": f"{home}/{PSVR2TK_ZIP}",
+        "psvr2toolkit_dll_sha256": PSVR2TK_DLL_SHA,
+        "steamvr_settings": STEAMVR_SETTINGS,
         "files": files,
     }
 
@@ -188,6 +221,12 @@ def render_build(root: Path, host: str) -> tuple[Path, tuple[FileSpec, ...]]:
         json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
     )
 
+    releases = {}
+    for prefix, (repo, tag, asset, digest) in VR_RELEASES.items():
+        releases[f"{prefix}_URL"] = (
+            f"https://github.com/BnuuySolutions/{repo}/releases/download/{tag}/{asset}"
+        )
+        releases[f"{prefix}_SHA"] = digest
     write_env_file(
         build_dir / "env",
         {
@@ -200,6 +239,7 @@ def render_build(root: Path, host: str) -> tuple[Path, tuple[FileSpec, ...]]:
             "NODE_EXPORTER_URL": NODE_EXPORTER_URL,
             "NODE_EXPORTER_SHA": NODE_EXPORTER_SHA,
             "CHECK_PATH": CHECK_PATH,
+            **releases,
         },
     )
     specs = file_specs(home)

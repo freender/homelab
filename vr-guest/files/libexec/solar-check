@@ -4,7 +4,7 @@
 Runs as the desktop user: solar-metrics.timer every 15 minutes, and the vr-guest
 installer as its verify step. What to expect comes from check.json, which the
 module renders at deploy time (hashes of every file it installs, the kargs, the
-pinned node_exporter version).
+pinned node_exporter version and PSVR2Toolkit dll, the SteamVR settings).
 
 Output is one line per item, `  ok    <id>` or `  FAIL  <id>: <reason>`; the ids are
 the `check` label of homelab_solar_check, so renaming one breaks its history and
@@ -17,7 +17,6 @@ import json
 import os
 import subprocess
 import sys
-import zipfile
 from pathlib import Path
 
 MANIFEST = Path("/usr/local/share/vr-guest/check.json")
@@ -88,24 +87,12 @@ def check_system(report: Report, manifest: dict) -> None:
     report.item("sshd", succeeds("systemctl", "is-active", "-q", "sshd"), "not active")
 
 
-def zip_member(archive: Path, name: str) -> bytes | None:
-    try:
-        with zipfile.ZipFile(archive) as handle:
-            return handle.read(name)
-    except (OSError, KeyError, zipfile.BadZipFile):
-        return None
-
-
-def steamvr_settings_ok(path: Path) -> bool:
+def steamvr_settings_ok(path: Path, wanted: dict) -> bool:
     try:
         settings = json.loads(path.read_text(encoding="utf-8")).get("steamvr") or {}
     except (OSError, ValueError, AttributeError):
         return False
-    return bool(
-        settings.get("enableLinuxVulkanAsync")
-        and settings.get("useFacetRenderer")
-        and settings.get("showMirrorView") is False
-    )
+    return all(settings.get(key) == value for key, value in wanted.items())
 
 
 def check_vr(report: Report, manifest: dict) -> None:
@@ -117,9 +104,7 @@ def check_vr(report: Report, manifest: dict) -> None:
     report.item("ignition_shim", shim == str(home / "ignition/libdriver_ignition.so"),
                 "driver_playstation_vr2.so is not the Ignition shim")
     dll = plugin / "bin/win64/driver_playstation_vr2.dll"
-    pinned = zip_member(Path(manifest["psvr2tk_zip"]), "driver_playstation_vr2.dll")
-    current = dll.read_bytes() if dll.is_file() else None
-    report.item("psvr2toolkit_dll", pinned is not None and current == pinned,
+    report.item("psvr2toolkit_dll", digest(dll) == manifest["psvr2toolkit_dll_sha256"],
                 "driver_playstation_vr2.dll is not the pinned PSVR2Toolkit "
                 "(Steam restored Sony's?)")
     vrpaths = read(home / ".config/openvr/openvrpaths.vrpath") or ""
@@ -135,7 +120,8 @@ def check_vr(report: Report, manifest: dict) -> None:
     target = os.readlink(runtime) if runtime.is_symlink() else ""
     report.item("openxr_runtime", target == str(steamvr / "steamxr_linux64.json"), "not SteamVR")
     report.item("steamvr_settings",
-                steamvr_settings_ok(home / ".steam/steam/config/steamvr.vrsettings"),
+                steamvr_settings_ok(home / ".steam/steam/config/steamvr.vrsettings",
+                                    manifest["steamvr_settings"]),
                 "values differ")
 
 

@@ -1,4 +1,4 @@
-"""vr-guest: solar's guest-side setup (freender/homelab-ops#400).
+"""vr-guest: solar's guest-side setup (freender/homelab-ops#400, #401).
 
 Three parts, three loaders: the orchestrator is a package module; the remote
 installer and `solar-check` are scripts loaded by path. The check ids are pinned
@@ -13,6 +13,7 @@ import importlib.machinery
 import importlib.util
 import io
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -148,6 +149,18 @@ def test_render_build_env(tmp_path: Path) -> None:
         "NODE_EXPORTER_URL": vr_guest.NODE_EXPORTER_URL,
         "NODE_EXPORTER_SHA": vr_guest.NODE_EXPORTER_SHA,
         "CHECK_PATH": "/usr/local/libexec/solar-check",
+        "SVLF_URL": "https://github.com/BnuuySolutions/SteamVRLinuxFixes/releases/download/"
+                    "v0.2.1/VK_LAYER_BNUUY_steamvr_linux_fixes.zip",
+        "SVLF_SHA": vr_guest.VR_RELEASES["SVLF"][3],
+        "IGNITION_URL": "https://github.com/BnuuySolutions/Ignition/releases/download/"
+                        "v1.1.0/Ignition-Linux-Windows.zip",
+        "IGNITION_SHA": vr_guest.VR_RELEASES["IGNITION"][3],
+        "PSVR2TK_URL": "https://github.com/BnuuySolutions/PSVR2Toolkit/releases/download/"
+                       "v1.0.0-experimental-3/PSVR2TK-win64-Ignition.zip",
+        "PSVR2TK_SHA": vr_guest.VR_RELEASES["PSVR2TK"][3],
+        "UNITYSETUP_URL": "https://github.com/BnuuySolutions/PSVR2Toolkit.UnitySetup/releases/"
+                          "download/v1.1.0/PSVR2Toolkit.UnitySetup-Linux.zip",
+        "UNITYSETUP_SHA": vr_guest.VR_RELEASES["UNITYSETUP"][3],
     }
 
 
@@ -164,7 +177,11 @@ def test_check_manifest_ids_and_hashes(tmp_path: Path) -> None:
     assert manifest["hostname"] == "solar"
     assert manifest["home"] == "/var/home/freender"
     assert manifest["kargs"] == list(vr_guest.KARGS)
-    assert manifest["psvr2tk_zip"] == "/var/home/freender/vr-downloads/PSVR2TK-win64-Ignition.zip"
+    assert manifest["psvr2toolkit_dll_sha256"] == vr_guest.PSVR2TK_DLL_SHA
+    assert manifest["steamvr_settings"] == {
+        "enableLinuxVulkanAsync": True, "useFacetRenderer": True, "showMirrorView": False,
+        "supersampleManualOverride": True, "supersampleScale": 1.18,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -337,6 +354,339 @@ def test_install_refuses_another_os(installer, tmp_path) -> None:
         installer.install(make_ctx(tmp_path, {"OS_TYPE": "steamos"}))
 
 
+def test_verify_owns_the_vr_ids_the_vr_stage_converged(installer, tmp_path) -> None:
+    installer._run = Commands({("runuser",): (1, "  FAIL  psvr2toolkit_dll: not pinned\n")})
+    ctx = make_ctx(tmp_path, {"CHECK_PATH": "/c"})
+
+    with pytest.raises(InstallError, match="failed after deploy: psvr2toolkit_dll$"):
+        installer.verify(ctx, "freender", frozenset({"psvr2toolkit_dll"}))
+
+
+# --- vr stage ----------------------------------------------------------------------
+
+
+@pytest.fixture
+def desktop(installer, tmp_path):
+    home = tmp_path / "home"
+    home.mkdir()
+    return installer.Desktop("freender", home, os.getuid(), os.getgid())
+
+
+def make_zip(path: Path, members: dict[str, bytes]) -> Path:
+    with zipfile.ZipFile(path, "w") as handle:
+        for name, data in members.items():
+            handle.writestr(name, data)
+    return path
+
+
+def test_put_writes_only_on_change_and_sets_the_mode(installer, desktop) -> None:
+    dest = desktop.home / ".local/lib/x.so"
+
+    assert installer.put(desktop, dest, b"a", 0o755)
+    assert dest.read_bytes() == b"a"
+    assert dest.stat().st_mode & 0o777 == 0o755
+    assert not installer.put(desktop, dest, b"a", 0o644)
+    assert dest.stat().st_mode & 0o777 == 0o644
+    assert installer.put(desktop, dest, b"b", 0o644)
+    assert sorted(p.name for p in dest.parent.iterdir()) == ["x.so"]
+
+
+def test_put_replaces_a_symlink(installer, desktop) -> None:
+    target = desktop.home / "target"
+    target.write_bytes(b"a")
+    dest = desktop.home / "link"
+    dest.symlink_to(target)
+
+    assert installer.put(desktop, dest, b"a", 0o644)
+    assert not dest.is_symlink()
+
+
+def test_ensure_link(installer, desktop) -> None:
+    link = desktop.home / ".config/openxr/1/active_runtime.json"
+    target = desktop.home / "steamxr_linux64.json"
+
+    assert installer.ensure_link(desktop, link, target)
+    assert not installer.ensure_link(desktop, link, target)
+    assert installer.ensure_link(desktop, link, desktop.home / "other.json")
+    assert link.readlink() == desktop.home / "other.json"
+
+
+def test_extract_skips_unchanged_members_and_sets_modes(installer, desktop, tmp_path) -> None:
+    archive = make_zip(tmp_path / "a.zip", {
+        "run.sh": b"#!/bin/sh", "proton": b"p", "lib.dll": b"d", "Data/": b"", "Data/x": b"x",
+    })
+    dest = desktop.home / "ignition"
+
+    assert installer.extract(desktop, archive, dest, frozenset({"proton"})) == 4
+    modes = {name: (dest / name).stat().st_mode & 0o777
+             for name in ("run.sh", "proton", "lib.dll", "Data/x")}
+    assert modes == {"run.sh": 0o755, "proton": 0o755, "lib.dll": 0o644, "Data/x": 0o644}
+    (dest / "lib.dll").chmod(0o600)
+    assert installer.extract(desktop, archive, dest, frozenset({"proton"})) == 0
+    assert (dest / "lib.dll").stat().st_mode & 0o777 == 0o644
+    (dest / "Data/x").write_bytes(b"y")
+    assert installer.extract(desktop, archive, dest, frozenset({"proton"})) == 1
+    assert (dest / "Data/x").read_bytes() == b"x"
+
+
+@pytest.mark.parametrize("name", ["../evil", "a/../../evil"])
+def test_extract_refuses_to_leave_dest(installer, desktop, tmp_path, name: str) -> None:
+    archive = make_zip(tmp_path / "a.zip", {name: b"x"})
+    with pytest.raises(InstallError, match="unsafe member"):
+        installer.extract(desktop, archive, desktop.home / "d")
+
+
+def fake_release(installer, monkeypatch, archives: dict[str, Path]) -> None:
+    monkeypatch.setattr(installer, "fetch_release", lambda ctx, prefix: archives[prefix])
+
+
+def test_install_svlf_puts_the_layer_under_local(installer, desktop, tmp_path, monkeypatch):
+    archive = make_zip(tmp_path / "svlf.zip", {
+        "install.sh": b"", "libsteamvr_linux_fixes.so": b"so",
+        "VkLayer_steamvr_linux_fixes.json": b"{}",
+    })
+    fake_release(installer, monkeypatch, {"SVLF": archive})
+
+    installer.install_svlf(make_ctx(tmp_path), desktop)
+
+    lib = desktop.home / ".local/lib/libsteamvr_linux_fixes.so"
+    layer = desktop.home / ".local/share/vulkan/implicit_layer.d/VkLayer_steamvr_linux_fixes.json"
+    assert lib.read_bytes() == b"so" and lib.stat().st_mode & 0o777 == 0o755
+    assert layer.read_bytes() == b"{}" and layer.stat().st_mode & 0o777 == 0o644
+    assert not (desktop.home / ".local/lib/install.sh").exists()
+
+
+def make_plugin(home: Path, installer) -> Path:
+    plugin = home / installer.PLUGIN
+    (plugin / "bin/win64").mkdir(parents=True)
+    (plugin / "driver.vrdrivermanifest").write_text('{"name": "playstation_vr2"}')
+    return plugin
+
+
+def test_install_ignition_does_what_install_ignition_sh_does(installer, desktop, tmp_path,
+                                                             monkeypatch) -> None:
+    names = ["libdriver_ignition.so", "ignition_server.exe", *installer.IGNITION_SUPPORT]
+    archive = make_zip(tmp_path / "ign.zip", {name: name.encode() for name in names})
+    fake_release(installer, monkeypatch, {"IGNITION": archive})
+    plugin = make_plugin(desktop.home, installer)
+
+    installer.install_ignition(make_ctx(tmp_path), desktop, plugin)
+
+    ignition, linux64 = desktop.home / "ignition", plugin / "bin/linux64"
+    shim = linux64 / "driver_playstation_vr2.so"
+    assert shim.readlink() == ignition / "libdriver_ignition.so"
+    assert json.loads((linux64 / "ignition.json").read_text()) == {
+        "server_exe": f"{ignition}/ignition_server.exe",
+        "driver_dll": "../win64/driver_playstation_vr2.dll",
+        "wine_cmd": ["./launch_serverhelper.sh"],
+        "wait_for_debugger": False,
+    }
+    for name in installer.IGNITION_SUPPORT:
+        assert (linux64 / name).read_bytes() == name.encode()
+    assert (linux64 / "proton").stat().st_mode & 0o777 == 0o755
+    assert (linux64 / "wine_hidraw.reg").stat().st_mode & 0o777 == 0o644
+
+
+def write_vrpath(home: Path, drivers) -> None:
+    path = home / ".config/openvr/openvrpaths.vrpath"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"external_drivers": drivers}))
+
+
+def test_driver_registered_follows_symlinked_steam_paths(installer, desktop) -> None:
+    plugin = make_plugin(desktop.home, installer)
+    assert not installer.driver_registered(desktop, plugin)
+    (desktop.home / ".steam").mkdir()
+    (desktop.home / ".steam/steam").symlink_to(desktop.home / ".local/share/Steam")
+    write_vrpath(desktop.home, None)
+    assert not installer.driver_registered(desktop, plugin)
+    registered = ".steam/steam/steamapps/common/PlayStation VR2 App/SteamVR_Plug-In"
+    write_vrpath(desktop.home, [str(desktop.home / registered)])
+    assert installer.driver_registered(desktop, plugin)
+
+
+def test_register_driver_runs_vrpathreg_only_when_missing(installer, desktop, tmp_path) -> None:
+    plugin = make_plugin(desktop.home, installer)
+    steamvr = desktop.home / installer.STEAMVR
+    commands = Commands()
+    installer._run = commands
+
+    installer.register_driver(desktop, steamvr, plugin)
+    write_vrpath(desktop.home, [str(plugin)])
+    installer.register_driver(desktop, steamvr, plugin)
+
+    assert commands.seen == [["runuser", "-u", "freender", "--", "env",
+                              f"{steamvr}/bin/vrpathreg.sh", "adddriver", str(plugin)]]
+
+
+TOOLKIT = b"toolkit PlayStation VR2 Toolkit - v1"
+TOOLKIT_SHA = hashlib.sha256(TOOLKIT).hexdigest()
+
+
+@pytest.mark.parametrize(
+    ("current", "kept", "expect_kept"),
+    [
+        (b"sony", None, b"sony"),            # first install
+        (b"sony v2", b"sony", b"sony v2"),   # PS VR2 App update restored a newer Sony dll
+        (TOOLKIT, b"sony", b"sony"),         # already in place
+        (b"older PlayStation VR2 Toolkit", b"sony", b"sony"),  # an older pinned toolkit
+        (None, b"sony", b"sony"),
+    ],
+)
+def test_psvr2toolkit_keeps_sonys_dll(installer, desktop, tmp_path, monkeypatch,
+                                      current, kept, expect_kept) -> None:
+    plugin = make_plugin(desktop.home, installer)
+    win64 = plugin / "bin/win64"
+    if current is not None:
+        (win64 / installer.SONY_DLL).write_bytes(current)
+    if kept is not None:
+        (win64 / installer.SONY_DLL_KEPT).write_bytes(kept)
+    archive = make_zip(tmp_path / "tk.zip", {installer.SONY_DLL: TOOLKIT, "capi.dll": b"c"})
+    fake_release(installer, monkeypatch, {"PSVR2TK": archive})
+
+    installer.install_psvr2toolkit(make_ctx(tmp_path), desktop, plugin, TOOLKIT_SHA)
+
+    assert (win64 / installer.SONY_DLL_KEPT).read_bytes() == expect_kept
+    assert (win64 / installer.SONY_DLL).read_bytes() == TOOLKIT
+    assert (win64 / "capi.dll").read_bytes() == b"c"
+
+
+def test_psvr2toolkit_refuses_without_sonys_dll(installer, desktop, tmp_path) -> None:
+    plugin = make_plugin(desktop.home, installer)
+    with pytest.raises(InstallError, match="verify the PS VR2 App"):
+        installer.install_psvr2toolkit(make_ctx(tmp_path), desktop, plugin, TOOLKIT_SHA)
+
+
+@pytest.mark.parametrize(("caps", "set_it"), [("x cap_sys_nice=eip\n", False), ("", True)])
+def test_cap_sys_nice(installer, tmp_path, caps: str, set_it: bool) -> None:
+    commands = Commands({("getcap",): (0, caps)})
+    installer._run = commands
+
+    installer.ensure_cap_sys_nice(tmp_path)
+
+    launcher = f"{tmp_path}/bin/linux64/vrcompositor-launcher"
+    assert (["setcap", "CAP_SYS_NICE=eip", launcher] in commands.seen) is set_it
+
+
+def test_scheme_handlers_wait_for_steamvrs_desktop_files(installer, desktop) -> None:
+    commands = Commands()
+    installer._run = commands
+    assert installer.ensure_scheme_handlers(desktop) is False
+    assert commands.seen == []
+
+
+def test_scheme_handlers_set_only_what_is_missing(installer, desktop) -> None:
+    applications = desktop.home / ".local/share/applications"
+    applications.mkdir(parents=True)
+    (applications / "valve-vrmonitor.desktop").write_text("")
+    commands = Commands({
+        ("runuser", "-u", "freender", "--", "xdg-mime", "query", "default",
+         "x-scheme-handler/vrmonitor"): (0, "valve-vrmonitor.desktop\n"),
+    })
+    installer._run = commands
+
+    assert installer.ensure_scheme_handlers(desktop)
+
+    writes = [argv[5:] for argv in commands.seen if "query" not in argv]
+    assert writes == [["update-desktop-database", str(applications)],
+                      ["xdg-mime", "default", "valve-steamvr.desktop", "x-scheme-handler/steamvr"]]
+
+
+def settings_path(desktop, installer) -> Path:
+    path = desktop.home / installer.STEAMVR_SETTINGS
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def test_steamvr_settings_merge_and_back_up(installer, desktop, monkeypatch) -> None:
+    path = settings_path(desktop, installer)
+    path.write_text('{"steamvr": {"installID": "1", "showMirrorView": true}, "other": {}}')
+    monkeypatch.setattr(installer, "steamvr_running", lambda: False)
+
+    assert installer.ensure_steamvr_settings(desktop, WANTED)
+
+    assert json.loads(path.read_text()) == {
+        "steamvr": {"installID": "1", "showMirrorView": False, "supersampleScale": 1.18},
+        "other": {},
+    }
+    assert len(list(path.parent.glob("steamvr.vrsettings.bak.*"))) == 1
+    assert installer.ensure_steamvr_settings(desktop, WANTED)
+    assert len(list(path.parent.glob("steamvr.vrsettings.bak.*"))) == 1
+
+
+def test_steamvr_settings_created_when_missing(installer, desktop, monkeypatch) -> None:
+    path = settings_path(desktop, installer)
+    monkeypatch.setattr(installer, "steamvr_running", lambda: False)
+
+    assert installer.ensure_steamvr_settings(desktop, WANTED)
+    assert json.loads(path.read_text()) == {"steamvr": WANTED}
+
+
+def test_steamvr_settings_left_alone_once_steamvr_starts(installer, desktop, monkeypatch) -> None:
+    path = settings_path(desktop, installer)
+    path.write_text("{}")
+    monkeypatch.setattr(installer, "steamvr_running", lambda: True)
+
+    assert installer.ensure_steamvr_settings(desktop, WANTED) is False
+    assert path.read_text() == "{}"
+
+
+def test_steamvr_settings_refuse_broken_json(installer, desktop) -> None:
+    settings_path(desktop, installer).write_text("{")
+    with pytest.raises(InstallError, match="not valid JSON"):
+        installer.ensure_steamvr_settings(desktop, WANTED)
+
+
+def install_steamvr(desktop, installer) -> None:
+    launcher = desktop.home / installer.STEAMVR / "bin/linux64/vrcompositor-launcher"
+    launcher.parent.mkdir(parents=True)
+    launcher.write_text("")
+
+
+@pytest.mark.parametrize("missing", ["steamvr", "plugin", "running"])
+def test_vr_skips_without_touching_anything(installer, desktop, tmp_path, monkeypatch,
+                                            capsys, missing: str) -> None:
+    if missing != "steamvr":
+        install_steamvr(desktop, installer)
+    if missing != "plugin":
+        make_plugin(desktop.home, installer)
+    monkeypatch.setattr(installer, "steamvr_running", lambda: missing == "running")
+    monkeypatch.setattr(installer, "fetch_release", lambda *_: pytest.fail("downloaded"))
+
+    assert installer.vr(make_ctx(tmp_path), desktop) == frozenset()
+    assert "vr stage skipped" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(("handlers", "settings", "dropped"), [
+    (True, True, set()),
+    (False, True, {"vrmonitor_handler"}),
+    (True, False, {"steamvr_settings"}),
+])
+def test_vr_owns_what_it_converged(installer, desktop, tmp_path, monkeypatch,
+                                   handlers: bool, settings: bool, dropped: set[str]) -> None:
+    install_steamvr(desktop, installer)
+    make_plugin(desktop.home, installer)
+    (tmp_path / "check.json").write_text(json.dumps(vr_manifest(desktop.home)))
+    monkeypatch.setattr(installer, "steamvr_running", lambda: False)
+    calls: list[str] = []
+    for name in ("install_svlf", "install_ignition", "register_driver",
+                 "install_psvr2toolkit", "install_unitysetup", "ensure_cap_sys_nice"):
+        monkeypatch.setattr(installer, name, lambda *_a, name=name: calls.append(name))
+    monkeypatch.setattr(installer, "ensure_scheme_handlers", lambda *_: handlers)
+    monkeypatch.setattr(installer, "ensure_steamvr_settings", lambda *_: settings)
+
+    owned = installer.vr(make_ctx(tmp_path), desktop)
+
+    assert owned == installer.VR_CHECKS - dropped
+    assert len(calls) == 6
+    runtime = desktop.home / ".config/openxr/1/active_runtime.json"
+    assert runtime.readlink() == desktop.home / installer.STEAMVR / "steamxr_linux64.json"
+
+
+def test_vr_check_ids_are_solar_check_ids(installer) -> None:
+    assert installer.VR_CHECKS <= set(CHECK_IDS)
+
+
 # ---------------------------------------------------------------------------
 # solar-check
 # ---------------------------------------------------------------------------
@@ -389,31 +739,46 @@ def test_check_file_entries_compare_hashes(check, tmp_path, capsys) -> None:
     assert "  FAIL  gone: differs from repo\n" in out
 
 
+WANTED = {"showMirrorView": False, "supersampleScale": 1.18}
+
+
 @pytest.mark.parametrize(
     ("settings", "passes"),
     [
-        ({"steamvr": {"enableLinuxVulkanAsync": True, "useFacetRenderer": True,
-                      "showMirrorView": False}}, True),
-        ({"steamvr": {"enableLinuxVulkanAsync": True, "useFacetRenderer": True}}, False),
-        ({"steamvr": {"enableLinuxVulkanAsync": False, "useFacetRenderer": True,
-                      "showMirrorView": False}}, False),
-        ([], False),
+        # SteamVR writes 1.18 back as 1.1799999999999999: the same double.
+        ('{"steamvr": {"showMirrorView": false, "supersampleScale": 1.1799999999999999,'
+         ' "other": 1}}', True),
+        ('{"steamvr": {"showMirrorView": false}}', False),
+        ('{"steamvr": {"showMirrorView": true, "supersampleScale": 1.18}}', False),
+        ("[]", False),
+        ("{", False),
     ],
 )
-def test_steamvr_settings(check, tmp_path, settings, passes: bool) -> None:
+def test_steamvr_settings(check, tmp_path, settings: str, passes: bool) -> None:
     path = tmp_path / "steamvr.vrsettings"
-    path.write_text(json.dumps(settings))
-    assert check.steamvr_settings_ok(path) is passes
-    assert check.steamvr_settings_ok(tmp_path / "missing") is False
+    path.write_text(settings)
+    assert check.steamvr_settings_ok(path, WANTED) is passes
+    assert check.steamvr_settings_ok(tmp_path / "missing", WANTED) is False
 
 
-def test_zip_member(check, tmp_path) -> None:
-    archive = tmp_path / "a.zip"
-    with zipfile.ZipFile(archive, "w") as handle:
-        handle.writestr("driver_playstation_vr2.dll", b"dll")
-    assert check.zip_member(archive, "driver_playstation_vr2.dll") == b"dll"
-    assert check.zip_member(archive, "other.dll") is None
-    assert check.zip_member(tmp_path / "missing.zip", "x") is None
+def vr_manifest(home: Path) -> dict:
+    return {"home": str(home), "psvr2toolkit_dll_sha256": hashlib.sha256(b"toolkit").hexdigest(),
+            "steamvr_settings": WANTED}
+
+
+@pytest.mark.parametrize(("dll", "passes"), [(b"toolkit", True), (b"sony", False), (None, False)])
+def test_psvr2toolkit_dll_compares_the_pinned_hash(check, tmp_path, monkeypatch, capsys,
+                                                   dll: bytes | None, passes: bool) -> None:
+    win64 = tmp_path / check.PLUGIN / "bin/win64"
+    win64.mkdir(parents=True)
+    if dll is not None:
+        (win64 / "driver_playstation_vr2.dll").write_bytes(dll)
+    monkeypatch.setattr(check, "output", lambda *cmd: "")
+
+    check.check_vr(check.Report(), vr_manifest(tmp_path))
+
+    line = next(line for line in capsys.readouterr().out.splitlines() if "psvr2toolkit" in line)
+    assert line.startswith("  ok  " if passes else "  FAIL")
 
 
 @pytest.mark.parametrize(
