@@ -132,11 +132,12 @@ groups:
       # Thermal or hardware slowdown while SteamVR runs: dropped frames in the
       # headset. sw_power_cap is left out, it is the normal ceiling at full
       # load. avg over 5m tolerates a reason that flickers between samples;
-      # with for: 5m it means throttled most of the last ~10 minutes.
+      # with for: 5m it means throttled most of the last ~10 minutes. The session
+      # is vrcompositor: Steam runs vrserver alone on every launch to probe for VR.
       - alert: SolarGpuThrottling
         expr: |
           avg_over_time(nvidia_gpu_clock_event_reason{host="solar", reason=~"sw_thermal_slowdown|hw_thermal_slowdown|hw_slowdown|hw_power_brake_slowdown"}[5m]) > 0.5
-          and on(host) homelab_solar_process_running{host="solar", process="vrserver"} == 1
+          and on(host) homelab_solar_process_running{host="solar", process="vrcompositor"} == 1
         for: 5m
         labels:
           severity: warning
