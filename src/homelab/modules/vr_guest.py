@@ -62,7 +62,7 @@ VECTOR_FILES = (
     (vector_host.WRAPPER_NAME, vector_host.WRAPPER_PATH, "755", "vector_wrapper"),
 )
 # Steam's and SteamVR's logs Vector ships beside the journal, under the desktop home:
-# the ones the vr skill debugs from. The unit's CAP_DAC_READ_SEARCH reads them.
+# the ones the steam skill debugs from. The unit's CAP_DAC_READ_SEARCH reads them.
 STEAM_LOG_DIR = ".local/share/Steam/logs"
 STEAM_LOGS = (
     "vrserver.txt", "vrcompositor.txt", "vrcompositor-linux.txt",
@@ -144,6 +144,8 @@ ETC_FILES = (
 HOME_FILES = (
     (".local/bin/psvr2-steamvr", "755"),
     (".local/bin/psvr2-audio", "755"),
+    # The desktop session's env for commands run over SSH (kscreen-doctor, Steam).
+    (".local/bin/solar-session", "755"),
     (".config/systemd/user/psvr2-steamvr.service", "644"),
     # What goxlr-utility's own "autostart" toggle writes, so the UI shows it on.
     (".config/autostart/goxlr-daemon.desktop", "644"),

@@ -50,6 +50,7 @@ MANIFEST_IDS = [
     "/etc/systemd/system/vector.service",
     "home/.local/bin/psvr2-steamvr",
     "home/.local/bin/psvr2-audio",
+    "home/.local/bin/solar-session",
     "home/.config/systemd/user/psvr2-steamvr.service",
     "home/.config/autostart/goxlr-daemon.desktop",
     "home/.config/autostart/steam.desktop",

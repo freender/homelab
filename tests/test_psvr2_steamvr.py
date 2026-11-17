@@ -18,24 +18,34 @@ STEAMVR = ("vrmonitor", "vrdashboard", "vrwebhelper", "vrcompositor", "vrserver"
 
 STUBS = {
     "pgrep": r"""
-pat= list=
+pat= list= full=
 while (( $# )); do
-    case "$1" in -x) pat=$2; shift ;; -l) list=1 ;; -u) shift ;; esac
+    case "$1" in -x) pat=$2; shift ;; -f) full=1 ;; -l) list=1 ;; -u) shift ;; *) pat=$1 ;; esac
     shift
 done
 rc=1
 while read -r p; do
-    [[ -n "$p" && "$p" =~ ^($pat)$ ]] || continue
+    if [[ -n "$full" ]]; then
+        [[ -n "$p" && "$p" == *"$pat"* ]] || continue
+    else
+        [[ -n "$p" && "$p" =~ ^($pat)$ ]] || continue
+    fi
     rc=0
     [[ -n "$list" ]] && echo "1 $p"
 done < "$FAKE/procs"
 exit "$rc"
 """,
     "pkill": r"""
-sig=
-for a in "$@"; do case "$a" in -TERM|-KILL) sig=$a ;; esac; done
+sig= name=
+for a in "$@"; do case "$a" in -TERM|-KILL) sig=$a ;; -*|[0-9]*) ;; *) name=$a ;; esac; done
+if [[ "$name" == steam* ]]; then
+    echo "pkill $sig $name" >> "$FAKE/log"
+    [[ "$name" == steam && "$(cat "$FAKE/steam_dies_on" 2>/dev/null)" == "${sig#-}" ]] \
+        && sed -i '/^steam$/d' "$FAKE/procs"
+    exit 0
+fi
 echo "pkill $sig" >> "$FAKE/log"
-[[ "$(cat "$FAKE/dies_on")" == "${sig#-}" ]] && : > "$FAKE/procs"
+[[ "$(cat "$FAKE/dies_on")" == "${sig#-}" ]] && sed -i '/^vr/d' "$FAKE/procs"
 exit 0
 """,
     "systemctl": r"""
@@ -63,12 +73,16 @@ fi
     "timeout": 'shift; exec "$@"',
     "kscreen-doctor": 'echo "kscreen-doctor $*" >> "$FAKE/log"',
     "systemd-run": 'echo "systemd-run $*" >> "$FAKE/log"',
-    "steam": 'echo "steam $*" >> "$FAKE/log"',
+    "steam": r"""
+echo "steam $*" >> "$FAKE/log"
+[[ "$*" == -shutdown && ! -e "$FAKE/steam_ignores_shutdown" ]] && sed -i '/^steam$/d' "$FAKE/procs"
+exit 0
+""",
 }
 
 VRMONITOR = r"""#!/bin/bash
 echo "vrmonitor.sh $*" >> "$FAKE/log"
-[[ "$(cat "$FAKE/dies_on")" == quit ]] && : > "$FAKE/procs"
+[[ "$(cat "$FAKE/dies_on")" == quit ]] && sed -i "/^vr/d" "$FAKE/procs"
 exit 0
 """
 
@@ -395,3 +409,130 @@ def test_start_after_a_quit_is_not_held_by_the_cooldown(solar: Solar) -> None:
 
     assert "starting SteamVR" in result.stdout
     assert any("steam://rungameid/250820" in line for line in solar.log)
+
+
+# Logs "edit <how many Steam processes were running>", then exits with its argument.
+EDIT = ("bash", "-c",
+        'echo "edit $(grep -c "^steam$" "$FAKE/procs")" >> "$FAKE/log"; exit "${1:-0}"', "_")
+
+
+def launches(solar: Solar) -> list[str]:
+    return [line for line in solar.log if line.startswith("systemd-run")]
+
+
+def test_steam_edit_runs_the_command_with_steam_quit_then_relaunches_it(solar: Solar) -> None:
+    solar.procs("steam")
+
+    result = solar.run("steam-edit", "--", *EDIT)
+
+    assert result.returncode == 0, result.stderr
+    assert solar.log.index("steam -shutdown") < solar.log.index("edit 0")
+    assert launches(solar) == ["systemd-run --user --collect --no-block --quiet steam -pipewire"]
+    assert solar.log.index("edit 0") < solar.log.index(launches(solar)[0])
+
+
+def test_steam_edit_leaves_a_stopped_steam_stopped(solar: Solar) -> None:
+    solar.procs()
+
+    result = solar.run("steam-edit", "--", *EDIT)
+
+    assert result.returncode == 0
+    assert solar.log == ["edit 0"]
+
+
+def test_steam_edit_relaunches_steam_after_a_failed_command(solar: Solar) -> None:
+    solar.procs("steam")
+
+    result = solar.run("steam-edit", "--", *EDIT, "7")
+
+    assert result.returncode == 7
+    assert len(launches(solar)) == 1
+
+
+@pytest.mark.parametrize(("procs", "code", "message"), [
+    (("steam", "reaper SteamLaunch AppId=620 -- game"), 3, "a Steam game is running"),
+    (("steam", *STEAMVR), 4, "pass --quit-vr"),
+], ids=["game", "steamvr"])
+def test_steam_edit_refuses_while_in_use(solar: Solar, procs: tuple[str, ...], code: int,
+                                         message: str) -> None:
+    solar.procs(*procs)
+
+    result = solar.run("steam-edit", "--", *EDIT)
+
+    assert result.returncode == code
+    assert message in result.stderr
+    assert solar.log == []
+
+
+def test_steam_edit_quits_steamvr_and_brings_it_back_with_the_headset_on(solar: Solar) -> None:
+    solar.procs("steam", *STEAMVR)
+    solar.headset(True)
+
+    result = solar.run("steam-edit", "--quit-vr", "--", *EDIT)
+
+    assert result.returncode == 0, result.stderr
+    order = [solar.log.index(step) for step in
+             ("vrmonitor.sh vrmonitor://quit", "steam -shutdown", "edit 0")]
+    assert order == sorted(order)
+    assert launches(solar) == [
+        "systemd-run --user --collect --no-block --quiet steam -pipewire steam://rungameid/250820"]
+
+
+def test_steam_edit_launches_steamvr_held_off_by_the_lock(solar: Solar) -> None:
+    solar.procs("steam")
+    solar.headset(True)
+
+    result = solar.run("steam-edit", "--", *EDIT)
+
+    assert result.returncode == 0
+    assert "relaunching Steam with SteamVR" in result.stdout
+    assert "steam://rungameid/250820" in launches(solar)[0]
+
+
+def test_steam_edit_does_not_run_the_command_when_steam_survives(solar: Solar) -> None:
+    solar.procs("steam")
+    (solar.fake / "steam_ignores_shutdown").touch()
+    (solar.fake / "steam_dies_on").write_text("never", encoding="utf-8")
+
+    result = solar.run("steam-edit", "--", *EDIT)
+
+    assert result.returncode == 1
+    assert "Steam still running after SIGKILL" in result.stderr
+    assert not [line for line in solar.log if line.startswith("edit")]
+    assert {"pkill -TERM steam", "pkill -KILL steamwebhelper", "pkill -KILL steam"} <= set(
+        solar.log)
+
+
+def test_steam_edit_terminates_a_steam_that_ignores_shutdown(solar: Solar) -> None:
+    solar.procs("steam")
+    (solar.fake / "steam_ignores_shutdown").touch()
+    (solar.fake / "steam_dies_on").write_text("TERM", encoding="utf-8")
+
+    result = solar.run("steam-edit", "--", *EDIT)
+
+    assert result.returncode == 0
+    assert "Steam ignored -shutdown" in result.stdout
+    assert "edit 0" in solar.log
+
+
+def test_steam_edit_needs_a_command(solar: Solar) -> None:
+    result = solar.run("steam-edit", "--quit-vr", "--")
+
+    assert result.returncode == 2
+    assert "usage" in result.stderr
+
+
+def test_steam_restart_launches_steam_even_when_it_was_down(solar: Solar) -> None:
+    solar.procs()
+
+    result = solar.run("steam-restart")
+
+    assert result.returncode == 0
+    assert launches(solar) == ["systemd-run --user --collect --no-block --quiet steam -pipewire"]
+
+
+def test_steam_restart_refuses_with_steamvr_up(solar: Solar) -> None:
+    result = solar.run("steam-restart")
+
+    assert result.returncode == 4
+    assert launches(solar) == []

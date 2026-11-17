@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# Run a command in the desktop user's graphical session from SSH (solar):
+# `ssh solar .local/bin/solar-session kscreen-doctor -o`. An SSH login has no
+# Wayland or X display, so kscreen-doctor, spectacle and `steam -shutdown` find
+# no session without this.
+set -euo pipefail
+
+(( $# )) || { echo "usage: $0 CMD [ARG...]" >&2; exit 2; }
+
+export XDG_RUNTIME_DIR="/run/user/$UID"
+export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
+export DISPLAY="${DISPLAY:-:0}"
+export PATH="$HOME/.local/bin:$PATH"
+
+WAYLAND_DISPLAY=wayland-1
+for socket in "$XDG_RUNTIME_DIR"/wayland-*; do
+    [[ -S "$socket" ]] || continue
+    WAYLAND_DISPLAY="${socket##*/}"
+    break
+done
+export WAYLAND_DISPLAY
+
+exec "$@"

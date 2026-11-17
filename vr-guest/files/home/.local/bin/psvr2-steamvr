@@ -13,6 +13,13 @@
 # A headset back within the grace has its start refused by systemd, so `stop`
 # starts the unit again itself. `start` relaunches a SteamVR left without its
 # compositor rather than adopting it.
+#
+# `steam-edit [--quit-vr] -- CMD...` runs CMD with Steam quit, for edits to files
+# Steam rewrites on exit (shortcuts.vdf, config.vdf), then relaunches what was
+# running. `steam-restart [--quit-vr]` quits and relaunches Steam. Both refuse while
+# a Steam game runs (exit 3), and while SteamVR runs unless --quit-vr (exit 4). They
+# hold the lock, so a headset-on in the meantime cannot launch Steam mid-edit; its
+# SteamVR launch is made once Steam comes back.
 set -euo pipefail
 
 STEAMVR_APPID=250820
@@ -25,6 +32,7 @@ QUIT_TIMEOUT=30
 TERM_TIMEOUT=10
 KILL_TIMEOUT=5
 STEAM_EXIT_TIMEOUT=30
+STEAM_TERM_TIMEOUT=15
 # Steam starts its webhelper within seconds of the client. A webhelper this much
 # younger than its client was respawned after a crash, and a respawned webhelper
 # never shows the launch prompt, so the SteamVR launch hangs on it.
@@ -91,42 +99,127 @@ steam_ages() {
     echo "$ppid ${client_age// /} $helper_age"
 }
 
-# Sets steam_client to the Steam client's pid when its webhelper was respawned.
+steam_running() {
+    pgrep -u "$UID" -x steam >/dev/null
+}
+
+game_running() {
+    pgrep -u "$UID" -f "SteamLaunch AppId=" >/dev/null
+}
+
 webhelper_respawned() {
     local client_age helper_age
-    read -r steam_client client_age helper_age < <(steam_ages) || return 1
+    read -r _ client_age helper_age < <(steam_ages) || return 1
     (( client_age - helper_age > WEBHELPER_RESPAWN_AGE )) || return 1
     echo "steamwebhelper is ${helper_age}s old but Steam ${client_age}s: respawned, restarting Steam"
 }
 
-# Sets steam_client when the running Steam is not logged in. A Steam started with
-# no usable screen sits at a login window it never shows, and its connection log
-# ends on a Logged Off state with no account ([U:1:0]); a restart logs it in.
+# A Steam started with no usable screen sits at a login window it never shows, and
+# its connection log ends on a Logged Off state with no account ([U:1:0]); a
+# restart logs it in.
 steam_logged_off() {
     local last
-    read -r steam_client _ _ < <(steam_ages) || return 1
+    steam_ages >/dev/null || return 1
     last=$(grep -E '^\[[^]]+\] \[[^]]+\] \[U:' "$CONNECTION_LOG" 2>/dev/null | tail -n1) || return 1
     [[ "$last" == *"] [Logged Off, "*"] [U:1:0] "* ]] || return 1
     echo "Steam is not logged in, restarting it"
 }
 
+# Returns non-zero only if Steam survives SIGKILL.
 shutdown_steam() {
     local i
     timeout 10 steam -shutdown >/dev/null 2>&1 9>&- || true
     for (( i = 0; i < STEAM_EXIT_TIMEOUT; i++ )); do
-        kill -0 "$steam_client" 2>/dev/null || return 0
+        steam_running || return 0
         sleep 1
     done
     # A client blocked on the hidden launch prompt ignores -shutdown too.
     echo "Steam ignored -shutdown for ${STEAM_EXIT_TIMEOUT}s, terminating it"
-    kill -TERM "$steam_client" 2>/dev/null || true
-    for (( i = 0; i < 15; i++ )); do
-        kill -0 "$steam_client" 2>/dev/null || break
+    pkill -u "$UID" -TERM -x steam || true
+    for (( i = 0; i < STEAM_TERM_TIMEOUT; i++ )); do
+        steam_running || return 0
         sleep 1
     done
     pkill -u "$UID" -KILL -x steamwebhelper || true
     pkill -u "$UID" -KILL -x steam || true
     sleep 2
+    if steam_running; then
+        echo "Steam still running after SIGKILL" >&2
+        return 1
+    fi
+}
+
+# Quits Steam, and SteamVR when $1 is 1, recording in steam_was_running whether
+# Steam was up. 3: a game is running; 4: SteamVR is running and $1 is 0.
+steam_quiesce() {
+    steam_was_running=0
+    if game_running; then
+        echo "a Steam game is running, leaving Steam alone" >&2
+        return 3
+    fi
+    if steamvr_running; then
+        if (( ! $1 )); then
+            echo "SteamVR is running (someone may be in the headset): pass --quit-vr" >&2
+            return 4
+        fi
+        quit || return 1
+    fi
+    steam_running || return 0
+    steam_was_running=1
+    echo "quitting Steam"
+    shutdown_steam
+}
+
+# Relaunches Steam if it was running, with SteamVR if the headset is on and
+# SteamVR is not: the one quit for the edit, or a headset-on held off by the lock.
+steam_resume() {
+    local args=()
+    if headset_present && ! steamvr_running; then
+        rm -f "$state.last"
+        args=("steam://rungameid/$STEAMVR_APPID")
+    fi
+    if (( steam_was_running )) || (( ${#args[@]} )); then
+        wake_screen
+        sleep "$SETTLE"
+        echo "relaunching Steam${args:+ with SteamVR}"
+        launch_steam "${args[@]}"
+    fi
+}
+
+steam_edit() {
+    local quit_vr=0 rc=0
+    if [[ "${1:-}" == --quit-vr ]]; then quit_vr=1; shift; fi
+    [[ "${1:-}" == -- ]] && shift
+    (( $# )) || usage
+    lock -w 180
+    steam_quiesce "$quit_vr" || rc=$?
+    if (( rc )); then
+        # A failed quit after SteamVR went down: bring back what can be.
+        if (( rc == 1 )) && ! steam_running; then steam_resume; fi
+        return "$rc"
+    fi
+    "$@" 9>&- || rc=$?
+    steam_resume
+    return "$rc"
+}
+
+steam_restart() {
+    local quit_vr=0
+    [[ "${1:-}" == --quit-vr ]] && quit_vr=1
+    local rc=0
+    lock -w 180
+    steam_quiesce "$quit_vr" || rc=$?
+    (( rc == 0 || rc == 1 )) || return "$rc"
+    if (( rc == 0 )) || ! steam_running; then
+        steam_was_running=1
+        steam_resume
+    fi
+    return "$rc"
+}
+
+usage() {
+    echo "usage: $0 [start|stop|quit|steam-restart [--quit-vr]|steam-edit [--quit-vr] -- CMD...]" >&2
+    exit 2
 }
 
 wait_steamvr_exit() {
@@ -176,7 +269,7 @@ start() {
 
     wake_screen
     if webhelper_respawned || steam_logged_off; then
-        shutdown_steam
+        shutdown_steam || true
     fi
     sleep "$SETTLE"
     echo "starting SteamVR"
@@ -225,7 +318,7 @@ restart_crashed_steam() {
     sleep "$WEBHELPER_CRASH_WAIT"
     headset_present && return 0
     if webhelper_respawned; then
-        shutdown_steam
+        shutdown_steam || true
         wake_screen
         launch_steam
     fi
@@ -284,5 +377,7 @@ case "${1:-start}" in
     start) start ;;
     stop) stop ;;
     quit) lock -w 180; quit ;;
-    *) echo "usage: $0 [start|stop|quit]" >&2; exit 2 ;;
+    steam-edit) shift; steam_edit "$@" ;;
+    steam-restart) shift; steam_restart "$@" ;;
+    *) usage ;;
 esac
