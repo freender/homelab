@@ -17,7 +17,8 @@
 # `steam-edit [--quit-vr] -- CMD...` runs CMD with Steam quit, for edits to files
 # Steam rewrites on exit (shortcuts.vdf, config.vdf), then relaunches what was
 # running. `steam-restart [--quit-vr]` quits and relaunches Steam. Both refuse while
-# a Steam game runs (exit 3), and while SteamVR runs unless --quit-vr (exit 4). They
+# a Steam game runs (exit 3), and while SteamVR runs unless --quit-vr (exit 4), after
+# first waiting out the SteamVR probe Steam runs on every launch. They
 # hold the lock, so a headset-on in the meantime cannot launch Steam mid-edit; its
 # SteamVR launch is made once Steam comes back.
 set -euo pipefail
@@ -48,6 +49,9 @@ REQUEUE_DELAY=3
 COMPOSITOR_START_AGE=30
 # The headset's sound card, the same device the service is bound to.
 HEADSET_UNIT=dev-psvr2.device
+# Every Steam launch probes for VR hardware by running vrserver for up to ~2.5 min,
+# with no headset and no compositor; steam-edit waits this long for it to exit.
+PROBE_WAIT=180
 STEAMVR_PROCS=(vrmonitor vrdashboard vrwebhelper vrcompositor vrserver)
 
 state="${XDG_RUNTIME_DIR:-/tmp}/psvr2-steamvr"
@@ -59,6 +63,11 @@ steamvr_running() {
 
 headset_present() {
     systemctl --user is-active --quiet "$HEADSET_UNIT"
+}
+
+# Nobody can be in a session with the headset off and no compositor drawing it.
+steamvr_probe() {
+    ! headset_present && ! pgrep -u "$UID" -x vrcompositor >/dev/null
 }
 
 shutting_down() {
@@ -156,6 +165,10 @@ steam_quiesce() {
     if game_running; then
         echo "a Steam game is running, leaving Steam alone" >&2
         return 3
+    fi
+    if (( ! $1 )) && steamvr_running && steamvr_probe; then
+        echo "waiting up to ${PROBE_WAIT}s for Steam's SteamVR probe to exit"
+        wait_steamvr_exit "$PROBE_WAIT" || true
     fi
     if steamvr_running; then
         if (( ! $1 )); then

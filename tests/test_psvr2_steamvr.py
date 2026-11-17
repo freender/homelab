@@ -68,6 +68,11 @@ if [[ -e "$FAKE/headset_after" ]]; then
     echo "$left" > "$FAKE/headset_after"
     (( left > 0 )) || touch "$FAKE/headset"
 fi
+if [[ -e "$FAKE/vr_exits_after" ]]; then
+    left=$(( $(cat "$FAKE/vr_exits_after") - 1 ))
+    echo "$left" > "$FAKE/vr_exits_after"
+    (( left > 0 )) || sed -i '/^vr/d' "$FAKE/procs"
+fi
 """,
     "flock": "exit 0",
     "timeout": 'shift; exec "$@"',
@@ -461,6 +466,40 @@ def test_steam_edit_refuses_while_in_use(solar: Solar, procs: tuple[str, ...], c
 
     assert result.returncode == code
     assert message in result.stderr
+    assert solar.log == []
+
+
+def test_steam_edit_waits_out_steams_steamvr_probe(solar: Solar) -> None:
+    solar.procs("steam", "vrserver")
+    (solar.fake / "vr_exits_after").write_text("3", encoding="utf-8")
+
+    result = solar.run("steam-edit", "--", *EDIT)
+
+    assert result.returncode == 0, result.stderr
+    assert "waiting up to 180s for Steam's SteamVR probe" in result.stdout
+    assert solar.log[:3] == ["sleep 1"] * 3
+    assert "edit 0" in solar.log
+    assert not [line for line in solar.log if line.startswith(("pkill", "vrmonitor.sh"))]
+
+
+def test_steam_edit_refuses_a_probe_that_outlasts_the_wait(solar: Solar) -> None:
+    solar.procs("steam", "vrserver")
+
+    result = solar.run("steam-edit", "--", *EDIT)
+
+    assert result.returncode == 4
+    assert "pass --quit-vr" in result.stderr
+    assert solar.log == ["sleep 1"] * 180
+
+
+def test_steam_edit_does_not_wait_on_a_session_with_the_headset_on(solar: Solar) -> None:
+    solar.procs("steam", "vrserver")
+    solar.headset(True)
+
+    result = solar.run("steam-edit", "--", *EDIT)
+
+    assert result.returncode == 4
+    assert "probe" not in result.stdout
     assert solar.log == []
 
 
