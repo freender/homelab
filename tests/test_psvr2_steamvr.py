@@ -51,7 +51,14 @@ case "$*" in
     *) cat "$FAKE/ps_client" 2>/dev/null || exit 1 ;;
 esac
 """,
-    "sleep": 'echo "sleep $*" >> "$FAKE/log"',
+    "sleep": r"""
+echo "sleep $*" >> "$FAKE/log"
+if [[ -e "$FAKE/headset_after" ]]; then
+    left=$(( $(cat "$FAKE/headset_after") - 1 ))
+    echo "$left" > "$FAKE/headset_after"
+    (( left > 0 )) || touch "$FAKE/headset"
+fi
+""",
     "flock": "exit 0",
     "timeout": 'shift; exec "$@"',
     "kscreen-doctor": 'echo "kscreen-doctor $*" >> "$FAKE/log"',
@@ -188,7 +195,7 @@ def test_quit_with_steamvr_down_does_nothing(solar: Solar) -> None:
 
 
 REQUEUE = ("systemd-run --user --collect --no-block --quiet --on-active=3 "
-           "systemctl --user start psvr2-steamvr.service")
+           "--timer-property=AccuracySec=100ms systemctl --user start psvr2-steamvr.service")
 
 
 def test_stop_leaves_steamvr_when_the_headset_came_back(solar: Solar) -> None:
@@ -198,7 +205,7 @@ def test_stop_leaves_steamvr_when_the_headset_came_back(solar: Solar) -> None:
 
     assert result.returncode == 0
     assert "leaving SteamVR running" in result.stdout
-    assert solar.log == ["sleep 10", REQUEUE]
+    assert solar.log == [REQUEUE]
 
 
 def test_stop_restarts_steamvr_with_a_crashed_overlay(solar: Solar) -> None:
@@ -222,7 +229,7 @@ def test_stop_ignores_a_stray_overlay_when_steamvr_is_down(solar: Solar) -> None
 
     assert result.returncode == 0
     assert "SteamVR not running, leaving it to start" in result.stdout
-    assert solar.log == ["sleep 10", REQUEUE]
+    assert solar.log == [REQUEUE]
 
 
 def test_stop_does_not_requeue_once_the_headset_is_gone(solar: Solar) -> None:
@@ -230,6 +237,18 @@ def test_stop_does_not_requeue_once_the_headset_is_gone(solar: Solar) -> None:
 
     assert result.returncode == 0
     assert REQUEUE not in solar.log
+    assert solar.log[:10] == ["sleep 1"] * 10
+    assert "SteamVR quit" in result.stdout
+
+
+def test_stop_ends_the_grace_when_the_headset_returns(solar: Solar) -> None:
+    (solar.fake / "headset_after").write_text("2", encoding="utf-8")
+
+    result = solar.run("stop")
+
+    assert result.returncode == 0
+    assert "leaving SteamVR running" in result.stdout
+    assert solar.log == ["sleep 1", "sleep 1", REQUEUE]
 
 
 def test_stop_does_not_requeue_after_a_failed_quit(solar: Solar) -> None:
@@ -251,7 +270,7 @@ def test_stop_skips_the_grace_during_shutdown(solar: Solar) -> None:
 
     assert result.returncode == 0
     assert "system shutting down" in result.stdout
-    assert "sleep 10" not in solar.log
+    assert "sleep 1" not in solar.log
     assert "SteamVR quit" in result.stdout
 
 

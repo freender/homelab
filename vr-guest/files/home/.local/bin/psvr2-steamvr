@@ -235,8 +235,19 @@ restart_crashed_steam() {
 # and the next headset-off would quit nothing. Start it once this stop is done.
 requeue_start() {
     echo "starting $UNIT again in ${REQUEUE_DELAY}s"
+    # A user timer's default AccuracySec=1min stretches the delay to ~12s.
     systemd-run --user --collect --no-block --quiet --on-active="$REQUEUE_DELAY" \
-        systemctl --user start "$UNIT" 9>&-
+        --timer-property=AccuracySec=100ms systemctl --user start "$UNIT" 9>&-
+}
+
+# Waits up to GRACE seconds; succeeds as soon as the headset is back.
+headset_returns() {
+    local i
+    for (( i = 0; i < GRACE; i++ )); do
+        headset_present && return 0
+        sleep 1
+    done
+    headset_present
 }
 
 stop() {
@@ -246,8 +257,7 @@ stop() {
         quit
         return
     fi
-    sleep "$GRACE"
-    if headset_present; then
+    if headset_returns; then
         if ! steamvr_running; then
             echo "headset back within ${GRACE}s and SteamVR not running, leaving it to start"
         # vrwebhelper draws the SteamVR dashboard and overlay and is not respawned
