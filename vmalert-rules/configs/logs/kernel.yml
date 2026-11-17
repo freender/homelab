@@ -8,14 +8,16 @@ groups:
     interval: 5m
     rules:
       # The kernel OOM killer fired on a host or inside a CT/VM cgroup. Metrics only
-      # show memory pressure; the kill itself exists only in the journal.
+      # show memory pressure; the kill itself exists only in the journal. `host` is
+      # the kernel that logged the kill (a VM's own kernel for in-guest OOMs), and
+      # `victim` the killed process, so an in-guest kill doesn't read as the guest dying.
       - alert: KernelOomKill
-        expr: '{_HOSTNAME=~".+"} _TRANSPORT:=kernel "Killed process" | stats by (_HOSTNAME) count() as kills | rename _HOSTNAME as host'
+        expr: '{_HOSTNAME=~".+"} _TRANSPORT:=kernel "Killed process" | extract "Killed process <pid> (<victim>)" | stats by (_HOSTNAME, victim) count() as kills | rename _HOSTNAME as host'
         labels:
           severity: warning
         annotations:
-          summary: "OOM killer fired {{ $value }}x on {{ $labels.host }}"
-          description: "The kernel killed {{ $value }} process(es) on {{ $labels.host }} in the last 5m. Find them with `{_HOSTNAME=\"{{ $labels.host }}\"} \"Killed process\"` in VictoriaLogs; the oom_memcg names the CT/VM."
+          summary: "OOM killer killed {{ $labels.victim }} on {{ $labels.host }} ({{ $value }}x)"
+          description: "The kernel on {{ $labels.host }} ran out of memory and killed `{{ $labels.victim }}` {{ $value }}x in the last 5m; {{ $labels.host }} itself kept running. Find it with `{_HOSTNAME=\"{{ $labels.host }}\"} \"Killed process\"` in VictoriaLogs. On a PVE node, the `oom-kill:` line's task_memcg names the CT/VM the victim ran in."
 
       # Disk/controller errors the kernel logs before SMART or ZFS counters move.
       - alert: KernelIoErrors
