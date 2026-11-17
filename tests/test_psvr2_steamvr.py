@@ -47,6 +47,7 @@ esac
     "ps": r"""
 case "$*" in
     *args=*) cat "$FAKE/ps_helper" 2>/dev/null ;;
+    *comm=*) cat "$FAKE/ps_comm" 2>/dev/null ;;
     *) cat "$FAKE/ps_client" 2>/dev/null || exit 1 ;;
 esac
 """,
@@ -186,6 +187,10 @@ def test_quit_with_steamvr_down_does_nothing(solar: Solar) -> None:
     assert solar.log == []
 
 
+REQUEUE = ("systemd-run --user --collect --no-block --quiet --on-active=3 "
+           "systemctl --user start psvr2-steamvr.service")
+
+
 def test_stop_leaves_steamvr_when_the_headset_came_back(solar: Solar) -> None:
     solar.headset(True)
 
@@ -193,7 +198,7 @@ def test_stop_leaves_steamvr_when_the_headset_came_back(solar: Solar) -> None:
 
     assert result.returncode == 0
     assert "leaving SteamVR running" in result.stdout
-    assert solar.log == ["sleep 10"]
+    assert solar.log == ["sleep 10", REQUEUE]
 
 
 def test_stop_restarts_steamvr_with_a_crashed_overlay(solar: Solar) -> None:
@@ -205,7 +210,8 @@ def test_stop_restarts_steamvr_with_a_crashed_overlay(solar: Solar) -> None:
     assert result.returncode == 0
     assert "overlay has crashed" in result.stdout
     assert "SteamVR quit" in result.stdout
-    assert not [line for line in solar.log if line.startswith(("steam", "systemd-run"))]
+    assert not [line for line in solar.log if line.startswith("steam")]
+    assert solar.log.index("vrmonitor.sh vrmonitor://quit") < solar.log.index(REQUEUE)
 
 
 def test_stop_ignores_a_stray_overlay_when_steamvr_is_down(solar: Solar) -> None:
@@ -216,6 +222,25 @@ def test_stop_ignores_a_stray_overlay_when_steamvr_is_down(solar: Solar) -> None
 
     assert result.returncode == 0
     assert "SteamVR not running, leaving it to start" in result.stdout
+    assert solar.log == ["sleep 10", REQUEUE]
+
+
+def test_stop_does_not_requeue_once_the_headset_is_gone(solar: Solar) -> None:
+    result = solar.run("stop")
+
+    assert result.returncode == 0
+    assert REQUEUE not in solar.log
+
+
+def test_stop_does_not_requeue_after_a_failed_quit(solar: Solar) -> None:
+    solar.headset(True)
+    solar.procs("vrmonitor", "vrserver")
+    solar.dies_on("never")
+
+    result = solar.run("stop")
+
+    assert result.returncode == 1
+    assert REQUEUE not in solar.log
 
 
 def test_stop_skips_the_grace_during_shutdown(solar: Solar) -> None:
@@ -313,6 +338,34 @@ def test_start_without_a_logged_off_steam_just_launches(solar: Solar, client: bo
     assert result.returncode == 0
     assert "steam -shutdown" not in solar.log
     assert any("steam://rungameid/250820" in line for line in solar.log)
+
+
+def test_start_relaunches_steamvr_whose_compositor_died(solar: Solar) -> None:
+    solar.procs("vrmonitor", "vrserver")
+    (solar.fake / "ps_comm").write_text("  840 vrserver\n", encoding="utf-8")
+    (solar.runtime / "psvr2-steamvr.last").write_text(str(10**10), encoding="utf-8")
+
+    result = solar.run("start")
+
+    assert result.returncode == 0
+    assert "running without its compositor" in result.stdout
+    assert solar.log.index("vrmonitor.sh vrmonitor://quit") < next(
+        i for i, line in enumerate(solar.log) if "steam://rungameid/250820" in line)
+
+
+@pytest.mark.parametrize(("procs", "age"), [
+    (("vrmonitor", "vrcompositor", "vrserver"), "840"),
+    (("vrmonitor", "vrserver"), "30"),
+], ids=["compositor-up", "still-starting"])
+def test_start_adopts_a_steamvr_it_should_not_restart(solar: Solar, procs: tuple[str, ...],
+                                                     age: str) -> None:
+    solar.procs(*procs)
+    (solar.fake / "ps_comm").write_text(f"{age} vrserver\n", encoding="utf-8")
+
+    result = solar.run("start")
+
+    assert (result.returncode, result.stdout) == (0, "SteamVR already running\n")
+    assert solar.log == []
 
 
 def test_start_after_a_quit_is_not_held_by_the_cooldown(solar: Solar) -> None:

@@ -10,6 +10,9 @@
 # Quitting asks vrmonitor first, then SIGTERM, then SIGKILL, and fails if SteamVR
 # survives all three. After a headset-off quit it restarts Steam if the quit
 # crashed its webhelper. During system shutdown it quits at once, with no grace.
+# A headset back within the grace has its start refused by systemd, so `stop`
+# starts the unit again itself. `start` relaunches a SteamVR left without its
+# compositor rather than adopting it.
 set -euo pipefail
 
 STEAMVR_APPID=250820
@@ -29,6 +32,12 @@ WEBHELPER_RESPAWN_AGE=60
 # Quitting SteamVR aborts steamwebhelper about 2s later (ValveSoftware/SteamVR-for-Linux#964).
 WEBHELPER_CRASH_WAIT=5
 CONNECTION_LOG="$HOME/.local/share/Steam/logs/connection_log.txt"
+UNIT=psvr2-steamvr.service
+# Long enough for the stop job that queues it to have finished.
+REQUEUE_DELAY=3
+# vrserver starts a few seconds before vrcompositor; only a vrserver older than
+# this without one is a SteamVR whose compositor died.
+COMPOSITOR_START_AGE=30
 # The headset's sound card, the same device the service is bound to.
 HEADSET_UNIT=dev-psvr2.device
 STEAMVR_PROCS=(vrmonitor vrdashboard vrwebhelper vrcompositor vrserver)
@@ -135,10 +144,23 @@ signal_steamvr() {
     done
 }
 
+# A headset-off with nothing quitting SteamVR (the unit already stopped) leaves
+# vrserver and vrmonitor running after vrcompositor aborts on the lost display;
+# adopting that session leaves the headset blank.
+compositor_dead() {
+    local age
+    pgrep -u "$UID" -x vrcompositor >/dev/null && return 1
+    age=$(ps -u "$UID" -o etimes=,comm= | awk '$2 == "vrserver" { print $1; exit }')
+    [[ -n "$age" ]] && (( age > COMPOSITOR_START_AGE ))
+}
+
 start() {
     lock -n || exit 0
 
-    if steamvr_running; then
+    if compositor_dead; then
+        echo "SteamVR running without its compositor, restarting it"
+        quit
+    elif steamvr_running; then
         echo "SteamVR already running"
         exit 0
     fi
@@ -208,6 +230,15 @@ restart_crashed_steam() {
     fi
 }
 
+# The re-plug's start arrives while this stop job runs, and systemd refuses it
+# ("transaction is destructive"): the unit would end stopped with the headset on,
+# and the next headset-off would quit nothing. Start it once this stop is done.
+requeue_start() {
+    echo "starting $UNIT again in ${REQUEUE_DELAY}s"
+    systemd-run --user --collect --no-block --quiet --on-active="$REQUEUE_DELAY" \
+        systemctl --user start "$UNIT" 9>&-
+}
+
 stop() {
     lock -w 60
     if shutting_down; then
@@ -219,16 +250,15 @@ stop() {
     if headset_present; then
         if ! steamvr_running; then
             echo "headset back within ${GRACE}s and SteamVR not running, leaving it to start"
-            return 0
-        fi
         # vrwebhelper draws the SteamVR dashboard and overlay and is not respawned
-        # after a crash; quitting lets the start queued by the re-plug relaunch it.
-        if pgrep -u "$UID" -x vrwebhelper >/dev/null; then
+        # after a crash; quitting lets the requeued start relaunch it.
+        elif pgrep -u "$UID" -x vrwebhelper >/dev/null; then
             echo "headset back within ${GRACE}s, leaving SteamVR running"
-            return 0
+        else
+            echo "headset back within ${GRACE}s but the SteamVR overlay has crashed, restarting SteamVR"
+            quit
         fi
-        echo "headset back within ${GRACE}s but the SteamVR overlay has crashed, restarting SteamVR"
-        quit
+        requeue_start
         return
     fi
     if ! steamvr_running; then
