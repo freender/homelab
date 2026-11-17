@@ -52,6 +52,7 @@ MANIFEST_IDS = [
     "home/.local/bin/psvr2-audio",
     "home/.config/systemd/user/psvr2-steamvr.service",
     "home/.config/autostart/goxlr-daemon.desktop",
+    "home/.config/autostart/steam.desktop",
     "home/.local/share/applications/goxlr-utility.desktop",
     "solar_metrics_script",
     "solar_gpu_metrics_script",

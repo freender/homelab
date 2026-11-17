@@ -76,9 +76,10 @@ wake_screen() {
 }
 
 # Its own transient unit: a `steam` that becomes the Steam client must outlive
-# this oneshot's cgroup.
+# this oneshot's cgroup. -pipewire matches the autostart entry: on Wayland, Remote
+# Play (Steam Link) can capture the desktop only through PipeWire.
 launch_steam() {
-    systemd-run --user --collect --no-block --quiet "$(launcher)" "$@" 9>&-
+    systemd-run --user --collect --no-block --quiet "$(launcher)" -pipewire "$@" 9>&-
 }
 
 # Prints "<client pid> <client age> <webhelper age>" for the running Steam client.

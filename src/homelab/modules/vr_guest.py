@@ -147,6 +147,8 @@ HOME_FILES = (
     (".config/systemd/user/psvr2-steamvr.service", "644"),
     # What goxlr-utility's own "autostart" toggle writes, so the UI shows it on.
     (".config/autostart/goxlr-daemon.desktop", "644"),
+    # -pipewire lets Remote Play (Steam Link) capture the Wayland desktop.
+    (".config/autostart/steam.desktop", "644"),
     (".local/share/applications/goxlr-utility.desktop", "644"),
 )
 # (repo name under files/libexec/, check id or None when the check does not compare it).
