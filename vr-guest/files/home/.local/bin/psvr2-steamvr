@@ -34,6 +34,8 @@ TERM_TIMEOUT=10
 KILL_TIMEOUT=5
 STEAM_EXIT_TIMEOUT=30
 STEAM_TERM_TIMEOUT=15
+# A just-launched Steam brings its webhelper up within ~10s, longer when it updates.
+STEAM_READY_TIMEOUT=90
 # Steam starts its webhelper within seconds of the client. A webhelper this much
 # younger than its client was respawned after a crash, and a respawned webhelper
 # never shows the launch prompt, so the SteamVR launch hangs on it.
@@ -134,16 +136,35 @@ steam_logged_off() {
     echo "Steam is not logged in, restarting it"
 }
 
+# Steam takes -shutdown only once its client is up, which its webhelper marks.
+# Before that, `steam -shutdown` finds no Steam to ask and starts a second client,
+# which from an SSH login fails with an "Unable to open a connection to X" dialog.
+# Fails if Steam is still starting after STEAM_READY_TIMEOUT or has exited.
+wait_steam_ready() {
+    local i
+    for (( i = 0; i < STEAM_READY_TIMEOUT; i++ )); do
+        steam_running || return 1
+        steam_ages >/dev/null && return 0
+        sleep 1
+    done
+    steam_ages >/dev/null
+}
+
 # Returns non-zero only if Steam survives SIGKILL.
 shutdown_steam() {
     local i
-    timeout 10 steam -shutdown >/dev/null 2>&1 9>&- || true
-    for (( i = 0; i < STEAM_EXIT_TIMEOUT; i++ )); do
+    if wait_steam_ready; then
+        timeout 10 steam -shutdown >/dev/null 2>&1 9>&- || true
+        for (( i = 0; i < STEAM_EXIT_TIMEOUT; i++ )); do
+            steam_running || return 0
+            sleep 1
+        done
+        # A client blocked on the hidden launch prompt ignores -shutdown too.
+        echo "Steam ignored -shutdown for ${STEAM_EXIT_TIMEOUT}s, terminating it"
+    else
         steam_running || return 0
-        sleep 1
-    done
-    # A client blocked on the hidden launch prompt ignores -shutdown too.
-    echo "Steam ignored -shutdown for ${STEAM_EXIT_TIMEOUT}s, terminating it"
+        echo "Steam still starting after ${STEAM_READY_TIMEOUT}s, terminating it"
+    fi
     pkill -u "$UID" -TERM -x steam || true
     for (( i = 0; i < STEAM_TERM_TIMEOUT; i++ )); do
         steam_running || return 0

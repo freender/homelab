@@ -12,6 +12,13 @@ export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
 export DISPLAY="${DISPLAY:-:0}"
 export PATH="$HOME/.local/bin:$PATH"
 
+# Xwayland only admits clients holding its per-login cookie; its file name is
+# random, so take it from the session's user manager.
+if [[ -z "${XAUTHORITY:-}" ]]; then
+    XAUTHORITY=$(systemctl --user show-environment 2>/dev/null | sed -n 's/^XAUTHORITY=//p') || true
+    if [[ -n "$XAUTHORITY" ]]; then export XAUTHORITY; else unset XAUTHORITY; fi
+fi
+
 WAYLAND_DISPLAY=wayland-1
 for socket in "$XDG_RUNTIME_DIR"/wayland-*; do
     [[ -S "$socket" ]] || continue

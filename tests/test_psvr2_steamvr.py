@@ -68,6 +68,14 @@ if [[ -e "$FAKE/headset_after" ]]; then
     echo "$left" > "$FAKE/headset_after"
     (( left > 0 )) || touch "$FAKE/headset"
 fi
+if [[ -e "$FAKE/helper_after" ]]; then
+    left=$(( $(cat "$FAKE/helper_after") - 1 ))
+    echo "$left" > "$FAKE/helper_after"
+    if (( left <= 0 )); then
+        echo "999999 5 /x/steamwebhelper" > "$FAKE/ps_helper"
+        echo 10 > "$FAKE/ps_client"
+    fi
+fi
 if [[ -e "$FAKE/vr_exits_after" ]]; then
     left=$(( $(cat "$FAKE/vr_exits_after") - 1 ))
     echo "$left" > "$FAKE/vr_exits_after"
@@ -294,6 +302,7 @@ def test_stop_skips_the_grace_during_shutdown(solar: Solar) -> None:
 
 
 def test_stop_restarts_steam_whose_webhelper_crashed(solar: Solar) -> None:
+    solar.procs("steam", *STEAMVR)
     (solar.fake / "ps_helper").write_text("999999 3 /x/steamwebhelper\n", encoding="utf-8")
     (solar.fake / "ps_client").write_text("  4000\n", encoding="utf-8")
 
@@ -336,7 +345,7 @@ SIGNED_OUT = "[2026-11-15 15:07:53] [Logged Off, 0, 0] [U:1:51555675] Log sessio
 
 
 def test_start_restarts_a_steam_that_is_not_logged_in(solar: Solar) -> None:
-    solar.procs()
+    solar.procs("steam")
     solar.steam_client()
     restarted = "[2026-11-16 18:00:00] Client version: 1794536281"
     solar.connection_log(LOGGED_ON, "", restarted, LOGGED_OFF)
@@ -427,6 +436,7 @@ def launches(solar: Solar) -> list[str]:
 
 def test_steam_edit_runs_the_command_with_steam_quit_then_relaunches_it(solar: Solar) -> None:
     solar.procs("steam")
+    solar.steam_client()
 
     result = solar.run("steam-edit", "--", *EDIT)
 
@@ -447,6 +457,7 @@ def test_steam_edit_leaves_a_stopped_steam_stopped(solar: Solar) -> None:
 
 def test_steam_edit_relaunches_steam_after_a_failed_command(solar: Solar) -> None:
     solar.procs("steam")
+    solar.steam_client()
 
     result = solar.run("steam-edit", "--", *EDIT, "7")
 
@@ -471,6 +482,7 @@ def test_steam_edit_refuses_while_in_use(solar: Solar, procs: tuple[str, ...], c
 
 def test_steam_edit_waits_out_steams_steamvr_probe(solar: Solar) -> None:
     solar.procs("steam", "vrserver")
+    solar.steam_client()
     (solar.fake / "vr_exits_after").write_text("3", encoding="utf-8")
 
     result = solar.run("steam-edit", "--", *EDIT)
@@ -505,6 +517,7 @@ def test_steam_edit_does_not_wait_on_a_session_with_the_headset_on(solar: Solar)
 
 def test_steam_edit_quits_steamvr_and_brings_it_back_with_the_headset_on(solar: Solar) -> None:
     solar.procs("steam", *STEAMVR)
+    solar.steam_client()
     solar.headset(True)
 
     result = solar.run("steam-edit", "--quit-vr", "--", *EDIT)
@@ -519,6 +532,7 @@ def test_steam_edit_quits_steamvr_and_brings_it_back_with_the_headset_on(solar: 
 
 def test_steam_edit_launches_steamvr_held_off_by_the_lock(solar: Solar) -> None:
     solar.procs("steam")
+    solar.steam_client()
     solar.headset(True)
 
     result = solar.run("steam-edit", "--", *EDIT)
@@ -530,6 +544,7 @@ def test_steam_edit_launches_steamvr_held_off_by_the_lock(solar: Solar) -> None:
 
 def test_steam_edit_does_not_run_the_command_when_steam_survives(solar: Solar) -> None:
     solar.procs("steam")
+    solar.steam_client()
     (solar.fake / "steam_ignores_shutdown").touch()
     (solar.fake / "steam_dies_on").write_text("never", encoding="utf-8")
 
@@ -544,6 +559,7 @@ def test_steam_edit_does_not_run_the_command_when_steam_survives(solar: Solar) -
 
 def test_steam_edit_terminates_a_steam_that_ignores_shutdown(solar: Solar) -> None:
     solar.procs("steam")
+    solar.steam_client()
     (solar.fake / "steam_ignores_shutdown").touch()
     (solar.fake / "steam_dies_on").write_text("TERM", encoding="utf-8")
 
@@ -551,6 +567,31 @@ def test_steam_edit_terminates_a_steam_that_ignores_shutdown(solar: Solar) -> No
 
     assert result.returncode == 0
     assert "Steam ignored -shutdown" in result.stdout
+    assert "edit 0" in solar.log
+
+
+def test_steam_edit_waits_for_a_starting_steam_before_shutdown(solar: Solar) -> None:
+    solar.procs("steam")
+    (solar.fake / "helper_after").write_text("4", encoding="utf-8")
+
+    result = solar.run("steam-edit", "--", *EDIT)
+
+    assert result.returncode == 0, result.stderr
+    assert solar.log[:5] == ["sleep 1"] * 4 + ["steam -shutdown"]
+    assert "edit 0" in solar.log
+
+
+def test_steam_edit_terminates_a_steam_that_never_finishes_starting(solar: Solar) -> None:
+    solar.procs("steam")
+    (solar.fake / "steam_dies_on").write_text("TERM", encoding="utf-8")
+
+    result = solar.run("steam-edit", "--", *EDIT)
+
+    assert result.returncode == 0, result.stderr
+    assert "Steam still starting after 90s, terminating it" in result.stdout
+    assert "steam -shutdown" not in solar.log
+    assert solar.log.count("sleep 1") == 90
+    assert "pkill -TERM steam" in solar.log
     assert "edit 0" in solar.log
 
 
