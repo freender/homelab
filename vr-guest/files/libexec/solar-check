@@ -114,9 +114,6 @@ def check_vr(report: Report, manifest: dict) -> None:
     vrpaths = read(home / ".config/openvr/openvrpaths.vrpath") or ""
     report.item("openvr_driver", "PlayStation VR2 App/SteamVR_Plug-In" in vrpaths,
                 "PS VR2 driver not in openvrpaths external_drivers")
-    caps = output("getcap", str(steamvr / "bin/linux64/vrcompositor-launcher"))
-    report.item("compositor_cap_sys_nice", "cap_sys_nice" in caps,
-                "vrcompositor-launcher lost cap_sys_nice")
     handler = output("xdg-mime", "query", "default", "x-scheme-handler/vrmonitor")
     report.item("vrmonitor_handler", handler == "valve-vrmonitor.desktop",
                 "no vrmonitor:// handler")

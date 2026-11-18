@@ -211,7 +211,7 @@ Everything solar runs outside the Bazzite image is the `vr-guest` module
 auto-login, the xr-hardware and headset udev rules), the Steam disk, the headset session
 above (`psvr2-steamvr`, `psvr2-audio`, `psvr2-steamvr.service`), KDE idle settings,
 node_exporter and the `solar-metrics` timer, the SteamVR side (SteamVRLinuxFixes,
-Ignition, PSVR2Toolkit, the play-area tool, `cap_sys_nice`, URL handlers, OpenXR runtime,
+Ignition, PSVR2Toolkit, the play-area tool, URL handlers, OpenXR runtime,
 `steamvr.vrsettings` values), plus the read-only check `/usr/local/libexec/solar-check`.
 The module's `bluez` stage also builds and installs the patched bluetoothd that keeps the
 Sense controllers connected (`vr-guest/bluez-eagain/`; see its README).
@@ -224,7 +224,7 @@ ssh solar /usr/local/libexec/solar-check
 The SteamVR part skips itself with a warning while SteamVR runs; quit it first
 (`psvr2-steamvr quit` on solar) and deploy again. It needs Steam, SteamVR and the PS VR2
 App installed, and SteamVR started once for the URL handlers. Redeploy after a SteamVR or
-PS VR2 App update: it restores `cap_sys_nice` and swaps Sony's dll back out.
+PS VR2 App update: it swaps Sony's dll back out.
 `vr-guest/steamvr-linux-fixes/` is a rolled-back local FIFO patch, kept for reference.
 
 The full rebuild, including VM creation and the steps that need Steam's UI, is the

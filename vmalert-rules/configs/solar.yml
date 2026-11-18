@@ -9,7 +9,7 @@ groups:
       # daily by itself and never reboots, and solar is always on.
 
       # One series per solar-check id (karg:..., /etc/..., psvr2toolkit_dll,
-      # compositor_cap_sys_nice, bluez_build_matches, ...). 30m absorbs a
+      # bluez_build_matches, ...). 30m absorbs a
       # vr-guest deploy or a SteamVR update mid-flight; anything that stays
       # failed past that needs a hand on solar. bluez_build_matches is the one
       # that fires after a Bazzite update: the patched bluetoothd was built for
@@ -21,7 +21,7 @@ groups:
           severity: warning
         annotations:
           summary: "solar: solar-check {{ $labels.check }} failed"
-          description: "The solar guest-side check `{{ $labels.check }}` has failed for 30 minutes. Run `/usr/local/libexec/solar-check` on solar for the reason. Common causes: a SteamVR update dropped cap_sys_nice, or a PS VR2 App update restored Sony's dll (both: `psvr2-steamvr quit` on solar, then `./deploy vr-guest solar` from the repo), or a Bazzite update shipped a new terra-bluez (`bluez_build_matches`: move the bluez-eagain inputs to it and deploy, per vr-guest/bluez-eagain/README.md, or roll back). /etc, home, script or bluetoothd-build drift (`bluez_build_inputs`, `bluez_dropin`): `./deploy vr-guest solar`."
+          description: "The solar guest-side check `{{ $labels.check }}` has failed for 30 minutes. Run `/usr/local/libexec/solar-check` on solar for the reason. Common causes: a PS VR2 App update or file verify restored Sony's dll (`psvr2-steamvr quit` on solar, then `./deploy vr-guest solar` from the repo), or a Bazzite update shipped a new terra-bluez (`bluez_build_matches`: move the bluez-eagain inputs to it and deploy, per vr-guest/bluez-eagain/README.md, or roll back). /etc, home, script or bluetoothd-build drift (`bluez_build_inputs`, `bluez_dropin`): `./deploy vr-guest solar`."
 
       # The heads-up, not the nag: solar is a one-minute power-cycle, best taken
       # just before a VR session, so a staged image is worth knowing about the

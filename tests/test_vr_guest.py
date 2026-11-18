@@ -64,7 +64,7 @@ MANIFEST_IDS = [
 CHECK_IDS = [
     "hostname", "karg:nvidia-modeset.conceal_vrr_caps=1", "karg:bluetooth.disable_ertm=1",
     "conceal_vrr_caps", *MANIFEST_IDS, "steam_library", "sshd", "steamvr_linux_fixes",
-    "ignition_shim", "psvr2toolkit_dll", "openvr_driver", "compositor_cap_sys_nice",
+    "ignition_shim", "psvr2toolkit_dll", "openvr_driver",
     "vrmonitor_handler", "openxr_runtime", "steamvr_settings", "kde_ddc_ci", "patched_bluetoothd",
     "bluez_build_matches", "bluez_build_inputs", "node_exporter_version", "solar_metrics_timer",
     "solar_gpu_metrics_active", "vector_version", "vector_active", "goxlr_version",
@@ -935,17 +935,6 @@ def test_psvr2toolkit_refuses_without_sonys_dll(installer, desktop, tmp_path) ->
         installer.install_psvr2toolkit(make_ctx(tmp_path), desktop, plugin, TOOLKIT_SHA)
 
 
-@pytest.mark.parametrize(("caps", "set_it"), [("x cap_sys_nice=eip\n", False), ("", True)])
-def test_cap_sys_nice(installer, tmp_path, caps: str, set_it: bool) -> None:
-    commands = Commands({("getcap",): (0, caps)})
-    installer._run = commands
-
-    installer.ensure_cap_sys_nice(tmp_path)
-
-    launcher = f"{tmp_path}/bin/linux64/vrcompositor-launcher"
-    assert (["setcap", "CAP_SYS_NICE=eip", launcher] in commands.seen) is set_it
-
-
 def test_scheme_handlers_wait_for_steamvrs_desktop_files(installer, desktop) -> None:
     commands = Commands()
     installer._run = commands
@@ -1048,7 +1037,7 @@ def test_vr_owns_what_it_converged(installer, desktop, tmp_path, monkeypatch,
     monkeypatch.setattr(installer, "steamvr_running", lambda: False)
     calls: list[str] = []
     for name in ("install_svlf", "install_ignition", "register_driver",
-                 "install_psvr2toolkit", "install_unitysetup", "ensure_cap_sys_nice"):
+                 "install_psvr2toolkit", "install_unitysetup"):
         monkeypatch.setattr(installer, name, lambda *_a, name=name: calls.append(name))
     monkeypatch.setattr(installer, "ensure_scheme_handlers", lambda *_: handlers)
     monkeypatch.setattr(installer, "ensure_steamvr_settings", lambda *_: settings)
@@ -1056,7 +1045,7 @@ def test_vr_owns_what_it_converged(installer, desktop, tmp_path, monkeypatch,
     owned = installer.vr(make_ctx(tmp_path), desktop)
 
     assert owned == installer.VR_CHECKS - dropped
-    assert len(calls) == 6
+    assert len(calls) == 5
     runtime = desktop.home / ".config/openxr/1/active_runtime.json"
     assert runtime.readlink() == desktop.home / installer.STEAMVR / "steamxr_linux64.json"
 

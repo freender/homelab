@@ -103,7 +103,7 @@ OWNED_CHECKS = frozenset({
 OWNED_PREFIXES = ("/etc/", "home/")
 VR_CHECKS = frozenset({
     "steamvr_linux_fixes", "ignition_shim", "psvr2toolkit_dll", "openvr_driver",
-    "compositor_cap_sys_nice", "vrmonitor_handler", "openxr_runtime", "steamvr_settings",
+    "vrmonitor_handler", "openxr_runtime", "steamvr_settings",
 })
 BLUEZ_CHECKS = frozenset({
     "patched_bluetoothd", "bluez_build_matches", "bluez_build_inputs", "bluez_dropin",
@@ -678,16 +678,6 @@ def install_unitysetup(ctx: InstallContext, user: Desktop) -> None:
     report("PSVR2Toolkit.UnitySetup (play area tool)", changed)
 
 
-def ensure_cap_sys_nice(steamvr: Path) -> None:
-    """A SteamVR update drops it from the compositor launcher (missed frames)."""
-    launcher = str(steamvr / "bin" / "linux64" / "vrcompositor-launcher")
-    if "cap_sys_nice" in capture("getcap", launcher):
-        log.sub("vrcompositor-launcher already has cap_sys_nice")
-        return
-    _run(["setcap", "CAP_SYS_NICE=eip", launcher], check=True)
-    log.ok("vrcompositor-launcher cap_sys_nice set")
-
-
 def ensure_scheme_handlers(user: Desktop) -> bool:
     """vrmonitor:// and steamvr://; False when SteamVR has not written its .desktop files."""
     applications = user.home / ".local/share/applications"
@@ -749,7 +739,6 @@ def vr(ctx: InstallContext, user: Desktop) -> frozenset[str]:
     register_driver(user, steamvr, plugin)
     install_psvr2toolkit(ctx, user, plugin, manifest["psvr2toolkit_dll_sha256"])
     install_unitysetup(ctx, user)
-    ensure_cap_sys_nice(steamvr)
     ensure_link(user, user.home / ".config/openxr/1/active_runtime.json",
                 steamvr / "steamxr_linux64.json")
     converged = set(VR_CHECKS)
