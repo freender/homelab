@@ -139,7 +139,8 @@ IGNITION_SUPPORT = (
 )
 BREW_ROOT = Path("/home/linuxbrew")
 BREW_PREFIX = BREW_ROOT / ".linuxbrew"
-SUNSHINE_OPT = BREW_PREFIX / "opt/sunshine"
+# The tap's stable and pre-release formulas conflict: one is installed at a time.
+SUNSHINE_FORMULAS = ("sunshine", "sunshine-beta")
 # Brew's libdbus looks for the system bus under its own prefix; without it Avahi
 # is unreachable and Moonlight clients do not discover solar.
 BREW_DBUS_SOCKET = BREW_PREFIX / "var/run/dbus/system_bus_socket"
@@ -530,9 +531,14 @@ def goxlr(ctx: InstallContext, user: str) -> None:
 # --- sunshine ----------------------------------------------------------------------
 
 
-def sunshine_version() -> str:
-    """The Cellar release brew's opt/sunshine points at; "" when not installed."""
-    return SUNSHINE_OPT.resolve().name if SUNSHINE_OPT.exists() else ""
+def sunshine_opt(formula: str) -> Path:
+    return BREW_PREFIX / "opt" / formula
+
+
+def sunshine_version(formula: str) -> str:
+    """The Cellar release brew's opt/<formula> points at; "" when not installed."""
+    opt = sunshine_opt(formula)
+    return opt.resolve().name if opt.exists() else ""
 
 
 def brew(user: Desktop, *args: str) -> None:
@@ -551,33 +557,41 @@ def ensure_brew_owner(user: Desktop) -> None:
 def ensure_sunshine_formula(ctx: InstallContext, user: Desktop) -> bool:
     """The pinned release, pinned in brew too; True when it changed."""
     version, tap = env.text(ctx, "SUNSHINE_VERSION", ""), env.text(ctx, "SUNSHINE_TAP", "")
-    formula = f"{tap.lower()}/sunshine"
+    name = env.text(ctx, "SUNSHINE_FORMULA", "")
+    if name not in SUNSHINE_FORMULAS:
+        raise InstallError(f"SUNSHINE_FORMULA {name!r} is not one of {SUNSHINE_FORMULAS}")
+    formula = f"{tap.lower()}/{name}"
     # Its RPATH needs brew's gcc runtime (libquadmath), which it does not depend on.
     if not (BREW_PREFIX / "opt/gcc").exists():
         brew(user, "install", "gcc")
         log.ok("brew gcc installed (Sunshine's libquadmath)")
-    installed = sunshine_version()
-    if installed == version:
-        log.sub(f"Sunshine {version} already installed")
+    installed = sunshine_version(name)
+    others = [other for other in SUNSHINE_FORMULAS if other != name and sunshine_version(other)]
+    if installed == version and not others:
+        log.sub(f"Sunshine {version} ({name}) already installed")
         return False
     brew(user, "tap", tap)
     brew(user, "trust", tap)
-    if installed:
+    for other in others:
+        brew(user, "unpin", f"{tap.lower()}/{other}")
+        brew(user, "uninstall", "--formula", f"{tap.lower()}/{other}")
+        log.ok(f"{other} uninstalled: it conflicts with {name}")
+    if installed and installed != version:
         brew(user, "unpin", formula)
         brew(user, "upgrade", formula)
-    else:
+    elif not installed:
         brew(user, "install", formula)
     brew(user, "pin", formula)
-    found = sunshine_version()
+    found = sunshine_version(name)
     if found != version:
-        raise InstallError(f"the {tap} tap installed Sunshine {found or 'nothing'}, "
+        raise InstallError(f"the {tap} tap installed {name} {found or 'nothing'}, "
                            f"vr-guest pins {version}: bump SUNSHINE_VERSION")
-    log.ok(f"Sunshine {version} installed and pinned")
+    log.ok(f"Sunshine {version} ({name}) installed and pinned")
     return True
 
 
-def sunshine_host_current() -> bool:
-    cellar = SUNSHINE_OPT.resolve()
+def sunshine_host_current(formula: str) -> bool:
+    cellar = sunshine_opt(formula).resolve()
     caps = _run(["getcap", str(cellar / "bin/sunshine")], check=False, capture_output=True,
                 text=True).stdout
     return "cap_sys_admin" in caps and all(
@@ -585,12 +599,13 @@ def sunshine_host_current() -> bool:
         for src, dest in SUNSHINE_HOST_FILES)
 
 
-def ensure_sunshine_host() -> bool:
+def ensure_sunshine_host(formula: str) -> bool:
     """KMS capture's cap_sys_admin, the gamepad udev rule and uhid, via the postinst."""
-    if sunshine_host_current():
+    if sunshine_host_current(formula):
         log.sub("Sunshine capabilities and udev rules current")
         return False
-    _run([str(SUNSHINE_OPT.resolve() / "bin/postinst")], check=True, capture_output=True)
+    _run([str(sunshine_opt(formula).resolve() / "bin/postinst")], check=True,
+         capture_output=True)
     log.ok("Sunshine postinst: cap_sys_admin, udev rules, uhid")
     return True
 
@@ -649,7 +664,7 @@ def ensure_sunshine_running(user: Desktop, unit: str, changed: set[str]) -> bool
 def sunshine(ctx: InstallContext, user: Desktop) -> frozenset[str]:
     """The check ids the sunshine stage converged; empty without Homebrew."""
     log.action("Sunshine (Moonlight streaming host)")
-    env.require(ctx, "SUNSHINE_VERSION", "SUNSHINE_TAP", "SUNSHINE_UNIT")
+    env.require(ctx, "SUNSHINE_FORMULA", "SUNSHINE_VERSION", "SUNSHINE_TAP", "SUNSHINE_UNIT")
     if not (BREW_PREFIX / "bin/brew").exists():
         log.warn(f"no Homebrew in {BREW_PREFIX} (brew-setup.service not run): sunshine skipped")
         return frozenset()
@@ -659,7 +674,7 @@ def sunshine(ctx: InstallContext, user: Desktop) -> frozenset[str]:
     changed = install_sunshine_files(ctx, user)
     if ensure_sunshine_formula(ctx, user):
         changed.add("formula")
-    if ensure_sunshine_host():
+    if ensure_sunshine_host(env.text(ctx, "SUNSHINE_FORMULA", "")):
         changed.add("host")
     ensure_link(user, BREW_DBUS_SOCKET, SYSTEM_DBUS_SOCKET)
     unit = env.text(ctx, "SUNSHINE_UNIT", "")

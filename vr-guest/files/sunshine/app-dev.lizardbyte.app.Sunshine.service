@@ -7,7 +7,7 @@ After=graphical-session.target xdg-desktop-autostart.target xdg-desktop-portal.s
 [Service]
 # KMS capture and the tray need the desktop up first.
 ExecStartPre=/bin/sleep 5
-ExecStart=/home/linuxbrew/.linuxbrew/opt/sunshine/bin/sunshine
+ExecStart=/home/linuxbrew/.linuxbrew/opt/sunshine-beta/bin/sunshine
 Restart=on-failure
 RestartSec=5s
 

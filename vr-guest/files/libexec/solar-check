@@ -34,7 +34,6 @@ STEAM = ".local/share/Steam/steamapps/common"
 PLUGIN = f"{STEAM}/PlayStation VR2 App/SteamVR_Plug-In"
 STEAMVR = f"{STEAM}/SteamVR"
 BREW_PREFIX = Path("/home/linuxbrew/.linuxbrew")
-SUNSHINE_OPT = BREW_PREFIX / "opt/sunshine"
 SUNSHINE_UNIT = "app-dev.lizardbyte.app.Sunshine.service"
 BREW_DBUS_SOCKET = BREW_PREFIX / "var/run/dbus/system_bus_socket"
 SYSTEM_DBUS_SOCKET = "/run/dbus/system_bus_socket"
@@ -196,8 +195,9 @@ def check_goxlr(report: Report, manifest: dict) -> None:
 
 def check_sunshine(report: Report, manifest: dict) -> None:
     """The ids SolarSunshineDown alerts on, with sunshine_conf and sunshine_unit."""
-    cellar = Path(os.path.realpath(SUNSHINE_OPT))
-    version = cellar.name if SUNSHINE_OPT.exists() else ""
+    opt = BREW_PREFIX / "opt" / manifest["sunshine_formula"]
+    cellar = Path(os.path.realpath(opt))
+    version = cellar.name if opt.exists() else ""
     wanted = manifest["sunshine_version"]
     report.item("sunshine_version", version == wanted, f"is {version or 'not installed'}, "
                 f"not {wanted} (brew upgraded it?)")

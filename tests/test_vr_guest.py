@@ -206,7 +206,8 @@ def test_render_build_env(tmp_path: Path) -> None:
         "GOXLR_URL": "https://github.com/GoXLR-on-Linux/goxlr-utility/releases/download/"
                      "v1.2.4/goxlr-utility-1.2.4-1.x86_64.rpm",
         "GOXLR_SHA": vr_guest.GOXLR_SHA,
-        "SUNSHINE_VERSION": "2026.914.233613",
+        "SUNSHINE_FORMULA": "sunshine-beta",
+        "SUNSHINE_VERSION": "2026.1118.30014",
         "SUNSHINE_TAP": "LizardByte/homebrew",
         "SUNSHINE_UNIT": "app-dev.lizardbyte.app.Sunshine.service",
         "BLUEZ_TERRA": "terra-bluez-5.87+1.git8750129efca8-2.fc45.x86_64",
@@ -242,7 +243,8 @@ def test_check_manifest_ids_and_hashes(tmp_path: Path) -> None:
     assert manifest["kargs"] == list(vr_guest.KARGS)
     assert manifest["vector_version"] == vr_guest.VECTOR_VERSION
     assert manifest["goxlr_version"] == vr_guest.GOXLR_VERSION
-    assert manifest["sunshine_version"] == "2026.914.233613"
+    assert manifest["sunshine_formula"] == "sunshine-beta"
+    assert manifest["sunshine_version"] == "2026.1118.30014"
     assert manifest["psvr2toolkit_dll_sha256"] == vr_guest.PSVR2TK_DLL_SHA
     assert manifest["bluez_inputs"] == vr_guest.bluez_inputs(root)
     assert manifest["steamvr_settings"] == {
@@ -1418,18 +1420,21 @@ def test_udev_triggers_the_goxlr_only_when_its_rule_changed(installer, tmp_path,
 
 # --- sunshine stage ------------------------------------------------------------------
 
-SUNSHINE_PIN = "2026.914.233613"
+SUNSHINE_PIN = "2026.1118.30014"
+SUNSHINE_FORMULA = "sunshine-beta"
 SUNSHINE_UNIT = "app-dev.lizardbyte.app.Sunshine.service"
-SUNSHINE_ENV = {"SUNSHINE_VERSION": SUNSHINE_PIN, "SUNSHINE_TAP": "LizardByte/homebrew",
-                "SUNSHINE_UNIT": SUNSHINE_UNIT}
+SUNSHINE_ENV = {"SUNSHINE_FORMULA": SUNSHINE_FORMULA, "SUNSHINE_VERSION": SUNSHINE_PIN,
+                "SUNSHINE_TAP": "LizardByte/homebrew", "SUNSHINE_UNIT": SUNSHINE_UNIT}
 SESSION = {"XDG_RUNTIME_DIR": "/run/user/1001",
            "DBUS_SESSION_BUS_ADDRESS": "unix:path=/run/user/1001/bus"}
+TAPPED = "lizardbyte/homebrew/sunshine-beta"
+STABLE = "lizardbyte/homebrew/sunshine"
 
 
-def install_cellar(prefix: Path, version: str) -> Path:
-    cellar = prefix / "Cellar/sunshine" / version
+def install_cellar(prefix: Path, version: str, formula: str = SUNSHINE_FORMULA) -> Path:
+    cellar = prefix / "Cellar" / formula / version
     (cellar / "bin").mkdir(parents=True, exist_ok=True)
-    opt = prefix / "opt/sunshine"
+    opt = prefix / "opt" / formula
     opt.parent.mkdir(parents=True, exist_ok=True)
     if opt.is_symlink():
         opt.unlink()
@@ -1443,13 +1448,13 @@ def brew_prefix(installer, tmp_path):
     (prefix / "bin").mkdir(parents=True)
     installer.BREW_ROOT = prefix.parent
     installer.BREW_PREFIX = prefix
-    installer.SUNSHINE_OPT = prefix / "opt/sunshine"
     installer.BREW_DBUS_SOCKET = prefix / "var/run/dbus/system_bus_socket"
     return prefix
 
 
 class BrewHost(Commands):
-    """`brew install|upgrade` pours what the tap ships; records the brew arguments."""
+    """`brew install|upgrade` pours what the tap ships, `uninstall` drops the opt link;
+    records the brew arguments."""
 
     def __init__(self, prefix: Path, ships: str = SUNSHINE_PIN):
         super().__init__()
@@ -1462,12 +1467,14 @@ class BrewHost(Commands):
         if argv[0] == "runuser" and brew in argv:
             args = argv[argv.index(brew) + 1:]
             self.brew.append(args)
-            if args[0] in ("install", "upgrade"):
-                for name in args[1:]:
-                    if name == "gcc":
-                        (self.prefix / "opt/gcc").mkdir(parents=True, exist_ok=True)
-                    else:
-                        install_cellar(self.prefix, self.ships)
+            names = [arg.rsplit("/", 1)[-1] for arg in args[1:] if not arg.startswith("-")]
+            for name in names:
+                if args[0] == "uninstall":
+                    (self.prefix / "opt" / name).unlink()
+                elif args[0] in ("install", "upgrade") and name == "gcc":
+                    (self.prefix / "opt/gcc").mkdir(parents=True, exist_ok=True)
+                elif args[0] in ("install", "upgrade"):
+                    install_cellar(self.prefix, self.ships, name)
         return super().__call__(cmd, check, **kwargs)
 
 
@@ -1488,10 +1495,9 @@ def test_sunshine_installs_the_pin_from_the_tap(installer, desktop, tmp_path,
 
     assert installer.ensure_sunshine_formula(make_ctx(tmp_path, SUNSHINE_ENV), desktop)
 
-    formula = "lizardbyte/homebrew/sunshine"
     assert host.brew == [["install", "gcc"], ["tap", "LizardByte/homebrew"],
-                         ["trust", "LizardByte/homebrew"], ["install", formula], ["pin", formula]]
-    assert installer.sunshine_version() == SUNSHINE_PIN
+                         ["trust", "LizardByte/homebrew"], ["install", TAPPED], ["pin", TAPPED]]
+    assert installer.sunshine_version(SUNSHINE_FORMULA) == SUNSHINE_PIN
 
 
 def test_sunshine_upgrades_an_older_release(installer, desktop, tmp_path, brew_prefix) -> None:
@@ -1502,16 +1508,53 @@ def test_sunshine_upgrades_an_older_release(installer, desktop, tmp_path, brew_p
 
     assert installer.ensure_sunshine_formula(make_ctx(tmp_path, SUNSHINE_ENV), desktop)
 
-    formula = "lizardbyte/homebrew/sunshine"
-    assert host.brew[2:] == [["unpin", formula], ["upgrade", formula], ["pin", formula]]
+    assert host.brew[2:] == [["unpin", TAPPED], ["upgrade", TAPPED], ["pin", TAPPED]]
+
+
+def test_sunshine_swaps_out_the_conflicting_formula(installer, desktop, tmp_path,
+                                                    brew_prefix) -> None:
+    install_cellar(brew_prefix, "2026.914.233613", "sunshine")
+    (brew_prefix / "opt/gcc").mkdir()
+    host = BrewHost(brew_prefix)
+    installer._run = host
+
+    assert installer.ensure_sunshine_formula(make_ctx(tmp_path, SUNSHINE_ENV), desktop)
+
+    assert host.brew[2:] == [["unpin", STABLE], ["uninstall", "--formula", STABLE],
+                             ["install", TAPPED], ["pin", TAPPED]]
+    assert installer.sunshine_version("sunshine") == ""
+    assert installer.sunshine_version(SUNSHINE_FORMULA) == SUNSHINE_PIN
+
+
+def test_sunshine_drops_a_leftover_formula_beside_the_pin(installer, desktop, tmp_path,
+                                                          brew_prefix) -> None:
+    install_cellar(brew_prefix, SUNSHINE_PIN)
+    install_cellar(brew_prefix, "2026.914.233613", "sunshine")
+    (brew_prefix / "opt/gcc").mkdir()
+    host = BrewHost(brew_prefix)
+    installer._run = host
+
+    assert installer.ensure_sunshine_formula(make_ctx(tmp_path, SUNSHINE_ENV), desktop)
+
+    assert host.brew[2:] == [["unpin", STABLE], ["uninstall", "--formula", STABLE],
+                             ["pin", TAPPED]]
+
+
+def test_sunshine_refuses_an_unknown_formula(installer, desktop, tmp_path, brew_prefix) -> None:
+    installer._run = BrewHost(brew_prefix)
+
+    with pytest.raises(InstallError, match="SUNSHINE_FORMULA 'sunshine-nightly' is not one of"):
+        installer.ensure_sunshine_formula(
+            make_ctx(tmp_path, {**SUNSHINE_ENV, "SUNSHINE_FORMULA": "sunshine-nightly"}), desktop)
+    assert installer._run.seen == []
 
 
 def test_sunshine_refuses_a_tap_release_other_than_the_pin(installer, desktop, tmp_path,
                                                            brew_prefix) -> None:
     installer._run = BrewHost(brew_prefix, ships="2026.999.1")
 
-    with pytest.raises(InstallError, match="installed Sunshine 2026.999.1, vr-guest pins "
-                                           "2026.914.233613: bump SUNSHINE_VERSION"):
+    with pytest.raises(InstallError, match="installed sunshine-beta 2026.999.1, vr-guest pins "
+                                           "2026.1118.30014: bump SUNSHINE_VERSION"):
         installer.ensure_sunshine_formula(make_ctx(tmp_path, SUNSHINE_ENV), desktop)
 
 
@@ -1523,6 +1566,12 @@ def test_the_pinned_sunshine_is_left_alone(installer, desktop, tmp_path, brew_pr
 
     assert not installer.ensure_sunshine_formula(make_ctx(tmp_path, SUNSHINE_ENV), desktop)
     assert host.seen == []
+
+
+def test_the_sunshine_unit_runs_the_pinned_formula() -> None:
+    unit = (ROOT / "vr-guest/files/sunshine" / vr_guest.SUNSHINE_UNIT).read_text()
+    assert (f"ExecStart=/home/linuxbrew/.linuxbrew/opt/{vr_guest.SUNSHINE_FORMULA}/bin/sunshine\n"
+            in unit)
 
 
 def test_brew_owner(installer, desktop, brew_prefix) -> None:
@@ -1555,7 +1604,8 @@ def test_sunshine_postinst_only_when_its_host_files_drift(installer, brew_prefix
     commands = Commands({("getcap",): (0, caps)})
     installer._run = commands
 
-    assert installer.ensure_sunshine_host() is postinst
+    assert installer.ensure_sunshine_host(SUNSHINE_FORMULA) is postinst
+    assert ["getcap", str(cellar / "bin/sunshine")] in commands.seen
     assert ([str(cellar / "bin/postinst")] in commands.seen) is postinst
 
 
@@ -1659,11 +1709,12 @@ def test_sunshine_stage(installer, desktop, tmp_path, brew_prefix, monkeypatch,
     units.mkdir(parents=True)
     (units / SUNSHINE_UNIT).write_text("unit")
     (units / "sunshine.service").symlink_to(units / SUNSHINE_UNIT)
-    masked, running = [], []
+    masked, running, hosts = [], [], []
     monkeypatch.setattr(installer.systemd, "mask", lambda ctx, unit, reason: masked.append(unit))
     monkeypatch.setattr(installer, "install_sunshine_files", lambda ctx, user: {"sunshine/x"})
     monkeypatch.setattr(installer, "ensure_sunshine_formula", lambda ctx, user: True)
-    monkeypatch.setattr(installer, "ensure_sunshine_host", lambda: False)
+    monkeypatch.setattr(installer, "ensure_sunshine_host",
+                        lambda formula: hosts.append(formula) and False)
     monkeypatch.setattr(installer, "ensure_sunshine_running",
                         lambda user, unit, changed: running.append(changed) or session)
     installer._run = Commands()
@@ -1675,6 +1726,7 @@ def test_sunshine_stage(installer, desktop, tmp_path, brew_prefix, monkeypatch,
     assert masked == ["brew-update.timer", "brew-upgrade.timer", "brew-update.service",
                       "brew-upgrade.service"]
     assert running == [{"sunshine/x", "formula"}]
+    assert hosts == [SUNSHINE_FORMULA]
     assert not (units / "sunshine.service").exists()
     wants = units / "graphical-session.target.wants" / SUNSHINE_UNIT
     assert os.readlink(wants) == str(units / SUNSHINE_UNIT)
@@ -1940,7 +1992,7 @@ def test_check_sunshine(check, tmp_path, monkeypatch, capsys, version, caps, sta
                         active, failed) -> None:
     prefix = tmp_path / ".linuxbrew"
     prefix.mkdir()
-    check.SUNSHINE_OPT = prefix / "opt/sunshine"
+    check.BREW_PREFIX = prefix
     check.BREW_DBUS_SOCKET = prefix / "socket"
     if version:
         install_cellar(prefix, version)
@@ -1954,12 +2006,14 @@ def test_check_sunshine(check, tmp_path, monkeypatch, capsys, version, caps, sta
     monkeypatch.setattr(check, "succeeds",
                         lambda *cmd: seen.append(cmd) or (active if "systemctl" in cmd else starts))
 
-    check.check_sunshine(check.Report(), {"sunshine_version": SUNSHINE_PIN})
+    check.check_sunshine(check.Report(), {"sunshine_formula": SUNSHINE_FORMULA,
+                                          "sunshine_version": SUNSHINE_PIN})
 
     out = capsys.readouterr().out
     assert [line.split()[1].rstrip(":") for line in out.splitlines()
             if line.startswith("  FAIL")] == failed
-    binary = str(prefix / "Cellar/sunshine" / version / "bin/sunshine") if version else None
+    cellar = prefix / "Cellar" / SUNSHINE_FORMULA
+    binary = str(cellar / version / "bin/sunshine") if version else None
     if binary:
         assert (binary, "--version") in seen
         assert ("getcap", binary) in seen

@@ -86,7 +86,13 @@ GOXLR_SHA = "a3006b5536f98d162904c41a407c66810df2509ef47bb6457cbc8f2a05c297ea"
 # layering. Brew only installs the tap's current formula: the stage refuses any
 # other release, so bump this when the tap moves. Steam Link was tried first
 # (homelab-ops#416): ~14 FPS desktop capture.
-SUNSHINE_VERSION = "2026.914.233613"
+# sunshine-beta, the tap's pre-release: 2026.914 (stable) drops the DualSense's
+# feedback when Moonlight resumes a running app (fixed upstream in Sunshine#5941,
+# with #5818 and newer libvirtualhid). Back to "sunshine" once a stable has them;
+# the stage swaps the two (brew will not install both), and the unit's ExecStart
+# names the formula's opt path.
+SUNSHINE_FORMULA = "sunshine-beta"
+SUNSHINE_VERSION = "2026.1118.30014"
 SUNSHINE_TAP = "LizardByte/homebrew"
 SUNSHINE_UNIT = "app-dev.lizardbyte.app.Sunshine.service"
 # (repo name under files/sunshine/, destination relative to $HOME, check id)
@@ -325,6 +331,7 @@ def check_manifest(root: Path, host: str, home: str, vector_dir: Path) -> dict[s
         "node_exporter_version": NODE_EXPORTER_VERSION,
         "vector_version": VECTOR_VERSION,
         "goxlr_version": GOXLR_VERSION,
+        "sunshine_formula": SUNSHINE_FORMULA,
         "sunshine_version": SUNSHINE_VERSION,
         "psvr2toolkit_dll_sha256": PSVR2TK_DLL_SHA,
         "bluez_inputs": bluez_inputs(root),
@@ -378,6 +385,7 @@ def render_build(root: Path, host: str) -> tuple[Path, tuple[FileSpec, ...]]:
             "GOXLR_VERSION": GOXLR_VERSION,
             "GOXLR_URL": GOXLR_URL,
             "GOXLR_SHA": GOXLR_SHA,
+            "SUNSHINE_FORMULA": SUNSHINE_FORMULA,
             "SUNSHINE_VERSION": SUNSHINE_VERSION,
             "SUNSHINE_TAP": SUNSHINE_TAP,
             "SUNSHINE_UNIT": SUNSHINE_UNIT,
