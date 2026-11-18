@@ -26,6 +26,12 @@ The `goxlr` stage unpacks goxlr-utility's pinned RPM into /usr/local/bin (nothin
 is layered) and starts the daemon in the desktop session when it is not running.
 A running daemon is never restarted: an upgrade applies at the next login.
 
+The `sunshine` stage installs the pinned Sunshine from the LizardByte tap with the
+desktop user's Homebrew (brew never runs as root), so /home/linuxbrew is made that
+user's: Bazzite's brew-setup gives it to uid 1000. It masks Bazzite's unattended
+brew update/upgrade, which would move the libraries the pinned build links. It
+restarts Sunshine only when something changed and no Moonlight client is connected.
+
 Ends by running `solar-check` as the desktop user, the same check `solar-metrics`
 publishes every 15 minutes. A failure this module owns fails the deploy; a
 not-yet-booted karg, and the vr items when the vr stage was skipped, only warn.
@@ -108,6 +114,10 @@ VR_CHECKS = frozenset({
 BLUEZ_CHECKS = frozenset({
     "patched_bluetoothd", "bluez_build_matches", "bluez_build_inputs", "bluez_dropin",
 })
+SUNSHINE_CHECKS = frozenset({
+    "sunshine_version", "sunshine_runs", "sunshine_caps", "sunshine_discovery",
+    "sunshine_conf", "sunshine_unit", "sunshine_active",
+})
 DDC_CHECK = "kde_ddc_ci"
 BLUETOOTHD = Path("/usr/local/libexec/bluetooth/bluetoothd")
 BLUEZ_MARKER = Path(f"{BLUETOOTHD}.built-for")
@@ -127,6 +137,22 @@ IGNITION_SUPPORT = (
     "proton", "launch_serverhelper.sh", "driver_install.sh", "driver_uninstall.sh",
     "wine_hidraw.reg",
 )
+BREW_ROOT = Path("/home/linuxbrew")
+BREW_PREFIX = BREW_ROOT / ".linuxbrew"
+SUNSHINE_OPT = BREW_PREFIX / "opt/sunshine"
+# Brew's libdbus looks for the system bus under its own prefix; without it Avahi
+# is unreachable and Moonlight clients do not discover solar.
+BREW_DBUS_SOCKET = BREW_PREFIX / "var/run/dbus/system_bus_socket"
+SYSTEM_DBUS_SOCKET = Path("/run/dbus/system_bus_socket")
+BREW_AUTO_UNITS = (
+    "brew-update.timer", "brew-upgrade.timer", "brew-update.service", "brew-upgrade.service",
+)
+# What the formula's postinst copies out of its Cellar (with the binary's setcap).
+SUNSHINE_HOST_FILES = (
+    ("lib/udev/rules.d/60-sunshine.rules", "/etc/udev/rules.d/60-sunshine.rules"),
+    ("lib/modules-load.d/60-sunshine.conf", "/etc/modules-load.d/60-sunshine.conf"),
+)
+USER_UNITS = ".config/systemd/user"
 SCHEME_HANDLERS = (
     ("x-scheme-handler/vrmonitor", "valve-vrmonitor.desktop"),
     ("x-scheme-handler/steamvr", "valve-steamvr.desktop"),
@@ -499,6 +525,152 @@ def goxlr(ctx: InstallContext, user: str) -> None:
     env.require(ctx, "GOXLR_VERSION", "GOXLR_URL", "GOXLR_SHA")
     ensure_goxlr_binaries(ctx)
     ensure_goxlr_daemon(user)
+
+
+# --- sunshine ----------------------------------------------------------------------
+
+
+def sunshine_version() -> str:
+    """The Cellar release brew's opt/sunshine points at; "" when not installed."""
+    return SUNSHINE_OPT.resolve().name if SUNSHINE_OPT.exists() else ""
+
+
+def brew(user: Desktop, *args: str) -> None:
+    _run(["runuser", "-u", user.name, "--", "env", f"HOME={user.home}",
+          str(BREW_PREFIX / "bin/brew"), *args], check=True, cwd=user.home)
+
+
+def ensure_brew_owner(user: Desktop) -> None:
+    if BREW_ROOT.stat().st_uid == user.uid:
+        log.sub(f"{BREW_ROOT} already {user.name}'s")
+        return
+    _run(["chown", "-R", f"{user.uid}:{user.gid}", str(BREW_ROOT)], check=True)
+    log.ok(f"{BREW_ROOT} given to {user.name} (brew-setup made it uid 1000's)")
+
+
+def ensure_sunshine_formula(ctx: InstallContext, user: Desktop) -> bool:
+    """The pinned release, pinned in brew too; True when it changed."""
+    version, tap = env.text(ctx, "SUNSHINE_VERSION", ""), env.text(ctx, "SUNSHINE_TAP", "")
+    formula = f"{tap.lower()}/sunshine"
+    # Its RPATH needs brew's gcc runtime (libquadmath), which it does not depend on.
+    if not (BREW_PREFIX / "opt/gcc").exists():
+        brew(user, "install", "gcc")
+        log.ok("brew gcc installed (Sunshine's libquadmath)")
+    installed = sunshine_version()
+    if installed == version:
+        log.sub(f"Sunshine {version} already installed")
+        return False
+    brew(user, "tap", tap)
+    brew(user, "trust", tap)
+    if installed:
+        brew(user, "unpin", formula)
+        brew(user, "upgrade", formula)
+    else:
+        brew(user, "install", formula)
+    brew(user, "pin", formula)
+    found = sunshine_version()
+    if found != version:
+        raise InstallError(f"the {tap} tap installed Sunshine {found or 'nothing'}, "
+                           f"vr-guest pins {version}: bump SUNSHINE_VERSION")
+    log.ok(f"Sunshine {version} installed and pinned")
+    return True
+
+
+def sunshine_host_current() -> bool:
+    cellar = SUNSHINE_OPT.resolve()
+    caps = _run(["getcap", str(cellar / "bin/sunshine")], check=False, capture_output=True,
+                text=True).stdout
+    return "cap_sys_admin" in caps and all(
+        Path(dest).is_file() and files.same_content(cellar / src, Path(dest))
+        for src, dest in SUNSHINE_HOST_FILES)
+
+
+def ensure_sunshine_host() -> bool:
+    """KMS capture's cap_sys_admin, the gamepad udev rule and uhid, via the postinst."""
+    if sunshine_host_current():
+        log.sub("Sunshine capabilities and udev rules current")
+        return False
+    _run([str(SUNSHINE_OPT.resolve() / "bin/postinst")], check=True, capture_output=True)
+    log.ok("Sunshine postinst: cap_sys_admin, udev rules, uhid")
+    return True
+
+
+def install_sunshine_files(ctx: InstallContext, user: Desktop) -> set[str]:
+    changed = set()
+    for name, (dest, _mode) in ctx.file_map.items():
+        if name.startswith("sunshine/"):
+            make_user_dirs(Path(dest).parent, user.home, user.uid, user.gid)
+            if files.install(ctx, name):
+                changed.add(name)
+            os.chown(dest, user.uid, user.gid)
+    return changed
+
+
+def session_output(user: Desktop, session: dict[str, str], *cmd: str) -> str:
+    exports = [f"{key}={value}" for key, value in session.items()]
+    return _run(["runuser", "-u", user.name, "--", "env", *exports, *cmd],
+                check=False, capture_output=True, text=True).stdout.strip()
+
+
+def sunshine_streaming(user: Desktop, session: dict[str, str], unit: str) -> bool:
+    """Whether the running Sunshine's last client event is a connect."""
+    pid = session_output(user, session, "systemctl", "--user", "show", "-p", "MainPID",
+                         "--value", unit)
+    if not pid or pid == "0":
+        return False
+    last = _run(["journalctl", f"_PID={pid}", "-o", "cat", "--no-pager", "-n", "1",
+                 "--grep", "CLIENT (CONNECTED|DISCONNECTED)"],
+                check=False, capture_output=True, text=True).stdout
+    return "CLIENT CONNECTED" in last
+
+
+def ensure_sunshine_running(user: Desktop, unit: str, changed: set[str]) -> bool:
+    """Start it, or restart it on a change; False without a session."""
+    session = session_env(user.uid)
+    if session is None:
+        log.warn(f"{user.name} has no session bus (not logged in): Sunshine starts at login")
+        return False
+    if f"sunshine/{unit}" in changed:
+        as_user(user.name, session, "systemctl", "--user", "daemon-reload")
+    active = session_output(user, session, "systemctl", "--user", "is-active", unit) == "active"
+    if active and not changed:
+        log.sub("Sunshine running")
+        return True
+    if active and sunshine_streaming(user, session, unit):
+        log.warn("a Moonlight client is connected: Sunshine keeps its old setup until "
+                 f"`systemctl --user restart {unit}` after the stream")
+        return True
+    as_user(user.name, session, "systemctl", "--user", "reset-failed", unit)
+    as_user(user.name, session, "systemctl", "--user", "restart", unit)
+    log.ok("Sunshine restarted" if active else "Sunshine started")
+    return True
+
+
+def sunshine(ctx: InstallContext, user: Desktop) -> frozenset[str]:
+    """The check ids the sunshine stage converged; empty without Homebrew."""
+    log.action("Sunshine (Moonlight streaming host)")
+    env.require(ctx, "SUNSHINE_VERSION", "SUNSHINE_TAP", "SUNSHINE_UNIT")
+    if not (BREW_PREFIX / "bin/brew").exists():
+        log.warn(f"no Homebrew in {BREW_PREFIX} (brew-setup.service not run): sunshine skipped")
+        return frozenset()
+    ensure_brew_owner(user)
+    for unit in BREW_AUTO_UNITS:
+        systemd.mask(ctx, unit, "an unattended brew upgrade breaks the pinned Sunshine")
+    changed = install_sunshine_files(ctx, user)
+    if ensure_sunshine_formula(ctx, user):
+        changed.add("formula")
+    if ensure_sunshine_host():
+        changed.add("host")
+    ensure_link(user, BREW_DBUS_SOCKET, SYSTEM_DBUS_SOCKET)
+    unit = env.text(ctx, "SUNSHINE_UNIT", "")
+    units = user.home / USER_UNITS
+    # `brew services` left an Alias= link to the unit it wrote; the repo's has none.
+    if (units / "sunshine.service").is_symlink():
+        (units / "sunshine.service").unlink()
+    ensure_link(user, units / "graphical-session.target.wants" / unit, units / unit)
+    if ensure_sunshine_running(user, unit, changed):
+        return SUNSHINE_CHECKS
+    return SUNSHINE_CHECKS - {"sunshine_active"}
 
 
 # --- vr ----------------------------------------------------------------------------
@@ -896,6 +1068,7 @@ def install(ctx: InstallContext) -> None:
     metrics(ctx, user)
     install_vector(ctx)
     goxlr(ctx, user)
+    converged |= sunshine(ctx, Desktop.lookup(user))
     converged |= vr(ctx, Desktop.lookup(user))
     verify(ctx, user, converged | bluez(ctx))
 

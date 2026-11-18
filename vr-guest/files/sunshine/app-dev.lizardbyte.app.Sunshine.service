@@ -1,0 +1,15 @@
+[Unit]
+Description=Sunshine, the Moonlight game-stream host (vr-guest)
+StartLimitIntervalSec=500
+StartLimitBurst=5
+After=graphical-session.target xdg-desktop-autostart.target xdg-desktop-portal.service
+
+[Service]
+# KMS capture and the tray need the desktop up first.
+ExecStartPre=/bin/sleep 5
+ExecStart=/home/linuxbrew/.linuxbrew/opt/sunshine/bin/sunshine
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=graphical-session.target

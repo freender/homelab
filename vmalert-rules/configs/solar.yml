@@ -14,8 +14,9 @@ groups:
       # failed past that needs a hand on solar. bluez_build_matches is the one
       # that fires after a Bazzite update: the patched bluetoothd was built for
       # the previous terra-bluez.
+      # sunshine_* ids are SolarSunshineDown's, below.
       - alert: SolarPatchCheckFailed
-        expr: homelab_solar_check{host="solar"} == 0
+        expr: homelab_solar_check{host="solar", check!~"sunshine_.*"} == 0
         for: 30m
         labels:
           severity: warning
@@ -45,6 +46,18 @@ groups:
           # The bluez line only renders when bluez actually changed;
           # SolarPatchCheckFailed covers anything the reboot breaks.
           description: "Updates: {{ range $i, $c := query \"homelab_ostree_pending_package_changed{host='solar'} == 1\" }}{{ if $i }}, {{ end }}{{ $c.Labels.package }}{{ else }}no kernel, NVIDIA or bluez change{{ end }}\nApply: ssh clovis qm shutdown 106 && ssh clovis qm start 106{{ with query \"homelab_ostree_pending_package_changed{host='solar',package='bluez'} == 1\" }}\n⚠️ bluez changed: move the bluez-eagain inputs to the new terra-bluez, then ./deploy vr-guest solar (vr-guest/bluez-eagain/README.md){{ end }}"
+
+      # Sunshine, the Moonlight host the Apple TV streams from (vr-guest sunshine
+      # stage): its own rule so a streaming outage reads as one, not as patch
+      # drift. 30m like the patch checks, so a deploy or a hand restart passes.
+      - alert: SolarSunshineDown
+        expr: homelab_solar_check{host="solar", check=~"sunshine_.*"} == 0
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "solar: Sunshine {{ $labels.check }} failed, Moonlight streaming is down"
+          description: "solar-check `{{ $labels.check }}` has failed for 30 minutes; run `/usr/local/libexec/solar-check` on solar for the reason. sunshine_active: `systemctl --user status app-dev.lizardbyte.app.Sunshine` and `journalctl --user -u app-dev.lizardbyte.app.Sunshine -b` on solar. sunshine_runs or sunshine_version: a brew upgrade moved its libraries or release, `./deploy vr-guest solar` reinstalls the pin. sunshine_conf: a setting saved in the web UI, copy it into vr-guest/files/sunshine/sunshine.conf or deploy it away. sunshine_caps, sunshine_discovery, sunshine_unit: `./deploy vr-guest solar`."
 
       # A staged (or finalized, not yet booted) Bazzite image only applies on a
       # full power-off/on of VM 106. uupd replaces the staged image daily without

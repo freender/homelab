@@ -5,6 +5,7 @@ stages (homelab-ops#400; design in #399) and the `vr` stage (#401). The `vector`
 stage ships the journal to VictoriaLogs (#403, design in #402) from vector-host's
 config render. The `bluez` stage builds and installs the patched bluetoothd (#405).
 The `goxlr` stage installs goxlr-utility for the GoXLR mixer moved over from exo.
+The `sunshine` stage installs Sunshine, the Moonlight host the Apple TV streams from.
 
 Every destination, mode, pinned release and expected value is decided here and passed
 down: the file map and env for the installer, and `check.json` for `solar-check`, the
@@ -78,6 +79,21 @@ GOXLR_URL = (
     f"v{GOXLR_VERSION}/goxlr-utility-{GOXLR_VERSION}-1.x86_64.rpm"
 )
 GOXLR_SHA = "a3006b5536f98d162904c41a407c66810df2509ef47bb6457cbc8f2a05c297ea"
+
+# Sunshine from the LizardByte tap's Homebrew build, in /home/linuxbrew, which image
+# updates never touch. Its KMS capture needs no KDE screen-share prompt (the Flatpak
+# cannot do KMS), and the RPM hardcodes /usr/share/sunshine, so it would need
+# layering. Brew only installs the tap's current formula: the stage refuses any
+# other release, so bump this when the tap moves. Steam Link was tried first
+# (homelab-ops#416): ~14 FPS desktop capture.
+SUNSHINE_VERSION = "2026.914.233613"
+SUNSHINE_TAP = "LizardByte/homebrew"
+SUNSHINE_UNIT = "app-dev.lizardbyte.app.Sunshine.service"
+# (repo name under files/sunshine/, destination relative to $HOME, check id)
+SUNSHINE_FILES = (
+    ("sunshine.conf", ".config/sunshine/sunshine.conf", "sunshine_conf"),
+    (SUNSHINE_UNIT, f".config/systemd/user/{SUNSHINE_UNIT}", "sunshine_unit"),
+)
 
 # The vr stage's pinned BnuuySolutions releases: env prefix -> (repo, tag, zip asset,
 # its sha256). Verified against the files solar ran on 2026-11-15.
@@ -223,6 +239,9 @@ def module_sources(root: Path) -> list[tuple[Path, str]]:
         (module / "files" / "libexec" / name, f"libexec/{name}") for name, _ in LIBEXEC_FILES
     ]
     sources += [
+        (module / "files" / "sunshine" / name, f"sunshine/{name}") for name, _, _ in SUNSHINE_FILES
+    ]
+    sources += [
         (module / BLUEZ_SOURCE / name, f"{BLUEZ_DIR}/{name}")
         for name in ("build.sh", BLUEZ_DROPIN)
     ]
@@ -262,6 +281,8 @@ def file_specs(home: str) -> tuple[FileSpec, ...]:
     specs = [FileSpec(f"etc/{path}", f"/etc/{path}", mode) for path, mode in ETC_FILES]
     specs += [FileSpec(f"home/{path}", f"{home}/{path}", mode) for path, mode in HOME_FILES]
     specs += [FileSpec(f"libexec/{name}", f"{LIBEXEC}/{name}", "755") for name, _ in LIBEXEC_FILES]
+    specs += [FileSpec(f"sunshine/{name}", f"{home}/{dest}", "644")
+              for name, dest, _ in SUNSHINE_FILES]
     specs += [FileSpec(f"{VECTOR_DIR}/{name}", dest, mode) for name, dest, mode, _ in VECTOR_FILES]
     specs.append(FileSpec(f"{BLUEZ_DIR}/{BLUEZ_DROPIN}", BLUEZ_DROPIN_PATH, "644"))
     specs.append(FileSpec(MANIFEST_NAME, MANIFEST_PATH, "644"))
@@ -292,6 +313,11 @@ def check_manifest(root: Path, host: str, home: str, vector_dir: Path) -> dict[s
     ]
     files.append({"id": "bluez_dropin", "path": BLUEZ_DROPIN_PATH,
                   "sha256": sha256(module / BLUEZ_SOURCE / BLUEZ_DROPIN)})
+    files += [
+        {"id": check_id, "path": f"{home}/{dest}",
+         "sha256": sha256(module / "files" / "sunshine" / name)}
+        for name, dest, check_id in SUNSHINE_FILES
+    ]
     return {
         "hostname": host,
         "home": home,
@@ -299,6 +325,7 @@ def check_manifest(root: Path, host: str, home: str, vector_dir: Path) -> dict[s
         "node_exporter_version": NODE_EXPORTER_VERSION,
         "vector_version": VECTOR_VERSION,
         "goxlr_version": GOXLR_VERSION,
+        "sunshine_version": SUNSHINE_VERSION,
         "psvr2toolkit_dll_sha256": PSVR2TK_DLL_SHA,
         "bluez_inputs": bluez_inputs(root),
         "steamvr_settings": STEAMVR_SETTINGS,
@@ -351,6 +378,9 @@ def render_build(root: Path, host: str) -> tuple[Path, tuple[FileSpec, ...]]:
             "GOXLR_VERSION": GOXLR_VERSION,
             "GOXLR_URL": GOXLR_URL,
             "GOXLR_SHA": GOXLR_SHA,
+            "SUNSHINE_VERSION": SUNSHINE_VERSION,
+            "SUNSHINE_TAP": SUNSHINE_TAP,
+            "SUNSHINE_UNIT": SUNSHINE_UNIT,
             "BLUEZ_TERRA": BLUEZ_TERRA,
             "BLUEZ_IMAGE": BLUEZ_IMAGE,
             "BLUEZ_INPUTS": bluez_inputs(root),

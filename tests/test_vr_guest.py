@@ -60,6 +60,11 @@ MANIFEST_IDS = [
     "/etc/vector/homelab.yaml",
     "vector_wrapper",
     "bluez_dropin",
+    "sunshine_conf",
+    "sunshine_unit",
+]
+SUNSHINE_IDS = [
+    "sunshine_version", "sunshine_runs", "sunshine_caps", "sunshine_discovery", "sunshine_active",
 ]
 CHECK_IDS = [
     "hostname", "karg:nvidia-modeset.conceal_vrr_caps=1", "karg:bluetooth.disable_ertm=1",
@@ -67,7 +72,7 @@ CHECK_IDS = [
     "ignition_shim", "psvr2toolkit_dll", "openvr_driver",
     "vrmonitor_handler", "openxr_runtime", "steamvr_settings", "kde_ddc_ci", "patched_bluetoothd",
     "bluez_build_matches", "bluez_build_inputs", "node_exporter_version", "solar_metrics_timer",
-    "solar_gpu_metrics_active", "vector_version", "vector_active", "goxlr_version",
+    "solar_gpu_metrics_active", "vector_version", "vector_active", "goxlr_version", *SUNSHINE_IDS,
 ]
 
 
@@ -166,6 +171,10 @@ def test_render_build_maps_every_file_to_its_destination(tmp_path: Path) -> None
     assert destinations["bluez/50-eagain-patch.conf"] == (
         "/etc/systemd/system/bluetooth.service.d/50-eagain-patch.conf", "644")
     assert (build_dir / "bluez/build.sh").is_file()
+    assert destinations["sunshine/sunshine.conf"] == (
+        "/var/home/freender/.config/sunshine/sunshine.conf", "644")
+    assert destinations["sunshine/app-dev.lizardbyte.app.Sunshine.service"] == (
+        "/var/home/freender/.config/systemd/user/app-dev.lizardbyte.app.Sunshine.service", "644")
     assert sorted(p.name for p in (build_dir / "bluez/patches").iterdir()) == [
         p.name for p in vr_guest.bluez_patches(ROOT)]
     for spec in specs:
@@ -197,6 +206,9 @@ def test_render_build_env(tmp_path: Path) -> None:
         "GOXLR_URL": "https://github.com/GoXLR-on-Linux/goxlr-utility/releases/download/"
                      "v1.2.4/goxlr-utility-1.2.4-1.x86_64.rpm",
         "GOXLR_SHA": vr_guest.GOXLR_SHA,
+        "SUNSHINE_VERSION": "2026.914.233613",
+        "SUNSHINE_TAP": "LizardByte/homebrew",
+        "SUNSHINE_UNIT": "app-dev.lizardbyte.app.Sunshine.service",
         "BLUEZ_TERRA": "terra-bluez-5.87+1.git8750129efca8-2.fc45.x86_64",
         "BLUEZ_IMAGE": "registry.fedoraproject.org/fedora:45",
         "BLUEZ_INPUTS": vr_guest.bluez_inputs(ROOT),
@@ -230,6 +242,7 @@ def test_check_manifest_ids_and_hashes(tmp_path: Path) -> None:
     assert manifest["kargs"] == list(vr_guest.KARGS)
     assert manifest["vector_version"] == vr_guest.VECTOR_VERSION
     assert manifest["goxlr_version"] == vr_guest.GOXLR_VERSION
+    assert manifest["sunshine_version"] == "2026.914.233613"
     assert manifest["psvr2toolkit_dll_sha256"] == vr_guest.PSVR2TK_DLL_SHA
     assert manifest["bluez_inputs"] == vr_guest.bluez_inputs(root)
     assert manifest["steamvr_settings"] == {
@@ -496,7 +509,7 @@ def test_ensure_no_ddc_ci_without_wayland_is_not_owned(installer, tmp_path) -> N
     [("hostname", True), ("/etc/ssh/sshd_config.d/10-key-only.conf", True),
      ("home/.local/bin/psvr2-audio", True), ("solar_metrics_script", True),
      ("karg:bluetooth.disable_ertm=1", False), ("psvr2toolkit_dll", False),
-     ("bluez_build_matches", False)],
+     ("bluez_build_matches", False), ("sunshine_active", False)],
 )
 def test_owned_checks(installer, check_id: str, is_owned: bool) -> None:
     assert installer.owned(check_id) is is_owned
@@ -1403,6 +1416,293 @@ def test_udev_triggers_the_goxlr_only_when_its_rule_changed(installer, tmp_path,
             in commands.seen) is triggered
 
 
+# --- sunshine stage ------------------------------------------------------------------
+
+SUNSHINE_PIN = "2026.914.233613"
+SUNSHINE_UNIT = "app-dev.lizardbyte.app.Sunshine.service"
+SUNSHINE_ENV = {"SUNSHINE_VERSION": SUNSHINE_PIN, "SUNSHINE_TAP": "LizardByte/homebrew",
+                "SUNSHINE_UNIT": SUNSHINE_UNIT}
+SESSION = {"XDG_RUNTIME_DIR": "/run/user/1001",
+           "DBUS_SESSION_BUS_ADDRESS": "unix:path=/run/user/1001/bus"}
+
+
+def install_cellar(prefix: Path, version: str) -> Path:
+    cellar = prefix / "Cellar/sunshine" / version
+    (cellar / "bin").mkdir(parents=True, exist_ok=True)
+    opt = prefix / "opt/sunshine"
+    opt.parent.mkdir(parents=True, exist_ok=True)
+    if opt.is_symlink():
+        opt.unlink()
+    opt.symlink_to(cellar)
+    return cellar
+
+
+@pytest.fixture
+def brew_prefix(installer, tmp_path):
+    prefix = tmp_path / "linuxbrew/.linuxbrew"
+    (prefix / "bin").mkdir(parents=True)
+    installer.BREW_ROOT = prefix.parent
+    installer.BREW_PREFIX = prefix
+    installer.SUNSHINE_OPT = prefix / "opt/sunshine"
+    installer.BREW_DBUS_SOCKET = prefix / "var/run/dbus/system_bus_socket"
+    return prefix
+
+
+class BrewHost(Commands):
+    """`brew install|upgrade` pours what the tap ships; records the brew arguments."""
+
+    def __init__(self, prefix: Path, ships: str = SUNSHINE_PIN):
+        super().__init__()
+        self.prefix, self.ships = prefix, ships
+        self.brew: list[list[str]] = []
+
+    def __call__(self, cmd, check=False, **kwargs):
+        argv = list(cmd)
+        brew = str(self.prefix / "bin/brew")
+        if argv[0] == "runuser" and brew in argv:
+            args = argv[argv.index(brew) + 1:]
+            self.brew.append(args)
+            if args[0] in ("install", "upgrade"):
+                for name in args[1:]:
+                    if name == "gcc":
+                        (self.prefix / "opt/gcc").mkdir(parents=True, exist_ok=True)
+                    else:
+                        install_cellar(self.prefix, self.ships)
+        return super().__call__(cmd, check, **kwargs)
+
+
+def test_brew_runs_as_the_desktop_user_in_its_home(installer, desktop, brew_prefix) -> None:
+    commands = Commands()
+    installer._run = commands
+
+    installer.brew(desktop, "pin", "x")
+
+    assert commands.seen == [["runuser", "-u", "freender", "--", "env", f"HOME={desktop.home}",
+                              str(brew_prefix / "bin/brew"), "pin", "x"]]
+
+
+def test_sunshine_installs_the_pin_from_the_tap(installer, desktop, tmp_path,
+                                                brew_prefix) -> None:
+    host = BrewHost(brew_prefix)
+    installer._run = host
+
+    assert installer.ensure_sunshine_formula(make_ctx(tmp_path, SUNSHINE_ENV), desktop)
+
+    formula = "lizardbyte/homebrew/sunshine"
+    assert host.brew == [["install", "gcc"], ["tap", "LizardByte/homebrew"],
+                         ["trust", "LizardByte/homebrew"], ["install", formula], ["pin", formula]]
+    assert installer.sunshine_version() == SUNSHINE_PIN
+
+
+def test_sunshine_upgrades_an_older_release(installer, desktop, tmp_path, brew_prefix) -> None:
+    install_cellar(brew_prefix, "2026.800.1")
+    (brew_prefix / "opt/gcc").mkdir()
+    host = BrewHost(brew_prefix)
+    installer._run = host
+
+    assert installer.ensure_sunshine_formula(make_ctx(tmp_path, SUNSHINE_ENV), desktop)
+
+    formula = "lizardbyte/homebrew/sunshine"
+    assert host.brew[2:] == [["unpin", formula], ["upgrade", formula], ["pin", formula]]
+
+
+def test_sunshine_refuses_a_tap_release_other_than_the_pin(installer, desktop, tmp_path,
+                                                           brew_prefix) -> None:
+    installer._run = BrewHost(brew_prefix, ships="2026.999.1")
+
+    with pytest.raises(InstallError, match="installed Sunshine 2026.999.1, vr-guest pins "
+                                           "2026.914.233613: bump SUNSHINE_VERSION"):
+        installer.ensure_sunshine_formula(make_ctx(tmp_path, SUNSHINE_ENV), desktop)
+
+
+def test_the_pinned_sunshine_is_left_alone(installer, desktop, tmp_path, brew_prefix) -> None:
+    install_cellar(brew_prefix, SUNSHINE_PIN)
+    (brew_prefix / "opt/gcc").mkdir()
+    host = BrewHost(brew_prefix)
+    installer._run = host
+
+    assert not installer.ensure_sunshine_formula(make_ctx(tmp_path, SUNSHINE_ENV), desktop)
+    assert host.seen == []
+
+
+def test_brew_owner(installer, desktop, brew_prefix) -> None:
+    installer._run = Commands()
+    installer.ensure_brew_owner(desktop)
+    assert installer._run.seen == []
+
+    other = desktop._replace(uid=desktop.uid + 1)
+    installer.ensure_brew_owner(other)
+    assert installer._run.seen == [["chown", "-R", f"{other.uid}:{other.gid}",
+                                    str(brew_prefix.parent)]]
+
+
+@pytest.mark.parametrize(("caps", "same", "postinst"), [
+    ("x/sunshine cap_sys_admin,cap_sys_nice=p", True, False),
+    ("", True, True),
+    ("x/sunshine cap_sys_admin,cap_sys_nice=p", False, True),
+])
+def test_sunshine_postinst_only_when_its_host_files_drift(installer, brew_prefix, tmp_path,
+                                                          caps, same, postinst) -> None:
+    cellar = install_cellar(brew_prefix, SUNSHINE_PIN)
+    hosted = []
+    for src, name in (("lib/udev/rules.d/60-sunshine.rules", "rules"),
+                      ("lib/modules-load.d/60-sunshine.conf", "modules")):
+        (cellar / src).parent.mkdir(parents=True, exist_ok=True)
+        (cellar / src).write_text(src)
+        (tmp_path / name).write_text(src if same else "old")
+        hosted.append((src, str(tmp_path / name)))
+    installer.SUNSHINE_HOST_FILES = tuple(hosted)
+    commands = Commands({("getcap",): (0, caps)})
+    installer._run = commands
+
+    assert installer.ensure_sunshine_host() is postinst
+    assert ([str(cellar / "bin/postinst")] in commands.seen) is postinst
+
+
+def test_sunshine_files_are_the_users(installer, desktop, tmp_path, monkeypatch) -> None:
+    dest = desktop.home / ".config/sunshine/sunshine.conf"
+    ctx = dataclasses.replace(make_ctx(tmp_path), file_map={
+        "sunshine/sunshine.conf": (str(dest), "644"),
+        "home/.local/bin/x": (str(desktop.home / "x"), "755"),
+    })
+    installed = []
+
+    def install(_ctx, name):
+        installed.append(name)
+        Path(ctx.file_map[name][0]).write_text("conf")
+        return True
+
+    monkeypatch.setattr(installer.files, "install", install)
+
+    assert installer.install_sunshine_files(ctx, desktop) == {"sunshine/sunshine.conf"}
+    assert installed == ["sunshine/sunshine.conf"]
+
+
+@pytest.mark.parametrize(("pid", "journal", "streaming"), [
+    ("0", "", False),
+    ("", "", False),
+    ("42", "[x]: Info: CLIENT CONNECTED\n", True),
+    ("42", "[x]: Info: CLIENT DISCONNECTED\n", False),
+    ("42", "", False),
+])
+def test_sunshine_streaming_reads_the_running_process_journal(installer, desktop, pid, journal,
+                                                              streaming) -> None:
+    commands = Commands({("runuser",): (0, pid), ("journalctl",): (0, journal)})
+    installer._run = commands
+
+    assert installer.sunshine_streaming(desktop, SESSION, SUNSHINE_UNIT) is streaming
+    if pid not in ("", "0"):
+        assert commands.seen[-1] == ["journalctl", "_PID=42", "-o", "cat", "--no-pager", "-n", "1",
+                                     "--grep", "CLIENT (CONNECTED|DISCONNECTED)"]
+
+
+class SunshineSession(Commands):
+    """`systemctl --user is-active` answers `state`; records the user systemctl verbs."""
+
+    def __init__(self, state: str):
+        super().__init__()
+        self.state = state
+
+    def verbs(self) -> list[str]:
+        return [argv[argv.index("--user") + 1] for argv in self.seen if "--user" in argv]
+
+    def __call__(self, cmd, check=False, **kwargs):
+        argv = list(cmd)
+        if "is-active" in argv:
+            self.seen.append(argv)
+            return subprocess.CompletedProcess(argv, 0, stdout=self.state, stderr="")
+        return super().__call__(cmd, check, **kwargs)
+
+
+@pytest.mark.parametrize(("state", "changed", "streaming", "verbs"), [
+    ("active", set(), False, ["is-active"]),
+    ("active", {"sunshine/sunshine.conf"}, True, ["is-active"]),
+    ("active", {"formula"}, False, ["is-active", "reset-failed", "restart"]),
+    ("inactive", set(), False, ["is-active", "reset-failed", "restart"]),
+    ("active", {f"sunshine/{SUNSHINE_UNIT}"}, False,
+     ["daemon-reload", "is-active", "reset-failed", "restart"]),
+])
+def test_sunshine_restarts_on_a_change_unless_streaming(installer, desktop, monkeypatch, capsys,
+                                                        state, changed, streaming, verbs) -> None:
+    host = SunshineSession(state)
+    installer._run = host
+    monkeypatch.setattr(installer, "session_env", lambda uid: SESSION)
+    monkeypatch.setattr(installer, "sunshine_streaming", lambda *_a: streaming)
+
+    assert installer.ensure_sunshine_running(desktop, SUNSHINE_UNIT, changed)
+
+    assert host.verbs() == verbs
+    assert ("a Moonlight client is connected" in capsys.readouterr().out) is streaming
+
+
+def test_sunshine_waits_for_a_login(installer, desktop, monkeypatch) -> None:
+    installer._run = Commands()
+    monkeypatch.setattr(installer, "session_env", lambda uid: None)
+
+    assert not installer.ensure_sunshine_running(desktop, SUNSHINE_UNIT, {"formula"})
+    assert installer._run.seen == []
+
+
+def test_sunshine_stage_skips_without_homebrew(installer, desktop, tmp_path, brew_prefix) -> None:
+    (brew_prefix / "bin").rmdir()
+    installer._run = Commands()
+
+    assert installer.sunshine(make_ctx(tmp_path, SUNSHINE_ENV), desktop) == frozenset()
+    assert installer._run.seen == []
+
+
+@pytest.mark.parametrize(("session", "owned"), [(True, "all"), (False, "no sunshine_active")])
+def test_sunshine_stage(installer, desktop, tmp_path, brew_prefix, monkeypatch,
+                        session, owned) -> None:
+    (brew_prefix / "bin/brew").touch()
+    units = desktop.home / ".config/systemd/user"
+    units.mkdir(parents=True)
+    (units / SUNSHINE_UNIT).write_text("unit")
+    (units / "sunshine.service").symlink_to(units / SUNSHINE_UNIT)
+    masked, running = [], []
+    monkeypatch.setattr(installer.systemd, "mask", lambda ctx, unit, reason: masked.append(unit))
+    monkeypatch.setattr(installer, "install_sunshine_files", lambda ctx, user: {"sunshine/x"})
+    monkeypatch.setattr(installer, "ensure_sunshine_formula", lambda ctx, user: True)
+    monkeypatch.setattr(installer, "ensure_sunshine_host", lambda: False)
+    monkeypatch.setattr(installer, "ensure_sunshine_running",
+                        lambda user, unit, changed: running.append(changed) or session)
+    installer._run = Commands()
+
+    converged = installer.sunshine(make_ctx(tmp_path, SUNSHINE_ENV), desktop)
+
+    expected = installer.SUNSHINE_CHECKS
+    assert converged == (expected if session else expected - {"sunshine_active"}), owned
+    assert masked == ["brew-update.timer", "brew-upgrade.timer", "brew-update.service",
+                      "brew-upgrade.service"]
+    assert running == [{"sunshine/x", "formula"}]
+    assert not (units / "sunshine.service").exists()
+    wants = units / "graphical-session.target.wants" / SUNSHINE_UNIT
+    assert os.readlink(wants) == str(units / SUNSHINE_UNIT)
+    assert os.readlink(installer.BREW_DBUS_SOCKET) == "/run/dbus/system_bus_socket"
+
+
+def test_sunshine_check_ids_are_solar_check_ids(installer) -> None:
+    assert installer.SUNSHINE_CHECKS <= set(CHECK_IDS)
+
+
+def test_install_runs_every_stage_in_order(installer, tmp_path, monkeypatch) -> None:
+    stages = []
+    for name, result in (("base", frozenset({"a"})), ("metrics", None), ("install_vector", None),
+                         ("goxlr", None), ("sunshine", frozenset({"s"})),
+                         ("vr", frozenset({"v"})), ("bluez", frozenset({"b"}))):
+        monkeypatch.setattr(installer, name,
+                            lambda *_a, n=name, r=result: stages.append(n) or r)
+    monkeypatch.setattr(installer.Desktop, "lookup", classmethod(lambda cls, name: name))
+    monkeypatch.setattr(installer, "verify", lambda ctx, user, extra: stages.append(extra))
+
+    installer.install(make_ctx(tmp_path, {"OS_TYPE": "bazzite", "DESKTOP_USER": "freender",
+                                          "DESKTOP_HOME": "/h", "NODE_EXPORTER_VERSION": "1",
+                                          "CHECK_PATH": "/c"}))
+
+    assert stages == ["base", "metrics", "install_vector", "goxlr", "sunshine", "vr", "bluez",
+                      frozenset({"a", "s", "v", "b"})]
+
+
 # ---------------------------------------------------------------------------
 # solar-check
 # ---------------------------------------------------------------------------
@@ -1628,3 +1928,40 @@ def test_check_goxlr(check, monkeypatch, capsys, stdout: str, failed: list[str])
     out = capsys.readouterr().out
     assert [line.split()[1].rstrip(":") for line in out.splitlines()
             if line.startswith("  FAIL")] == failed
+
+
+@pytest.mark.parametrize(("version", "caps", "starts", "linked", "active", "failed"), [
+    (SUNSHINE_PIN, "b cap_sys_admin,cap_sys_nice=p", True, True, True, []),
+    ("2026.999.1", "b cap_sys_admin,cap_sys_nice=p", True, True, True, ["sunshine_version"]),
+    (None, "", False, False, False, ["sunshine_version", "sunshine_runs", "sunshine_caps",
+                                     "sunshine_discovery", "sunshine_active"]),
+])
+def test_check_sunshine(check, tmp_path, monkeypatch, capsys, version, caps, starts, linked,
+                        active, failed) -> None:
+    prefix = tmp_path / ".linuxbrew"
+    prefix.mkdir()
+    check.SUNSHINE_OPT = prefix / "opt/sunshine"
+    check.BREW_DBUS_SOCKET = prefix / "socket"
+    if version:
+        install_cellar(prefix, version)
+    bus = tmp_path / "bus"
+    bus.touch()
+    check.SYSTEM_DBUS_SOCKET = str(bus)
+    if linked:
+        check.BREW_DBUS_SOCKET.symlink_to(bus)
+    seen: list[tuple[str, ...]] = []
+    monkeypatch.setattr(check, "output", lambda *cmd: seen.append(cmd) or caps)
+    monkeypatch.setattr(check, "succeeds",
+                        lambda *cmd: seen.append(cmd) or (active if "systemctl" in cmd else starts))
+
+    check.check_sunshine(check.Report(), {"sunshine_version": SUNSHINE_PIN})
+
+    out = capsys.readouterr().out
+    assert [line.split()[1].rstrip(":") for line in out.splitlines()
+            if line.startswith("  FAIL")] == failed
+    binary = str(prefix / "Cellar/sunshine" / version / "bin/sunshine") if version else None
+    if binary:
+        assert (binary, "--version") in seen
+        assert ("getcap", binary) in seen
+    assert ("env", f"XDG_RUNTIME_DIR=/run/user/{os.getuid()}", "systemctl", "--user",
+            "is-active", "-q", SUNSHINE_UNIT) in seen
