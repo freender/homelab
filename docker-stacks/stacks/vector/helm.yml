@@ -11,13 +11,16 @@ services:
     image: timberio/vector:0.61.0-debian
     container_name: vector-helm
     restart: always
-    stop_grace_period: 60s
+    # Vector's own limit (5s) runs out before Docker's grace. A batch still
+    # retrying at shutdown stays in the disk buffer and is resent on start;
+    # the 60s default once held tower's HA migration for 60s.
+    stop_grace_period: 10s
     mem_limit: 512m
     environment:
       TZ: 'America/New_York'
     # The config is owned by the vector-config module, which reloads it with
     # SIGHUP. Metrics on :9598 are scraped over net_overlay; no host port.
-    command: ["--config", "/etc/vector/vector.yaml"]
+    command: ["--config", "/etc/vector/vector.yaml", "--graceful-shutdown-limit-secs", "5"]
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - /var/log:/var/log:ro
