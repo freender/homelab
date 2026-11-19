@@ -13,6 +13,10 @@ StartLimitIntervalSec=0
 Environment=VECTOR_CONFIG={{ CONFIG }}
 # A journald-only pipeline needs no more; the default is one worker per CPU.
 Environment=VECTOR_THREADS=2
+# Down from 60 s: an in-flight batch that cannot reach helm (gone first in a UPS
+# shutdown) would hold the host's shutdown that long. It is resent from the disk
+# buffer at the next start.
+Environment=VECTOR_GRACEFUL_SHUTDOWN_LIMIT_SECS=5
 ExecStartPre=
 ExecStartPre=/usr/bin/vector validate --skip-healthchecks
 RestartSec=30s

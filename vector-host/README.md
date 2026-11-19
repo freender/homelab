@@ -40,6 +40,9 @@ both on one host.
   `VECTOR_CONFIG=/etc/vector/homelab.yaml` keeps the config out of the package's
   `/etc/vector/vector.yaml` conffile. `VECTOR_THREADS=2` keeps a journald-only
   pipeline from starting one worker per CPU on the PVE nodes.
+  `VECTOR_GRACEFUL_SHUTDOWN_LIMIT_SECS=5` replaces the 60 s default, so a batch
+  that cannot reach helm (gone first in a UPS shutdown) does not hold the host's
+  shutdown; it is resent from the disk buffer at the next start.
 
 `vector-host.shadow: true` sends the journal to tenant `AccountID=1`, so it can
 run beside another shipper on tenant 0; no host uses it since the journal-upload

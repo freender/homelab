@@ -22,6 +22,9 @@ StateDirectory=vector
 Environment=VECTOR_CONFIG=/etc/vector/homelab.yaml
 # A journal and a few log files need no more; the default is one worker per CPU.
 Environment=VECTOR_THREADS=2
+# Down from 60 s, so a batch that cannot reach helm does not hold a reboot; it
+# is resent from the disk buffer at the next start.
+Environment=VECTOR_GRACEFUL_SHUTDOWN_LIMIT_SECS=5
 ExecStartPre=/usr/local/bin/vector validate --skip-healthchecks
 ExecStart=/usr/local/bin/vector
 ExecReload=/usr/local/bin/vector validate --skip-healthchecks

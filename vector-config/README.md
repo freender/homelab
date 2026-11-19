@@ -104,7 +104,8 @@ deploy, because Vector keeps running the old config when a reload is rejected.
   `stop_grace_period: 10s` above it). Vector's 60 s default held tower's whole HA
   migration for 60 s when an in-flight journald batch could not resolve
   `victoria-logs` during shutdown. Every sink has a disk buffer, so a killed batch is
-  resent at the next start, not lost.
+  resent at the next start, not lost. Host-native Vector (`vector-host`, solar's
+  `vr-guest` unit) has the same 5 s cap.
 - **A new host needs `vector.yaml` before its first start.** The bind mount would
   otherwise create a directory. Create `/mnt/cache/appdata/vector/data` and copy
   the rendered `build/<host>/vector.yaml` into place, then deploy
