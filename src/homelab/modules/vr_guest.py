@@ -136,8 +136,10 @@ BLUEZ_DROPIN_PATH = f"/etc/systemd/system/bluetooth.service.d/{BLUEZ_DROPIN}"
 
 # Merged into steamvr.vrsettings' "steamvr" section with SteamVR quit (it rewrites the
 # file on exit). 90 Hz at 118% manual supersampling is the settled Alyx tuning.
+# Async off: with it on, a vkWaitForPresent timeout (headset off) becomes a render-watchdog
+# abort (ValveSoftware/SteamVR-for-Linux#1040).
 STEAMVR_SETTINGS = {
-    "enableLinuxVulkanAsync": True,
+    "enableLinuxVulkanAsync": False,
     "useFacetRenderer": True,
     "showMirrorView": False,
     "supersampleManualOverride": True,
