@@ -248,7 +248,7 @@ def test_check_manifest_ids_and_hashes(tmp_path: Path) -> None:
     assert manifest["psvr2toolkit_dll_sha256"] == vr_guest.PSVR2TK_DLL_SHA
     assert manifest["bluez_inputs"] == vr_guest.bluez_inputs(root)
     assert manifest["steamvr_settings"] == {
-        "enableLinuxVulkanAsync": False, "useFacetRenderer": True, "showMirrorView": False,
+        "enableLinuxVulkanAsync": True, "useFacetRenderer": True, "showMirrorView": False,
         "supersampleManualOverride": True, "supersampleScale": 1.18,
     }
 
