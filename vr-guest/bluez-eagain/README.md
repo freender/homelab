@@ -53,9 +53,10 @@ fails, which alerts as `SolarPatchCheckFailed`, and the deploy refuses until the
 match. Either roll back, or move the inputs to the new source:
 
 1. Take the new terra-bluez spec and replace patches `0001`–`0099` with its patch set.
-2. Point the `curl` line in `build.sh` at its git commit.
-3. Set `BLUEZ_TERRA` to the new `rpm -q terra-bluez`.
-4. Run `./deploy vr-guest solar` with SteamVR quit. If `0100` or `0101` no longer apply,
+2. Set `BLUEZ_TERRA` to the new `rpm -q terra-bluez`. `build.sh` fetches the bluez commit
+   named in it (`.git<hash>-`), so nothing else pins the source. If the spec's `./configure`
+   flags changed, update them in `build.sh`.
+3. Run `./deploy vr-guest solar` with SteamVR quit. If `0100` or `0101` no longer apply,
    the build fails loudly (`patch -F3`), and its logs are in the work dir.
 
 ## Rollback

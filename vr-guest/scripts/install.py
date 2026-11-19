@@ -958,7 +958,7 @@ def dropin_current(ctx: InstallContext) -> bool:
     return dest.is_file() and files.same_content(ctx.build_dir / BLUEZ_DROPIN, dest)
 
 
-def build_bluetoothd(ctx: InstallContext, inputs: str, image: str) -> Path:
+def build_bluetoothd(ctx: InstallContext, inputs: str, image: str, commit: str) -> Path:
     """Build in a throwaway container, or reuse a build of the same inputs.
 
     The work dir persists, so a build that SteamVR kept from being installed, and
@@ -974,7 +974,7 @@ def build_bluetoothd(ctx: InstallContext, inputs: str, image: str) -> Path:
     shutil.copytree(ctx.build_dir / "bluez" / "patches", BLUEZ_WORK / "patches")
     log.sub(f"building bluetoothd in {image}; this takes minutes")
     result = _run(
-        ["podman", "run", "--rm", "-v", f"{BLUEZ_WORK}:/build:Z",
+        ["podman", "run", "--rm", "-e", f"BLUEZ_COMMIT={commit}", "-v", f"{BLUEZ_WORK}:/build:Z",
          "-v", f"{BLUEZ_WORK}/patches:/patches:ro,Z", image, "bash", "/build/build.sh"],
         check=False, capture_output=True, text=True,
     )
@@ -1006,13 +1006,13 @@ def install_bluetoothd(built: Path, inputs: str, terra: str) -> None:
 def bluez(ctx: InstallContext) -> frozenset[str]:
     """The check ids the bluez stage converged; empty when it was skipped."""
     log.action("Patched BlueZ (bluez-eagain)")
-    env.require(ctx, "BLUEZ_TERRA", "BLUEZ_IMAGE", "BLUEZ_INPUTS")
+    env.require(ctx, "BLUEZ_TERRA", "BLUEZ_COMMIT", "BLUEZ_IMAGE", "BLUEZ_INPUTS")
     terra, inputs = env.text(ctx, "BLUEZ_TERRA", ""), env.text(ctx, "BLUEZ_INPUTS", "")
     found = image_bluez()
     if found != terra:
         raise InstallError(
             f"the image has {found or 'no terra-bluez'}, bluez-eagain is written for {terra}: "
-            "update its patch set, build.sh's source commit and BLUEZ_TERRA "
+            "update its patch set and BLUEZ_TERRA "
             "(vr-guest/bluez-eagain/README.md)"
         )
     binary_ok, dropin_ok = bluetoothd_current(inputs, terra), dropin_current(ctx)
@@ -1023,7 +1023,8 @@ def bluez(ctx: InstallContext) -> frozenset[str]:
         log.warn("SteamVR is running (someone may be in the headset): bluez stage skipped; "
                  "deploy again after `psvr2-steamvr quit`")
         return frozenset()
-    built = None if binary_ok else build_bluetoothd(ctx, inputs, env.text(ctx, "BLUEZ_IMAGE", ""))
+    built = None if binary_ok else build_bluetoothd(
+        ctx, inputs, env.text(ctx, "BLUEZ_IMAGE", ""), env.text(ctx, "BLUEZ_COMMIT", ""))
     if steamvr_running():
         log.warn("SteamVR started during the build: the new bluetoothd waits in "
                  f"{BLUEZ_WORK} for the next deploy")

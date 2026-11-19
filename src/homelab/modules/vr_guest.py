@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import shutil
 from pathlib import Path
 
@@ -125,8 +126,9 @@ VR_RELEASES = {
 PSVR2TK_DLL_SHA = "b456e89433ad8dbe02719e215409912bb26fb9bf062d8528bb29174ea3d24583"
 
 # The patched bluetoothd (bluez-eagain/README.md) is built on solar from these inputs.
-# BLUEZ_TERRA is the exact `rpm -q terra-bluez` the patch set and build.sh's source
-# commit reproduce; the stage refuses any other. Bump all three together.
+# BLUEZ_TERRA is the exact `rpm -q terra-bluez` the patch set reproduces; the stage
+# refuses any other, and build.sh fetches the bluez commit named in it (bluez_commit).
+# Bump it together with the patch set.
 BLUEZ_SOURCE = "bluez-eagain"
 BLUEZ_TERRA = "terra-bluez-5.87+1.git8750129efca8-2.fc45.x86_64"
 BLUEZ_IMAGE = "registry.fedoraproject.org/fedora:45"
@@ -209,6 +211,7 @@ def validate(root: Path, hosts: list[str]) -> None:
             raise ValueError(f"missing module file: {path}")
     if not bluez_patches(root):
         raise ValueError(f"no patches in {root / MODULE_DIR / BLUEZ_SOURCE / 'patches'}")
+    bluez_commit(BLUEZ_TERRA)
     vector_host.victoria_logs_base(root)
     for host in hosts:
         host_type(root, host)
@@ -259,6 +262,14 @@ def module_sources(root: Path) -> list[tuple[Path, str]]:
 
 def bluez_patches(root: Path) -> list[Path]:
     return sorted((root / MODULE_DIR / BLUEZ_SOURCE / "patches").glob("*.patch"))
+
+
+def bluez_commit(terra: str) -> str:
+    """The bluez/bluez commit a terra-bluez NEVRA is built from (its `.git<hash>-`)."""
+    match = re.fullmatch(r"terra-bluez-[^+]+\+\d+\.git([0-9a-f]{7,40})-.+", terra)
+    if match is None:
+        raise ValueError(f"BLUEZ_TERRA {terra!r} names no bluez git commit")
+    return match.group(1)
 
 
 def bluez_inputs(root: Path) -> str:
@@ -390,6 +401,7 @@ def render_build(root: Path, host: str) -> tuple[Path, tuple[FileSpec, ...]]:
             "SUNSHINE_TAP": SUNSHINE_TAP,
             "SUNSHINE_UNIT": SUNSHINE_UNIT,
             "BLUEZ_TERRA": BLUEZ_TERRA,
+            "BLUEZ_COMMIT": bluez_commit(BLUEZ_TERRA),
             "BLUEZ_IMAGE": BLUEZ_IMAGE,
             "BLUEZ_INPUTS": bluez_inputs(root),
             **releases,

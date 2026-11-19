@@ -211,6 +211,7 @@ def test_render_build_env(tmp_path: Path) -> None:
         "SUNSHINE_TAP": "LizardByte/homebrew",
         "SUNSHINE_UNIT": "app-dev.lizardbyte.app.Sunshine.service",
         "BLUEZ_TERRA": "terra-bluez-5.87+1.git8750129efca8-2.fc45.x86_64",
+        "BLUEZ_COMMIT": "8750129efca8",
         "BLUEZ_IMAGE": "registry.fedoraproject.org/fedora:45",
         "BLUEZ_INPUTS": vr_guest.bluez_inputs(ROOT),
         "SVLF_URL": "https://github.com/BnuuySolutions/SteamVRLinuxFixes/releases/download/"
@@ -1072,7 +1073,8 @@ def test_vr_check_ids_are_solar_check_ids(installer) -> None:
 # --- bluez stage ---------------------------------------------------------------------
 
 TERRA = "terra-bluez-5.87+1.git8750129efca8-2.fc45.x86_64"
-BLUEZ_ENV = {"BLUEZ_TERRA": TERRA, "BLUEZ_IMAGE": "fedora:45", "BLUEZ_INPUTS": "inputs-1"}
+BLUEZ_ENV = {"BLUEZ_TERRA": TERRA, "BLUEZ_COMMIT": "8750129efca8", "BLUEZ_IMAGE": "fedora:45",
+             "BLUEZ_INPUTS": "inputs-1"}
 
 
 class BluezHost(Commands):
@@ -1135,6 +1137,7 @@ def test_bluez_fresh_host_builds_installs_and_restarts(installer, bluez_host) ->
     podman = next(argv for argv in commands.seen if argv[:2] == ["podman", "run"])
     assert podman[-3:] == ["fedora:45", "bash", "/build/build.sh"]
     assert f"{work}:/build:Z" in podman and f"{work}/patches:/patches:ro,Z" in podman
+    assert podman[podman.index("-e") + 1] == "BLUEZ_COMMIT=8750129efca8"
     assert (work / "patches" / "0100.patch").is_file()
     assert (work / "inputs").read_text() == "inputs-1\n"
     assert installer.BLUETOOTHD.read_bytes() == b"patched"
@@ -1246,10 +1249,33 @@ def test_bluez_check_ids_are_solar_check_ids(installer) -> None:
     assert installer.BLUEZ_CHECKS <= set(CHECK_IDS)
 
 
-def test_bluez_terra_pin_matches_build_sh() -> None:
-    commit = vr_guest.BLUEZ_TERRA.split(".git", 1)[1].split("-", 1)[0]
+def test_bluez_commit_comes_from_the_terra_nevra() -> None:
+    assert vr_guest.bluez_commit(TERRA) == "8750129efca8"
+    assert vr_guest.bluez_commit(
+        "terra-bluez-5.88+3.gitdeadbeef0123-1.fc46.x86_64") == "deadbeef0123"
+
+
+@pytest.mark.parametrize("terra", [
+    "terra-bluez-5.87-2.fc45.x86_64",
+    "bluez-5.87+1.git8750129efca8-2.fc45.x86_64",
+    "terra-bluez-5.87+1.gitXYZ-2.fc45.x86_64",
+    "terra-bluez-5.87+1.git8750129efca8",
+])
+def test_bluez_commit_rejects_a_nevra_without_one(terra) -> None:
+    with pytest.raises(ValueError, match="names no bluez git commit"):
+        vr_guest.bluez_commit(terra)
+
+
+def test_validate_rejects_a_bluez_terra_without_a_commit(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(vr_guest, "BLUEZ_TERRA", "terra-bluez-5.87-2.fc45.x86_64")
+    with pytest.raises(ValueError, match="names no bluez git commit"):
+        vr_guest.validate(fake_root(tmp_path), [])
+
+
+def test_build_sh_takes_its_source_commit_from_the_env() -> None:
     build_sh = (ROOT / "vr-guest" / "bluez-eagain" / "build.sh").read_text(encoding="utf-8")
-    assert f"bluez/archive/{commit}.tar.gz" in build_sh
+    assert "bluez/archive/${BLUEZ_COMMIT:?}.tar.gz" in build_sh
+    assert vr_guest.bluez_commit(vr_guest.BLUEZ_TERRA) not in build_sh
 
 
 def test_bluez_inputs_follow_every_build_input(tmp_path: Path) -> None:
