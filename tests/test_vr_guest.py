@@ -68,7 +68,8 @@ SUNSHINE_IDS = [
 ]
 CHECK_IDS = [
     "hostname", "karg:nvidia-modeset.conceal_vrr_caps=1", "karg:bluetooth.disable_ertm=1",
-    "conceal_vrr_caps", *MANIFEST_IDS, "steam_library", "sshd", "steamvr_linux_fixes",
+    "conceal_vrr_caps", *MANIFEST_IDS, "steam_library", "sshd", "admin_users",
+    "steamvr_linux_fixes",
     "ignition_shim", "psvr2toolkit_dll", "openvr_driver",
     "vrmonitor_handler", "openxr_runtime", "steamvr_settings", "kde_ddc_ci", "patched_bluetoothd",
     "bluez_build_matches", "bluez_build_inputs", "node_exporter_version", "solar_metrics_timer",
@@ -192,6 +193,8 @@ def test_render_build_env(tmp_path: Path) -> None:
         "DESKTOP_USER": "freender",
         "DESKTOP_HOME": "/var/home/freender",
         "KARGS": "nvidia-modeset.conceal_vrr_caps=1 bluetooth.disable_ertm=1",
+        "ADMIN_GROUP": "wheel",
+        "RETIRED_SUDOERS": "/etc/sudoers.d/90-freender-nopasswd",
         "NODE_EXPORTER_VERSION": vr_guest.NODE_EXPORTER_VERSION,
         "NODE_EXPORTER_URL": vr_guest.NODE_EXPORTER_URL,
         "NODE_EXPORTER_SHA": vr_guest.NODE_EXPORTER_SHA,
@@ -242,6 +245,7 @@ def test_check_manifest_ids_and_hashes(tmp_path: Path) -> None:
     assert manifest["hostname"] == "solar"
     assert manifest["home"] == "/var/home/freender"
     assert manifest["kargs"] == list(vr_guest.KARGS)
+    assert manifest["admin_group"] == "wheel"
     assert manifest["vector_version"] == vr_guest.VECTOR_VERSION
     assert manifest["goxlr_version"] == vr_guest.GOXLR_VERSION
     assert manifest["sunshine_formula"] == "sunshine-beta"
@@ -406,6 +410,40 @@ def test_hostname(installer, current: str, calls: int) -> None:
     assert len(commands.seen) == calls
     if calls == 2:
         assert commands.seen[1] == ["hostnamectl", "hostname", "solar"]
+
+
+def admin_ctx(tmp_path: Path, retired: Path) -> InstallContext:
+    return make_ctx(tmp_path, {"ADMIN_GROUP": "wheel", "RETIRED_SUDOERS": str(retired)})
+
+
+def test_drop_admin_rights_removes_sudoers_and_every_member(installer, tmp_path, monkeypatch,
+                                                            capsys) -> None:
+    retired = tmp_path / "90-freender-nopasswd"
+    retired.write_text("freender ALL=(ALL) NOPASSWD: ALL\n")
+    monkeypatch.setattr(installer.grp, "getgrnam",
+                        lambda name: dataclasses.make_dataclass("G", ["gr_mem"])(
+                            ["bazzite", "freender"]) if name == "wheel" else None)
+    commands = Commands()
+    installer._run = commands
+
+    installer.drop_admin_rights(admin_ctx(tmp_path, retired))
+
+    assert not retired.exists()
+    assert commands.seen == [["gpasswd", "-d", "bazzite", "wheel"],
+                             ["gpasswd", "-d", "freender", "wheel"]]
+    assert "no sudo" not in capsys.readouterr().out
+
+
+def test_drop_admin_rights_already_clean(installer, tmp_path, monkeypatch, capsys) -> None:
+    monkeypatch.setattr(installer.grp, "getgrnam",
+                        lambda name: dataclasses.make_dataclass("G", ["gr_mem"])([]))
+    commands = Commands()
+    installer._run = commands
+
+    installer.drop_admin_rights(admin_ctx(tmp_path, tmp_path / "gone"))
+
+    assert commands.seen == []
+    assert "no sudo or wheel rights to remove" in capsys.readouterr().out
 
 
 @pytest.mark.parametrize(
@@ -1853,7 +1891,7 @@ def test_check_file_entries_compare_hashes(check, tmp_path, capsys) -> None:
     good, bad = tmp_path / "good", tmp_path / "bad"
     good.write_text("a")
     bad.write_text("b")
-    manifest = {"hostname": "solar", "kargs": [], "files": [
+    manifest = {"hostname": "solar", "kargs": [], "admin_group": "nosuchgroup", "files": [
         {"id": "good", "path": str(good), "sha256": hashlib.sha256(b"a").hexdigest()},
         {"id": "bad", "path": str(bad), "sha256": hashlib.sha256(b"a").hexdigest()},
         {"id": "gone", "path": str(tmp_path / "gone"), "sha256": "x"},
@@ -1864,6 +1902,27 @@ def test_check_file_entries_compare_hashes(check, tmp_path, capsys) -> None:
     assert "  ok    good\n" in out
     assert "  FAIL  bad: differs from repo\n" in out
     assert "  FAIL  gone: differs from repo\n" in out
+
+
+@pytest.mark.parametrize(
+    ("members", "line"),
+    [([], "  ok    admin_users\n"), (["bazzite", "freender"],
+                                    "  FAIL  admin_users: wheel: bazzite, freender\n")],
+)
+def test_check_admin_users_must_be_empty(check, monkeypatch, capsys, members, line) -> None:
+    monkeypatch.setattr(check.grp, "getgrnam",
+                        lambda name: dataclasses.make_dataclass("G", ["gr_mem"])(members))
+    monkeypatch.setattr(check, "output", lambda *cmd: "solar")
+    monkeypatch.setattr(check, "succeeds", lambda *cmd: True)
+
+    check.check_system(check.Report(), {"hostname": "solar", "kargs": [], "files": [],
+                                        "admin_group": "wheel"})
+
+    assert line in capsys.readouterr().out
+
+
+def test_check_admin_group_missing_counts_as_empty(check) -> None:
+    assert check.admin_members("nosuchgroup-vr-guest") == []
 
 
 WANTED = {"showMirrorView": False, "supersampleScale": 1.18}

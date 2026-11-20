@@ -5,7 +5,8 @@ Runs as the desktop user: solar-metrics.timer every 15 minutes, and the vr-guest
 installer as its verify step. What to expect comes from check.json, which the
 module renders at deploy time (hashes of every file it installs, the kargs, the
 pinned node_exporter, Vector, goxlr-utility and Sunshine versions and PSVR2Toolkit
-dll, the bluetoothd build inputs, the SteamVR settings).
+dll, the bluetoothd build inputs, the SteamVR settings, the admin group that must
+stay empty).
 
 Output is one line per item, `  ok    <id>` or `  FAIL  <id>: <reason>`; the ids are
 the `check` label of homelab_solar_check, so renaming one breaks its history and
@@ -13,6 +14,7 @@ vmalert-rules/configs/solar.yml. Exit 0 when everything passes, 1 otherwise.
 """
 from __future__ import annotations
 
+import grp
 import hashlib
 import json
 import os
@@ -93,6 +95,15 @@ def check_system(report: Report, manifest: dict) -> None:
                     "differs from repo")
     report.item("steam_library", os.path.ismount(STEAM_MOUNT), f"{STEAM_MOUNT} not mounted")
     report.item("sshd", succeeds("systemctl", "is-active", "-q", "sshd"), "not active")
+    admins = admin_members(manifest["admin_group"])
+    report.item("admin_users", admins == [], f"{manifest['admin_group']}: {', '.join(admins)}")
+
+
+def admin_members(group: str) -> list[str]:
+    try:
+        return list(grp.getgrnam(group).gr_mem)
+    except KeyError:
+        return []
 
 
 def steamvr_settings_ok(path: Path, wanted: dict) -> bool:

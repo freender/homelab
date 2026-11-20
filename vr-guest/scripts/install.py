@@ -39,6 +39,7 @@ not-yet-booted karg, and the vr items when the vr stage was skipped, only warn.
 
 from __future__ import annotations
 
+import grp
 import hashlib
 import json
 import os
@@ -101,7 +102,7 @@ KDE_SETTINGS = (
 # this module's failure. The vr and bluez stages add VR_CHECKS and BLUEZ_CHECKS when
 # they ran; booted kargs only ever warn.
 OWNED_CHECKS = frozenset({
-    "hostname", "steam_library", "sshd",
+    "hostname", "steam_library", "sshd", "admin_users",
     "node_exporter_version", "solar_metrics_script", "solar_metrics_timer",
     "solar_gpu_metrics_script", "solar_gpu_metrics_active",
     "vector_version", "vector_wrapper", "vector_active", "goxlr_version",
@@ -236,6 +237,24 @@ def install_etc(ctx: InstallContext) -> None:
               f"--attr-match=idVendor={GOXLR_VENDOR}"], check=True)
 
 
+def drop_admin_rights(ctx: InstallContext) -> None:
+    """Retire the old NOPASSWD file and empty the admin group (see ADMIN_GROUP)."""
+    changed = False
+    for name in env.text(ctx, "RETIRED_SUDOERS", "").split():
+        path = Path(name)
+        if path.exists():
+            path.unlink()
+            log.ok(f"{path} removed")
+            changed = True
+    group = env.text(ctx, "ADMIN_GROUP", "")
+    for member in grp.getgrnam(group).gr_mem if group else []:
+        _run(["gpasswd", "-d", member, group], check=True)
+        log.ok(f"{member} removed from {group}")
+        changed = True
+    if not changed:
+        log.sub(f"no sudo or {group} rights to remove")
+
+
 def ensure_steam_library(user: str) -> None:
     fstab = Path("/etc/fstab")
     if not any(line.startswith("LABEL=steam ") for line in fstab.read_text().splitlines()):
@@ -345,6 +364,8 @@ def base(ctx: InstallContext, user: str, home: str) -> frozenset[str]:
     ensure_kargs(ctx)
     log.action("/etc: key-only sshd, auto-login, udev")
     install_etc(ctx)
+    log.action("No admin users")
+    drop_admin_rights(ctx)
     log.action("Steam library disk")
     ensure_steam_library(user)
     log.action("Headset-on SteamVR session and KDE")

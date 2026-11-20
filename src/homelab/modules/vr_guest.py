@@ -42,6 +42,13 @@ SUPPORTED_TYPES = {
 
 KARGS = ("nvidia-modeset.conceal_vrr_caps=1", "bluetooth.disable_ertm=1")
 
+# Nobody on solar is an admin: games run untrusted code as the desktop user, and
+# wheel is root-equivalent through polkit alone (rpm-ostree package installs,
+# firewall, system Flatpaks with no password). Root is SSH-only (`infra` key).
+ADMIN_GROUP = "wheel"
+# The hand-placed NOPASSWD file the desktop user had before this was managed.
+RETIRED_SUDOERS = ("/etc/sudoers.d/90-freender-nopasswd",)
+
 NODE_EXPORTER_VERSION = "1.12.1"
 NODE_EXPORTER_URL = (
     "https://github.com/prometheus/node_exporter/releases/download/"
@@ -339,6 +346,7 @@ def check_manifest(root: Path, host: str, home: str, vector_dir: Path) -> dict[s
         "hostname": host,
         "home": home,
         "kargs": list(KARGS),
+        "admin_group": ADMIN_GROUP,
         "node_exporter_version": NODE_EXPORTER_VERSION,
         "vector_version": VECTOR_VERSION,
         "goxlr_version": GOXLR_VERSION,
@@ -384,6 +392,8 @@ def render_build(root: Path, host: str) -> tuple[Path, tuple[FileSpec, ...]]:
             "DESKTOP_USER": user,
             "DESKTOP_HOME": home,
             "KARGS": " ".join(KARGS),
+            "ADMIN_GROUP": ADMIN_GROUP,
+            "RETIRED_SUDOERS": " ".join(RETIRED_SUDOERS),
             "NODE_EXPORTER_VERSION": NODE_EXPORTER_VERSION,
             "NODE_EXPORTER_URL": NODE_EXPORTER_URL,
             "NODE_EXPORTER_SHA": NODE_EXPORTER_SHA,
