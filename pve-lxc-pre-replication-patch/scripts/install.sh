@@ -57,15 +57,24 @@ LXC_ORIGINAL=$(cat <<'EOF'
 
         $self->log('info', "shutdown CT $vmid\n");
 
-        PVE::LXC::vm_stop($vmid, 0, $timeout);
+        eval { PVE::LXC::vm_stop($vmid, 0, $timeout) };
+        if (my $err = $@) {
+            # the target of a remote migration already reserved the VMID with a locked config
+            if (my $tunnel = delete $self->{tunnel}) {
+                eval { PVE::Tunnel::finish_tunnel($tunnel, 1); };
+                $self->log('warn', "cleanup of the target failed - $@") if $@;
+            }
+            die $err;
+        }
 
         $running = 0;
     }
 EOF
 )
 
-# Patched blocks are byte-identical to the series submitted upstream for
-# bug #2984 (see README), so production runs exactly what was sent for review.
+# The blocks match pve-container 6.1.24 and pve-ha-manager 5.2.6. An upstream
+# change to either stanza makes the reapply refuse with failed-unexpected-*;
+# rebase the blocks onto the new upstream text (see README).
 LXC_PATCHED=$(cat <<'EOF'
     # with a local replication job to the target, replicate while the container is still
     # running, so that only the remaining delta has to be transferred after shutdown
@@ -90,35 +99,15 @@ LXC_PATCHED=$(cat <<'EOF'
 
         $self->log('info', "shutdown CT $vmid\n");
 
-        PVE::LXC::vm_stop($vmid, 0, $timeout);
-
-        $running = 0;
-    }
-EOF
-)
-
-# Pre-upstream wording that was deployed before the blocks above; a host still
-# carrying it is upgraded in place rather than refused as "unexpected".
-LXC_LEGACY_PATCHED=$(cat <<'EOF'
-    if ($restart && $running && !$remote) {
-        my $rep_cfg = PVE::ReplicationConfig->new();
-        if (my $jobcfg = $rep_cfg->find_local_replication_job($vmid, $self->{node})) {
-            my $start_time = time();
-            my $logfunc = sub { my ($msg) = @_; $self->log('info', "pre-stop replication: $msg"); };
-            $self->log('info', 'run pre-stop replication before shutdown');
-            PVE::Replication::run_replication(
-                'PVE::LXC::Config', $jobcfg, $start_time, $start_time, $logfunc,
-            );
+        eval { PVE::LXC::vm_stop($vmid, 0, $timeout) };
+        if (my $err = $@) {
+            # the target of a remote migration already reserved the VMID with a locked config
+            if (my $tunnel = delete $self->{tunnel}) {
+                eval { PVE::Tunnel::finish_tunnel($tunnel, 1); };
+                $self->log('warn', "cleanup of the target failed - $@") if $@;
+            }
+            die $err;
         }
-    }
-
-    # in restart mode, we shutdown the container before migrating
-    if ($restart && $running) {
-        my $timeout = $self->{opts}->{timeout} // 180;
-
-        $self->log('info', "shutdown CT $vmid\n");
-
-        PVE::LXC::vm_stop($vmid, 0, $timeout);
 
         $running = 0;
     }
@@ -132,6 +121,9 @@ HA_ORIGINAL=$(cat <<'EOF'
         target => $target,
         online => 0, # we cannot migrate CT (yet) online, only relocate
     };
+
+    $migrate_options //= {};
+    $params->{$_} = $migrate_options->{$_} for keys $migrate_options->%*;
 
     # always relocate container for now
     if ($class->check_running($haenv, $id)) {
@@ -149,20 +141,8 @@ HA_PATCHED=$(cat <<'EOF'
         restart => 1, # let the migration task handle shutdown and start of running CTs
     };
 
-EOF
-)
-
-HA_LEGACY_PATCHED=$(cat <<'EOF'
-    my $params = {
-        node => $nodename,
-        vmid => $id,
-        target => $target,
-        online => 0, # we cannot migrate CT (yet) online, only relocate
-        restart => 1,
-    };
-
-    # Let the LXC restart migration worker stop/start running containers so it
-    # can run pre-stop replication before shutdown.
+    $migrate_options //= {};
+    $params->{$_} = $migrate_options->{$_} for keys $migrate_options->%*;
 EOF
 )
 
@@ -245,12 +225,10 @@ patch_target() {
   local target=$1
   local original=$2
   local patched=$3
-  local legacy=$4
-  local marker=$5
-  local label=$6
+  local marker=$4
+  local label=$5
   local patched_count
   local original_count
-  local legacy_count
 
   if [[ ! -f ${target} ]]; then
     echo "missing target: ${target}" >&2
@@ -260,18 +238,11 @@ patch_target() {
 
   patched_count=$(grep -Fc "${marker}" "${target}" || true)
   original_count=$(count_block "${original}" "${target}")
-  legacy_count=$(count_block "${legacy}" "${target}")
 
+  # Marker first: the patched LXC block still contains the untouched original
+  # stanza, so matching the original first would insert a second copy.
   if [[ ${patched_count} -eq 1 ]]; then
     printf '%s=already-patched\n' "${label}"
-    return
-  fi
-
-  # Legacy first: the legacy LXC block still contains the untouched original
-  # stanza, so matching the original first would insert a second copy.
-  if [[ ${patched_count} -eq 0 && ${legacy_count} -eq 1 ]]; then
-    replace_block "${target}" "${legacy}" "${patched}" "${label}"
-    printf '%s=patched (upgraded from legacy wording)\n' "${label}"
     return
   fi
 
@@ -296,9 +267,9 @@ if [[ ${IF_TARGET_CHANGED} == true ]] && all_targets_unchanged; then
 fi
 
 tmp_status=$(mktemp)
-patch_target "${LXC_MIGRATE_TARGET}" "${LXC_ORIGINAL}" "${LXC_PATCHED}" "${LXC_LEGACY_PATCHED}" \
+patch_target "${LXC_MIGRATE_TARGET}" "${LXC_ORIGINAL}" "${LXC_PATCHED}" \
   'run replication before shutting down CT' 'lxc_migrate' | tee -a "${tmp_status}"
-patch_target "${HA_PVECT_TARGET}" "${HA_ORIGINAL}" "${HA_PATCHED}" "${HA_LEGACY_PATCHED}" \
+patch_target "${HA_PVECT_TARGET}" "${HA_ORIGINAL}" "${HA_PATCHED}" \
   'let the migration task handle shutdown and start of running CTs' 'ha_pvect' | tee -a "${tmp_status}"
 
 if [[ ${RESTART_SERVICES} == true ]]; then

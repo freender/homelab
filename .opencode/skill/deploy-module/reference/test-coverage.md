@@ -76,7 +76,9 @@ than trusting it. `wsl_conf` has installer tests in `test_homelab_install.py` bu
 still no dedicated file. Prefer
 adding to these over re-covering well-tested areas.
 The three `pve-*-patch` modules' `install.sh` (~610 lines, never ported per
-homelab-ops#35) have no execution coverage at all — ShellCheck only. A port moves a module's installer into
+homelab-ops#35) have no execution coverage at all — ShellCheck only. The exception is
+`pve-lxc-pre-replication-patch`: `tests/test_pve_lxc_pre_replication_patch.py` runs its
+generated reapply script against trimmed upstream fixtures. A port moves a module's installer into
 in-process tests that assert behaviour rather than grepping the script for a
 string. **It does not move it into the coverage report or the CRAP gate:** tests
 load `<module>/scripts/install.py` by file path under an ad-hoc module name, and

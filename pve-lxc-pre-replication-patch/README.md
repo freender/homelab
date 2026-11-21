@@ -41,12 +41,26 @@ jobs for arbitrary targets and does not implement true LXC live migration.
 - Forum: https://forum.proxmox.com/threads/improvement-reduce-migration-downtime-to-seconds-with-two-step-transfer.72498/
 - Bugzilla: https://bugzilla.proxmox.com/show_bug.cgi?id=2984
 
-The patched blocks in `scripts/install.sh` are byte-identical to the two-patch
-series prepared for `pve-devel` (`[PATCH container 1/2]` for `Migrate.pm`,
-`[PATCH ha-manager 2/2]` for `PVECT.pm`), so production soak-tests exactly the
-code under review. Hosts that still carry the earlier wording are upgraded in
-place on the next apply. Once the series is merged and released, the installer
-will refuse with `failed-unexpected-*` and the module should be retired.
+The patched blocks in `scripts/install.sh` follow the two-patch series prepared
+for `pve-devel` (`[PATCH container 1/2]` for `Migrate.pm`,
+`[PATCH ha-manager 2/2]` for `PVECT.pm`), so production soak-tests the code
+under review. They are written against pve-container 6.1.24 and pve-ha-manager
+5.2.6; rebase the series whenever the blocks are rebased.
+
+## When The Reapply Refuses
+
+The installer replaces exact upstream stanzas, so any upstream edit to either
+one makes the apt-hook reapply refuse with `failed-unexpected-lxc_migrate` or
+`failed-unexpected-ha_pvect`, and `PvePatchUnhealthy` fires. Both files are then
+stock: nothing breaks, but HA CT migrations lose the pre-stop replication pass.
+
+Read the package changelog before acting. If it says bug #2984 was fixed,
+retire the module. Otherwise upstream only moved code around the stanza:
+copy the new stanza into `LXC_ORIGINAL`/`HA_ORIGINAL`, rebuild the patched
+blocks around it, refresh `tests/fixtures/pve_lxc_pre_replication/` from the
+new packages, and redeploy. pve-container 6.1.24 (an `eval` around `vm_stop`)
+and pve-ha-manager 5.2.6 (`$migrate_options` passthrough) were the first such
+rebase.
 
 ## Operational Files
 
