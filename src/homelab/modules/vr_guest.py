@@ -183,6 +183,8 @@ HOME_FILES = (
     # -pipewire lets Remote Play (Steam Link) capture the Wayland desktop.
     (".config/autostart/steam.desktop", "644"),
     (".local/share/applications/goxlr-utility.desktop", "644"),
+    # Applies at the next WirePlumber start (login); the deploy never restarts it.
+    (".config/wireplumber/wireplumber.conf.d/51-disable-acer-audio.conf", "644"),
 )
 # (repo name under files/libexec/, check id or None when the check does not compare it).
 LIBEXEC_FILES = (

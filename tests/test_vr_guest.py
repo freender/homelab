@@ -55,6 +55,7 @@ MANIFEST_IDS = [
     "home/.config/autostart/goxlr-daemon.desktop",
     "home/.config/autostart/steam.desktop",
     "home/.local/share/applications/goxlr-utility.desktop",
+    "home/.config/wireplumber/wireplumber.conf.d/51-disable-acer-audio.conf",
     "solar_metrics_script",
     "solar_gpu_metrics_script",
     "/etc/vector/homelab.yaml",
