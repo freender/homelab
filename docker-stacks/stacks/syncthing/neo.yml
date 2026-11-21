@@ -18,7 +18,6 @@ services:
       - /mnt/cache/appdata/syncthing:/config
       - /mnt/cache/obsidian:/obsidian
       - /mnt/cache/documents:/documents
-      - /mnt/cache/drop:/drop
     environment:
       PUID: 1000
       PGID: 1000
